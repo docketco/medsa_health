@@ -1,0 +1,85 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   styles/globals.css
+   Global styles for the entire Medsa app.
+   These apply to every page — patient, practitioner, and institution portals.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* Reset — removes browser default spacing so everything looks consistent */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Base typography */
+html, body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  background-color: #f0ede8;
+  color: #1a1a1a;
+}
+
+/* All buttons and inputs inherit the app font */
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+/* Remove default link underline */
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+/* ── Medsa Colour Palette (CSS variables) ────────────────────────────────────
+   Used across all three portals. Change one value here and it updates
+   everywhere in the app.
+───────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Brand greens */
+  --green:        #4a7c59;
+  --green-mid:    #6b9e7a;
+  --green-light:  #ddeae1;
+  --green-xlight: #eef4f0;
+
+  /* Warm neutral backgrounds */
+  --beige:        #f0ede8;   /* page background */
+  --card:         #e8e4de;   /* card surface */
+  --cream:        #faf8f5;   /* elevated surface (nav, topbar) */
+
+  /* Brown earth tones */
+  --brown:        #6b5344;
+  --brown-light:  #ede8e3;
+
+  /* Text */
+  --text:         #1a1a1a;
+  --text-sub:     #6b6560;
+  --text-muted:   #9c9690;
+
+  /* Borders */
+  --border:       #d8d4ce;
+
+  /* Status colours */
+  --red:          #c0392b;
+  --red-light:    #fdecea;
+  --amber:        #b45309;
+  --amber-light:  #fef3e2;
+  --blue:         #2563eb;
+  --blue-light:   #dbeafe;
+  --navy:         #1e3a5f;
+  --navy-light:   #dbeafe;
+  --purple:       #534ab7;
+  --purple-light: #eeedfe;
+}
+
+/* ── Pulse animation for live indicators ─────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.pulse {
+  animation: pulse 2s infinite;
+}
