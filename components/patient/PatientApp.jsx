@@ -1,165 +1,703 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// components/patient/PatientApp.jsx
-//
-// ROOT of the PATIENT PORTAL.
-//
-// This component manages which screen the patient is currently looking at.
-// Think of it like a TV remote — it switches between channels (screens)
-// but the TV itself (this component) stays the same.
-//
-// Screens managed here:
-//   home          — the main dashboard (QR card, quick access, message board)
-//   records       — medical records, vaccinations, sharing, upload
-//   doctors       — find doctors/clinics, book, pay, wait times
-//   calendar      — appointments, medication alarms
-//   insurance     — plans, AI recommendations, claims, agents
-//   prescriptions — active meds, drug info, refills
-//   family        — guardian controls for minors/seniors/disability
-//   storage       — subscription tiers and cloud storage
-//
-// The TOPBAR (green bar at top) and BOTTOM NAV are persistent — they appear
-// on every screen. The SOS emergency card is always accessible from the topbar.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useState } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
-import HomeScreen from './HomeScreen'
-import RecordsScreen from './RecordsScreen'
-import DoctorsScreen from './DoctorsScreen'
-import CalendarScreen from './CalendarScreen'
-import InsuranceScreen from './InsuranceScreen'
-import PrescriptionsScreen from './PrescriptionsScreen'
-import FamilyScreen from './FamilyScreen'
-import StorageScreen from './StorageScreen'
-import EmergencyOverlay from './EmergencyOverlay'
 
-export default function PatientApp() {
-  const [screen, setScreen] = useState('home')
-  const [isEn, setIsEn] = useState(true)
-  const [emergencyOpen, setEmergencyOpen] = useState(false)
+function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
+  const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
+  const V={primary:{background:C.green,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'},navy:{background:C.navy,color:'#fff'}}
+  return <button style={{...base,...V[variant]}} onClick={onClick} disabled={disabled}>{children}</button>
+}
+function Card({ children, style:sx={}, onClick }) {
+  return <div onClick={onClick} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',margin:'0 16px 10px',overflow:'hidden',cursor:onClick?'pointer':'default',...sx}}>{children}</div>
+}
+function SecLabel({ children }) {
+  return <div style={{fontSize:'10px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,padding:'16px 16px 8px'}}>{children}</div>
+}
+function Toggle({ checked=false, onChange }) {
+  const [on,setOn]=useState(checked)
+  return <div onClick={()=>{setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+}
+function Badge({ text, type }) {
+  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
+  const [bg,fg]=map[type]||map.ok
+  return <span style={{fontSize:'10px',background:bg,color:fg,padding:'3px 9px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
+}
 
-  // Screen title shown in the topbar
-  const titles = {
-    home:          'medsa',
-    records:       isEn ? 'Medical records'   : '醫療記錄',
-    doctors:       isEn ? 'Doctors & clinics' : '醫生與診所',
-    calendar:      isEn ? 'Calendar'          : '日曆',
-    insurance:     isEn ? 'Insurance'         : '保險',
-    prescriptions: isEn ? 'Prescriptions'     : '處方',
-    family:        isEn ? 'Family & guardians': '家庭與監護',
-    storage:       isEn ? 'Storage & plan'    : '儲存與計劃',
-  }
-
-  // Bottom nav items
-  const navItems = [
-    { key: 'home',      icon: '◎', labelEn: 'Home',     labelZh: '主頁'  },
-    { key: 'records',   icon: '▣', labelEn: 'Records',  labelZh: '記錄'  },
-    { key: 'doctors',   icon: '◈', labelEn: 'Find care',labelZh: '尋找'  },
-    { key: 'calendar',  icon: '◇', labelEn: 'Calendar', labelZh: '日曆'  },
-    { key: 'insurance', icon: '◉', labelEn: 'Insurance',labelZh: '保險'  },
-  ]
-
+// ── EMERGENCY OVERLAY ─────────────────────────────────────────────────────────
+function EmergencyOverlay({ open, onClose }) {
+  if (!open) return null
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column',
-      minHeight: '100vh', maxWidth: '440px',
-      margin: '0 auto', background: C.beige,
-    }}>
-      {/* ── Topbar ──────────────────────────────────────────────────────── */}
-      <div style={{
-        background: C.green, padding: '14px 16px',
-        display: 'flex', alignItems: 'center', gap: '10px',
-        position: 'sticky', top: 0, zIndex: 10,
-      }}>
-        {/* Back arrow — only shows when not on home */}
-        {screen !== 'home' && (
-          <button
-            onClick={() => setScreen('home')}
-            style={{
-              background: 'rgba(255,255,255,0.18)', border: 'none',
-              color: '#fff', width: 32, height: 32, borderRadius: '50%',
-              cursor: 'pointer', fontSize: '16px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-          >←</button>
-        )}
-        {/* Logo (home) or title (other screens) */}
-        {screen === 'home'
-          ? <MedsaLogo height={20} />
-          : <span style={{ fontSize: '17px', fontWeight: 500, color: '#fff' }}>{titles[screen]}</span>
-        }
-        <div style={{ flex: 1 }} />
-        {/* SOS button — always visible, opens emergency card */}
-        <button
-          onClick={() => setEmergencyOpen(true)}
-          style={{
-            background: C.red, border: 'none', color: '#fff',
-            fontSize: '11px', fontWeight: 700,
-            padding: '5px 10px', borderRadius: '20px', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', gap: '5px',
-          }}
-        >
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%',
-            background: '#ff9999', display: 'inline-block',
-            animation: 'pulse 2s infinite',
-          }}/>
-          SOS
-        </button>
-        {/* Language toggle */}
-        <button
-          onClick={() => setIsEn(!isEn)}
-          style={{
-            background: 'rgba(255,255,255,0.18)', border: 'none',
-            color: '#fff', fontSize: '11px',
-            padding: '4px 10px', borderRadius: '20px', cursor: 'pointer',
-          }}
-        >
-          {isEn ? '廣東話' : 'EN'}
-        </button>
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'90vh',overflowY:'auto'}}>
+        <div style={{textAlign:'center',marginBottom:'16px'}}>
+          <div style={{fontSize:'28px',marginBottom:'6px'}}>🚨</div>
+          <div style={{fontSize:'18px',fontWeight:700,color:C.red}}>Emergency health card</div>
+          <div style={{fontSize:'12px',color:C.textSub}}>Show this to any medical personnel</div>
+        </div>
+        <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Wong Mei-ling, Lisa</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB 14 Mar 1988 · MDS-84921-HK</div>
+          <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
+            <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
+              <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
+              <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>O+</div>
+            </div>
+            <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
+              <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
+              <div style={{fontSize:'13px',fontWeight:600}}>Wong Tai (Mother)</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>+852 9xxx xxxx</div>
+            </div>
+          </div>
+          {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
+            <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c}</div>
+          ))}
+          <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
+            {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
+              <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
+            ))}
+          </div>
+          <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
+            {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i)=>(
+              <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m}</div>
+            ))}
+          </div>
+        </div>
+        <div style={{background:C.greenXLight,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Verified Medsa record · Last updated 12 Jun 2025 · QE Hospital</div>
+        <Btn style={{width:'100%'}} onClick={onClose}>Close</Btn>
       </div>
+    </div>
+  )
+}
 
-      {/* ── Screen content ───────────────────────────────────────────────── */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {screen === 'home'          && <HomeScreen          onNav={setScreen} isEn={isEn} />}
-        {screen === 'records'       && <RecordsScreen       isEn={isEn} />}
-        {screen === 'doctors'       && <DoctorsScreen       isEn={isEn} />}
-        {screen === 'calendar'      && <CalendarScreen      isEn={isEn} />}
-        {screen === 'insurance'     && <InsuranceScreen     isEn={isEn} />}
-        {screen === 'prescriptions' && <PrescriptionsScreen isEn={isEn} />}
-        {screen === 'family'        && <FamilyScreen        isEn={isEn} />}
-        {screen === 'storage'       && <StorageScreen       isEn={isEn} />}
+// ── HOME ─────────────────────────────────────────────────────────────────────
+function HomeScreen({ onNav, isEn }) {
+  return (
+    <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
+      <div style={{background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,margin:'16px 16px 0',borderRadius:'16px',padding:'20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?'Good morning, Lisa':'早晨，Lisa'}</div>
+          <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport is active':'您的健康護照已啟動'}</div>
+          <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'8px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
+        </div>
+        <div style={{width:64,height:64,background:'#fff',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect x="2" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="2" y="28" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="28" width="4" height="4" fill={C.green}/><rect x="34" y="28" width="4" height="4" fill={C.green}/>
+            <rect x="40" y="28" width="6" height="4" fill={C.green}/><rect x="28" y="34" width="6" height="4" fill={C.green}/>
+            <rect x="36" y="34" width="4" height="4" fill={C.green}/><rect x="28" y="40" width="4" height="6" fill={C.green}/>
+            <rect x="34" y="42" width="12" height="4" fill={C.green}/>
+          </svg>
+        </div>
       </div>
-
-      {/* ── Bottom nav ───────────────────────────────────────────────────── */}
-      <div style={{
-        background: C.cream, borderTop: `0.5px solid ${C.border}`,
-        display: 'flex', padding: '8px 0 6px',
-        position: 'sticky', bottom: 0,
-      }}>
-        {navItems.map(item => (
-          <div
-            key={item.key}
-            onClick={() => setScreen(item.key)}
-            style={{
-              flex: 1, display: 'flex', flexDirection: 'column',
-              alignItems: 'center', gap: '2px',
-              cursor: 'pointer',
-              color: screen === item.key ? C.green : C.textMuted,
-              fontSize: '10px',
-            }}
-          >
-            <span style={{ fontSize: '20px', lineHeight: 1 }}>{item.icon}</span>
-            <span>{isEn ? item.labelEn : item.labelZh}</span>
+      <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
+        {[
+          {key:'records',icon:'▣',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
+          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Claims, plans, agents':'索賠、計劃、代理人',bg:C.blueLight,badge:'2'},
+          {key:'prescriptions',icon:'◈',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
+          {key:'calendar',icon:'◇',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
+        ].map(item=>(
+          <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
+            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',marginBottom:'10px',color:C.green}}>{item.icon}</div>
+            <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.label}</div>
+            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.sub}</div>
+            {item.badge&&<span style={{position:'absolute',top:10,right:10,background:C.red,color:'#fff',fontSize:'10px',width:18,height:18,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>{item.badge}</span>}
           </div>
         ))}
       </div>
+      <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
+      <div style={{padding:'0 16px'}}>
+        {[
+          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay, live wait times':'搜索、預約、即時等候時間'},
+          {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
+          {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
+        ].map(item=>(
+          <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
+            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
+            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
+            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+          </div>
+        ))}
+      </div>
+      <SecLabel>{isEn?'Message board':'訊息板'}</SecLabel>
+      <Card>
+        <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
+        {[
+          {dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'},
+          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B. Tap to confirm.':'伊利沙伯醫院，3B室。'},
+          {dot:C.green,title:isEn?'Insurance claim approved':'保險索賠已批准',body:isEn?'AIA claim #44821 — HK$3,200 approved.':'AIA索賠#44821 — 港幣3,200元已批准。'},
+        ].map((m,i)=>(
+          <div key={i} style={{padding:'10px 14px',borderBottom:i<2?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:m.dot,marginTop:'5px',flexShrink:0}}/>
+            <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
+          </div>
+        ))}
+      </Card>
+      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
+        <span style={{color:C.brown}}>◇</span>
+        <div>
+          <div style={{fontSize:'12px',fontWeight:600,color:C.brown}}>{isEn?'You control your records':'您掌控自己的記錄'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{isEn?'Choose what each provider sees — anytime.':'隨時選擇每位醫療提供者可查看的內容。'}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
-      {/* ── Emergency overlay — appears over everything when SOS tapped ── */}
-      <EmergencyOverlay open={emergencyOpen} onClose={() => setEmergencyOpen(false)} isEn={isEn} />
+// ── RECORDS ───────────────────────────────────────────────────────────────────
+function RecordsScreen({ isEn }) {
+  const [tab,setTab]=useState('all')
+  const [expanded,setExpanded]=useState(null)
+  const records=[
+    {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
+    {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
+    {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
+    {id:4,icon:'◇',bg:C.brownLight,title:'Allergy test results',sub:'Uploaded manually · PDF',date:'9 Jan 2025',src:'Manual',details:[['Penicillin','⚠ Severe allergy'],['Verified by','Pending review']]},
+  ]
+  const vaccines=[
+    {name:'COVID-19',status:'ok',label:'Up to date',doses:[['Dose 1 — BioNTech','12 Mar 2021'],['Dose 2 — BioNTech','3 Apr 2021'],['Booster 1','18 Jan 2022'],['Booster 2 — XBB','9 Oct 2023']]},
+    {name:'Influenza (seasonal)',status:'due',label:'Due soon',doses:[['2023–24 Quadrivalent','6 Oct 2023'],['2024–25 — Book now','Recommended']]},
+    {name:'Hepatitis B',status:'ok',label:'Complete',doses:[['Dose 1','Jan 1992'],['Dose 2','Mar 1992'],['Dose 3','Jul 1992']]},
+    {name:'HPV (Gardasil 9)',status:'ok',label:'Complete',doses:[['Dose 1','5 Sep 2018'],['Dose 2','5 Nov 2018'],['Dose 3','5 Mar 2019']]},
+    {name:'Tetanus / Td booster',status:'full',label:'Overdue',doses:[['Last booster','Mar 2013'],['Next due — every 10 yrs','Overdue 2023']]},
+  ]
+  const providers=[{init:'QE',name:'Queen Elizabeth Hospital',sub:'Medsa partner',on:true},{init:'MIH',name:'Matilda International',sub:'Medsa partner',on:true},{init:'DR',name:'Dr Chan Siu-ming',sub:'Private practitioner',on:true},{init:'VF',name:'Valley Fitness Clinic',sub:'Non-Medsa · Link share',on:false}]
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{background:C.greenXLight,borderBottom:`0.5px solid ${C.greenLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
+        <span style={{color:C.green}}>◇</span>
+        <span style={{fontSize:'12px',color:C.green}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
+      </div>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,overflowX:'auto'}}>
+        {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
+        ))}
+      </div>
+      {tab==='all'&&<>
+        <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
+        {records.map(r=>(
+          <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
+            <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+              <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
+              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{r.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{r.sub}</div></div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{r.src}</span></div>
+            </div>
+            {expanded===r.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+              {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
+              <div style={{display:'flex',gap:'8px',marginTop:'12px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}}>Share</Btn>
+                <Btn style={{flex:1,fontSize:'12px'}}>Download</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>View full</Btn>
+              </div>
+            </div>}
+          </Card>
+        ))}
+      </>}
+      {tab==='vax'&&<>
+        <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
+        {vaccines.map(v=>(
+          <Card key={v.name}>
+            <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{v.name}</span><Badge text={v.label} type={v.status}/></div>
+            <div style={{padding:'0 16px 14px'}}>
+              {v.doses.map(([d,date])=>(
+                <div key={d} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
+                  <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:C.green,flexShrink:0}}/>
+                  <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{d}</strong></div>
+                  <span style={{fontSize:'11px',color:C.textMuted}}>{date}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ))}
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>
+      </>}
+      {tab==='sharing'&&<>
+        <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
+        <Card>
+          {providers.map((p,i)=>(
+            <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:600,flexShrink:0}}>{p.init}</div>
+              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{p.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{p.sub}</div></div>
+              <Toggle checked={p.on}/>
+            </div>
+          ))}
+        </Card>
+        <SecLabel>{isEn?'Record type controls':'記錄類型控制'}</SecLabel>
+        <Card>
+          {['Lab results','Visit summaries','Imaging','Surgical history','Vaccinations','Mental health records','Allergy info'].map((item,i,arr)=>(
+            <div key={item} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
+              <span>{item}</span><Toggle checked={item!=='Mental health records'&&item!=='Surgical history'}/>
+            </div>
+          ))}
+        </Card>
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>◇ {isEn?'Create one-time access link':'建立一次性存取連結'}</Btn></div>
+      </>}
+      {tab==='upload'&&<>
+        <SecLabel>{isEn?'Upload a record':'上傳記錄'}</SecLabel>
+        <div style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer'}}>
+          <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
+          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{isEn?'Tap to upload':'點擊上傳'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
+          <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
+            {['PDF','JPG/PNG','DICOM','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
+          </div>
+        </div>
+        <Card style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+          <div style={{width:36,height:36,borderRadius:'10px',background:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.amber,fontSize:'18px'}}>⏳</div>
+          <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>Allergy test results.pdf</div><div style={{fontSize:'11px',color:C.textSub}}>Uploaded 9 Jan · Awaiting verification</div></div>
+          <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}}>Send for review</Btn>
+        </Card>
+        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
+          ◇ {isEn?'Once registered on Medsa with your govt ID, records from partner institutions sync automatically.':'使用政府身份證在Medsa上註冊後，合作機構的記錄會自動同步。'}
+        </div>
+      </>}
+    </div>
+  )
+}
 
-      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
+// ── DOCTORS ───────────────────────────────────────────────────────────────────
+function DoctorsScreen({ isEn }) {
+  const [tab,setTab]=useState('search')
+  const [selTime,setSelTime]=useState('10:30am')
+  const [selLang,setSelLang]=useState('廣東話')
+  const [booked,setBooked]=useState(false)
+  const waitTimes=[{name:'Pacific Medical Group',area:'Wan Chai',wait:12,busy:'Low'},{name:'QE Hospital A&E',area:'Ho Man Tin',wait:48,busy:'High'},{name:'Matilda International',area:'Happy Valley',wait:22,busy:'Medium'},{name:'Central Health Medical',area:'Central',wait:8,busy:'Low'}]
+  const doctors=[{init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok'},{init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due'},{init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok'},{init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due'},{init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full'}]
+  const busyColor={Low:[C.greenLight,C.green],Medium:[C.amberLight,C.amber],High:[C.redLight,C.red]}
+  const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
+  const UNAVAIL=['9:30am','11:00am']
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{background:C.green,padding:'0 16px 14px'}}>
+        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+          <input style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
+        </div>
+      </div>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
+        {[['search',isEn?'Find doctors':'尋找醫生'],['book',isEn?'Book':'預約'],['payments',isEn?'Payments':'付款']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+        ))}
+      </div>
+      {tab==='search'&&<>
+        <SecLabel>{isEn?'Live wait times · Near you':'即時等候時間 · 附近'}</SecLabel>
+        <Card>
+          {waitTimes.map((c,i)=>{const [bg,fg]=busyColor[c.busy]||busyColor.Low;return(
+            <div key={i} style={{padding:'12px 16px',display:'flex',alignItems:'center',borderBottom:i<waitTimes.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{c.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.area}</div></div>
+              <div style={{textAlign:'right'}}><div style={{fontSize:'16px',fontWeight:700,color:c.wait>45?C.red:c.wait>20?C.amber:C.green}}>{c.wait} min</div><span style={{fontSize:'10px',background:bg,color:fg,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{c.busy}</span></div>
+            </div>
+          )})}
+        </Card>
+        <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
+        {doctors.map((doc,i)=>(
+          <Card key={i}>
+            <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+              <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
+              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div><div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.spec}</div><div style={{fontSize:'12px',color:C.textSub}}>{doc.clinic}</div></div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',color:'#d4a017'}}>★★★★★</div><div style={{fontSize:'10px',color:C.textMuted}}>{doc.rating}</div><Badge text={doc.avail} type={doc.type}/></div>
+            </div>
+            <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
+              <Btn style={{flex:1,fontSize:'12px'}}>Message</Btn>
+              {doc.type==='full'
+                ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
+                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setTab('book')}>Book</Btn>}
+            </div>
+          </Card>
+        ))}
+      </>}
+      {tab==='book'&&<>
+        <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
+        <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
+          <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan Siu-ming</div><div style={{fontSize:'12px',color:C.textSub}}>General Practice · Pacific Medical Group</div></div>
+        </Card>
+        <Card>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
+          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+            <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
+              {[['TUE','24',true],['WED','25',false],['THU','26',false],['FRI','27',false],['SAT','28',false]].map(([day,date,sel])=>(
+                <div key={day} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:sel?C.green:C.card,color:sel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${sel?C.green:C.border}`}}>
+                  <div style={{fontSize:'10px',opacity:0.8}}>{day}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
+              {TIMES.map(t=>{const u=UNAVAIL.includes(t);const s=t===selTime;return(
+                <div key={t} onClick={()=>!u&&setSelTime(t)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:u?'not-allowed':'pointer',background:s?C.green:u?C.beige:C.card,color:s?'#fff':u?C.textMuted:C.text,opacity:u?0.5:1}}>{t}</div>
+              )})}
+            </div>
+          </div>
+        </Card>
+        <Card>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Language':'語言'}</div></div>
+          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+            {['廣東話','English','普通話','日本語'].map(l=>(
+              <div key={l} onClick={()=>setSelLang(l)} style={{border:`0.5px solid ${selLang===l?C.green:C.border}`,borderRadius:'8px',padding:'10px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:selLang===l?C.green:C.card,color:selLang===l?'#fff':C.text}}>{l}</div>
+            ))}
+          </div></div>
+        </Card>
+        <Card>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
+          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+            <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
+              {[['Doctor','Dr Chan Siu-ming'],['Date',`Tue 24 Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i)=>(
+                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===5?700:400}}>{v}</span></div>
+              ))}
+            </div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(true)}>{isEn?'Confirm appointment':'確認預約'}</Btn>
+          </div>
+        </Card>
+        {booked&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
+            <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
+            <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Dr Chan Siu-ming · Tue 24 Jun at {selTime} · Pacific Medical Group</div>
+            <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>setBooked(false)}>Done</Btn>
+          </div>
+        </div>}
+      </>}
+      {tab==='payments'&&<>
+        <SecLabel>{isEn?'Outstanding':'待付款'}</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan — Jun 12</div><Badge text="Due HK$80" type="due"/></div>
+          {[['Consultation fee','HK$380'],['AIA covered','−HK$300'],['Balance','HK$80']].map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
+          <div style={{display:'flex',gap:'8px',marginTop:'12px'}}><Btn style={{flex:1,fontSize:'12px'}}>Receipt</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Pay HK$80</Btn></div>
+        </Card>
+        <SecLabel>{isEn?'Recent payments':'最近付款'}</SecLabel>
+        {[{title:'Ruttonjee Hospital — Feb 18',amount:'HK$1,200',status:'Paid',type:'ok'},{title:'Matilda International — May 3',amount:'HK$680',status:'Refund pending',type:'due'}].map((p,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div style={{fontSize:'13px',fontWeight:500}}>{p.title}</div></div>
+            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{p.amount}</div><Badge text={p.status} type={p.type}/></div>
+          </Card>
+        ))}
+      </>}
+    </div>
+  )
+}
+
+// ── CALENDAR ──────────────────────────────────────────────────────────────────
+function CalendarScreen({ isEn }) {
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}}>
+          <span style={{fontSize:'15px',fontWeight:600}}>June 2025</span>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>‹</button>
+            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>›</button>
+          </div>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px',marginBottom:'8px'}}>
+          {['M','T','W','T','F','S','S'].map((d,i)=><div key={i} style={{textAlign:'center',fontSize:'11px',color:C.textMuted,fontWeight:600}}>{d}</div>)}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px'}}>
+          {[16,17,18,19,20,21,22,23,24,25,26,27,28,29].map(d=>(
+            <div key={d} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:d===24?C.green:'transparent',color:d===24?'#fff':(d===25||d===27)?C.green:C.text,fontWeight:d===24?600:400}}>
+              {d}
+              {(d===25||d===27)&&<div style={{width:4,height:4,borderRadius:'50%',background:C.green,margin:'2px auto 0'}}/>}
+            </div>
+          ))}
+        </div>
+      </div>
+      <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
+      {[
+        {time:'10:30 am',date:'Tue 24 Jun',title:'Dr Chan Siu-ming',sub:'Pacific Medical Group · Wan Chai',bg:C.greenLight,icon:'◎'},
+        {time:'8:00 pm',date:'Tue 24 Jun',title:'Metformin 500mg',sub:'Take with dinner · Daily',bg:C.brownLight,icon:'◉'},
+        {time:'9:00 am',date:'Fri 27 Jun',title:'Flu vaccine — booking pending',sub:'Pacific Medical Group',bg:C.amberLight,icon:'◈'},
+      ].map((e,i)=>(
+        <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+          <div style={{width:40,height:40,borderRadius:'12px',background:e.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{e.icon}</div>
+          <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{e.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{e.sub}</div></div>
+          <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',fontWeight:600}}>{e.time}</div><div style={{fontSize:'11px',color:C.textMuted}}>{e.date}</div></div>
+        </Card>
+      ))}
+      <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
+      {[{med:'Metformin 500mg',schedule:'Daily with dinner',next:'Tonight 8pm',on:true,time:'20:00'},{med:'Vitamin D3 1000IU',schedule:'Daily with breakfast',next:'Tomorrow 8am',on:true,time:'08:00'},{med:'Iron supplement 14mg',schedule:'Every other day',next:'Thu morning',on:false,time:'09:00'}].map((m,i)=>{
+        const [on,setOn]=useState(m.on)
+        const [t,setT]=useState(m.time)
+        return(
+          <Card key={i} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
+              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{m.med}</div><div style={{fontSize:'11px',color:C.textSub}}>{m.schedule} · Next: {m.next}</div></div>
+              <div onClick={()=>setOn(!on)} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+            </div>
+            {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+              <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
+              <input type="time" value={t} onChange={e=>setT(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
+              <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
+            </div>}
+          </Card>
+        )
+      })}
+      <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>
+    </div>
+  )
+}
+
+// ── INSURANCE ─────────────────────────────────────────────────────────────────
+function InsuranceScreen({ isEn }) {
+  const [tab,setTab]=useState('overview')
+  const [expanded,setExpanded]=useState(null)
+  const plans=[
+    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,why:'Covers your diabetes, outpatient visits, and lab tests. Matches your usage history.',covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
+    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',covers:['Hospitalisation','Specialist','Surgery']},
+    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + unlimited travel',match:82,sponsored:false,why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',covers:['Hospitalisation','Outpatient','Specialist','Travel emergency','Mental health']},
+  ]
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
+        {[['overview','Overview'],['claims','Claims'],['plans','AI Plans'],['agents','Agents']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+        ))}
+      </div>
+      {tab==='overview'&&<>
+        <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
+          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care</div>
+          <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
+          <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Annual limit · Renews Jan 2026':'年度限額 · 2026年1月續保'}</div>
+          <div style={{display:'flex',gap:'16px',marginTop:'14px'}}>
+            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Used':'已使用'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$21,400</div></div>
+            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
+          </div>
+        </div>
+        <SecLabel>{isEn?'Quick actions':'快速操作'}</SecLabel>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
+          {[['▣',isEn?'File a claim':'提交索賠'],['◇',isEn?'Payment':'付款'],['◈',isEn?'Plan details':'計劃詳情'],['◎',isEn?'My agent':'我的代理人']].map(([icon,label])=>(
+            <div key={label} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',textAlign:'center'}}>
+              <div style={{fontSize:'24px',marginBottom:'8px',color:C.green}}>{icon}</div>
+              <div style={{fontSize:'13px',fontWeight:500}}>{label}</div>
+            </div>
+          ))}
+        </div>
+      </>}
+      {tab==='claims'&&<>
+        <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
+        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Agent notified</div></div>
+          <Badge text="Processing" type="due"/>
+        </Card>
+        <SecLabel>{isEn?'Approved':'已批准'}</SecLabel>
+        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
+            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
+          </Card>
+        ))}
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'File new claim':'提交新索賠'}</Btn></div>
+      </>}
+      {tab==='plans'&&<>
+        <div style={{margin:'16px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history and usage. No agents involved — purely data-driven. Sponsored plans clearly labelled.':'根據您的病史和使用情況。純數據驅動，贊助計劃清楚標示。'}</div>
+        </div>
+        <SecLabel>{isEn?'Recommended for you':'為您推薦'}</SecLabel>
+        {plans.map((plan,i)=>(
+          <Card key={i} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
+                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+                  <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{plan.type}</span>
+                </div>
+                <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div><div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div></div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
+              <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/></div>
+              <span style={{fontSize:'11px',fontWeight:600,color:plan.match>=90?C.green:plan.match>=80?C.amber:C.textSub}}>{plan.match}% match</span>
+            </div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px',fontStyle:'italic'}}>"{plan.why}"</div>
+            {expanded===i&&<div style={{marginBottom:'12px',display:'flex',gap:'6px',flexWrap:'wrap'}}>{plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Contact insurer</Btn>
+            </div>
+          </Card>
+        ))}
+        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>◇ Sponsored plans are clearly labelled. AI match scores are independent of sponsorship status.</div>
+      </>}
+      {tab==='agents'&&<>
+        <SecLabel>{isEn?'Your agent':'您的代理人'}</SecLabel>
+        <Card style={{padding:'16px'}}>
+          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'12px'}}>
+            <div style={{width:48,height:48,borderRadius:'12px',background:C.blueLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',fontWeight:600,color:C.blue}}>張</div>
+            <div><div style={{fontSize:'15px',fontWeight:600}}>Mr Cheung Ho-fai</div><div style={{fontSize:'12px',color:C.textSub}}>AIA · Senior Agent · ★ 4.9 (62 reviews)</div></div>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn><Btn style={{flex:1,fontSize:'12px'}}>💬 Message</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Rate agent</Btn></div>
+        </Card>
+        <SecLabel>{isEn?'Find agents':'尋找代理人'}</SecLabel>
+        {[{init:'李',name:'Ms Lee Mei-kwan',company:'Prudential · ★ 4.8',spec:'Health + travel plans'},{init:'林',name:'Mr Lam Wai-keung',company:'Manulife · ★ 4.7',spec:'Family & critical illness'}].map((a,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+            <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600}}>{a.init}</div>
+            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{a.company}</div><div style={{fontSize:'11px',color:C.green}}>{a.spec}</div></div>
+            <Btn style={{fontSize:'11px',padding:'6px 10px'}}>Contact</Btn>
+          </Card>
+        ))}
+      </>}
+    </div>
+  )
+}
+
+// ── PRESCRIPTIONS ─────────────────────────────────────────────────────────────
+function PrescriptionsScreen({ isEn }) {
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
+      {[
+        {name:'Metformin 500mg',dose:'1 tablet twice daily with meals',dr:'Dr Chan Siu-ming',refills:'2 refills remaining',icon:'◉',bg:C.greenLight},
+        {name:'Vitamin D3 1000IU',dose:'1 capsule daily with breakfast',dr:'Dr Chan Siu-ming',refills:'Auto-refill on',icon:'◈',bg:C.brownLight},
+        {name:'Iron supplement 14mg',dose:'1 tablet every other day',dr:'Dr Lam Wai-yee',refills:'1 refill remaining',icon:'◇',bg:C.amberLight},
+      ].map((rx,i)=>(
+        <Card key={i}>
+          <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+            <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{rx.icon}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{rx.dose}</div>
+              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>Prescribed by {rx.dr}</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{rx.refills}</div>
+            </div>
+          </div>
+          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}}>Drug info</Btn>
+            <Btn style={{flex:1,fontSize:'12px'}}>Interactions</Btn>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Refill</Btn>
+          </div>
+        </Card>
+      ))}
+      <SecLabel>{isEn?'Drug reference':'藥物參考'}</SecLabel>
+      <Card style={{padding:'14px 16px'}}>
+        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
+        </div>
+        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage, interactions, contraindications, and side effects.':'查看劑量、相互作用、禁忌症和副作用。'}</div>
+      </Card>
+    </div>
+  )
+}
+
+// ── FAMILY ────────────────────────────────────────────────────────────────────
+function FamilyScreen({ isEn }) {
+  const members=[
+    {name:'Wong Tai (Mum)',relation:'Mother',age:64,type:'Senior',status:'Active',alerts:2},
+    {name:'Wong Siu-lok',relation:'Son',age:14,type:'Minor',status:'Active',alerts:0},
+    {name:'Uncle Cheung Ho',relation:'Uncle',age:72,type:'Senior',status:'Pending',alerts:1},
+  ]
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
+        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Active · HK$38/mo</div>
+        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Monitoring 2 of 3 members · Renews 1 Jul':'監護3名成員中的2名 · 7月1日續期'}</div>
+      </div>
+      <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
+      {members.map((m,i)=>(
+        <Card key={i} style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
+            <div style={{width:40,height:40,borderRadius:'12px',background:m.type==='Minor'?C.blueLight:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:m.type==='Minor'?C.blue:C.amber,flexShrink:0}}>{m.name[0]}</div>
+            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:600}}>{m.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{m.relation} · Age {m.age} · {m.type}</div></div>
+            <div style={{textAlign:'right'}}>
+              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:m.status==='Active'?C.greenLight:C.amberLight,color:m.status==='Active'?C.green:C.amber}}>{m.status}</span>
+              {m.alerts>0&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>⚠ {m.alerts} alert{m.alerts>1?'s':''}</div>}
+            </div>
+          </div>
+          <div style={{background:C.beige,borderRadius:'10px',padding:'10px 12px',marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Guardian access':'監護人存取'}</div>
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {['Medication reminders','Appointment alerts','Emergency card','Vitals summary'].map(tag=>(
+                <span key={tag} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px'}}>{tag}</span>
+              ))}
+            </div>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>View health</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Manage access</Btn></div>
+        </Card>
+      ))}
+      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
+      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
+        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account. Minors under 18 and seniors over 60 can be monitored with a small monthly subscription.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
+      </div>
+    </div>
+  )
+}
+
+// ── STORAGE ───────────────────────────────────────────────────────────────────
+function StorageScreen({ isEn }) {
+  const tiers=[
+    {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
+    {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
+    {name:'Family',price:'HK$38/mo',storage:'50 GB shared',perks:['Everything in Personal','Up to 5 family members','Guardian monitoring for seniors/minors','Priority support','Family emergency card'],current:false,color:C.brown,bg:C.brownLight},
+  ]
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>{isEn?'Your storage':'您的儲存空間'}</SecLabel>
+      <Card style={{padding:'16px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
+        <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
+        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?'At current rate you\'ll reach your limit in ~14 months.':'按目前速度，約14個月內達到限額。'}</div>
+      </Card>
+      <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
+      {tiers.map((tier,i)=>(
+        <div key={i} style={{background:C.cream,border:`0.5px solid ${tier.current?tier.color:C.border}`,borderRadius:'14px',margin:'0 16px 10px',padding:'16px',position:'relative'}}>
+          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{isEn?'Current plan':'目前計劃'}</span>}
+          <div style={{fontSize:'16px',fontWeight:700,color:tier.color,marginBottom:'2px'}}>{tier.name}</div>
+          <div style={{fontSize:'22px',fontWeight:800,color:C.text,marginBottom:'2px'}}>{tier.price}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {isEn?'cloud storage':'雲端儲存'}</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'14px'}}>
+            {tier.perks.map(p=><div key={p} style={{fontSize:'12px',color:C.text,display:'flex',alignItems:'center',gap:'7px'}}><span style={{color:tier.color,fontSize:'10px'}}>✓</span>{p}</div>)}
+          </div>
+          {!tier.current&&<button style={{width:'100%',border:'none',background:tier.color,borderRadius:'10px',padding:'11px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'inherit',color:'#fff'}}>{isEn?`Upgrade to ${tier.name}`:`升級至${tier.name}`}</button>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── ROOT ─────────────────────────────────────────────────────────────────────
+export default function PatientApp() {
+  const [screen,setScreen]=useState('home')
+  const [isEn,setIsEn]=useState(true)
+  const [emergencyOpen,setEmergencyOpen]=useState(false)
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
+  const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
+  return (
+    <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
+      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+      <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
+        {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
+        {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
+        <div style={{flex:1}}/>
+        <button onClick={()=>setEmergencyOpen(true)} style={{background:C.red,border:'none',color:'#fff',fontSize:'11px',fontWeight:700,padding:'5px 10px',borderRadius:'20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'5px',flexShrink:0}}>
+          <span style={{width:6,height:6,borderRadius:'50%',background:'#ff9999',display:'inline-block',animation:'pulse 2s infinite'}}/>SOS
+        </button>
+        <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
+      </div>
+      <div style={{flex:1,overflowY:'auto'}}>
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn}/>}
+        {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn}/>}
+        {screen==='insurance'&&<InsuranceScreen isEn={isEn}/>}
+        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn}/>}
+        {screen==='family'&&<FamilyScreen isEn={isEn}/>}
+        {screen==='storage'&&<StorageScreen isEn={isEn}/>}
+      </div>
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
+        {navItems.map(item=>(
+          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
+            <span style={{fontSize:'20px',lineHeight:1}}>{item.icon}</span>
+            <span>{isEn?item.en:item.zh}</span>
+          </div>
+        ))}
+      </div>
+      <EmergencyOverlay open={emergencyOpen} onClose={()=>setEmergencyOpen(false)}/>
     </div>
   )
 }

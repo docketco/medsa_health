@@ -1,7 +1,6 @@
 {
   "name": "medsa",
   "version": "1.0.0",
-  "description": "Medsa — Universal Health Passport Platform",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
