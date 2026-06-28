@@ -263,9 +263,7 @@ function DoctorsScreen({ isEn }) {
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
   const [booked,setBooked]=useState(false)
-  const waitTimes=[{name:'Pacific Medical Group',area:'Wan Chai',wait:12,busy:'Low'},{name:'QE Hospital A&E',area:'Ho Man Tin',wait:48,busy:'High'},{name:'Matilda International',area:'Happy Valley',wait:22,busy:'Medium'},{name:'Central Health Medical',area:'Central',wait:8,busy:'Low'}]
   const doctors=[{init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok'},{init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due'},{init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok'},{init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due'},{init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full'}]
-  const busyColor={Low:[C.greenLight,C.green],Medium:[C.amberLight,C.amber],High:[C.redLight,C.red]}
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   const UNAVAIL=['9:30am','11:00am']
   return (
@@ -441,59 +439,64 @@ function CalendarScreen({ isEn }) {
 
 // ── INSURANCE ─────────────────────────────────────────────────────────────────
 function InsuranceScreen({ isEn }) {
-  const [tab,setTab]=useState('overview')
+  const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
+  const [inquired,setInquired]=useState(null)
+  const [agentRating,setAgentRating]=useState(null)
+
   const plans=[
-    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,why:'Covers your diabetes, outpatient visits, and lab tests. Matches your usage history.',covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
-    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',covers:['Hospitalisation','Specialist','Surgery']},
-    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + unlimited travel',match:82,sponsored:false,why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',covers:['Hospitalisation','Outpatient','Specialist','Travel emergency','Mental health']},
+    {
+      name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,
+      why:'Covers your diabetes management, outpatient visits, and lab tests. Matches your usage history.',
+      covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)'],
+      agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'},
+    },
+    {
+      name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,
+      why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',
+      covers:['Hospitalisation','Specialist','Surgery'],
+      agent:{name:'Ms Lee Mei-kwan',rating:4.8,reviews:41,company:'Blue Cross · Agent'},
+    },
+    {
+      name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + unlimited travel',match:82,sponsored:false,
+      why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',
+      covers:['Hospitalisation','Outpatient','Travel emergency','Mental health'],
+      agent:{name:'Mr Lam Wai-keung',rating:4.7,reviews:88,company:'Bupa · Senior Agent'},
+    },
+    {
+      name:'AIA Critical Rider',company:'AIA',type:'Critical illness add-on',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,
+      why:'Add-on to your current plan. Pays out lump sum for critical diagnoses — cancer, heart attack, stroke.',
+      covers:['Critical illness lump sum','57 covered conditions'],
+      agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'},
+    },
   ]
+
   return (
     <div style={{background:C.beige,flex:1}}>
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
-        {[['overview','Overview'],['claims','Claims'],['plans','AI Plans'],['agents','Agents']].map(([k,l])=>(
+      {/* Active plan overview banner */}
+      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
+        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care — Active plan</div>
+        <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
+        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Annual limit · Renews Jan 2026':'年度限額 · 2026年1月續保'}</div>
+        <div style={{display:'flex',gap:'16px',marginTop:'14px'}}>
+          <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Used':'已使用'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$21,400</div></div>
+          <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
+        {[['plans',isEn?'Plans & AI picks':'計劃與AI推薦'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
-      {tab==='overview'&&<>
-        <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care</div>
-          <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
-          <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Annual limit · Renews Jan 2026':'年度限額 · 2026年1月續保'}</div>
-          <div style={{display:'flex',gap:'16px',marginTop:'14px'}}>
-            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Used':'已使用'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$21,400</div></div>
-            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
-          </div>
-        </div>
-        <SecLabel>{isEn?'Quick actions':'快速操作'}</SecLabel>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
-          {[['▣',isEn?'File a claim':'提交索賠'],['◇',isEn?'Payment':'付款'],['◈',isEn?'Plan details':'計劃詳情'],['◎',isEn?'My agent':'我的代理人']].map(([icon,label])=>(
-            <div key={label} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',textAlign:'center'}}>
-              <div style={{fontSize:'24px',marginBottom:'8px',color:C.green}}>{icon}</div>
-              <div style={{fontSize:'13px',fontWeight:500}}>{label}</div>
-            </div>
-          ))}
-        </div>
-      </>}
-      {tab==='claims'&&<>
-        <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
-        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Agent notified</div></div>
-          <Badge text="Processing" type="due"/>
-        </Card>
-        <SecLabel>{isEn?'Approved':'已批准'}</SecLabel>
-        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
-          </Card>
-        ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'File new claim':'提交新索賠'}</Btn></div>
-      </>}
+
+      {/* ── PLANS & AI ── */}
       {tab==='plans'&&<>
+        {/* AI picks section */}
         <div style={{margin:'16px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history and usage. No agents involved — purely data-driven. Sponsored plans clearly labelled.':'根據您的病史和使用情況。純數據驅動，贊助計劃清楚標示。'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history and usage. No agents involved in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.':'根據您的病史和使用情況。純數據驅動。贊助計劃清楚標示，不影響匹配分數。'}</div>
         </div>
         <SecLabel>{isEn?'Recommended for you':'為您推薦'}</SecLabel>
         {plans.map((plan,i)=>(
@@ -509,34 +512,115 @@ function InsuranceScreen({ isEn }) {
               </div>
               <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div><div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div></div>
             </div>
+            {/* Match bar */}
             <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
               <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/></div>
               <span style={{fontSize:'11px',fontWeight:600,color:plan.match>=90?C.green:plan.match>=80?C.amber:C.textSub}}>{plan.match}% match</span>
             </div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px',fontStyle:'italic'}}>"{plan.why}"</div>
-            {expanded===i&&<div style={{marginBottom:'12px',display:'flex',gap:'6px',flexWrap:'wrap'}}>{plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}</div>}
+            {/* Expanded coverage */}
+            {expanded===i&&<>
+              <div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
+              </div>
+              {/* Agent surfaces after inquiry */}
+              {inquired===i&&<div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px',marginBottom:'10px'}}>
+                <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>Assigned agent for this plan</div>
+                <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
+                  <div style={{width:40,height:40,borderRadius:'10px',background:C.blueLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:C.blue,flexShrink:0}}>{plan.agent.name[3]}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:'14px',fontWeight:600}}>{plan.agent.name}</div>
+                    <div style={{fontSize:'12px',color:C.textSub}}>{plan.agent.company}</div>
+                    <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(plan.agent.rating))} <span style={{color:C.textMuted}}>{plan.agent.rating} ({plan.agent.reviews} reviews)</span></div>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:'8px'}}>
+                  <Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn>
+                  <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>💬 Message agent</Btn>
+                </div>
+              </div>}
+            </>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Contact insurer</Btn>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>{setExpanded(i);setInquired(i)}}>{inquired===i?'Agent shown ✓':'Inquire about plan'}</Btn>
             </div>
           </Card>
         ))}
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>◇ Sponsored plans are clearly labelled. AI match scores are independent of sponsorship status.</div>
+
+        {/* Search all plans */}
+        <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
+        <div style={{padding:'0 16px 10px'}}>
+          <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+            <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search by keyword e.g. dental, travel, critical illness…':'按關鍵字搜尋，例如：牙科、旅遊、重疾…'}/>
+          </div>
+        </div>
+        <div style={{padding:'0 16px 16px'}}>
+          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
+            ◇ {isEn?'Sponsored plans are clearly labelled. AI match scores are fully independent of sponsorship. Medsa does not receive commission for plan recommendations — only for referral clicks.':'贊助計劃清楚標示。AI匹配分數完全獨立於贊助。Medsa不從計劃推薦中收取佣金。'}
+          </div>
+        </div>
       </>}
+
+      {/* ── CLAIMS ── */}
+      {tab==='claims'&&<>
+        <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
+        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Agent notified</div></div>
+          <Badge text="Processing" type="due"/>
+        </Card>
+        <SecLabel>{isEn?'Approved':'已批准'}</SecLabel>
+        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
+            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
+          </Card>
+        ))}
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'File new claim':'提交新索賠'}</Btn></div>
+      </>}
+
+      {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
-        <SecLabel>{isEn?'Your agent':'您的代理人'}</SecLabel>
+        <div style={{margin:'16px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
+          ◇ {isEn?'Agent ratings are left by Medsa patients after working with an agent. Agents are assigned by insurers — you can rate yours or browse agents before inquiring on a plan.':'代理人評分由患者在與代理人合作後留下。代理人由保險公司指派。'}
+        </div>
+        <SecLabel>{isEn?'Your current agent':'您的當前代理人'}</SecLabel>
         <Card style={{padding:'16px'}}>
           <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'12px'}}>
             <div style={{width:48,height:48,borderRadius:'12px',background:C.blueLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',fontWeight:600,color:C.blue}}>張</div>
-            <div><div style={{fontSize:'15px',fontWeight:600}}>Mr Cheung Ho-fai</div><div style={{fontSize:'12px',color:C.textSub}}>AIA · Senior Agent · ★ 4.9 (62 reviews)</div></div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'15px',fontWeight:600}}>Mr Cheung Ho-fai</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>AIA · Senior Agent</div>
+              <div style={{fontSize:'13px',color:'#d4a017',marginTop:'2px'}}>★★★★★ <span style={{fontSize:'12px',color:C.textMuted,fontWeight:400}}>4.9 (62 reviews)</span></div>
+            </div>
           </div>
-          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn><Btn style={{flex:1,fontSize:'12px'}}>💬 Message</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Rate agent</Btn></div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn>
+            <Btn style={{flex:1,fontSize:'12px'}}>💬 Message</Btn>
+          </div>
+          {agentRating===null?<Btn variant="primary" style={{width:'100%'}} onClick={()=>setAgentRating(0)}>Rate your agent</Btn>:
+          <div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+              {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAgentRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:agentRating>=n?1:0.3}}>★</div>)}
+            </div>
+            <Btn variant="primary" style={{width:'100%'}}>Submit rating</Btn>
+          </div>}
         </Card>
-        <SecLabel>{isEn?'Find agents':'尋找代理人'}</SecLabel>
-        {[{init:'李',name:'Ms Lee Mei-kwan',company:'Prudential · ★ 4.8',spec:'Health + travel plans'},{init:'林',name:'Mr Lam Wai-keung',company:'Manulife · ★ 4.7',spec:'Family & critical illness'}].map((a,i)=>(
+        <SecLabel>{isEn?'Browse agents by rating':'按評分瀏覽代理人'}</SecLabel>
+        {[
+          {init:'張',name:'Mr Cheung Ho-fai',company:'AIA',rating:4.9,reviews:62,spec:'Health + critical illness'},
+          {init:'李',name:'Ms Lee Mei-kwan',company:'Prudential',rating:4.8,reviews:41,spec:'Health + travel plans'},
+          {init:'林',name:'Mr Lam Wai-keung',company:'Manulife',rating:4.7,reviews:88,spec:'Family & critical illness'},
+          {init:'陳',name:'Ms Chan Pui-shan',company:'Bupa',rating:4.6,reviews:34,spec:'Health + dental plans'},
+        ].map((a,i)=>(
           <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600}}>{a.init}</div>
-            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{a.company}</div><div style={{fontSize:'11px',color:C.green}}>{a.spec}</div></div>
+            <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{a.company} · {a.spec}</div>
+              <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(a.rating))} <span style={{fontSize:'11px',color:C.textMuted,fontWeight:400}}>{a.rating} ({a.reviews})</span></div>
+            </div>
             <Btn style={{fontSize:'11px',padding:'6px 10px'}}>Contact</Btn>
           </Card>
         ))}
