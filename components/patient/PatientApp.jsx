@@ -377,6 +377,26 @@ function DoctorsScreen({ isEn }) {
   )
 }
 
+// ── MED ALARM CARD (standalone component — hooks cannot be used inside .map) ──
+function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
+  const [on,setOn]=useState(defaultOn)
+  const [t,setT]=useState(defaultTime)
+  return (
+    <Card style={{padding:'14px 16px'}}>
+      <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
+        <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
+        <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule} · Next: {next}</div></div>
+        <div onClick={()=>setOn(!on)} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+      </div>
+      {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+        <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
+        <input type="time" value={t} onChange={e=>setT(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
+        <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
+      </div>}
+    </Card>
+  )
+}
+
 // ── CALENDAR ──────────────────────────────────────────────────────────────────
 function CalendarScreen({ isEn }) {
   return (
@@ -414,24 +434,9 @@ function CalendarScreen({ isEn }) {
         </Card>
       ))}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
-      {[{med:'Metformin 500mg',schedule:'Daily with dinner',next:'Tonight 8pm',on:true,time:'20:00'},{med:'Vitamin D3 1000IU',schedule:'Daily with breakfast',next:'Tomorrow 8am',on:true,time:'08:00'},{med:'Iron supplement 14mg',schedule:'Every other day',next:'Thu morning',on:false,time:'09:00'}].map((m,i)=>{
-        const [on,setOn]=useState(m.on)
-        const [t,setT]=useState(m.time)
-        return(
-          <Card key={i} style={{padding:'14px 16px'}}>
-            <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
-              <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
-              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{m.med}</div><div style={{fontSize:'11px',color:C.textSub}}>{m.schedule} · Next: {m.next}</div></div>
-              <div onClick={()=>setOn(!on)} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
-            </div>
-            {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-              <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
-              <input type="time" value={t} onChange={e=>setT(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
-              <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
-            </div>}
-          </Card>
-        )
-      })}
+      <MedAlarmCard med="Metformin 500mg" schedule="Daily with dinner" next="Tonight 8pm" defaultOn={true} defaultTime="20:00" isEn={isEn}/>
+      <MedAlarmCard med="Vitamin D3 1000IU" schedule="Daily with breakfast" next="Tomorrow 8am" defaultOn={true} defaultTime="08:00" isEn={isEn}/>
+      <MedAlarmCard med="Iron supplement 14mg" schedule="Every other day" next="Thu morning" defaultOn={false} defaultTime="09:00" isEn={isEn}/>
       <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>
     </div>
   )
