@@ -23,7 +23,6 @@ function Badge({ text, type }) {
   return <span style={{fontSize:'10px',background:bg,color:fg,padding:'3px 9px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
 }
 
-// ── EMERGENCY OVERLAY ─────────────────────────────────────────────────────────
 function EmergencyOverlay({ open, onClose }) {
   if (!open) return null
   return (
@@ -69,7 +68,6 @@ function EmergencyOverlay({ open, onClose }) {
   )
 }
 
-// ── HOME ─────────────────────────────────────────────────────────────────────
 function HomeScreen({ onNav, isEn }) {
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
@@ -95,7 +93,7 @@ function HomeScreen({ onNav, isEn }) {
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
           {key:'records',icon:'▣',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
-          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Claims, plans, agents':'索賠、計劃、代理人',bg:C.blueLight,badge:'2'},
+          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
           {key:'prescriptions',icon:'◈',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
           {key:'calendar',icon:'◇',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
         ].map(item=>(
@@ -110,7 +108,7 @@ function HomeScreen({ onNav, isEn }) {
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
-          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay, live wait times':'搜索、預約、即時等候時間'},
+          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
           {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
@@ -126,7 +124,7 @@ function HomeScreen({ onNav, isEn }) {
         <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
         {[
           {dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'},
-          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B. Tap to confirm.':'伊利沙伯醫院，3B室。'},
+          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B.':'伊利沙伯醫院，3B室。'},
           {dot:C.green,title:isEn?'Insurance claim approved':'保險索賠已批准',body:isEn?'AIA claim #44821 — HK$3,200 approved.':'AIA索賠#44821 — 港幣3,200元已批准。'},
         ].map((m,i)=>(
           <div key={i} style={{padding:'10px 14px',borderBottom:i<2?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start'}}>
@@ -146,7 +144,6 @@ function HomeScreen({ onNav, isEn }) {
   )
 }
 
-// ── RECORDS ───────────────────────────────────────────────────────────────────
 function RecordsScreen({ isEn }) {
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
@@ -249,21 +246,23 @@ function RecordsScreen({ isEn }) {
           <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>Allergy test results.pdf</div><div style={{fontSize:'11px',color:C.textSub}}>Uploaded 9 Jan · Awaiting verification</div></div>
           <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}}>Send for review</Btn>
         </Card>
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-          ◇ {isEn?'Once registered on Medsa with your govt ID, records from partner institutions sync automatically.':'使用政府身份證在Medsa上註冊後，合作機構的記錄會自動同步。'}
-        </div>
       </>}
     </div>
   )
 }
 
-// ── DOCTORS ───────────────────────────────────────────────────────────────────
 function DoctorsScreen({ isEn }) {
   const [tab,setTab]=useState('search')
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
   const [booked,setBooked]=useState(false)
-  const doctors=[{init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok'},{init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due'},{init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok'},{init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due'},{init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full'}]
+  const doctors=[
+    {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok'},
+    {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due'},
+    {init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok'},
+    {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due'},
+    {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full'},
+  ]
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   const UNAVAIL=['9:30am','11:00am']
   return (
@@ -280,15 +279,6 @@ function DoctorsScreen({ isEn }) {
         ))}
       </div>
       {tab==='search'&&<>
-        <SecLabel>{isEn?'Live wait times · Near you':'即時等候時間 · 附近'}</SecLabel>
-        <Card>
-          {waitTimes.map((c,i)=>{const [bg,fg]=busyColor[c.busy]||busyColor.Low;return(
-            <div key={i} style={{padding:'12px 16px',display:'flex',alignItems:'center',borderBottom:i<waitTimes.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{c.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.area}</div></div>
-              <div style={{textAlign:'right'}}><div style={{fontSize:'16px',fontWeight:700,color:c.wait>45?C.red:c.wait>20?C.amber:C.green}}>{c.wait} min</div><span style={{fontSize:'10px',background:bg,color:fg,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{c.busy}</span></div>
-            </div>
-          )})}
-        </Card>
         <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
         {doctors.map((doc,i)=>(
           <Card key={i}>
@@ -353,8 +343,8 @@ function DoctorsScreen({ isEn }) {
           <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
             <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
             <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Dr Chan Siu-ming · Tue 24 Jun at {selTime} · Pacific Medical Group</div>
-            <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>setBooked(false)}>Done</Btn>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Dr Chan Siu-ming · Tue 24 Jun at {selTime}</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>
           </div>
         </div>}
       </>}
@@ -377,7 +367,6 @@ function DoctorsScreen({ isEn }) {
   )
 }
 
-// ── MED ALARM CARD (standalone component — hooks cannot be used inside .map) ──
 function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
   const [on,setOn]=useState(defaultOn)
   const [t,setT]=useState(defaultTime)
@@ -397,7 +386,6 @@ function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
   )
 }
 
-// ── CALENDAR ──────────────────────────────────────────────────────────────────
 function CalendarScreen({ isEn }) {
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -442,43 +430,19 @@ function CalendarScreen({ isEn }) {
   )
 }
 
-// ── INSURANCE ─────────────────────────────────────────────────────────────────
 function InsuranceScreen({ isEn }) {
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
   const [agentRating,setAgentRating]=useState(null)
-
   const plans=[
-    {
-      name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,
-      why:'Covers your diabetes management, outpatient visits, and lab tests. Matches your usage history.',
-      covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)'],
-      agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'},
-    },
-    {
-      name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,
-      why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',
-      covers:['Hospitalisation','Specialist','Surgery'],
-      agent:{name:'Ms Lee Mei-kwan',rating:4.8,reviews:41,company:'Blue Cross · Agent'},
-    },
-    {
-      name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + unlimited travel',match:82,sponsored:false,
-      why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',
-      covers:['Hospitalisation','Outpatient','Travel emergency','Mental health'],
-      agent:{name:'Mr Lam Wai-keung',rating:4.7,reviews:88,company:'Bupa · Senior Agent'},
-    },
-    {
-      name:'AIA Critical Rider',company:'AIA',type:'Critical illness add-on',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,
-      why:'Add-on to your current plan. Pays out lump sum for critical diagnoses — cancer, heart attack, stroke.',
-      covers:['Critical illness lump sum','57 covered conditions'],
-      agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'},
-    },
+    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,why:'Covers your diabetes management, outpatient visits, and lab tests.',covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)'],agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'}},
+    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,why:'Strong hospital coverage at lower cost.',covers:['Hospitalisation','Specialist','Surgery'],agent:{name:'Ms Lee Mei-kwan',rating:4.8,reviews:41,company:'Blue Cross · Agent'}},
+    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',match:82,sponsored:false,why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',covers:['Hospitalisation','Outpatient','Travel emergency','Mental health'],agent:{name:'Mr Lam Wai-keung',rating:4.7,reviews:88,company:'Bupa · Senior Agent'}},
+    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,why:'Pays out lump sum for critical diagnoses — cancer, heart attack, stroke.',covers:['Critical illness lump sum','57 covered conditions'],agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'}},
   ]
-
   return (
     <div style={{background:C.beige,flex:1}}>
-      {/* Active plan overview banner */}
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care — Active plan</div>
         <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
@@ -488,20 +452,15 @@ function InsuranceScreen({ isEn }) {
           <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
         </div>
       </div>
-
-      {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
         {[['plans',isEn?'Plans & AI picks':'計劃與AI推薦'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
-
-      {/* ── PLANS & AI ── */}
       {tab==='plans'&&<>
-        {/* AI picks section */}
         <div style={{margin:'16px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history and usage. No agents involved in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.':'根據您的病史和使用情況。純數據驅動。贊助計劃清楚標示，不影響匹配分數。'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history. No agents in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.':'根據您的病史。純數據驅動。贊助計劃清楚標示，不影響匹配分數。'}</div>
         </div>
         <SecLabel>{isEn?'Recommended for you':'為您推薦'}</SecLabel>
         {plans.map((plan,i)=>(
@@ -517,18 +476,15 @@ function InsuranceScreen({ isEn }) {
               </div>
               <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div><div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div></div>
             </div>
-            {/* Match bar */}
             <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
               <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/></div>
               <span style={{fontSize:'11px',fontWeight:600,color:plan.match>=90?C.green:plan.match>=80?C.amber:C.textSub}}>{plan.match}% match</span>
             </div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px',fontStyle:'italic'}}>"{plan.why}"</div>
-            {/* Expanded coverage */}
             {expanded===i&&<>
               <div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
                 {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
               </div>
-              {/* Agent surfaces after inquiry */}
               {inquired===i&&<div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px',marginBottom:'10px'}}>
                 <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>Assigned agent for this plan</div>
                 <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
@@ -551,23 +507,15 @@ function InsuranceScreen({ isEn }) {
             </div>
           </Card>
         ))}
-
-        {/* Search all plans */}
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
         <div style={{padding:'0 16px 10px'}}>
           <div style={{position:'relative',display:'flex',alignItems:'center'}}>
             <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search by keyword e.g. dental, travel, critical illness…':'按關鍵字搜尋，例如：牙科、旅遊、重疾…'}/>
+            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
           </div>
         </div>
-        <div style={{padding:'0 16px 16px'}}>
-          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-            ◇ {isEn?'Sponsored plans are clearly labelled. AI match scores are fully independent of sponsorship. Medsa does not receive commission for plan recommendations — only for referral clicks.':'贊助計劃清楚標示。AI匹配分數完全獨立於贊助。Medsa不從計劃推薦中收取佣金。'}
-          </div>
-        </div>
+        <div style={{padding:'0 16px 16px'}}><div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>◇ {isEn?'Sponsored plans are clearly labelled. AI match scores are independent of sponsorship.':'贊助計劃清楚標示。AI匹配分數完全獨立於贊助。'}</div></div>
       </>}
-
-      {/* ── CLAIMS ── */}
       {tab==='claims'&&<>
         <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -583,11 +531,9 @@ function InsuranceScreen({ isEn }) {
         ))}
         <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'File new claim':'提交新索賠'}</Btn></div>
       </>}
-
-      {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
         <div style={{margin:'16px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-          ◇ {isEn?'Agent ratings are left by Medsa patients after working with an agent. Agents are assigned by insurers — you can rate yours or browse agents before inquiring on a plan.':'代理人評分由患者在與代理人合作後留下。代理人由保險公司指派。'}
+          ◇ {isEn?'Agent ratings are left by Medsa patients. Agents are assigned by insurers — rate yours or browse before inquiring on a plan.':'代理人評分由患者留下。代理人由保險公司指派。'}
         </div>
         <SecLabel>{isEn?'Your current agent':'您的當前代理人'}</SecLabel>
         <Card style={{padding:'16px'}}>
@@ -603,14 +549,15 @@ function InsuranceScreen({ isEn }) {
             <Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn>
             <Btn style={{flex:1,fontSize:'12px'}}>💬 Message</Btn>
           </div>
-          {agentRating===null?<Btn variant="primary" style={{width:'100%'}} onClick={()=>setAgentRating(0)}>Rate your agent</Btn>:
-          <div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
-            <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-              {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAgentRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:agentRating>=n?1:0.3}}>★</div>)}
-            </div>
-            <Btn variant="primary" style={{width:'100%'}}>Submit rating</Btn>
-          </div>}
+          {agentRating===null
+            ?<Btn variant="primary" style={{width:'100%'}} onClick={()=>setAgentRating(0)}>Rate your agent</Btn>
+            :<div>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
+              <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+                {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAgentRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:agentRating>=n?1:0.3}}>★</div>)}
+              </div>
+              <Btn variant="primary" style={{width:'100%'}}>Submit rating</Btn>
+            </div>}
         </Card>
         <SecLabel>{isEn?'Browse agents by rating':'按評分瀏覽代理人'}</SecLabel>
         {[
@@ -634,7 +581,6 @@ function InsuranceScreen({ isEn }) {
   )
 }
 
-// ── PRESCRIPTIONS ─────────────────────────────────────────────────────────────
 function PrescriptionsScreen({ isEn }) {
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -673,7 +619,6 @@ function PrescriptionsScreen({ isEn }) {
   )
 }
 
-// ── FAMILY ────────────────────────────────────────────────────────────────────
 function FamilyScreen({ isEn }) {
   const members=[
     {name:'Wong Tai (Mum)',relation:'Mother',age:64,type:'Senior',status:'Active',alerts:2},
@@ -711,13 +656,12 @@ function FamilyScreen({ isEn }) {
       ))}
       <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account. Minors under 18 and seniors over 60 can be monitored with a small monthly subscription.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
+        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
       </div>
     </div>
   )
 }
 
-// ── STORAGE ───────────────────────────────────────────────────────────────────
 function StorageScreen({ isEn }) {
   const tiers=[
     {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
@@ -749,7 +693,6 @@ function StorageScreen({ isEn }) {
   )
 }
 
-// ── ROOT ─────────────────────────────────────────────────────────────────────
 export default function PatientApp() {
   const [screen,setScreen]=useState('home')
   const [isEn,setIsEn]=useState(true)
