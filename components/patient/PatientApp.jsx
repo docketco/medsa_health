@@ -520,13 +520,14 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
       <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
       {appointments.length>0 ? appointments.map((appt,i)=>{
         const dt = new Date(appt.scheduled_at)
-        const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})
-        const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})
+        const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
+        const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Hong_Kong'})
+        const drName = appt.practitioners?.full_name ? 'Dr '+appt.practitioners.full_name.split(',')[0] : appt.appointment_type
         return(
           <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
             <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:'14px',fontWeight:500}}>{appt.practitioners?.full_name||appt.appointment_type}</div>
+              <div style={{fontSize:'14px',fontWeight:500}}>{drName}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
               <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
             </div>
@@ -978,7 +979,7 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
         name:`${m.medication_name} ${m.dosage||''}`.trim(),
         dose:m.frequency||'As prescribed',
         dr:m.prescribed_by||'—',
-        refills:`Prescribed by ${m.institution||'clinic'} · ${m.start_date?'Since '+new Date(m.start_date).toLocaleDateString('en-HK',{month:'short',year:'numeric'}):''}`,
+        refills:`${m.institution||''} · ${m.start_date?'Since '+new Date(m.start_date).toLocaleDateString('en-HK',{month:'short',year:'numeric'}):''}`.trim().replace(/^·\s*/,''),
         icon:['◉','◈','◇','◎','▣'][idx%5],
         bg:[C.greenLight,C.brownLight,C.amberLight,C.blueLight,C.greenLight][idx%5],
       })) : [
@@ -992,7 +993,7 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
             <div style={{flex:1}}>
               <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
               <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{rx.dose}</div>
-              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>Prescribed by {rx.dr}</div>
+              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{rx.dr}</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{rx.refills}</div>
             </div>
           </div>
