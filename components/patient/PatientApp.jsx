@@ -529,11 +529,11 @@ function ClaimsTab({ isEn }) {
   const [bundleReady,setBundleReady]=useState(false)
 
   const CLAIM_TYPES=[
-    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:['Consultation receipt','Doctor's diagnosis letter or stamp','Patient ID copy','Policy number']},
-    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:['Hospital admission & discharge summary','All receipts and invoices','Doctor's report','Lab & imaging reports (if any)','Patient ID copy','Policy number']},
-    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:['Specialist consultation receipt','Referral letter from GP (if required by your plan)','Diagnosis and treatment notes','Patient ID copy','Policy number']},
-    {key:'lab',label:'Lab & imaging',icon:'◉',docs:['Lab or imaging receipt','Test results report','Doctor's referral or order','Patient ID copy','Policy number']},
-    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:['Pharmacy receipt','Prescription copy','Doctor's diagnosis (if required)','Patient ID copy','Policy number']},
+    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:['Consultation receipt','Doctor diagnosis letter or stamp','Patient ID copy','Policy number']},
+    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:['Hospital admission & discharge summary','All receipts and invoices','Doctor report','Lab & imaging reports (if any)','Patient ID copy','Policy number']},
+    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:['Specialist consultation receipt','Referral letter from GP if required by plan','Diagnosis and treatment notes','Patient ID copy','Policy number']},
+    {key:'lab',label:'Lab & imaging',icon:'◉',docs:['Lab or imaging receipt','Test results report','Doctor referral or order','Patient ID copy','Policy number']},
+    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:['Pharmacy receipt','Prescription copy','Doctor diagnosis (if required)','Patient ID copy','Policy number']},
   ]
 
   const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
