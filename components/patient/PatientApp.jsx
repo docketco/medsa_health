@@ -23,72 +23,149 @@ function Badge({ text, type }) {
   return <span style={{fontSize:'10px',background:bg,color:fg,padding:'3px 9px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
 }
 
-function EmergencyOverlay({ open, onClose }) {
+// ── EMERGENCY CARD SETUP + CONSENT FLOW ──────────────────────────────────────
+// This is shown to PATIENTS only for setup/consent — not for showing to EMS.
+// EMS access the emergency card automatically via QR scan in the practitioner portal.
+function EmergencyCardSetup({ open, onClose, consented, onConsent }) {
+  const [step, setStep] = useState(consented ? 'view' : 'intro')
   if (!open) return null
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'90vh',overflowY:'auto'}}>
-        <div style={{textAlign:'center',marginBottom:'16px'}}>
-          <div style={{fontSize:'28px',marginBottom:'6px'}}>🚨</div>
-          <div style={{fontSize:'18px',fontWeight:700,color:C.red}}>Emergency health card</div>
-          <div style={{fontSize:'12px',color:C.textSub}}>Show this to any medical personnel</div>
-        </div>
-        <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
-          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Wong Mei-ling, Lisa</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB 14 Mar 1988 · MDS-84921-HK</div>
-          <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
-            <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
-              <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
-              <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>O+</div>
-            </div>
-            <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
-              <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
-              <div style={{fontSize:'13px',fontWeight:600}}>Wong Tai (Mother)</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>+852 9xxx xxxx</div>
-            </div>
+
+        {/* Step 1 — intro / not yet consented */}
+        {step==='intro'&&<>
+          <div style={{textAlign:'center',marginBottom:'20px'}}>
+            <div style={{fontSize:'36px',marginBottom:'10px'}}>🛡️</div>
+            <div style={{fontSize:'18px',fontWeight:700,color:C.text,marginBottom:'6px'}}>Emergency health card</div>
+            <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>When activated, verified emergency personnel can instantly access your critical medical info by scanning your Medsa QR — even if you can't speak or respond.</div>
           </div>
-          {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
-            <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c}</div>
-          ))}
-          <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-            {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
-              <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
+          <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'16px',marginBottom:'16px'}}>
+            <div style={{fontSize:'12px',fontWeight:600,color:C.green,marginBottom:'10px'}}>What emergency personnel will see:</div>
+            {['Blood type','Critical conditions','Severe allergies','Current medications','Emergency contact'].map((item,i)=>(
+              <div key={i} style={{fontSize:'13px',color:C.text,padding:'4px 0',display:'flex',alignItems:'center',gap:'8px'}}><span style={{color:C.green,fontSize:'10px'}}>✓</span>{item}</div>
             ))}
           </div>
-          <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-            {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i)=>(
-              <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m}</div>
-            ))}
+          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
+            ◇ This information is auto-populated from your verified medical records and updates automatically. You cannot selectively hide fields — this ensures accuracy in a life-critical moment. You can deactivate the card at any time.
           </div>
-        </div>
-        <div style={{background:C.greenXLight,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Verified Medsa record · Last updated 12 Jun 2025 · QE Hospital</div>
-        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-          <button onClick={()=>alert('Apple Wallet integration coming soon. Your physical Medsa card works in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
-            Add to Apple Wallet
-          </button>
-          <button onClick={()=>alert('Google Wallet integration coming soon. Your physical Medsa card works in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
-            Google Wallet
-          </button>
-        </div>
-        <Btn style={{width:'100%'}} onClick={onClose}>Close</Btn>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={()=>setStep('consent')}>Set up my emergency card</Btn>
+          <Btn style={{width:'100%'}} onClick={onClose}>Not now</Btn>
+        </>}
+
+        {/* Step 2 — consent */}
+        {step==='consent'&&<>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'16px'}}>One-time consent</div>
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',marginBottom:'16px',fontSize:'13px',color:C.text,lineHeight:1.8}}>
+            I, <strong>Wong Mei-ling, Lisa</strong>, consent to Medsa making my critical medical information accessible to verified emergency medical personnel (EMS, A&E staff, and Medsa-registered practitioners in an emergency context) via QR scan.<br/><br/>
+            I understand that:<br/>
+            · This information is sourced from my verified medical records<br/>
+            · It updates automatically as my records are updated<br/>
+            · I cannot selectively withhold fields from the emergency card<br/>
+            · I can deactivate this consent at any time from Settings<br/>
+            · Medsa is not liable for information on any physical card I self-complete
+          </div>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={()=>{onConsent();setStep('view')}}>I agree — activate my emergency card</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setStep('intro')}>Back</Btn>
+        </>}
+
+        {/* Step 3 — active card view (for patient reference) */}
+        {step==='view'&&<>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+            <div>
+              <div style={{fontSize:'17px',fontWeight:700}}>Emergency card</div>
+              <div style={{fontSize:'12px',color:C.green,marginTop:'2px'}}>● Active · Auto-updating from records</div>
+            </div>
+            <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px',fontWeight:600}}>Consented ✓</span>
+          </div>
+          <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
+            <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
+            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Wong Mei-ling, Lisa</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB 14 Mar 1988 · MDS-84921-HK</div>
+            <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
+              <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
+                <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
+                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>O+</div>
+              </div>
+              <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
+                <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
+                <div style={{fontSize:'13px',fontWeight:600}}>Wong Tai (Mother)</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>+852 9xxx xxxx</div>
+              </div>
+            </div>
+            {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
+              <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c}</div>
+            ))}
+            <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
+              {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
+                <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
+              ))}
+            </div>
+            <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
+              {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i)=>(
+                <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m}</div>
+              ))}
+            </div>
+          </div>
+          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
+            ◇ <strong>Physical card:</strong> Medsa provides a blank courtesy card with your QR pre-printed. Fill in fields by hand from the information above. Keep it in your wallet. Note: you are responsible for keeping the handwritten fields accurate. Scanning the QR always retrieves live verified data.
+          </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <button onClick={()=>alert('Add your Medsa Emergency Card to Apple Wallet — coming in Phase 3.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
+              Apple Wallet
+            </button>
+            <button onClick={()=>alert('Add your Medsa Emergency Card to Google Wallet — coming in Phase 3.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
+              Google Wallet
+            </button>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>alert('Request a physical courtesy card from Medsa — coming soon.')}>Request physical card</Btn>
+            <Btn variant="danger" style={{flex:1,fontSize:'12px'}} onClick={()=>{onConsent(false);setStep('intro')}}>Deactivate card</Btn>
+          </div>
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={onClose}>Close</Btn>
+        </>}
       </div>
     </div>
   )
 }
 
-function HomeScreen({ onNav, isEn }) {
+function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented }) {
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
-      <div style={{background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,margin:'16px 16px 0',borderRadius:'16px',padding:'20px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-        <div>
-          <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?'Good morning, Lisa':'早晨，Lisa'}</div>
-          <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport is active':'您的健康護照已啟動'}</div>
-          <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'8px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
+
+      {/* ── Emergency card reminder banner (shown until consented) ── */}
+      {!emergencyConsented&&(
+        <div onClick={onOpenEmergencySetup} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.amber} 0%,#c87000 100%)`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
+          <div style={{width:36,height:36,background:'rgba(255,255,255,0.2)',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',flexShrink:0}}>🛡️</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?'Set up your emergency card':'設置緊急健康卡'}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?'Let verified EMS access your critical info instantly on scan':'讓緊急人員即時掃描獲取您的關鍵資訊'}</div>
+          </div>
+          <span style={{color:'rgba(255,255,255,0.8)',fontSize:'18px'}}>›</span>
         </div>
-        <div style={{width:64,height:64,background:'#fff',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+      )}
+
+      {/* ── QR Health Passport — hero element ── */}
+      <div style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?'Good morning, Lisa':'早晨，Lisa'}</div>
+            <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
+            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
+          </div>
+          {/* Emergency card status badge */}
+          <div onClick={onOpenEmergencySetup} style={{cursor:'pointer'}}>
+            {emergencyConsented
+              ?<span style={{fontSize:'10px',background:'rgba(255,255,255,0.2)',color:'#fff',padding:'4px 10px',borderRadius:'20px',fontWeight:600,display:'flex',alignItems:'center',gap:'4px'}}><span style={{width:6,height:6,borderRadius:'50%',background:'#7fff7f',display:'inline-block'}}/>Emergency card ✓</span>
+              :<span style={{fontSize:'10px',background:'rgba(255,180,0,0.3)',color:'#ffe066',padding:'4px 10px',borderRadius:'20px',fontWeight:600}}>Emergency card — set up ›</span>
+            }
+          </div>
+        </div>
+        {/* QR Code — large and centred, the hero */}
+        <div style={{background:'#fff',borderRadius:'14px',padding:'20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'12px'}}>
+          <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
             <rect x="2" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
             <rect x="28" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
             <rect x="2" y="28" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
@@ -97,6 +174,10 @@ function HomeScreen({ onNav, isEn }) {
             <rect x="36" y="34" width="4" height="4" fill={C.green}/><rect x="28" y="40" width="4" height="6" fill={C.green}/>
             <rect x="34" y="42" width="12" height="4" fill={C.green}/>
           </svg>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{isEn?'Show this to any Medsa-registered provider':'向任何Medsa註冊醫療人員出示'}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{isEn?'They see what their role permits · You control the rest':'他們只看到其職責所允許的內容'}</div>
+          </div>
         </div>
       </div>
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
@@ -707,6 +788,7 @@ export default function PatientApp() {
   const [screen,setScreen]=useState('home')
   const [isEn,setIsEn]=useState(true)
   const [emergencyOpen,setEmergencyOpen]=useState(false)
+  const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
   return (
@@ -716,13 +798,10 @@ export default function PatientApp() {
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
         {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
         <div style={{flex:1}}/>
-        <button onClick={()=>setEmergencyOpen(true)} style={{background:C.red,border:'none',color:'#fff',fontSize:'11px',fontWeight:700,padding:'5px 10px',borderRadius:'20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'5px',flexShrink:0}}>
-          <span style={{width:6,height:6,borderRadius:'50%',background:'#ff9999',display:'inline-block',animation:'pulse 2s infinite'}}/>SOS
-        </button>
         <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} emergencyConsented={emergencyConsented}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn}/>}
@@ -739,7 +818,12 @@ export default function PatientApp() {
           </div>
         ))}
       </div>
-      <EmergencyOverlay open={emergencyOpen} onClose={()=>setEmergencyOpen(false)}/>
+      <EmergencyCardSetup
+        open={emergencyOpen}
+        onClose={()=>setEmergencyOpen(false)}
+        consented={emergencyConsented}
+        onConsent={(val=true)=>setEmergencyConsented(val)}
+      />
     </div>
   )
 }
