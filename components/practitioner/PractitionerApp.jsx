@@ -414,13 +414,84 @@ function PatientSearchScreen({ role }) {
         </>}
 
         {activeTab==='history'&&(access.history&&patient.consent.history?<>
-          <SecLabel>Conditions (this institution)</SecLabel>
+          <div style={{margin:'12px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>
+            ✓ Patient has consented to share full history across institutions · Demo view shows complete cross-institution timeline
+          </div>
+          <SecLabel>Active conditions</SecLabel>
           <Card style={{padding:'12px 16px'}}>
-            {patient.criticalConditions.map((c,i,arr)=><div key={i} style={{fontSize:'13px',padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>◎ {c}</div>)}
+            {[
+              {condition:'Type 2 Diabetes (insulin-dependent)',since:'2018',severity:'Controlled',managing:'Dr Chan Siu-ming · QE Hospital'},
+              {condition:'Iron deficiency anaemia',since:'2020',severity:'Mild',managing:'Dr Chan Siu-ming · QE Hospital'},
+              {condition:'Coronary artery disease',since:'2021',severity:'Stable',managing:'Dr Lam Wai-yee · HK Sanatorium'},
+            ].map((c,i,arr)=>(
+              <div key={i} style={{padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>◎ {c.condition}</div>
+                <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textSub}}>
+                  <span>Since {c.since}</span>
+                  <span style={{color:C.green,fontWeight:500}}>{c.severity}</span>
+                  <span>{c.managing}</span>
+                </div>
+              </div>
+            ))}
           </Card>
-          <SecLabel>Visit history (this institution)</SecLabel>
+          <SecLabel>Allergies & alerts</SecLabel>
           <Card style={{padding:'12px 16px'}}>
-            {patient.institutionRecords.map((v,i,arr)=><div key={i} style={{fontSize:'13px',color:C.textSub,padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>{v}</div>)}
+            {[
+              {allergen:'Penicillin',severity:'SEVERE — anaphylaxis risk',type:'Medication'},
+              {allergen:'Dust mites',severity:'Moderate — respiratory',type:'Environmental'},
+            ].map((a,i,arr)=>(
+              <div key={i} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div><div style={{fontSize:'13px',fontWeight:700,color:C.red}}>⚠ {a.allergen}</div><div style={{fontSize:'11px',color:C.textSub}}>{a.type}</div></div>
+                <span style={{fontSize:'11px',background:C.redLight,color:C.red,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>{a.severity}</span>
+              </div>
+            ))}
+          </Card>
+          <SecLabel>Full visit timeline — all institutions</SecLabel>
+          {[
+            {date:'20 Jun 2025',institution:'QE Hospital',type:'Admission',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Admitted for diabetic review. Elevated glucose 5.9 mmol/L. Fatigue reported. Blood panel ordered. Metformin dose reviewed.',icon:'▣',bg:C.blueLight},
+            {date:'12 Jun 2025',institution:'QE Hospital',type:'Lab results',doctor:'Dr Chan Siu-ming',dept:'Pathology',notes:'Full CBC. Haemoglobin 13.8 g/dL (normal). WBC 6.2 × 10⁹/L (normal). Glucose 5.9 mmol/L (slightly elevated). Iron 8.2 μmol/L (low).',icon:'◉',bg:C.greenLight},
+            {date:'3 May 2025',institution:'Matilda International',type:'Outpatient visit',doctor:'Dr Ho Siu-wai',dept:'General Practice',notes:'Annual check-up. BP 118/76 mmHg. BMI 22.4. Mild iron deficiency noted. Iron supplement prescribed. Flu vaccine recommended.',icon:'◎',bg:C.greenLight},
+            {date:'18 Feb 2025',institution:'Ruttonjee Hospital',type:'Imaging',doctor:'Dr Lam Wai-yee',dept:'Radiology',notes:'Chest X-ray. No active TB. Lungs clear. Cardiac silhouette normal. Incidental mild cardiomegaly — noted for cardiology follow-up.',icon:'▣',bg:C.amberLight},
+            {date:'9 Jan 2025',institution:'HK Sanatorium',type:'Specialist',doctor:'Dr Lam Wai-yee',dept:'Cardiology',notes:'Coronary artery disease annual review. ECG normal sinus rhythm. Atorvastatin continued. BP well controlled. Next review in 12 months.',icon:'◈',bg:C.blueLight},
+            {date:'14 Oct 2024',institution:'QE Hospital',type:'Outpatient visit',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Diabetes 6-month review. HbA1c 6.8% — good control. Metformin 500mg twice daily continued. Diet counselling provided.',icon:'◎',bg:C.greenLight},
+            {date:'22 Aug 2024',institution:'Matilda International',type:'Procedure',doctor:'Dr Wong Mei-ling',dept:'Ophthalmology',notes:'Diabetic retinopathy screening. Mild background retinopathy detected in left eye. Patient informed. Annual screening recommended.',icon:'◇',bg:C.brownLight},
+            {date:'5 Mar 2024',institution:'QE Hospital',type:'Emergency',doctor:'Dr Fung Ka-wai',dept:'A&E',notes:'Presented with chest pain. ECG showed no acute changes. Troponin negative. Diagnosed as musculoskeletal. Discharged same day.',icon:'◈',bg:C.redLight},
+          ].map((v,i)=>(
+            <Card key={i} style={{padding:'14px 16px'}}>
+              <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
+                <div style={{width:38,height:38,borderRadius:'10px',background:v.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{v.icon}</div>
+                <div style={{flex:1}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'4px'}}>
+                    <div><div style={{fontSize:'13px',fontWeight:600}}>{v.type}</div><div style={{fontSize:'11px',color:C.green,fontWeight:500}}>{v.institution} · {v.dept}</div></div>
+                    <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{v.date}</div><div style={{fontSize:'11px',color:C.textSub}}>{v.doctor}</div></div>
+                  </div>
+                  <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,fontStyle:'italic',marginTop:'4px'}}>"{v.notes}"</div>
+                </div>
+              </div>
+            </Card>
+          ))}
+          <SecLabel>Surgical & procedure history</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              {procedure:'Appendectomy',date:'Mar 2019',institution:'QE Hospital',surgeon:'Dr Ho Ka-fai',notes:'Laparoscopic. Uncomplicated. Full recovery.'},
+              {procedure:'Diabetic retinopathy laser treatment',date:'Nov 2021',institution:'HK Eye Hospital',surgeon:'Dr Chan Pui-shan',notes:'Left eye. Two sessions. No complications.'},
+            ].map((s,i,arr)=>(
+              <div key={i} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div style={{fontSize:'13px',fontWeight:500}}>{s.procedure}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{s.date} · {s.institution} · {s.surgeon}</div>
+                <div style={{fontSize:'12px',color:C.textSub,marginTop:'3px',fontStyle:'italic'}}>"{s.notes}"</div>
+              </div>
+            ))}
+          </Card>
+          <SecLabel>Family history (patient-declared)</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              'Father — Type 2 Diabetes, coronary artery disease (deceased age 71)',
+              'Mother — Hypertension, osteoporosis',
+              'Maternal grandmother — Breast cancer (deceased age 68)',
+            ].map((f,i,arr)=>(
+              <div key={i} style={{fontSize:'13px',color:C.textSub,padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>◇ {f}</div>
+            ))}
           </Card>
         </>:<div style={{padding:'40px 24px',textAlign:'center'}}>
           <div style={{fontSize:'24px',marginBottom:'12px',color:C.textMuted}}>◎</div>
