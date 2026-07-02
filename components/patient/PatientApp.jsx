@@ -1089,28 +1089,15 @@ function StorageScreen({ isEn, patient={} }) {
   )
 }
 
-export default function PatientApp({ liveData }) {
-  // liveData comes from Supabase via pages/patient.jsx
-  // Falls back to demo values if not yet connected
-  const patient = liveData?.patient || {
-    full_name: 'Wong Mei-ling, Lisa',
-    preferred_name: 'Lisa',
-    medsa_id: 'MDS-84921-HK',
-    date_of_birth: '1988-03-14',
-    blood_type: 'O+',
-    emergency_contact_name: 'Wong Tai',
-    emergency_contact_rel: 'Mother',
-    emergency_contact_phone: '+852 9xxx xxxx',
-    emergency_card_active: true,
-    storage_tier: 'essential',
-  }
-  const liveRecords = liveData?.records || []
-  const liveConditions = liveData?.conditions || []
-  const liveAllergies = liveData?.allergies || []
-  const liveMedications = liveData?.medications || []
-  const liveVaccinations = liveData?.vaccinations || []
-  const liveAppointments = liveData?.appointments || []
-  const liveClaims = liveData?.claims || []
+export default function PatientApp({ liveData={} }) {
+  const patient = liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
+  const liveRecords = liveData.records || []
+  const liveConditions = liveData.conditions || []
+  const liveAllergies = liveData.allergies || []
+  const liveMedications = liveData.medications || []
+  const liveVaccinations = liveData.vaccinations || []
+  const liveAppointments = liveData.appointments || []
+  const liveClaims = liveData.claims || []
   const [screen,setScreen]=useState('home')
   const [isEn,setIsEn]=useState(true)
   const [emergencyOpen,setEmergencyOpen]=useState(false)
