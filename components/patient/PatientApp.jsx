@@ -27,6 +27,7 @@ function Badge({ text, type }) {
 // This is shown to PATIENTS only for setup/consent — not for showing to EMS.
 // EMS access the emergency card automatically via QR scan in the practitioner portal.
 function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], patient }) {
+  const p = patient || { full_name:'Wong Mei-ling, Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx' }
   const [step, setStep] = useState(consented ? 'view' : 'intro')
   if (!open) return null
   return (
@@ -80,12 +81,12 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
           </div>
           <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
             <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
-            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{patient?.full_name||'Wong Mei-ling, Lisa'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {patient?.date_of_birth?new Date(patient?.date_of_birth||'1988-03-14').toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'14 Mar 1988'} · {patient?.medsa_id||'MDS-84921-HK'}</div>
+            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{p.full_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {new Date(p.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · {p.medsa_id}</div>
             <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
               <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
                 <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
-                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>{patient?.blood_type||'O+'}</div>
+                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>{p.blood_type}</div>
               </div>
               <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
                 <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
@@ -131,7 +132,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
   )
 }
 
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented }) {
+function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented, patient={} }) {
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
 
@@ -1057,7 +1058,7 @@ function FamilyScreen({ isEn }) {
   )
 }
 
-function StorageScreen({ isEn }) {
+function StorageScreen({ isEn, patient={} }) {
   const tiers=[
     {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
     {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
@@ -1091,7 +1092,18 @@ function StorageScreen({ isEn }) {
 export default function PatientApp({ liveData }) {
   // liveData comes from Supabase via pages/patient.jsx
   // Falls back to demo values if not yet connected
-  const patient = liveData?.patient || null
+  const patient = liveData?.patient || {
+    full_name: 'Wong Mei-ling, Lisa',
+    preferred_name: 'Lisa',
+    medsa_id: 'MDS-84921-HK',
+    date_of_birth: '1988-03-14',
+    blood_type: 'O+',
+    emergency_contact_name: 'Wong Tai',
+    emergency_contact_rel: 'Mother',
+    emergency_contact_phone: '+852 9xxx xxxx',
+    emergency_card_active: true,
+    storage_tier: 'essential',
+  }
   const liveRecords = liveData?.records || []
   const liveConditions = liveData?.conditions || []
   const liveAllergies = liveData?.allergies || []
