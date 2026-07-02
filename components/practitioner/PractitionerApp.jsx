@@ -254,9 +254,19 @@ function PractitionerIDScreen({ role }) {
           </div>
         ))}
       </Card>
-      <div style={{padding:'0 16px 16px',display:'flex',gap:'8px'}}>
+      <div style={{padding:'0 16px 8px',display:'flex',gap:'8px'}}>
         <Btn style={{flex:1}}>Show QR</Btn>
         <Btn variant="primary" style={{flex:1}}>Download ID</Btn>
+      </div>
+      <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
+        <button onClick={()=>alert('Apple Wallet integration coming soon. Use your printed Medsa ID card in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
+          Add to Apple Wallet
+        </button>
+        <button onClick={()=>alert('Google Wallet integration coming soon. Use your printed Medsa ID card in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
+          Google Wallet
+        </button>
       </div>
     </div>
   )
@@ -424,10 +434,20 @@ function PatientSearchScreen({ role }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>Scan patient QR</SecLabel>
-      <div onClick={()=>role==='ems'?setView('ems'):setView('patient')} style={{margin:'0 16px 10px',background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'32px 20px',textAlign:'center',cursor:'pointer'}}>
+      {/* Role-based scan — what each role sees on scan */}
+      <div style={{margin:'0 16px 10px',background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'24px 20px',textAlign:'center',cursor:'pointer'}} onClick={()=>role==='ems'?setView('ems'):setView('patient')}>
         <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>⬡</div>
-        <div style={{fontSize:'14px',fontWeight:500}}>Scan patient Medsa QR</div>
-        <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{role==='ems'?'Emergency card surfaces immediately on scan':'Point device at patient QR code'}</div>
+        <div style={{fontSize:'14px',fontWeight:500,marginBottom:'6px'}}>Scan patient Medsa QR</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,maxWidth:'280px',margin:'0 auto'}}>
+          {role==='ems'&&'Emergency card immediately — blood type, allergies, critical conditions, medications, emergency contact'}
+          {role==='receptionist'&&'Check-in view — patient identity, appointments, billing only. No clinical data.'}
+          {role==='pharmacist'&&'Prescriptions with per-visit diagnosis context, allergies, interaction flags'}
+          {(role==='doctor'||role==='dept_head')&&'Full clinical view — history, vitals, labs, imaging, medications. Subject to patient consent per record type.'}
+          {(role==='nurse'||role==='clinic_nurse')&&'Vitals, medications, allergies, care tasks. Clinic nurses can dispense.'}
+          {role==='therapist'&&'Specialty notes + consented cross-specialty context — e.g. diabetes flag visible to optometrist if relevant to treatment'}
+          {role==='allied'&&'Specialty view + relevant consented health context from other providers'}
+          {role==='admin'&&'Full administrative and clinical view across all departments'}
+        </div>
       </div>
       <SecLabel>Or search manually</SecLabel>
       <div style={{padding:'0 16px 10px'}}>
@@ -438,7 +458,7 @@ function PatientSearchScreen({ role }) {
       </div>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',display:'flex',gap:'10px'}}>
         <span style={{color:C.brown}}>◇</span>
-        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}><strong style={{color:C.brown}}>Tiered access applies.</strong> You see only what your role permits and the patient has consented. Institution records are limited to this institution only.</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}><strong style={{color:C.brown}}>One QR, role-based output.</strong> The same patient QR shows each role exactly what their function requires and what the patient has consented to share. No public or unauthenticated access.</div>
       </div>
     </div>
   )
@@ -619,7 +639,7 @@ export default function PractitionerApp() {
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         <MedsaLogo height={20}/>
         <span style={{flex:1,fontSize:'10px',color:'rgba(255,255,255,0.5)',letterSpacing:'1px',textTransform:'uppercase'}}>practitioner</span>
-        <span style={{fontSize:'10px',background:r.bg,color:r.color,padding:'3px 9px',borderRadius:'20px',fontWeight:600}}>{r.icon} {r.label}</span>
+        <span style={{fontSize:'10px',background:'rgba(255,255,255,0.18)',color:'#fff',padding:'3px 9px',borderRadius:'20px',fontWeight:500}}>{r.icon} {r.label}</span>
         <button onClick={()=>setRole(null)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',fontFamily:'inherit'}}>Clock out</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
