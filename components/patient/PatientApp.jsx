@@ -522,22 +522,68 @@ function CalendarScreen({ isEn }) {
 }
 
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-// Standalone component so useState can be used cleanly (no hooks in maps)
 function ClaimsTab({ isEn }) {
   const [claimType,setClaimType]=useState(null)
   const [checklist,setChecklist]=useState({})
   const [bundleReady,setBundleReady]=useState(false)
 
+  // Documents that already exist in this patient's Medsa records
+  // In production these would be queried from the database
+  const MEDSA_RECORDS = {
+    'Lab results report': {title:'Blood panel — full CBC', date:'12 Jun 2025', institution:'QE Hospital'},
+    'Test results report': {title:'Blood panel — full CBC', date:'12 Jun 2025', institution:'QE Hospital'},
+    'Lab & imaging reports (if any)': {title:'Chest X-ray + Blood panel', date:'Feb & Jun 2025', institution:'QE Hospital / Ruttonjee'},
+    'Prescription copy': {title:'Metformin 500mg + Iron supplement', date:'3 May 2025', institution:'Matilda International'},
+    'Diagnosis and treatment notes': {title:'General check-up summary', date:'3 May 2025', institution:'Matilda International'},
+    'Patient ID copy': {title:'Wong Mei-ling, Lisa — MDS-84921-HK', date:'On file', institution:'Medsa profile'},
+    'Policy number': {title:'AIA Prime Care — Policy #AIA-84921-HK', date:'On file', institution:'Medsa profile'},
+  }
+
   const CLAIM_TYPES=[
-    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:['Consultation receipt','Doctor diagnosis letter or stamp','Patient ID copy','Policy number']},
-    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:['Hospital admission & discharge summary','All receipts and invoices','Doctor report','Lab & imaging reports (if any)','Patient ID copy','Policy number']},
-    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:['Specialist consultation receipt','Referral letter from GP if required by plan','Diagnosis and treatment notes','Patient ID copy','Policy number']},
-    {key:'lab',label:'Lab & imaging',icon:'◉',docs:['Lab or imaging receipt','Test results report','Doctor referral or order','Patient ID copy','Policy number']},
-    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:['Pharmacy receipt','Prescription copy','Doctor diagnosis (if required)','Patient ID copy','Policy number']},
+    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:[
+      {name:'Consultation receipt',medsa:false},
+      {name:'Doctor diagnosis letter or stamp',medsa:false},
+      {name:'Patient ID copy',medsa:true},
+      {name:'Policy number',medsa:true},
+    ]},
+    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:[
+      {name:'Hospital admission & discharge summary',medsa:false},
+      {name:'All receipts and invoices',medsa:false},
+      {name:'Doctor report',medsa:false},
+      {name:'Lab & imaging reports (if any)',medsa:true},
+      {name:'Patient ID copy',medsa:true},
+      {name:'Policy number',medsa:true},
+    ]},
+    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:[
+      {name:'Specialist consultation receipt',medsa:false},
+      {name:'Referral letter from GP if required',medsa:false},
+      {name:'Diagnosis and treatment notes',medsa:true},
+      {name:'Patient ID copy',medsa:true},
+      {name:'Policy number',medsa:true},
+    ]},
+    {key:'lab',label:'Lab & imaging',icon:'◉',docs:[
+      {name:'Lab or imaging receipt',medsa:false},
+      {name:'Test results report',medsa:true},
+      {name:'Doctor referral or order',medsa:false},
+      {name:'Patient ID copy',medsa:true},
+      {name:'Policy number',medsa:true},
+    ]},
+    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:[
+      {name:'Pharmacy receipt',medsa:false},
+      {name:'Prescription copy',medsa:true},
+      {name:'Doctor diagnosis (if required)',medsa:false},
+      {name:'Patient ID copy',medsa:true},
+      {name:'Policy number',medsa:true},
+    ]},
   ]
 
   const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
-  const allChecked = selectedType && selectedType.docs.every((_,i)=>checklist[`${claimType}_${i}`])
+  // Medsa docs auto-checked, manual docs need patient action
+  const getKey = (type,i) => `${type}_${i}`
+  const isReady = (doc,key) => doc.medsa || checklist[key]
+  const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
+  const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
+  const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
 
   return (
     <div>
@@ -587,22 +633,38 @@ function ClaimsTab({ isEn }) {
           <span style={{fontSize:'12px',color:C.textMuted}}>· {selectedType.label}</span>
         </div>
 
+        {/* Auto-attach summary */}
+        <div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'12px 14px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◎ {medsaCount} of {selectedType.docs.length} documents auto-attached from your Medsa records</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{manualCount > 0 ? `${manualCount} item${manualCount>1?'s':''} need your attention — marked below.` : 'All documents are ready. You can bundle your claim now.'}</div>
+        </div>
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>Documents checklist</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Tick each item as you gather it. Some may already be in your Medsa records.</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Green items are auto-attached from your Medsa records. Upload or confirm the remaining items.</div>
           {selectedType.docs.map((doc,i)=>{
-            const key=`${claimType}_${i}`
-            const fromMedsa=['Lab & imaging reports (if any)','Lab or imaging receipt','Test results report','Prescription copy'].includes(doc)
+            const key=getKey(claimType,i)
+            const ready=isReady(doc,key)
+            const medsaRecord=MEDSA_RECORDS[doc.name]
             return(
-              <div key={i} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none'}}>
-                <div onClick={()=>setChecklist(prev=>({...prev,[key]:!prev[key]}))} style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${checklist[key]?C.green:C.border}`,background:checklist[key]?C.green:'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  {checklist[key]&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+              <div key={i} style={{display:'flex',gap:'12px',alignItems:'flex-start',padding:'12px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent',margin:doc.medsa?'0 -16px':undefined,padding:doc.medsa?'12px 16px':'12px 0'}}>
+                {/* Checkbox — auto-checked and locked for Medsa records */}
+                <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',cursor:doc.medsa?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}
+                  onClick={()=>!doc.medsa&&setChecklist(prev=>({...prev,[key]:!prev[key]}))}>
+                  {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
                 </div>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:'13px',color:C.text}}>{doc}</div>
-                  {fromMedsa&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>◎ May be available in your Medsa records</div>}
+                  <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
+                  {doc.medsa&&medsaRecord&&<>
+                    <div style={{fontSize:'11px',color:C.green,marginTop:'3px',fontWeight:500}}>◎ Auto-attached from Medsa records</div>
+                    <div style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
+                      <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{medsaRecord.title}</div>
+                      <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{medsaRecord.date} · {medsaRecord.institution}</div>
+                    </div>
+                  </>}
+                  {!doc.medsa&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
                 </div>
-                <div style={{fontSize:'11px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0}}>Upload</div>
+                {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
+                {doc.medsa&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:600,flexShrink:0,alignSelf:'center'}}>From Medsa</span>}
               </div>
             )
           })}
@@ -611,12 +673,15 @@ function ClaimsTab({ isEn }) {
         {/* Progress indicator */}
         <div style={{padding:'0 16px 10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>
-            <span>{Object.values(checklist).filter(Boolean).length} of {selectedType.docs.length} items ready</span>
-            {allChecked&&<span style={{color:C.green,fontWeight:600}}>Package ready ✓</span>}
+            <span style={{color:C.green}}>{medsaCount} auto-attached from Medsa</span>
+            {allChecked
+              ?<span style={{color:C.green,fontWeight:600}}>All documents ready ✓</span>
+              :<span>{manualCount - Object.values(checklist).filter(Boolean).length} still needed</span>}
           </div>
           <div style={{height:6,background:C.card,borderRadius:6,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${(Object.values(checklist).filter(Boolean).length/selectedType.docs.length)*100}%`,background:allChecked?C.green:C.amber,borderRadius:6,transition:'width 0.3s'}}/>
+            <div style={{height:'100%',width:`${(selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length/selectedType.docs.length)*100}%`,background:allChecked?C.green:C.amber,borderRadius:6,transition:'width 0.3s'}}/>
           </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length} of {selectedType.docs.length} documents ready</div>
         </div>
 
         {/* Bundle and submit */}
