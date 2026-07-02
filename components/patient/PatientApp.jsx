@@ -525,15 +525,28 @@ function InsuranceScreen({ isEn }) {
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
-  const [agentRating,setAgentRating]=useState(null)
+  const [anonRating,setAnonRating]=useState(null)
+  const [feedbackText,setFeedbackText]=useState('')
+  const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
+
   const plans=[
-    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,why:'Covers your diabetes management, outpatient visits, and lab tests.',covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)'],agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'}},
-    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,why:'Strong hospital coverage at lower cost.',covers:['Hospitalisation','Specialist','Surgery'],agent:{name:'Ms Lee Mei-kwan',rating:4.8,reviews:41,company:'Blue Cross · Agent'}},
-    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',match:82,sponsored:false,why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',covers:['Hospitalisation','Outpatient','Travel emergency','Mental health'],agent:{name:'Mr Lam Wai-keung',rating:4.7,reviews:88,company:'Bupa · Senior Agent'}},
-    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,why:'Pays out lump sum for critical diagnoses — cancer, heart attack, stroke.',covers:['Critical illness lump sum','57 covered conditions'],agent:{name:'Mr Cheung Ho-fai',rating:4.9,reviews:62,company:'AIA · Senior Agent'}},
+    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,
+     why:'Covers your diabetes management, outpatient visits, and lab tests. Matches your usage history.',
+     covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
+    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,
+     why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',
+     covers:['Hospitalisation','Specialist','Surgery']},
+    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',match:82,sponsored:false,
+     why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',
+     covers:['Hospitalisation','Outpatient','Travel emergency','Mental health']},
+    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,
+     why:'Pays lump sum for critical diagnoses — cancer, heart attack, stroke. Add-on to existing plan.',
+     covers:['Critical illness lump sum','57 covered conditions']},
   ]
+
   return (
     <div style={{background:C.beige,flex:1}}>
+      {/* Active plan banner */}
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care — Active plan</div>
         <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
@@ -543,16 +556,29 @@ function InsuranceScreen({ isEn }) {
           <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
         </div>
       </div>
+
+      {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
         {[['plans',isEn?'Plans & AI picks':'計劃與AI推薦'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
+
+      {/* ── PLANS & AI ── */}
       {tab==='plans'&&<>
-        <div style={{margin:'16px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Based on your health history. No agents in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.':'根據您的病史。純數據驅動。贊助計劃清楚標示，不影響匹配分數。'}</div>
+        {/* How Medsa works with insurers — integration story visible in demo */}
+        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ How Medsa connects you to insurers</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
+            Medsa matches your health profile to publicly listed plans using AI — no questionnaires, no cold calls. When you inquire, your details are forwarded directly to the insurer. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.
+          </div>
         </div>
+
+        <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Based on your verified health records. No agents involved in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.</div>
+        </div>
+
         <SecLabel>{isEn?'Recommended for you':'為您推薦'}</SecLabel>
         {plans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
@@ -565,39 +591,38 @@ function InsuranceScreen({ isEn }) {
                 <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
               </div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div><div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div></div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div>
+              </div>
             </div>
+            {/* Match bar */}
             <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
-              <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/></div>
+              <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}>
+                <div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/>
+              </div>
               <span style={{fontSize:'11px',fontWeight:600,color:plan.match>=90?C.green:plan.match>=80?C.amber:C.textSub}}>{plan.match}% match</span>
             </div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px',fontStyle:'italic'}}>"{plan.why}"</div>
-            {expanded===i&&<>
-              <div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
-              </div>
-              {inquired===i&&<div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px',marginBottom:'10px'}}>
-                <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>Assigned agent for this plan</div>
-                <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
-                  <div style={{width:40,height:40,borderRadius:'10px',background:C.blueLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:C.blue,flexShrink:0}}>{plan.agent.name[3]}</div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:'14px',fontWeight:600}}>{plan.agent.name}</div>
-                    <div style={{fontSize:'12px',color:C.textSub}}>{plan.agent.company}</div>
-                    <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(plan.agent.rating))} <span style={{color:C.textMuted}}>{plan.agent.rating} ({plan.agent.reviews} reviews)</span></div>
-                  </div>
-                </div>
-                <div style={{display:'flex',gap:'8px'}}>
-                  <Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn>
-                  <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>💬 Message agent</Btn>
-                </div>
-              </div>}
-            </>}
+            {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
+            </div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>{setExpanded(i);setInquired(i)}}>{inquired===i?'Agent shown ✓':'Inquire about plan'}</Btn>
+              {inquired===i
+                ?<div style={{flex:1,background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:500}}>✓ Enquiry sent</div>
+                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setInquired(i)}>Inquire about plan</Btn>}
             </div>
+            {/* Post-inquiry confirmation */}
+            {inquired===i&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
+              <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
+              <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Not sure which plans to combine? An agent can help structure your coverage once assigned.</div>
+            </div>}
           </Card>
         ))}
+
+        {/* Search all plans */}
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
         <div style={{padding:'0 16px 10px'}}>
           <div style={{position:'relative',display:'flex',alignItems:'center'}}>
@@ -605,13 +630,26 @@ function InsuranceScreen({ isEn }) {
             <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
           </div>
         </div>
-        <div style={{padding:'0 16px 16px'}}><div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>◇ {isEn?'Sponsored plans are clearly labelled. AI match scores are independent of sponsorship.':'贊助計劃清楚標示。AI匹配分數完全獨立於贊助。'}</div></div>
+        <div style={{padding:'0 16px 16px'}}>
+          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
+            ◇ Sponsored plans are clearly labelled. AI match scores are independent of sponsorship. Medsa earns a referral fee from insurers — this does not affect your recommendations.
+          </div>
+        </div>
       </>}
+
+      {/* ── CLAIMS ── */}
       {tab==='claims'&&<>
+        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+          Claims are currently filed directly with your insurer. Once your insurer integrates with Medsa, claim submission, status tracking, and approvals will all appear here in real time.
+        </div>
         <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Agent notified</div></div>
-          <Badge text="Processing" type="due"/>
+          <div>
+            <div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Filed with AIA directly · Awaiting response</div>
+          </div>
+          <Badge text="Pending" type="due"/>
         </Card>
         <SecLabel>{isEn?'Approved':'已批准'}</SecLabel>
         {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
@@ -620,57 +658,89 @@ function InsuranceScreen({ isEn }) {
             <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
           </Card>
         ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'File new claim':'提交新索賠'}</Btn></div>
-      </>}
-      {tab==='agents'&&<>
-        <div style={{margin:'16px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-          ◇ {isEn?'Agent ratings are left by Medsa patients. Agents are assigned by insurers — rate yours or browse before inquiring on a plan.':'代理人評分由患者留下。代理人由保險公司指派。'}
+        <div style={{padding:'0 16px 16px'}}>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}}>File a claim with my insurer</Btn>
+          <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',lineHeight:1.6}}>You will be directed to your insurer's claims process. Medsa is not a party to the claims decision.</div>
         </div>
-        <SecLabel>{isEn?'Your current agent':'您的當前代理人'}</SecLabel>
-        <Card style={{padding:'16px'}}>
-          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'12px'}}>
-            <div style={{width:48,height:48,borderRadius:'12px',background:C.blueLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',fontWeight:600,color:C.blue}}>張</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'15px',fontWeight:600}}>Mr Cheung Ho-fai</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>AIA · Senior Agent</div>
-              <div style={{fontSize:'13px',color:'#d4a017',marginTop:'2px'}}>★★★★★ <span style={{fontSize:'12px',color:C.textMuted,fontWeight:400}}>4.9 (62 reviews)</span></div>
+      </>}
+
+      {/* ── AGENT RATINGS ── */}
+      {tab==='agents'&&<>
+        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ Agent ratings — coming with insurer integration</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
+            Once your insurer integrates with Medsa, verified agents will appear here with ratings, languages, specialties, and availability. You will be able to browse, choose, and switch agents directly. All ratings are anonymous and based on verified interactions only.
+          </div>
+        </div>
+
+        {/* Anonymous feedback explainer */}
+        <SecLabel>{isEn?'How feedback works':'如何提交評價'}</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          {[
+            {icon:'◎',title:'Anonymous by default',body:'Your name is never attached to ratings or comments. Agents and insurers cannot identify who left feedback.'},
+            {icon:'◈',title:'Verified interactions only',body:'You can only rate an agent after a confirmed interaction — prevents fake reviews.'},
+            {icon:'◇',title:'Separate from complaints',body:'Ratings are public and anonymous. Formal complaints are named, private, and go to the insurer and Medsa support.'},
+          ].map((item,i,arr)=>(
+            <div key={i} style={{display:'flex',gap:'12px',padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <span style={{fontSize:'18px',color:C.green,flexShrink:0}}>{item.icon}</span>
+              <div><div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.title}</div><div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{item.body}</div></div>
             </div>
-          </div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}}>📞 Call</Btn>
-            <Btn style={{flex:1,fontSize:'12px'}}>💬 Message</Btn>
-          </div>
-          {agentRating===null
-            ?<Btn variant="primary" style={{width:'100%'}} onClick={()=>setAgentRating(0)}>Rate your agent</Btn>
-            :<div>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
-              <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-                {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAgentRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:agentRating>=n?1:0.3}}>★</div>)}
-              </div>
-              <Btn variant="primary" style={{width:'100%'}}>Submit rating</Btn>
-            </div>}
+          ))}
         </Card>
-        <SecLabel>{isEn?'Browse agents by rating':'按評分瀏覽代理人'}</SecLabel>
-        {[
-          {init:'張',name:'Mr Cheung Ho-fai',company:'AIA',rating:4.9,reviews:62,spec:'Health + critical illness'},
-          {init:'李',name:'Ms Lee Mei-kwan',company:'Prudential',rating:4.8,reviews:41,spec:'Health + travel plans'},
-          {init:'林',name:'Mr Lam Wai-keung',company:'Manulife',rating:4.7,reviews:88,spec:'Family & critical illness'},
-          {init:'陳',name:'Ms Chan Pui-shan',company:'Bupa',rating:4.6,reviews:34,spec:'Health + dental plans'},
-        ].map((a,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div>
-              <div style={{fontSize:'11px',color:C.textSub}}>{a.company} · {a.spec}</div>
-              <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(a.rating))} <span style={{fontSize:'11px',color:C.textMuted,fontWeight:400}}>{a.rating} ({a.reviews})</span></div>
+
+        {/* Preview of what agent ratings will look like */}
+        <SecLabel>{isEn?'Preview — agent ratings once live':'預覽 — 代理人評分上線後'}</SecLabel>
+        <div style={{margin:'0 16px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',opacity:0.6}}>
+          <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px',textAlign:'center',fontStyle:'italic'}}>This is a preview — agent profiles will be verified and live once your insurer integrates with Medsa</div>
+          {[
+            {init:'張',name:'Agent A',company:'AIA',rating:4.9,reviews:62,spec:'Health + critical illness',langs:['廣東話','English'],avail:'Available'},
+            {init:'李',name:'Agent B',company:'Prudential',rating:4.8,reviews:41,spec:'Family & travel plans',langs:['English','普通話'],avail:'Busy'},
+          ].map((a,i)=>(
+            <div key={i} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 0',borderTop:i>0?`0.5px solid ${C.border}`:'none'}}>
+              <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{a.company} · {a.spec}</div>
+                <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(a.rating))} <span style={{fontSize:'11px',color:C.textMuted}}>{a.rating} ({a.reviews})</span></div>
+                <div style={{display:'flex',gap:'4px',marginTop:'4px',flexWrap:'wrap'}}>
+                  {a.langs.map(l=><span key={l} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'1px 7px',borderRadius:'20px'}}>{l}</span>)}
+                  <span style={{fontSize:'10px',background:a.avail==='Available'?C.greenLight:C.amberLight,color:a.avail==='Available'?C.green:C.amber,padding:'1px 7px',borderRadius:'20px'}}>{a.avail}</span>
+                </div>
+              </div>
             </div>
-            <Btn style={{fontSize:'11px',padding:'6px 10px'}}>Contact</Btn>
-          </Card>
-        ))}
+          ))}
+        </div>
+
+        {/* Anonymous feedback form — available now for patients who have interacted */}
+        <SecLabel>{isEn?'Leave anonymous feedback':'留下匿名評價'}</SecLabel>
+        <Card style={{padding:'16px'}}>
+          {!feedbackSubmitted?<>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>Had a recent interaction with an agent through Medsa? Leave anonymous feedback — your identity will never be revealed.</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+              {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAnonRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:anonRating&&anonRating>=n?1:0.25}}>★</div>)}
+            </div>
+            <textarea value={feedbackText} onChange={e=>setFeedbackText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px'}} rows={3} placeholder="Optional comment — anonymous, never attributed to you…"/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>◇ Your name and account details are never stored with this feedback.</div>
+            <Btn variant="primary" style={{width:'100%'}} disabled={!anonRating} onClick={()=>setFeedbackSubmitted(true)}>Submit anonymously</Btn>
+          </>:<>
+            <div style={{textAlign:'center',padding:'16px 0'}}>
+              <div style={{fontSize:'28px',marginBottom:'10px'}}>✓</div>
+              <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'6px'}}>Feedback submitted anonymously</div>
+              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Thank you. Your feedback helps other patients make informed choices. It will appear on the agent's public profile once insurer integration is live.</div>
+            </div>
+          </>}
+        </Card>
+
+        {/* Complaint vs feedback distinction */}
+        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
+          ◇ <strong>Feedback is anonymous and public.</strong> If you need to raise a formal complaint about an agent or insurer, use the Help section — complaints are named, private, and directed to Medsa support and the relevant insurer.
+        </div>
       </>}
     </div>
   )
 }
+
 
 function PrescriptionsScreen({ isEn }) {
   return (
