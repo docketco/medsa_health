@@ -639,7 +639,6 @@ export default function PractitionerApp() {
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         <MedsaLogo height={20}/>
         <span style={{flex:1,fontSize:'10px',color:'rgba(255,255,255,0.5)',letterSpacing:'1px',textTransform:'uppercase'}}>practitioner</span>
-        <span style={{fontSize:'10px',background:'rgba(255,255,255,0.18)',color:'#fff',padding:'3px 9px',borderRadius:'20px',fontWeight:500}}>{r.icon} {r.label}</span>
         <button onClick={()=>setRole(null)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',fontFamily:'inherit'}}>Clock out</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
