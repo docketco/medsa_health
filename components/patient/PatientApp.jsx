@@ -521,6 +521,132 @@ function CalendarScreen({ isEn }) {
   )
 }
 
+// ── CLAIMS TAB ───────────────────────────────────────────────────────────────
+// Standalone component so useState can be used cleanly (no hooks in maps)
+function ClaimsTab({ isEn }) {
+  const [claimType,setClaimType]=useState(null)
+  const [checklist,setChecklist]=useState({})
+  const [bundleReady,setBundleReady]=useState(false)
+
+  const CLAIM_TYPES=[
+    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:['Consultation receipt','Doctor's diagnosis letter or stamp','Patient ID copy','Policy number']},
+    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:['Hospital admission & discharge summary','All receipts and invoices','Doctor's report','Lab & imaging reports (if any)','Patient ID copy','Policy number']},
+    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:['Specialist consultation receipt','Referral letter from GP (if required by your plan)','Diagnosis and treatment notes','Patient ID copy','Policy number']},
+    {key:'lab',label:'Lab & imaging',icon:'◉',docs:['Lab or imaging receipt','Test results report','Doctor's referral or order','Patient ID copy','Policy number']},
+    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:['Pharmacy receipt','Prescription copy','Doctor's diagnosis (if required)','Patient ID copy','Policy number']},
+  ]
+
+  const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
+  const allChecked = selectedType && selectedType.docs.every((_,i)=>checklist[`${claimType}_${i}`])
+
+  return (
+    <div>
+      {/* Integration notice — greyed out past claims */}
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+        ◈ <strong>Live claim tracking coming with insurer integration.</strong> Once your insurer connects with Medsa, claim submission, status updates, and approvals will sync here automatically.
+      </div>
+
+      {/* Greyed out past claims — for reference only */}
+      <SecLabel>{isEn?'Past claims (not yet synced)':'過往索賠（尚未同步）'}</SecLabel>
+      <div style={{opacity:0.4,pointerEvents:'none'}}>
+        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Filed directly with AIA</div></div>
+          <Badge text="Pending" type="due"/>
+        </Card>
+        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
+            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
+          </Card>
+        ))}
+      </div>
+      <div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>
+
+      {/* Medsa disclaimer */}
+      <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
+        ⚠ <strong>Important:</strong> Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.
+      </div>
+
+      {/* Claim preparation flow */}
+      <SecLabel>{isEn?'Prepare a claim package':'準備索賠文件包'}</SecLabel>
+
+      {!claimType&&<>
+        <div style={{padding:'0 16px 6px',fontSize:'12px',color:C.textSub}}>Select the type of claim you are preparing:</div>
+        {CLAIM_TYPES.map(t=>(
+          <Card key={t.key} onClick={()=>{setClaimType(t.key);setChecklist({});setBundleReady(false)}} style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px',cursor:'pointer'}}>
+            <div style={{width:40,height:40,background:C.greenLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{t.icon}</div>
+            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{t.label}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{t.docs.length} documents typically required</div></div>
+            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+          </Card>
+        ))}
+      </>}
+
+      {claimType&&selectedType&&<>
+        <div style={{padding:'0 16px 10px',display:'flex',alignItems:'center',gap:'10px'}}>
+          <div onClick={()=>{setClaimType(null);setChecklist({});setBundleReady(false)}} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Change claim type</div>
+          <span style={{fontSize:'12px',color:C.textMuted}}>· {selectedType.label}</span>
+        </div>
+
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>Documents checklist</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Tick each item as you gather it. Some may already be in your Medsa records.</div>
+          {selectedType.docs.map((doc,i)=>{
+            const key=`${claimType}_${i}`
+            const fromMedsa=['Lab & imaging reports (if any)','Lab or imaging receipt','Test results report','Prescription copy'].includes(doc)
+            return(
+              <div key={i} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div onClick={()=>setChecklist(prev=>({...prev,[key]:!prev[key]}))} style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${checklist[key]?C.green:C.border}`,background:checklist[key]?C.green:'transparent',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  {checklist[key]&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:'13px',color:C.text}}>{doc}</div>
+                  {fromMedsa&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>◎ May be available in your Medsa records</div>}
+                </div>
+                <div style={{fontSize:'11px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0}}>Upload</div>
+              </div>
+            )
+          })}
+        </Card>
+
+        {/* Progress indicator */}
+        <div style={{padding:'0 16px 10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>
+            <span>{Object.values(checklist).filter(Boolean).length} of {selectedType.docs.length} items ready</span>
+            {allChecked&&<span style={{color:C.green,fontWeight:600}}>Package ready ✓</span>}
+          </div>
+          <div style={{height:6,background:C.card,borderRadius:6,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${(Object.values(checklist).filter(Boolean).length/selectedType.docs.length)*100}%`,background:allChecked?C.green:C.amber,borderRadius:6,transition:'width 0.3s'}}/>
+          </div>
+        </div>
+
+        {/* Bundle and submit */}
+        <div style={{padding:'0 16px 8px'}}>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} disabled={!allChecked} onClick={()=>setBundleReady(true)}>
+            {allChecked?'Bundle claim package for download':'Complete checklist to bundle'}
+          </Btn>
+          {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Your documents have been bundled. Download the package and submit it directly to your insurer, or hold it ready for when direct submission via Medsa is available.</div>
+            <Btn style={{width:'100%',marginBottom:'6px'}}>Download claim package (PDF)</Btn>
+            <div style={{textAlign:'center'}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>or</div>
+              <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px',textAlign:'center',opacity:0.5}}>
+                <div style={{fontSize:'12px',color:C.textSub,fontWeight:500}}>Submit directly via Medsa</div>
+                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Available once your insurer integrates with Medsa</div>
+              </div>
+            </div>
+          </div>}
+        </div>
+
+        {/* Final disclaimer */}
+        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
+          ◇ This checklist covers standard requirements. Your insurer or agent may request additional documents specific to your plan or claim. Medsa is a preparation tool only — submission, review, and approval are handled entirely by your insurer. For plan-specific guidance, contact your assigned agent.
+        </div>
+      </>}
+    </div>
+  )
+}
+
 function InsuranceScreen({ isEn }) {
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
@@ -638,31 +764,7 @@ function InsuranceScreen({ isEn }) {
       </>}
 
       {/* ── CLAIMS ── */}
-      {tab==='claims'&&<>
-        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
-          Claims are currently filed directly with your insurer. Once your insurer integrates with Medsa, claim submission, status tracking, and approvals will all appear here in real time.
-        </div>
-        <SecLabel>{isEn?'Pending':'待處理'}</SecLabel>
-        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div>
-            <div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Filed with AIA directly · Awaiting response</div>
-          </div>
-          <Badge text="Pending" type="due"/>
-        </Card>
-        <SecLabel>{isEn?'Approved':'已批准'}</SecLabel>
-        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
-          </Card>
-        ))}
-        <div style={{padding:'0 16px 16px'}}>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}}>File a claim with my insurer</Btn>
-          <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',lineHeight:1.6}}>You will be directed to your insurer's claims process. Medsa is not a party to the claims decision.</div>
-        </div>
-      </>}
+      {tab==='claims'&&<ClaimsTab isEn={isEn}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
