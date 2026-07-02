@@ -240,7 +240,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[] }) {
   const hasLiveData = records.length > 0
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
-  const records=[
+  const demoRecords=[
     {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
     {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
     {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
