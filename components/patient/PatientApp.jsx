@@ -26,7 +26,7 @@ function Badge({ text, type }) {
 // ── EMERGENCY CARD SETUP + CONSENT FLOW ──────────────────────────────────────
 // This is shown to PATIENTS only for setup/consent — not for showing to EMS.
 // EMS access the emergency card automatically via QR scan in the practitioner portal.
-function EmergencyCardSetup({ open, onClose, consented, onConsent }) {
+function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], patient }) {
   const [step, setStep] = useState(consented ? 'view' : 'intro')
   if (!open) return null
   return (
@@ -80,12 +80,12 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent }) {
           </div>
           <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
             <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
-            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Wong Mei-ling, Lisa</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB 14 Mar 1988 · MDS-84921-HK</div>
+            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{patient?.full_name||'Wong Mei-ling, Lisa'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {patient?.date_of_birth?new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'14 Mar 1988'} · {patient?.medsa_id||'MDS-84921-HK'}</div>
             <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
               <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
                 <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
-                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>O+</div>
+                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>{patient?.blood_type||'O+'}</div>
               </div>
               <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
                 <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
@@ -151,7 +151,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented }) {
       <div style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
           <div>
-            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?'Good morning, Lisa':'早晨，Lisa'}</div>
+            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name||patient?.full_name?.split(',')[1]?.trim()||'Lisa'}`:'早晨，Lisa'}</div>
             <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
             <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
           </div>
@@ -235,7 +235,9 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented }) {
   )
 }
 
-function RecordsScreen({ isEn }) {
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[] }) {
+  // Use live Supabase data if available, otherwise fall back to demo records
+  const hasLiveData = records.length > 0
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
   const records=[
@@ -265,7 +267,21 @@ function RecordsScreen({ isEn }) {
       </div>
       {tab==='all'&&<>
         <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
-        {records.map(r=>(
+        {(hasLiveData ? records.map(r=>({
+          id: r.id,
+          icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
+          bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:C.greenLight,
+          title: r.title,
+          sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
+          date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
+          src: r.source==='synced'?'Synced':'Manual',
+          details: [['Diagnosis',r.diagnosis||'—'],['Notes',r.notes||'—'],['Department',r.department||'—']],
+        })) : [
+          {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
+          {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
+          {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
+          {id:4,icon:'◇',bg:C.brownLight,title:'Allergy test results',sub:'Uploaded manually · PDF',date:'9 Jan 2025',src:'Manual',details:[['Penicillin','⚠ Severe allergy'],['Verified by','Pending review']]},
+        ]).map(r=>(
           <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
@@ -477,7 +493,7 @@ function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
   )
 }
 
-function CalendarScreen({ isEn }) {
+function CalendarScreen({ isEn, appointments=[], medications=[] }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
@@ -501,7 +517,26 @@ function CalendarScreen({ isEn }) {
         </div>
       </div>
       <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
-      {[
+      {appointments.length>0 ? appointments.map((appt,i)=>{
+        const dt = new Date(appt.scheduled_at)
+        const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})
+        const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})
+        return(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+            <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'14px',fontWeight:500}}>{appt.practitioners?.full_name||appt.appointment_type}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
+              <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
+            </div>
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{dateStr}</div>
+              {appt.patient_pays>0&&<div style={{fontSize:'11px',color:C.amber}}>HK${appt.patient_pays} due</div>}
+            </div>
+          </Card>
+        )
+      }) : [
         {time:'10:30 am',date:'Tue 24 Jun',title:'Dr Chan Siu-ming',sub:'Pacific Medical Group · Wan Chai',bg:C.greenLight,icon:'◎'},
         {time:'8:00 pm',date:'Tue 24 Jun',title:'Metformin 500mg',sub:'Take with dinner · Daily',bg:C.brownLight,icon:'◉'},
         {time:'9:00 am',date:'Fri 27 Jun',title:'Flu vaccine — booking pending',sub:'Pacific Medical Group',bg:C.amberLight,icon:'◈'},
@@ -513,16 +548,21 @@ function CalendarScreen({ isEn }) {
         </Card>
       ))}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
-      <MedAlarmCard med="Metformin 500mg" schedule="Daily with dinner" next="Tonight 8pm" defaultOn={true} defaultTime="20:00" isEn={isEn}/>
-      <MedAlarmCard med="Vitamin D3 1000IU" schedule="Daily with breakfast" next="Tomorrow 8am" defaultOn={true} defaultTime="08:00" isEn={isEn}/>
-      <MedAlarmCard med="Iron supplement 14mg" schedule="Every other day" next="Thu morning" defaultOn={false} defaultTime="09:00" isEn={isEn}/>
+      {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
+        <MedAlarmCard key={i} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} next="Check schedule" defaultOn={m.alarm_enabled||false} defaultTime={m.alarm_time?.slice(0,5)||'08:00'} isEn={isEn}/>
+      )) : <>
+        <MedAlarmCard med="Metformin 500mg" schedule="Daily with dinner" next="Tonight 8pm" defaultOn={true} defaultTime="20:00" isEn={isEn}/>
+        <MedAlarmCard med="Vitamin D3 1000IU" schedule="Daily with breakfast" next="Tomorrow 8am" defaultOn={true} defaultTime="08:00" isEn={isEn}/>
+        <MedAlarmCard med="Iron supplement 14mg" schedule="Every other day" next="Thu morning" defaultOn={false} defaultTime="09:00" isEn={isEn}/>
+      </>}
       <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>
     </div>
   )
 }
 
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({ isEn }) {
+function ClaimsTab({ isEn, claims=[] }) {
+  const hasLiveClaims = claims.length > 0
   const [claimType,setClaimType]=useState(null)
   const [checklist,setChecklist]=useState({})
   const [bundleReady,setBundleReady]=useState(false)
@@ -594,19 +634,37 @@ function ClaimsTab({ isEn }) {
 
       {/* Greyed out past claims — for reference only */}
       <SecLabel>{isEn?'Past claims (not yet synced)':'過往索賠（尚未同步）'}</SecLabel>
-      <div style={{opacity:0.4,pointerEvents:'none'}}>
-        <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Filed directly with AIA</div></div>
-          <Badge text="Pending" type="due"/>
-        </Card>
-        {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
+      <div style={{opacity:hasLiveClaims?1:0.4,pointerEvents:hasLiveClaims?'auto':'none'}}>
+        {hasLiveClaims ? claims.map((c,i)=>{
+          const statusType = c.status==='approved'?'ok':c.status==='rejected'?'full':'due'
+          const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
+          return(
+            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:500}}>{c.claim_ref} · {c.institutions?.name||'—'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name||'—'} · {c.claim_type}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Submitted {date}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${c.plan_covers?.toLocaleString()}</div>
+                <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
+              </div>
+            </Card>
+          )
+        }) : <>
+          <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Filed directly with AIA</div></div>
+            <Badge text="Pending" type="due"/>
           </Card>
-        ))}
+          {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
+            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
+              <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
+            </Card>
+          ))}
+        </>}
       </div>
-      <div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>
+      {!hasLiveClaims&&<div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>}
 
       {/* Medsa disclaimer */}
       <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
@@ -712,7 +770,8 @@ function ClaimsTab({ isEn }) {
   )
 }
 
-function InsuranceScreen({ isEn }) {
+function InsuranceScreen({ isEn, claims=[] }) {
+  const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
@@ -829,7 +888,7 @@ function InsuranceScreen({ isEn }) {
       </>}
 
       {/* ── CLAIMS ── */}
-      {tab==='claims'&&<ClaimsTab isEn={isEn}/>}
+      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
@@ -909,15 +968,23 @@ function InsuranceScreen({ isEn }) {
 }
 
 
-function PrescriptionsScreen({ isEn }) {
+function PrescriptionsScreen({ isEn, medications=[] }) {
+  const hasLiveMeds = medications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
-      {[
+      {(hasLiveMeds ? medications.map((m,idx)=>({
+        name:`${m.medication_name} ${m.dosage||''}`.trim(),
+        dose:m.frequency||'As prescribed',
+        dr:m.prescribed_by||'—',
+        refills:`Prescribed by ${m.institution||'clinic'} · ${m.start_date?'Since '+new Date(m.start_date).toLocaleDateString('en-HK',{month:'short',year:'numeric'}):''}`,
+        icon:['◉','◈','◇','◎','▣'][idx%5],
+        bg:[C.greenLight,C.brownLight,C.amberLight,C.blueLight,C.greenLight][idx%5],
+      })) : [
         {name:'Metformin 500mg',dose:'1 tablet twice daily with meals',dr:'Dr Chan Siu-ming',refills:'2 refills remaining',icon:'◉',bg:C.greenLight},
         {name:'Vitamin D3 1000IU',dose:'1 capsule daily with breakfast',dr:'Dr Chan Siu-ming',refills:'Auto-refill on',icon:'◈',bg:C.brownLight},
         {name:'Iron supplement 14mg',dose:'1 tablet every other day',dr:'Dr Lam Wai-yee',refills:'1 refill remaining',icon:'◇',bg:C.amberLight},
-      ].map((rx,i)=>(
+      ]).map((rx,i)=>(
         <Card key={i}>
           <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
             <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{rx.icon}</div>
@@ -1021,7 +1088,17 @@ function StorageScreen({ isEn }) {
   )
 }
 
-export default function PatientApp() {
+export default function PatientApp({ liveData }) {
+  // liveData comes from Supabase via pages/patient.jsx
+  // Falls back to demo values if not yet connected
+  const patient = liveData?.patient
+  const liveRecords = liveData?.records || []
+  const liveConditions = liveData?.conditions || []
+  const liveAllergies = liveData?.allergies || []
+  const liveMedications = liveData?.medications || []
+  const liveVaccinations = liveData?.vaccinations || []
+  const liveAppointments = liveData?.appointments || []
+  const liveClaims = liveData?.claims || []
   const [screen,setScreen]=useState('home')
   const [isEn,setIsEn]=useState(true)
   const [emergencyOpen,setEmergencyOpen]=useState(false)
@@ -1038,14 +1115,14 @@ export default function PatientApp() {
         <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} emergencyConsented={emergencyConsented}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} emergencyConsented={emergencyConsented} patient={patient}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn}/>}
-        {screen==='insurance'&&<InsuranceScreen isEn={isEn}/>}
-        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
+        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims}/>}
+        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
-        {screen==='storage'&&<StorageScreen isEn={isEn}/>}
+        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
@@ -1060,6 +1137,10 @@ export default function PatientApp() {
         onClose={()=>setEmergencyOpen(false)}
         consented={emergencyConsented}
         onConsent={(val=true)=>setEmergencyConsented(val)}
+        liveConditions={liveConditions}
+        liveAllergies={liveAllergies}
+        liveMedications={liveMedications}
+        patient={patient}
       />
     </div>
   )
