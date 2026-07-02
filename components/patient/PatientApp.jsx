@@ -81,7 +81,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
           <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
             <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
             <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{patient?.full_name||'Wong Mei-ling, Lisa'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {patient?.date_of_birth?new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'14 Mar 1988'} · {patient?.medsa_id||'MDS-84921-HK'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {patient?.date_of_birth?new Date(patient?.date_of_birth||'1988-03-14').toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'14 Mar 1988'} · {patient?.medsa_id||'MDS-84921-HK'}</div>
             <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
               <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
                 <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
@@ -1091,7 +1091,7 @@ function StorageScreen({ isEn }) {
 export default function PatientApp({ liveData }) {
   // liveData comes from Supabase via pages/patient.jsx
   // Falls back to demo values if not yet connected
-  const patient = liveData?.patient
+  const patient = liveData?.patient || null
   const liveRecords = liveData?.records || []
   const liveConditions = liveData?.conditions || []
   const liveAllergies = liveData?.allergies || []
