@@ -62,6 +62,16 @@ function EmergencyOverlay({ open, onClose }) {
           </div>
         </div>
         <div style={{background:C.greenXLight,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Verified Medsa record · Last updated 12 Jun 2025 · QE Hospital</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <button onClick={()=>alert('Apple Wallet integration coming soon. Your physical Medsa card works in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
+            Add to Apple Wallet
+          </button>
+          <button onClick={()=>alert('Google Wallet integration coming soon. Your physical Medsa card works in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
+            Google Wallet
+          </button>
+        </div>
         <Btn style={{width:'100%'}} onClick={onClose}>Close</Btn>
       </div>
     </div>
