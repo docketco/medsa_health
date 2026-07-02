@@ -216,9 +216,50 @@ function EMSCard({ onClose }) {
 function PractitionerIDScreen({ role }) {
   const r=ROLES[role]
   const access=ACCESS[role]||{}
+  const [idTab,setIdTab]=useState('credentials')
+  const [lostReported,setLostReported]=useState(false)
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>Your practitioner ID</SecLabel>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,margin:'0 0 0 0'}}>
+        {[['credentials','Credentials'],['qr','My QR code']].map(([k,l])=>(
+          <div key={k} onClick={()=>setIdTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:idTab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${idTab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+        ))}
+      </div>
+      {idTab==='qr'&&<>
+        <div style={{margin:'16px 16px 0',background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'28px 20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'16px'}}>
+          <svg width="160" height="160" viewBox="0 0 48 48" fill="none">
+            <rect x="2" y="2" width="18" height="18" rx="2" fill={r.color}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="2" width="18" height="18" rx="2" fill={r.color}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="2" y="28" width="18" height="18" rx="2" fill={r.color}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="28" width="4" height="4" fill={r.color}/><rect x="34" y="28" width="4" height="4" fill={r.color}/>
+            <rect x="40" y="28" width="6" height="4" fill={r.color}/><rect x="28" y="34" width="6" height="4" fill={r.color}/>
+            <rect x="36" y="34" width="4" height="4" fill={r.color}/><rect x="28" y="40" width="4" height="6" fill={r.color}/>
+            <rect x="34" y="42" width="12" height="4" fill={r.color}/>
+          </svg>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:'14px',fontWeight:600,color:C.text}}>Chan Siu-ming, David</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{r.label} · QE Hospital</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>HK-MED-48291</div>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,textAlign:'center',lineHeight:1.5}}>This QR is used for clock-in at your institution and patient scanning. It encodes your role and permissions — scanning with different systems shows role-appropriate data.</div>
+        </div>
+        <div style={{margin:'12px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
+          ◇ Your physical Medsa ID card was issued when your account was created and includes this QR. A replacement is sent automatically if your credentials change. If your card is lost or stolen, report it below.
+        </div>
+        {!lostReported
+          ?<div style={{padding:'12px 16px 16px'}}>
+            <div onClick={()=>setLostReported(true)} style={{fontSize:'13px',color:C.red,textAlign:'center',cursor:'pointer',padding:'10px',borderRadius:'10px',border:`0.5px solid ${C.red}`,background:C.redLight}}>
+              ◎ Report lost or stolen card
+            </div>
+          </div>
+          :<div style={{margin:'12px 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Lost card reported</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>Your current card has been deactivated. Medsa will issue a replacement card to your registered address within 3–5 business days. Your QR above remains valid in the meantime.</div>
+          </div>
+        }
+      </>}
+      {idTab==='credentials'&&<>
       <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${r.color} 0%,${r.color}cc 100%)`,borderRadius:'16px',padding:'24px',color:'#fff',position:'relative',overflow:'hidden'}}>
         <div style={{position:'absolute',top:-20,right:-20,width:100,height:100,borderRadius:'50%',background:'rgba(255,255,255,0.07)'}}/>
         <div style={{fontSize:'10px',opacity:0.6,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'4px'}}>medsa practitioner</div>
@@ -254,18 +295,15 @@ function PractitionerIDScreen({ role }) {
           </div>
         ))}
       </Card>
-      <div style={{padding:'0 16px 8px',display:'flex',gap:'8px'}}>
-        <Btn style={{flex:1}}>Show QR</Btn>
-        <Btn variant="primary" style={{flex:1}}>Download ID</Btn>
-      </div>
+      </>}
       <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
-        <button onClick={()=>alert('Apple Wallet integration coming soon. Use your printed Medsa ID card in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+        <button onClick={()=>alert('Add your Medsa Staff ID to Apple Wallet — coming in Phase 3. Use your physical card in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
-          Add to Apple Wallet
+          Staff ID — Apple Wallet
         </button>
-        <button onClick={()=>alert('Google Wallet integration coming soon. Use your printed Medsa ID card in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+        <button onClick={()=>alert('Add your Medsa Staff ID to Google Wallet — coming in Phase 3. Use your physical card in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
-          Google Wallet
+          Staff ID — Google Wallet
         </button>
       </div>
     </div>
