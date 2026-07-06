@@ -311,6 +311,11 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState(null)
+  const [showReferral,setShowReferral]=useState(false)
+  const [referralNote,setReferralNote]=useState('')
+  const [referralSearch,setReferralSearch]=useState('')
+  const [referralSent,setReferralSent]=useState(false)
+  const [drugInfoOpen,setDrugInfoOpen]=useState(null)
 
   useEffect(() => {
     async function load() {
@@ -423,17 +428,46 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       <SecLabel>Prescription</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px'}}>
         {prescriptions.map((rx,i)=>(
-          <div key={i} style={{display:'flex',gap:'8px'}}>
-            <input value={rx.drug} onChange={e=>updateRx(i,'drug',e.target.value)} placeholder="Drug name" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-            <input value={rx.dosage} onChange={e=>updateRx(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-            <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <div key={i}>
+            <div style={{display:'flex',gap:'8px'}}>
+              <input value={rx.drug} onChange={e=>updateRx(i,'drug',e.target.value)} placeholder="Drug name" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+              <input value={rx.dosage} onChange={e=>updateRx(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+              <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+              {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
+            </div>
+            {drugInfoOpen===i&&<div style={{marginTop:'6px',background:C.blueLight,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.text,lineHeight:1.6}}>
+              <strong>{rx.drug} - drug information sheet</strong><br/>
+              Standard adult dosing, common side effects, and interaction warnings will display here once linked to a drug reference database (e.g. HK Department of Health formulary). This same sheet is visible to the patient in their Medsa app alongside this prescription.
+            </div>}
           </div>
         ))}
       </div>
       <Btn style={{marginBottom:'20px'}} onClick={addPrescriptionLine}>+ Add drug</Btn>
 
-      {prescriptions.some(p=>p.drug.trim())&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 14px',fontSize:'12px',color:C.amber,marginBottom:'16px'}}>
+      {prescriptions.some(p=>p.drug.trim())&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 14px',fontSize:'12px',color:C.amber,marginBottom:'20px'}}>
         {'\u25c7'} Saving will notify front desk immediately to prepare and label this prescription.
+      </div>}
+
+      <SecLabel>Refer to another doctor</SecLabel>
+      {!showReferral&&<Btn style={{marginBottom:'20px'}} onClick={()=>setShowReferral(true)}>+ Refer this patient</Btn>}
+      {showReferral&&!referralSent&&<Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Attach a case note and search your affiliated network or Medsa's directory for a specialist to refer to.</div>
+        <textarea value={referralNote} onChange={e=>setReferralNote(e.target.value)} rows={3} placeholder="Case summary for the receiving doctor..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={referralSearch} onChange={e=>setReferralSearch(e.target.value)} placeholder="Search by name, specialty, or clinic..." style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <Btn style={{flexShrink:0,fontSize:'12px'}}>Import affiliated doctors (CSV)</Btn>
+        </div>
+        {referralSearch.trim()&&<div style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'10px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Nearby on Medsa</div>
+          <div style={{fontSize:'13px',padding:'4px 0'}}>Dr Lam Wai-yee - Cardiologist - HK Sanatorium</div>
+        </div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn onClick={()=>{setShowReferral(false);setReferralNote('');setReferralSearch('')}}>Cancel</Btn>
+          <Btn variant="primary" onClick={()=>setReferralSent(true)}>Send referral</Btn>
+        </div>
+      </Card>}
+      {referralSent&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px 14px',fontSize:'12px',color:C.green,marginBottom:'20px'}}>
+        {'\u2713'} Referral sent with case note attached. The receiving doctor will see this patient's consented records once they accept.
       </div>}
 
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
@@ -578,11 +612,55 @@ function ScheduleScreen() {
 }
 
 function PaymentScreen() {
+  const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
   const [receiptSent,setReceiptSent]=useState(false)
   const [printed,setPrinted]=useState(false)
   const bill = {patient:'Wong Mei-ling, Lisa', consultFee:380, insurerCovers:300, patientPays:80}
+
+  const treatmentPlans = [
+    {patient:'Wong Mei-ling, Lisa', plan:'Physiotherapy - 10 sessions', paid:10, used:6, remaining:4, status:'active'},
+    {patient:'Chan Tai-man', plan:'Dermatology follow-up package - 4 visits', paid:4, used:4, remaining:0, status:'completed'},
+    {patient:'Lee Siu-fong', plan:'Diabetic monitoring - 6 visits', paid:2, used:2, remaining:0, status:'unpaid_renewal'},
+  ]
+
+  if (tab==='plans') return (
+    <PageWrap maxWidth={640}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
+        {[['collect','Collect payment'],['plans','Treatment plans']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
+      <SecLabel>Ongoing treatment plans - paid, used, remaining</SecLabel>
+      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+        {treatmentPlans.map((p,i)=>(
+          <Card key={i} style={{padding:'16px 18px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
+              <div>
+                <div style={{fontSize:'14px',fontWeight:600}}>{p.patient}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{p.plan}</div>
+              </div>
+              {p.status==='active'&&<Badge text="Active" type="ok"/>}
+              {p.status==='completed'&&<Badge text="Completed" type="ok"/>}
+              {p.status==='unpaid_renewal'&&<Badge text="Renewal due" type="due"/>}
+            </div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <div style={{flex:1,background:C.card,borderRadius:'8px',padding:'8px',textAlign:'center'}}>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Sessions used</div>
+                <div style={{fontSize:'15px',fontWeight:700}}>{p.used} / {p.paid}</div>
+              </div>
+              <div style={{flex:1,background:p.remaining>0?C.greenXLight:C.amberLight,borderRadius:'8px',padding:'8px',textAlign:'center'}}>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Remaining</div>
+                <div style={{fontSize:'15px',fontWeight:700,color:p.remaining>0?C.green:C.amber}}>{p.remaining}</div>
+              </div>
+            </div>
+            {p.status==='unpaid_renewal'&&<Btn variant="amber" style={{width:'100%',marginTop:'10px'}}>Send renewal reminder to patient</Btn>}
+          </Card>
+        ))}
+      </div>
+    </PageWrap>
+  )
 
   if (paid) return (
     <PageWrap maxWidth={440}>
@@ -602,7 +680,11 @@ function PaymentScreen() {
 
   return (
     <PageWrap maxWidth={440}>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Collect Payment</h2>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
+        {[['collect','Collect payment'],['plans','Treatment plans']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
       <Card style={{padding:'18px',marginBottom:'16px'}}>
         <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>{bill.patient}</div>
         {[['Consultation fee',`HK$${bill.consultFee}`],['Insurance covers',`-HK$${bill.insurerCovers}`],['Patient pays',`HK$${bill.patientPays}`]].map(([l,v],i)=>(
