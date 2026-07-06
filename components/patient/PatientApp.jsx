@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -359,18 +359,98 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[] }) {
   )
 }
 
+// ── VIDEO CONSULTATION MODAL ─────────────────────────────────────────────────
+// Matches iMeddy's model: video call + medical certificate/referral issuance
+function VideoCallModal({ doc, isEn, onClose }) {
+  const [stage,setStage]=useState('connecting') // connecting | active | ended
+  const [docsIssued,setDocsIssued]=useState([])
+
+  useEffect(() => {
+    if (stage==='connecting') {
+      const t = setTimeout(()=>setStage('active'), 1800)
+      return () => clearTimeout(t)
+    }
+  }, [stage])
+
+  if (!doc) return null
+
+  function requestDoc(type) {
+    if (!docsIssued.includes(type)) setDocsIssued([...docsIssued, type])
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:400,display:'flex',flexDirection:'column'}}>
+      <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff',padding:'24px'}}>
+        {stage==='connecting'&&<>
+          <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green,marginBottom:'16px'}}>{doc.init}</div>
+          <div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px'}}>{doc.name}</div>
+          <div style={{fontSize:'13px',opacity:0.7,marginBottom:'24px'}}>{isEn?'Connecting…':'連接中…'}</div>
+          <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,0.2)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
+          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          <div style={{position:'absolute',bottom:40}}>
+            <Btn variant="danger" onClick={onClose}>{isEn?'Cancel':'取消'}</Btn>
+          </div>
+        </>}
+        {stage==='active'&&<>
+          <div style={{width:'100%',maxWidth:360,aspectRatio:'3/4',background:'#1a1a1a',borderRadius:'16px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'16px',position:'relative'}}>
+            <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green}}>{doc.init}</div>
+            <div style={{position:'absolute',top:12,right:12,background:'rgba(0,0,0,0.5)',borderRadius:'20px',padding:'4px 10px',fontSize:'11px'}}>● {isEn?'Live':'直播中'}</div>
+            <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
+          </div>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
+          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{doc.spec}</div>
+          <div style={{display:'flex',gap:'16px'}}>
+            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◉</button>
+            <button onClick={()=>setStage('ended')} style={{width:52,height:52,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>✕</button>
+            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◈</button>
+          </div>
+        </>}
+        {stage==='ended'&&<div style={{background:C.cream,borderRadius:'16px',padding:'24px',width:'100%',maxWidth:400,color:C.text}}>
+          <div style={{textAlign:'center',marginBottom:'16px'}}>
+            <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {doc.spec}</div>
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
+          {[
+            {key:'certificate',label:isEn?'Medical certificate':'醫療證明書'},
+            {key:'sickleave',label:isEn?'Sick leave note':'病假紙'},
+            {key:'referral',label:isEn?'Referral letter':'轉介信'},
+          ].map(d=>(
+            <div key={d.key} onClick={()=>requestDoc(d.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'8px',cursor:'pointer'}}>
+              <span style={{fontSize:'13px'}}>{d.label}</span>
+              {docsIssued.includes(d.key)
+                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Issued':'已發出'}</span>
+                :<span style={{fontSize:'11px',color:C.green}}>{isEn?'Request':'索取'} ›</span>}
+            </div>
+          ))}
+          <Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={onClose}>{isEn?'Done':'完成'}</Btn>
+        </div>}
+      </div>
+    </div>
+  )
+}
+
 function DoctorsScreen({ isEn }) {
   const [tab,setTab]=useState('search')
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
   const [booked,setBooked]=useState(false)
+  const [sortBy,setSortBy]=useState('distance')
+  const [videoCallDoc,setVideoCallDoc]=useState(null)
+  const [whatsappReminder,setWhatsappReminder]=useState(true)
   const doctors=[
-    {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok'},
-    {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due'},
-    {init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok'},
-    {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due'},
-    {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full'},
+    {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok',distanceKm:0.8,videoAvail:true},
+    {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due',distanceKm:3.2,videoAvail:false},
+    {init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok',distanceKm:5.1,videoAvail:true},
+    {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due',distanceKm:1.5,videoAvail:true},
+    {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full',distanceKm:2.1,videoAvail:false},
   ]
+  const sortedDoctors = [...doctors].sort((a,b)=>{
+    if (sortBy==='distance') return a.distanceKm - b.distanceKm
+    if (sortBy==='rating') return parseFloat(b.rating) - parseFloat(a.rating)
+    return 0
+  })
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   const UNAVAIL=['9:30am','11:00am']
   return (
@@ -387,17 +467,31 @@ function DoctorsScreen({ isEn }) {
         ))}
       </div>
       {tab==='search'&&<>
+        <div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',alignItems:'center'}}>
+          <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Sort by':'排序方式'}</span>
+          {[['distance',isEn?'Nearest':'最近'],['rating',isEn?'Top rated':'評分最高']].map(([k,l])=>(
+            <div key={k} onClick={()=>setSortBy(k)} style={{fontSize:'11px',padding:'5px 12px',borderRadius:'20px',cursor:'pointer',background:sortBy===k?C.green:C.card,color:sortBy===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+          ))}
+        </div>
         <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
-        {doctors.map((doc,i)=>(
+        {sortedDoctors.map((doc,i)=>(
           <Card key={i}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
-              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div><div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.spec}</div><div style={{fontSize:'12px',color:C.textSub}}>{doc.clinic}</div></div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
+                <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.spec}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{doc.clinic}</div>
+                <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center'}}>
+                  <span style={{fontSize:'11px',color:C.textMuted}}>◇ {doc.distanceKm}km</span>
+                  {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {isEn?'Video available':'視像問診'}</span>}
+                </div>
+              </div>
               <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',color:'#d4a017'}}>★★★★★</div><div style={{fontSize:'10px',color:C.textMuted}}>{doc.rating}</div><Badge text={doc.avail} type={doc.type}/></div>
             </div>
             <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
-              <Btn style={{flex:1,fontSize:'12px'}}>Message</Btn>
+              {doc.videoAvail&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setVideoCallDoc(doc)}>◈ Video</Btn>}
               {doc.type==='full'
                 ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
                 :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setTab('book')}>Book</Btn>}
@@ -444,6 +538,16 @@ function DoctorsScreen({ isEn }) {
                 <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===5?700:400}}>{v}</span></div>
               ))}
             </div>
+            <div onClick={()=>setWhatsappReminder(!whatsappReminder)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'12px',cursor:'pointer'}}>
+              <div style={{width:34,height:18,borderRadius:20,background:whatsappReminder?C.green:C.border,position:'relative',flexShrink:0}}>
+                <div style={{position:'absolute',top:2,left:whatsappReminder?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'WhatsApp reminders':'WhatsApp提醒'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Get appointment reminders via WhatsApp':'透過WhatsApp接收預約提醒'}</div>
+              </div>
+              <span style={{fontSize:'18px',color:'#25D366'}}>◈</span>
+            </div>
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(true)}>{isEn?'Confirm appointment':'確認預約'}</Btn>
           </div>
         </Card>
@@ -471,6 +575,7 @@ function DoctorsScreen({ isEn }) {
           </Card>
         ))}
       </>}
+      <VideoCallModal doc={videoCallDoc} isEn={isEn} onClose={()=>setVideoCallDoc(null)}/>
     </div>
   )
 }
