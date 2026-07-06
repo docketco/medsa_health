@@ -311,22 +311,28 @@ function PractitionerIDScreen({ role }) {
 }
 
 // ── PATIENT SEARCH ────────────────────────────────────────────────────────────
-function PatientSearchScreen({ role }) {
+function PatientSearchScreen({ role, liveData={} }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
   const [logText,setLogText]=useState('')
   const [logSaved,setLogSaved]=useState(false)
   const access=ACCESS[role]||{}
+  const lp = liveData.patient
+  const hasLive = !!lp
   const patient={
-    name:'Wong Mei-ling, Lisa',id:'MDS-84921-HK',dob:'14 Mar 1988',age:37,
-    bloodType:'O+',allergies:['Penicillin (severe)','Dust mites (moderate)'],
+    name: hasLive ? lp.full_name : 'Wong Mei-ling, Lisa',
+    id: hasLive ? lp.medsa_id : 'MDS-84921-HK',
+    dob: hasLive ? new Date(lp.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : '14 Mar 1988',
+    age: hasLive ? Math.floor((Date.now()-new Date(lp.date_of_birth))/(365.25*24*60*60*1000)) : 37,
+    bloodType: hasLive ? lp.blood_type : 'O+',
+    allergies: hasLive && liveData.allergies?.length ? liveData.allergies.map(a=>`${a.allergen} (${a.severity})`) : ['Penicillin (severe)','Dust mites (moderate)'],
     ward:'Ward 3B · Bed 12',status:'Admitted',
     admissionReason:'Diabetic review — elevated glucose levels, persistent fatigue. Referred by Dr Chan for inpatient monitoring and medication adjustment.',
-    emergency:{name:'Wong Tai',relation:'Mother',phone:'+852 9xxx xxxx'},
+    emergency: hasLive ? {name:lp.emergency_contact_name, relation:lp.emergency_contact_rel, phone:lp.emergency_contact_phone} : {name:'Wong Tai',relation:'Mother',phone:'+852 9xxx xxxx'},
     vitals:{'Blood pressure':'118/76 mmHg','Heart rate':'72 bpm','Temperature':'36.8°C','SpO₂':'98%','Weight':'58 kg','Blood glucose':'5.9 mmol/L'},
-    currentMeds:['Metformin 500mg — twice daily','Vitamin D3 1000IU — daily','Aspirin 100mg — daily'],
-    criticalConditions:['Type 2 Diabetes (controlled)','Iron deficiency anaemia'],
-    institutionRecords:['20 Jun — Admitted, Internal Medicine','21 Jun — Vitals recorded, Nurse Yip','22 Jun — Dr Chan consultation, symptom log updated','23 Jun — Blood panel ordered'],
+    currentMeds: hasLive && liveData.medications?.length ? liveData.medications.map(m=>`${m.medication_name} ${m.dosage||''} — ${m.frequency||''}`.trim()) : ['Metformin 500mg — twice daily','Vitamin D3 1000IU — daily','Aspirin 100mg — daily'],
+    criticalConditions: hasLive && liveData.conditions?.length ? liveData.conditions.map(c=>`${c.condition_name}${c.severity?' ('+c.severity+')':''}`) : ['Type 2 Diabetes (controlled)','Iron deficiency anaemia'],
+    institutionRecords: hasLive && liveData.records?.length ? liveData.records.slice(0,6).map(r=>`${new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} — ${r.title}, ${r.institutions?.name||''}`) : ['20 Jun — Admitted, Internal Medicine','21 Jun — Vitals recorded, Nurse Yip','22 Jun — Dr Chan consultation, symptom log updated','23 Jun — Blood panel ordered'],
     consent:{history:true,imaging:true,mental:false,social:false},
   }
 
@@ -736,7 +742,7 @@ function HelpScreen() {
 }
 
 // ── ROOT ─────────────────────────────────────────────────────────────────────
-export default function PractitionerApp() {
+export default function PractitionerApp({ liveData={} }) {
   const [role,setRole]=useState(null)
   const [screen,setScreen]=useState('id')
   if(!role) return <ClockInScreen onLogin={r=>{setRole(r);setScreen('id')}}/>
@@ -752,7 +758,7 @@ export default function PractitionerApp() {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
-        {screen==='patients'&&<PatientSearchScreen role={role}/>}
+        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData}/>}
         {screen==='schedule'&&<ScheduleScreen role={role}/>}
         {screen==='messages'&&<MessagesScreen/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
