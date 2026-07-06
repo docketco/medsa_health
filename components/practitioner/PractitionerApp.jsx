@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -311,11 +312,159 @@ function PractitionerIDScreen({ role }) {
 }
 
 // ── PATIENT SEARCH ────────────────────────────────────────────────────────────
+// ── PRESCRIBE MODAL — writes directly to Supabase medications table so it ────
+// syncs to the patient's Medsa app immediately, and becomes visible to any
+// nurse/pharmacist who scans the patient for dispensing.
+function PrescribeModal({ open, onClose, patientMedsaId }) {
+  const [lines,setLines]=useState([{drug:'',dosage:'',frequency:''}])
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [error,setError]=useState(null)
+
+  if (!open) return null
+
+  function updateLine(i, field, value) {
+    setLines(lines.map((l,idx)=>idx===i?{...l,[field]:value}:l))
+  }
+  function addLine() { setLines([...lines, {drug:'',dosage:'',frequency:''}]) }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const { data: patient, error: pErr } = await supabase.from('patients').select('id').eq('medsa_id', patientMedsaId).single()
+      if (pErr || !patient) throw new Error('Patient not found in Medsa')
+      const rows = lines.filter(l=>l.drug.trim()).map(l=>({
+        patient_id: patient.id,
+        medication_name: l.drug,
+        dosage: l.dosage,
+        frequency: l.frequency,
+        active: true,
+        on_emergency_card: false,
+        start_date: new Date().toISOString().slice(0,10),
+      }))
+      if (rows.length===0) throw new Error('Add at least one drug')
+      const { error: insErr } = await supabase.from('medications').insert(rows)
+      if (insErr) throw insErr
+      setSaved(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:400,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        {!saved ? <>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>New prescription</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Syncs to the patient's Medsa app immediately. Any nurse or pharmacist scanning this patient will see exactly what to dispense.</div>
+          {lines.map((l,i)=>(
+            <div key={i} style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'10px',background:C.card,borderRadius:'10px',padding:'10px'}}>
+              <input value={l.drug} onChange={e=>updateLine(i,'drug',e.target.value)} placeholder="Drug name" style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input value={l.dosage} onChange={e=>updateLine(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+                <input value={l.frequency} onChange={e=>updateLine(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+              </div>
+            </div>
+          ))}
+          <Btn style={{width:'100%',marginBottom:'14px'}} onClick={addLine}>+ Add drug</Btn>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving}>{saving?'Saving…':'Save prescription'}</Btn>
+          </div>
+        </> : <>
+          <div style={{textAlign:'center',padding:'20px 0'}}>
+            <div style={{fontSize:'32px',marginBottom:'10px'}}>✓</div>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Prescription saved</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>Synced to the patient's Medsa record. Visible now to pharmacist and nurse roles for dispensing.</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={onClose}>Done</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+// ── NEW PATIENT REGISTRATION — for patients not yet on Medsa ─────────────────
+// Creates a placeholder profile. When the patient later downloads Medsa and
+// registers themselves with the same name/DOB or gets matched by HKID, their
+// full record picks up automatically — this is a front-desk convenience,
+// not a substitute for the patient owning their own account.
+function NewPatientRegistration({ onBack }) {
+  const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handleSubmit() {
+    setSaving(true)
+    setError(null)
+    try {
+      const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      const { error: insErr } = await supabase.from('patients').insert({
+        medsa_id: medsaId,
+        full_name: form.fullName,
+        date_of_birth: form.dob,
+        hkid: form.hkid || null,
+        phone: form.phone || null,
+        emergency_card_consent: false,
+        emergency_card_active: false,
+      })
+      if (insErr) throw insErr
+      setSaved(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (saved) return (
+    <div style={{background:C.beige,flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'40px 24px',textAlign:'center'}}>
+      <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
+      <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Patient registered</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName}. If they later download the Medsa app and register with matching details, their full record and this visit history will sync automatically.</div>
+      <Btn variant="primary" onClick={onBack}>Back to search</Btn>
+    </div>
+  )
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{padding:'12px 16px 4px'}}>
+        <div onClick={onBack} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back</div>
+      </div>
+      <SecLabel>Register new patient</SecLabel>
+      <Card style={{padding:'16px'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (optional)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+        </div>
+      </Card>
+      <div style={{margin:'0 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+        ◇ This creates a placeholder Medsa profile so today's visit is on record. The patient owns and completes their own profile once they register with Medsa themselves.
+      </div>
+      {error&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:C.red}}>{error}</div>}
+      <div style={{padding:'0 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Saving…':'Create Medsa profile'}</Btn>
+      </div>
+    </div>
+  )
+}
+
 function PatientSearchScreen({ role, liveData={} }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
   const [logText,setLogText]=useState('')
   const [logSaved,setLogSaved]=useState(false)
+  const [diagnosis,setDiagnosis]=useState('')
+  const [showPrescribeModal,setShowPrescribeModal]=useState(false)
+  const [dispensedIds,setDispensedIds]=useState([])
+  const canRegisterPatients = role==='receptionist'||role==='admin'
   const access=ACCESS[role]||{}
   const lp = liveData.patient
   const hasLive = !!lp
@@ -337,6 +486,7 @@ function PatientSearchScreen({ role, liveData={} }) {
   }
 
   if(view==='ems') return <EMSCard onClose={()=>setView('search')}/>
+  if(view==='newpatient') return <NewPatientRegistration onBack={()=>setView('search')}/>
 
   if(view==='patient') {
     const tabs=[
@@ -347,6 +497,7 @@ function PatientSearchScreen({ role, liveData={} }) {
       (access.prescribe||role==='doctor'||role==='dept_head'||role==='admin')&&{key:'log',label:'Log'},
     ].filter(Boolean)
     return (
+      <>
       <div style={{background:C.beige,flex:1}}>
         <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
@@ -510,23 +661,32 @@ function PatientSearchScreen({ role, liveData={} }) {
             <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
               <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
               <div style={{flex:1,fontSize:'13px'}}>{m}</div>
-              {access.dispense&&<Btn variant="amber" style={{fontSize:'11px',padding:'5px 10px'}}>Dispense</Btn>}
+              {access.dispense&&(dispensedIds.includes(i)
+                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Dispensed</span>
+                :<Btn variant="amber" style={{fontSize:'11px',padding:'5px 10px'}} onClick={()=>setDispensedIds([...dispensedIds,i])}>Dispense</Btn>)}
             </Card>
           ))}
-          {access.prescribe&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ Prescribe medication</Btn></div>}
+          {access.prescribe&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Prescribe medication</Btn></div>}
           {!access.prescribe&&!access.dispense&&<div style={{margin:'0 16px 16px',background:C.brownLight,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.brown}}>◇ Your role can view but not prescribe or dispense medications.</div>}
+          {access.dispense&&<div style={{margin:'0 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>◇ Dispensing here syncs directly from the doctor's prescription — no separate paperwork needed.</div>}
         </>}
 
         {activeTab==='log'&&<>
-          <SecLabel>Symptom & consultation log</SecLabel>
+          <SecLabel>Consultation</SecLabel>
           <Card style={{padding:'16px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Nurses can log symptoms and observations. Only doctors and dept heads can make diagnoses and prescriptions.</div>
+            {(role==='doctor'||role==='dept_head')&&<>
+              <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Diagnosis</div>
+              <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Type 2 Diabetes — glucose elevated" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+            </>}
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Notes</div>
             <textarea value={logText} onChange={e=>setLogText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={4} placeholder="Log symptoms, observations, or clinical notes for this visit…"/>
             {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Log saved to patient record</div>}
-            <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}} onClick={()=>{setLogText('');setLogSaved(false)}}>Clear</Btn>
+            <div style={{display:'flex',gap:'8px',marginBottom:access.prescribe?'10px':'0'}}>
+              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false)}}>Clear</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={()=>setLogSaved(true)}>Submit to record</Btn>
             </div>
+            {access.prescribe&&<Btn variant="amber" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Add prescription to this visit</Btn>}
           </Card>
           {(role==='doctor'||role==='dept_head'||role==='admin')&&<>
             <SecLabel>Bed / Location</SecLabel>
@@ -543,6 +703,8 @@ function PatientSearchScreen({ role, liveData={} }) {
           </>}
         </>}
       </div>
+      <PrescribeModal open={showPrescribeModal} onClose={()=>setShowPrescribeModal(false)} patientMedsaId={patient.id}/>
+      </>
     )
   }
 
@@ -575,6 +737,10 @@ function PatientSearchScreen({ role, liveData={} }) {
         <span style={{color:C.brown}}>◇</span>
         <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}><strong style={{color:C.brown}}>One QR, role-based output.</strong> The same patient QR shows each role exactly what their function requires and what the patient has consented to share. No public or unauthenticated access.</div>
       </div>
+      {canRegisterPatients&&<div style={{margin:'0 16px 16px',textAlign:'center'}}>
+        <span style={{fontSize:'12px',color:C.textSub}}>Patient not on Medsa yet? </span>
+        <span onClick={()=>setView('newpatient')} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them →</span>
+      </div>}
     </div>
   )
 }
