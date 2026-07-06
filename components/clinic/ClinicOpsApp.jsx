@@ -101,7 +101,80 @@ function ScanCheckInScreen({ isEn, onCheckedIn }) {
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────────────────────
-function OverviewScreen({ isEn, queue, onNav }) {
+// ── PATIENT QUEUE DETAIL — click a queue entry to see appointment + records ──
+// Medical records are time-limited: only visible while status is waiting/in_room,
+// auto-hidden once marked done (matches "records live during the visit" logic).
+function PatientQueueDetail({ entry, isEn, onClose }) {
+  const [conditions,setConditions]=useState([])
+  const [allergies,setAllergies]=useState([])
+  const [loading,setLoading]=useState(true)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data: patient } = await supabase.from('patients').select('*').eq('medsa_id','MDS-84921-HK').single()
+      if (patient) {
+        const [{data:c},{data:a}] = await Promise.all([
+          supabase.from('conditions').select('*').eq('patient_id',patient.id).eq('active',true),
+          supabase.from('allergies').select('*').eq('patient_id',patient.id),
+        ])
+        setConditions(c||[])
+        setAllergies(a||[])
+      }
+      setLoading(false)
+    }
+    load()
+  }, [entry])
+
+  if (!entry) return null
+  const recordsVisible = entry.status !== 'done'
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'17px',fontWeight:700}}>{entry.patientName}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{entry.ticket} · {entry.doctor} · {entry.room}</div>
+          </div>
+          <Badge text={entry.status==='waiting'?(isEn?'Waiting':'等候'):entry.status==='in_room'?(isEn?'In room':'診症中'):(isEn?'Done':'完成')} type={entry.status==='waiting'?'due':entry.status==='in_room'?'waiting':'ok'}/>
+        </div>
+
+        <SecLabel>{isEn?'Appointment details':'預約詳情'}</SecLabel>
+        <Card style={{padding:'12px 16px'}}>
+          {[['Doctor',entry.doctor],['Room',entry.room],['Ticket',entry.ticket],['Type','Follow-up consultation']].map(([l,v],i,arr)=>(
+            <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
+              <span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span>
+            </div>
+          ))}
+        </Card>
+
+        {recordsVisible ? <>
+          <SecLabel>{isEn?'Medical records — visible during visit':'醫療記錄 — 診症期間可見'}</SecLabel>
+          {loading&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
+          {!loading&&<Card style={{padding:'12px 16px'}}>
+            {allergies.length>0&&allergies.map((a,i)=>(
+              <div key={'a'+i} style={{padding:'5px 0',fontSize:'13px',fontWeight:600,color:a.severity==='severe'?C.red:C.text}}>⚠ {a.allergen} ({a.severity})</div>
+            ))}
+            {conditions.length>0&&conditions.map((c,i)=>(
+              <div key={'c'+i} style={{padding:'5px 0',fontSize:'13px'}}>◎ {c.condition_name}</div>
+            ))}
+            {allergies.length===0&&conditions.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'No active conditions or allergies on file':'沒有現有病況或過敏記錄'}</div>}
+          </Card>}
+          <div style={{margin:'0 16px 8px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+            {isEn?'◇ Access closes automatically once this visit is marked done.':'◇ 訪問記錄將於此次診症標記完成後自動關閉。'}
+          </div>
+        </> : <div style={{margin:'0 16px 16px',background:C.card,borderRadius:'10px',padding:'14px',fontSize:'12px',color:C.textMuted,textAlign:'center'}}>
+          {isEn?'Visit complete — record access has closed':'診症已完成 — 記錄訪問已關閉'}
+        </div>}
+
+        <Btn variant="primary" style={{width:'100%'}} onClick={onClose}>{isEn?'Close':'關閉'}</Btn>
+      </div>
+    </div>
+  )
+}
+
+function OverviewScreen({ isEn, queue, onNav, onSelectQueueEntry }) {
   const waiting = queue.filter(q=>q.status==='waiting').length
   const inRoom = queue.filter(q=>q.status==='in_room').length
   const done = queue.filter(q=>q.status==='done').length
@@ -140,13 +213,14 @@ function OverviewScreen({ isEn, queue, onNav }) {
 
       <SecLabel>{isEn?'Patient queue — all doctors':'病人排隊 — 所有醫生'}</SecLabel>
       {queue.map((q,i)=>(
-        <Card key={i} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
+        <Card key={i} onClick={()=>onSelectQueueEntry(q)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
           <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
             <div style={{fontSize:'11px',color:C.textSub}}>{q.doctor} · {q.room}</div>
           </div>
           <Badge text={q.status==='waiting'?(isEn?'Waiting':'等候'):q.status==='in_room'?(isEn?'In room':'診症中'):(isEn?'Done':'完成')} type={q.status==='waiting'?'due':q.status==='in_room'?'waiting':'ok'}/>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
         </Card>
       ))}
 
@@ -233,6 +307,68 @@ function ScheduleScreen({ isEn }) {
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowNewApptForm(false)}>{isEn?'Confirm booking':'確認預約'}</Btn>
         </div>
       </div>}
+    </div>
+  )
+}
+
+// ── INVENTORY: basic drug/supply stock tracking ──────────────────────────────
+function InventoryScreen({ isEn }) {
+  const [items,setItems]=useState([
+    {name:'Metformin 500mg', stock:340, unit:'tablets', reorderAt:100, supplier:'HK Pharma Distributors'},
+    {name:'Amoxicillin 250mg', stock:85, unit:'capsules', reorderAt:100, supplier:'HK Pharma Distributors'},
+    {name:'Paracetamol 500mg', stock:620, unit:'tablets', reorderAt:150, supplier:'MedSupply HK'},
+    {name:'Surgical masks', stock:45, unit:'boxes', reorderAt:20, supplier:'MedSupply HK'},
+    {name:'Syringes 5ml', stock:12, unit:'boxes', reorderAt:15, supplier:'MedSupply HK'},
+  ])
+  const [showReorderOnly,setShowReorderOnly]=useState(false)
+
+  const displayed = showReorderOnly ? items.filter(i=>i.stock<=i.reorderAt) : items
+  const lowStockCount = items.filter(i=>i.stock<=i.reorderAt).length
+
+  function adjustStock(name, delta) {
+    setItems(prev=>prev.map(i=>i.name===name?{...i,stock:Math.max(0,i.stock+delta)}:i))
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      {lowStockCount>0&&<div style={{margin:'16px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'14px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.amber}}>⚠ {lowStockCount} {isEn?'item(s) at or below reorder level':'項目已達或低於補貨水平'}</div>
+      </div>}
+
+      <div style={{padding:'12px 16px 4px',display:'flex',gap:'8px'}}>
+        {[[false,isEn?'All items':'所有項目'],[true,isEn?'Needs reorder':'需要補貨']].map(([v,l])=>(
+          <div key={String(v)} onClick={()=>setShowReorderOnly(v)} style={{fontSize:'11px',padding:'6px 12px',borderRadius:'20px',cursor:'pointer',background:showReorderOnly===v?C.green:C.card,color:showReorderOnly===v?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
+
+      <SecLabel>{isEn?'Stock levels':'庫存水平'}</SecLabel>
+      {displayed.map((item,i)=>{
+        const low = item.stock <= item.reorderAt
+        return (
+          <Card key={i} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{item.supplier}</div>
+              </div>
+              {low&&<Badge text={isEn?'Reorder':'需補貨'} type="due"/>}
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+              <button onClick={()=>adjustStock(item.name,-10)} style={{width:28,height:28,borderRadius:'8px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:'14px'}}>−</button>
+              <div style={{flex:1,textAlign:'center'}}>
+                <span style={{fontSize:'16px',fontWeight:700,color:low?C.amber:C.text}}>{item.stock}</span>
+                <span style={{fontSize:'11px',color:C.textMuted}}> {item.unit}</span>
+              </div>
+              <button onClick={()=>adjustStock(item.name,10)} style={{width:28,height:28,borderRadius:'8px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer',fontSize:'14px'}}>+</button>
+            </div>
+            <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>{isEn?'Reorder at':'補貨水平'}: {item.reorderAt} {item.unit}</div>
+          </Card>
+        )
+      })}
+
+      <div style={{padding:'8px 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add item':'新增項目'}</Btn>
+      </div>
     </div>
   )
 }
@@ -455,6 +591,7 @@ export default function ClinicOpsApp() {
   const [screen,setScreen]=useState('overview')
   const [isEn,setIsEn]=useState(true)
   const [activePatient,setActivePatient]=useState(null)
+  const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
 
   const queue = [
     {ticket:'A12', patientName:'Wong Mei-ling, Lisa', doctor:'Dr Chan', room:'Room 1', status:'in_room'},
@@ -469,6 +606,7 @@ export default function ClinicOpsApp() {
     {key:'scan', icon:'⬡', en:'Scan', zh:'掃描'},
     {key:'schedule', icon:'◇', en:'Schedule', zh:'排程'},
     {key:'records', icon:'◎', en:'Records', zh:'記錄'},
+    {key:'inventory', icon:'▤', en:'Inventory', zh:'庫存'},
     {key:'payment', icon:'◈', en:'Payment', zh:'付款'},
     {key:'claims', icon:'◉', en:'Claims', zh:'索賠'},
   ]
@@ -483,10 +621,11 @@ export default function ClinicOpsApp() {
       </div>
 
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen isEn={isEn} queue={queue} onNav={setScreen}/>}
+        {screen==='overview'&&<OverviewScreen isEn={isEn} queue={queue} onNav={setScreen} onSelectQueueEntry={setSelectedQueueEntry}/>}
         {screen==='scan'&&<ScanCheckInScreen isEn={isEn} onCheckedIn={(p)=>{setActivePatient(p);setScreen('records')}}/>}
         {screen==='schedule'&&<ScheduleScreen isEn={isEn}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} activePatient={activePatient}/>}
+        {screen==='inventory'&&<InventoryScreen isEn={isEn}/>}
         {screen==='payment'&&<PaymentScreen isEn={isEn}/>}
         {screen==='claims'&&<ClaimsScreen isEn={isEn}/>}
       </div>
@@ -499,6 +638,7 @@ export default function ClinicOpsApp() {
           </div>
         ))}
       </div>
+      <PatientQueueDetail entry={selectedQueueEntry} isEn={isEn} onClose={()=>setSelectedQueueEntry(null)}/>
     </div>
   )
 }
