@@ -133,8 +133,29 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
 }
 
 function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented, patient={} }) {
+  // Demo queue position — in production this reads from a shared `clinic_queue`
+  // Supabase table that both PatientApp and ClinicOpsApp read/write to, so a
+  // check-in on the clinic side updates this in real time on the patient side.
+  // Right now ClinicOpsApp's queue lives in local React state, not Supabase,
+  // so this is illustrative until that table exists.
+  const queueStatus = { checkedIn:true, position:2, ticket:'A14', clinic:'Pacific Medical Group', doctor:'Dr Chan Siu-ming' }
+
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
+
+      {/* ── Live queue position — shown only while checked in at a clinic ── */}
+      {queueStatus.checkedIn&&(
+        <div style={{margin:'14px 16px 0',background:C.navy,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
+          <div style={{width:44,height:44,borderRadius:'12px',background:'rgba(255,255,255,0.15)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <div style={{fontSize:'16px',fontWeight:800,color:'#fff',lineHeight:1}}>{queueStatus.position}</div>
+            <div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{isEn?'ahead':'位在前'}</div>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${queueStatus.position} people ahead of you`:`您前面有${queueStatus.position}位`}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.7)',marginTop:'2px'}}>{queueStatus.ticket} · {queueStatus.clinic} · {queueStatus.doctor}</div>
+          </div>
+        </div>
+      )}
 
       {/* ── Emergency card reminder banner (shown until consented) ── */}
       {!emergencyConsented&&(
