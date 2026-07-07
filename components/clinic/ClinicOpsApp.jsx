@@ -391,6 +391,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
         const dbRows = rxRows.map(p=>({
           patient_id: patient.id, medication_name: p.drug, dosage: p.dosage, frequency: p.frequency,
           active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
+          prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
         }))
         const { error: insErr } = await supabase.from('medications').insert(dbRows)
         if (insErr) throw insErr
@@ -676,13 +677,26 @@ function PaymentScreen() {
   const [paid,setPaid]=useState(false)
   const [receiptSent,setReceiptSent]=useState(false)
   const [printed,setPrinted]=useState(false)
+  const [treatmentPlans,setTreatmentPlans]=useState([])
+  const [plansLoading,setPlansLoading]=useState(true)
   const bill = {patient:'Wong Mei-ling, Lisa', consultFee:380, insurerCovers:300, patientPays:80}
 
-  const treatmentPlans = [
-    {patient:'Wong Mei-ling, Lisa', plan:'Physiotherapy - 10 sessions', paid:10, used:6, remaining:4, status:'active'},
-    {patient:'Chan Tai-man', plan:'Dermatology follow-up package - 4 visits', paid:4, used:4, remaining:0, status:'completed'},
-    {patient:'Lee Siu-fong', plan:'Diabetic monitoring - 6 visits', paid:2, used:2, remaining:0, status:'unpaid_renewal'},
-  ]
+  useEffect(() => {
+    async function load() {
+      setPlansLoading(true)
+      const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)')
+      setTreatmentPlans((data||[]).map(p => ({
+        patient: p.patients?.full_name || 'Unknown',
+        plan: p.plan_name,
+        paid: p.sessions_paid,
+        used: p.sessions_used,
+        remaining: p.sessions_paid - p.sessions_used,
+        status: p.status,
+      })))
+      setPlansLoading(false)
+    }
+    load()
+  }, [])
 
   if (tab==='plans') return (
     <PageWrap maxWidth={640}>
@@ -771,24 +785,36 @@ function PaymentScreen() {
 }
 
 function InventoryScreen() {
-  const [items,setItems]=useState([
-    {name:'Metformin 500mg', stock:340, unit:'tablets', reorderAt:100, supplier:'HK Pharma Distributors'},
-    {name:'Amoxicillin 250mg', stock:85, unit:'capsules', reorderAt:100, supplier:'HK Pharma Distributors'},
-    {name:'Paracetamol 500mg', stock:620, unit:'tablets', reorderAt:150, supplier:'MedSupply HK'},
-    {name:'Surgical masks', stock:45, unit:'boxes', reorderAt:20, supplier:'MedSupply HK'},
-    {name:'Syringes 5ml', stock:12, unit:'boxes', reorderAt:15, supplier:'MedSupply HK'},
-  ])
+  const [items,setItems]=useState([])
+  const [loading,setLoading]=useState(true)
   const [showReorderOnly,setShowReorderOnly]=useState(false)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data } = await supabase.from('clinic_inventory').select('*').order('item_name', { ascending: true })
+      setItems((data||[]).map(r => ({
+        id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier,
+      })))
+      setLoading(false)
+    }
+    load()
+  }, [])
+
   const displayed = showReorderOnly ? items.filter(i=>i.stock<=i.reorderAt) : items
   const lowStockCount = items.filter(i=>i.stock<=i.reorderAt).length
 
-  function adjustStock(name, delta) {
-    setItems(prev=>prev.map(i=>i.name===name?{...i,stock:Math.max(0,i.stock+delta)}:i))
+  async function adjustStock(id, delta) {
+    const item = items.find(i=>i.id===id)
+    const newStock = Math.max(0, item.stock+delta)
+    setItems(prev=>prev.map(i=>i.id===id?{...i,stock:newStock}:i))
+    await supabase.from('clinic_inventory').update({ stock: newStock, updated_at: new Date().toISOString() }).eq('id', id)
   }
 
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Inventory</h2>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {lowStockCount>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px'}}>
         <span style={{fontSize:'13px',fontWeight:600,color:C.amber}}>{'\u26a0'} {lowStockCount} item(s) at or below reorder level</span>
       </div>}
@@ -798,22 +824,22 @@ function InventoryScreen() {
         ))}
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {displayed.map((item,i)=>{
+        {displayed.map((item)=>{
           const low = item.stock <= item.reorderAt
           return (
-            <Card key={i} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'16px'}}>
+            <Card key={item.id} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'16px'}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{item.supplier} - reorder at {item.reorderAt} {item.unit}</div>
               </div>
               {low&&<Badge text="Reorder" type="due"/>}
               <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                <button onClick={()=>adjustStock(item.name,-10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>-</button>
+                <button onClick={()=>adjustStock(item.id,-10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>-</button>
                 <div style={{width:70,textAlign:'center'}}>
                   <span style={{fontSize:'15px',fontWeight:700,color:low?C.amber:C.text}}>{item.stock}</span>
                   <span style={{fontSize:'11px',color:C.textMuted}}> {item.unit}</span>
                 </div>
-                <button onClick={()=>adjustStock(item.name,10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>+</button>
+                <button onClick={()=>adjustStock(item.id,10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>+</button>
               </div>
             </Card>
           )
@@ -833,17 +859,37 @@ function ClaimsScreen() {
   const [step,setStep]=useState('list')
   const [claimType,setClaimType]=useState('outpatient')
   const [selectedPatient,setSelectedPatient]=useState(null)
+  const [selectedPlan,setSelectedPlan]=useState(null)
   const [amount,setAmount]=useState('')
-  const patients = [
-    {name:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', plan:'AIA Prime Care', insurer:'AIA', consented:true, policyOnFile:true},
-    {name:'Chan Tai-man', medsaId:'MDS-77213-HK', plan:'Bupa Gold Cover', insurer:'Bupa', consented:true, policyOnFile:true},
-    {name:'Lee Siu-fong', medsaId:'MDS-90142-HK', plan:'Blue Cross Hospital Plan', insurer:'Blue Cross', consented:false, policyOnFile:false},
-  ]
-  const existingClaims = [
-    {ref:'CLM-44823', patient:'Wong Mei-ling, Lisa', insurer:'AIA', amount:680, fee:20, status:'submitted', date:'3 Jul'},
-    {ref:'CLM-44821', patient:'Chan Tai-man', insurer:'Bupa', amount:1200, fee:35, status:'adjudicated', date:'28 Jun'},
-    {ref:'CLM-44790', patient:'Ho Ka-yee', insurer:'AIA', amount:450, fee:15, status:'validated', date:'2 Jul'},
-  ]
+  const [patients,setPatients]=useState([])
+  const [plans,setPlans]=useState([])
+  const [existingClaims,setExistingClaims]=useState([])
+  const [loading,setLoading]=useState(true)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const [{data:patientRows},{data:consentRows},{data:planRows},{data:claimRows}] = await Promise.all([
+        supabase.from('patients').select('id, full_name, medsa_id'),
+        supabase.from('patient_consent').select('patient_id').eq('active', true),
+        supabase.from('insurance_plans').select('*'),
+        supabase.from('insurance_claims').select('*, patients(full_name), insurance_plans(plan_name, company_name)').order('submitted_at', { ascending: false }).limit(10),
+      ])
+      const consentedIds = new Set((consentRows||[]).map(c=>c.patient_id))
+      setPatients((patientRows||[]).map(p => ({
+        id: p.id, name: p.full_name, medsaId: p.medsa_id, consented: consentedIds.has(p.id),
+      })))
+      setPlans(planRows||[])
+      setExistingClaims((claimRows||[]).map(c => ({
+        ref: c.claim_ref, patient: c.patients?.full_name||'Unknown', insurer: c.insurance_plans?.company_name||'-',
+        amount: c.amount, fee: c.clearinghouse_fee||0,
+        status: c.validated ? (c.status==='approved'||c.status==='rejected' ? 'adjudicated' : 'submitted') : 'validated',
+        date: c.submitted_at ? new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}) : '-',
+      })))
+      setLoading(false)
+    }
+    load()
+  }, [])
 
   // Medsa's clearinghouse fee - flat + small percentage, paid by the insurer
   // for automated validation, routing, and reconciliation of this claim.
@@ -902,14 +948,23 @@ function ClaimsScreen() {
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'16px',textAlign:'center'}}>New Claim</h2>
       <SecLabel>Select patient</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
-        {patients.map((p,i)=>(
-          <Card key={i} onClick={()=>p.consented&&setSelectedPatient(p)} style={{padding:'14px 18px',display:'flex',justifyContent:'space-between',alignItems:'center',opacity:p.consented?1:0.5,border:selectedPatient?.medsaId===p.medsaId?`1.5px solid ${C.green}`:undefined}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{p.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{p.medsaId} - {p.plan}</div></div>
+        {patients.map((p)=>(
+          <Card key={p.id} onClick={()=>p.consented&&setSelectedPatient(p)} style={{padding:'14px 18px',display:'flex',justifyContent:'space-between',alignItems:'center',opacity:p.consented?1:0.5,border:selectedPatient?.id===p.id?`1.5px solid ${C.green}`:undefined}}>
+            <div><div style={{fontSize:'13px',fontWeight:500}}>{p.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{p.medsaId}</div></div>
             {p.consented?<span style={{fontSize:'12px',color:C.green,fontWeight:600}}>Consented</span>:<span style={{fontSize:'12px',color:C.textMuted}}>No consent on file</span>}
           </Card>
         ))}
       </div>
       {selectedPatient&&<>
+        <SecLabel>Insurance plan</SecLabel>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+          {plans.map(pl=>(
+            <Card key={pl.id} onClick={()=>setSelectedPlan(pl)} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',border:selectedPlan?.id===pl.id?`1.5px solid ${C.green}`:undefined}}>
+              <div><div style={{fontSize:'13px',fontWeight:500}}>{pl.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{pl.company_name}</div></div>
+            </Card>
+          ))}
+        </div>
+
         <SecLabel>Claim type</SecLabel>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'8px',marginBottom:'20px'}}>
           {['outpatient','hospitalisation','specialist','lab'].map(t=>(
@@ -924,7 +979,7 @@ function ClaimsScreen() {
         <Card style={{padding:'16px',marginBottom:'20px'}}>
           {[
             {label:'Patient consent on file', ok:selectedPatient.consented},
-            {label:'Insurance policy on file', ok:selectedPatient.policyOnFile},
+            {label:'Insurance plan selected', ok:!!selectedPlan},
             {label:'Consultation record attached', ok:true},
             {label:'Diagnosis on file', ok:true},
           ].map((item,i,arr)=>(
@@ -935,13 +990,22 @@ function ClaimsScreen() {
           ))}
         </Card>
 
-        {amount&&<div style={{background:C.blueLight,borderRadius:'8px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.blue}}>
-          Medsa clearinghouse fee for this claim: <strong>HK${calcFee(amount)}</strong> (paid by {selectedPatient.insurer}, not deducted from your claim)
+        {amount&&selectedPlan&&<div style={{background:C.blueLight,borderRadius:'8px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.blue}}>
+          Medsa clearinghouse fee for this claim: <strong>HK${calcFee(amount)}</strong> (paid by {selectedPlan.company_name}, not deducted from your claim)
         </div>}
 
         <div style={{textAlign:'center'}}>
-          <Btn variant="primary" onClick={()=>setStep('submitted')} disabled={!selectedPatient.consented||!selectedPatient.policyOnFile||!amount}>
-            Validate & prepare for {selectedPatient.insurer}
+          <Btn variant="primary" onClick={async ()=>{
+            const claimRef = 'CLM-'+Math.floor(10000+Math.random()*89999)
+            await supabase.from('insurance_claims').insert({
+              claim_ref: claimRef, patient_id: selectedPatient.id, plan_id: selectedPlan.id,
+              claim_type: claimType, amount: parseFloat(amount), plan_covers: parseFloat(amount),
+              patient_pays: 0, status: 'pending', validated: true,
+              clearinghouse_fee: calcFee(amount),
+            })
+            setStep('submitted')
+          }} disabled={!selectedPatient.consented||!selectedPlan||!amount}>
+            Validate & prepare for {selectedPlan?.company_name||'insurer'}
           </Btn>
         </div>
       </>}
@@ -953,9 +1017,9 @@ function ClaimsScreen() {
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Claim validated</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'8px'}}>Ready to send to {selectedPatient?.insurer}. Clearinghouse fee HK${calcFee(amount)} applies once submitted.</div>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPatient?.insurer}'s existing claims portal (manual handoff until direct integration is in place)</div>
-        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setAmount('')}}>Done</Btn>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'8px'}}>Ready to send to {selectedPlan?.company_name}. Clearinghouse fee HK${calcFee(amount)} applies once submitted.</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPlan?.company_name}'s existing claims portal (manual handoff until direct integration is in place)</div>
+        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('')}}>Done</Btn>
       </div>
     </PageWrap>
   )
@@ -964,16 +1028,52 @@ function ClaimsScreen() {
 export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
   const [screen,setScreen]=useState('overview')
-  const [checkedInQueue,setCheckedInQueue]=useState([
-    {ticket:'A12', patientName:'Chan Tai-man', doctor:'Dr Lam', room:'Room 2', checkedInAt: Date.now() - 2*60*60*1000, department:'Cardiology'},
-  ])
+  const [checkedInQueue,setCheckedInQueue]=useState([])
+  const [queueLoading,setQueueLoading]=useState(true)
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [nextTicket,setNextTicket]=useState(13)
 
-  function handleCheckedIn(patient) {
-    // Guard against duplicate check-ins - if this patient already has an
-    // active (not-expired) entry today, don't add another one.
+  // Load today's queue and pending prescriptions from Supabase once signed in
+  useEffect(() => {
+    if (!staffMember) return
+    async function load() {
+      setQueueLoading(true)
+      const { data: queueRows } = await supabase
+        .from('clinic_queue')
+        .select('*')
+        .order('checked_in_at', { ascending: true })
+      setCheckedInQueue((queueRows||[]).map(r => ({
+        id: r.id,
+        ticket: r.ticket,
+        patientName: r.patient_name,
+        doctor: r.doctor_name || 'Unassigned',
+        room: r.room || '-',
+        checkedInAt: new Date(r.checked_in_at).getTime(),
+        department: r.department || 'All departments',
+        status: r.status,
+      })))
+
+      const { data: rxRows } = await supabase
+        .from('medications')
+        .select('*, patients(full_name)')
+        .not('prescribed_by_staff', 'is', null)
+        .order('start_date', { ascending: false })
+        .limit(20)
+      setPendingPrescriptions((rxRows||[]).map(r => ({
+        id: r.id,
+        patientName: r.patients?.full_name || 'Unknown patient',
+        doctorName: r.prescribed_by_staff,
+        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency }],
+        timestamp: new Date(r.start_date).getTime(),
+        status: r.dispense_status || 'pending',
+      })))
+      setQueueLoading(false)
+    }
+    load()
+  }, [staffMember])
+
+  async function handleCheckedIn(patient) {
     const alreadyActive = checkedInQueue.some(q =>
       q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
     )
@@ -981,16 +1081,25 @@ export default function ClinicOpsApp() {
       setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
       return
     }
-    const entry = {
-      ticket: 'A'+nextTicket,
-      patientName: patient.full_name,
-      doctor: staffMember?.role==='doctor' ? staffMember.name : 'Unassigned',
+    const ticket = 'A'+nextTicket
+    const { data, error } = await supabase.from('clinic_queue').insert({
+      ticket,
+      patient_id: patient.id,
+      patient_name: patient.full_name,
+      doctor_name: staffMember?.role==='doctor' ? staffMember.name : 'Unassigned',
       room: '-',
-      checkedInAt: Date.now(),
       department: staffMember?.department || 'All departments',
+      status: 'waiting',
+    }).select().single()
+
+    if (!error && data) {
+      setCheckedInQueue([...checkedInQueue, {
+        id: data.id, ticket: data.ticket, patientName: data.patient_name,
+        doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
+        department: data.department, status: data.status,
+      }])
+      setNextTicket(nextTicket+1)
     }
-    setCheckedInQueue([...checkedInQueue, entry])
-    setNextTicket(nextTicket+1)
     setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
   }
 
@@ -1001,16 +1110,28 @@ export default function ClinicOpsApp() {
     ? checkedInQueue
     : checkedInQueue.filter(q=>!q.department || q.department===staffMember.department)
 
-  function handlePrescribed(rx) {
-    setPendingPrescriptions([...pendingPrescriptions, {...rx, id: Date.now()}])
+  async function handlePrescribed(rx) {
+    // The actual medication rows are already written to Supabase inside
+    // ConsultationScreen's handleSave. Here we just reflect it locally so
+    // the Prescriptions queue updates immediately without a full reload.
+    setPendingPrescriptions([...pendingPrescriptions, {...rx, id: Date.now(), status:'pending'}])
   }
 
-  function handleConfirmPrescription(id) {
+  async function handleConfirmPrescription(id) {
     setPendingPrescriptions(prev=>prev.map(p=>p.id===id?{...p,status:'printed'}:p))
+    // Best-effort sync back to Supabase if this id is a real row (not a
+    // locally-generated Date.now() id from the same-session prescribe flow)
+    if (typeof id === 'string') {
+      await supabase.from('medications').update({ dispense_status: 'printed' }).eq('id', id)
+    }
   }
 
-  function handleRemoveFromQueue(index) {
-    setCheckedInQueue(prev => prev.filter((_, i) => i !== index))
+  async function handleRemoveFromQueue(index) {
+    const entry = scopedQueue[index]
+    setCheckedInQueue(prev => prev.filter(q => q.id !== entry.id))
+    if (entry?.id) {
+      await supabase.from('clinic_queue').delete().eq('id', entry.id)
+    }
   }
 
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
