@@ -39,26 +39,44 @@ function hoursRemaining(checkedInAt) {
 
 function StaffLogin({ onLogin }) {
   const staff = [
-    {id:1, name:'Dr Chan Siu-ming', role:'doctor', roleLabel:'Doctor', color:C.green},
-    {id:2, name:'Dr Lam Wai-yee', role:'doctor', roleLabel:'Doctor', color:C.green},
-    {id:3, name:'Yip Mei', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue},
-    {id:4, name:'Wong Siu-fan', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue},
-    {id:5, name:'Chan Ka-yee (Owner)', role:'admin', roleLabel:'Clinic Manager', color:C.purple},
+    {id:1, name:'Dr Chan Siu-ming', role:'doctor', roleLabel:'Doctor', color:C.green, department:'Internal Medicine'},
+    {id:2, name:'Dr Lam Wai-yee', role:'doctor', roleLabel:'Doctor', color:C.green, department:'Cardiology'},
+    {id:3, name:'Yip Mei', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue, department:'Internal Medicine'},
+    {id:4, name:'Wong Siu-fan', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue, department:'Cardiology'},
+    {id:5, name:'Chan Ka-yee (Owner)', role:'admin', roleLabel:'Clinic Manager', color:C.purple, department:'All departments'},
   ]
+  // For a solo clinic every staff member effectively shares one department -
+  // this list only needs to grow when Medsa is deployed at a multi-department
+  // institution. Admin/clinic manager always sees every department.
+  const departments = ['Internal Medicine','Cardiology','Paediatrics','Dermatology']
   const [pin,setPin]=useState('')
   const [selected,setSelected]=useState(null)
+  const [stage,setStage]=useState('pick') // pick | pin | department
+  const [chosenDept,setChosenDept]=useState(null)
+
+  function handlePinConfirm() {
+    if (selected.role==='admin') {
+      onLogin({ ...selected, department: 'All departments' })
+    } else {
+      setStage('department')
+    }
+  }
 
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:420}}>
         <div style={{textAlign:'center',marginBottom:'28px'}}>
           <div style={{fontSize:'22px',fontWeight:700,color:C.text}}>Medsa Clinic</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>Select your account to sign in</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>
+            {stage==='pick'&&'Select your account to sign in'}
+            {stage==='pin'&&'Enter your PIN'}
+            {stage==='department'&&'Which department are you working in today?'}
+          </div>
         </div>
-        {!selected ? (
+        {stage==='pick'&&(
           <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
             {staff.map(s=>(
-              <div key={s.id} onClick={()=>setSelected(s)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+              <div key={s.id} onClick={()=>{setSelected(s);setStage('pin')}} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
                 <div style={{width:38,height:38,borderRadius:'10px',background:s.color+'22',color:s.color,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'14px',flexShrink:0}}>{s.name[0]}</div>
                 <div style={{flex:1}}>
                   <div style={{fontSize:'14px',fontWeight:600}}>{s.name}</div>
@@ -68,7 +86,8 @@ function StaffLogin({ onLogin }) {
               </div>
             ))}
           </div>
-        ) : (
+        )}
+        {stage==='pin'&&(
           <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
             <div style={{textAlign:'center',marginBottom:'18px'}}>
               <div style={{width:52,height:52,borderRadius:'12px',background:selected.color+'22',color:selected.color,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'18px',margin:'0 auto 10px'}}>{selected.name[0]}</div>
@@ -78,9 +97,20 @@ function StaffLogin({ onLogin }) {
             <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="PIN" maxLength={4}
               style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'18px',textAlign:'center',letterSpacing:'8px',marginBottom:'14px',boxSizing:'border-box'}}/>
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('')}}>Back</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={()=>onLogin(selected)}>Sign in</Btn>
+              <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('');setStage('pick')}}>Back</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm}>Sign in</Btn>
             </div>
+          </div>
+        )}
+        {stage==='department'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
+              {departments.map(d=>(
+                <div key={d} onClick={()=>setChosenDept(d)} style={{padding:'12px 14px',borderRadius:'10px',cursor:'pointer',background:chosenDept===d?C.green:C.card,color:chosenDept===d?'#fff':C.text,fontSize:'13px',fontWeight:500}}>{d}</div>
+              ))}
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{'\u25c7'} A solo clinic can skip this by treating the whole clinic as one department. This only matters once Medsa runs across multiple departments or wards.</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>onLogin({...selected, department: chosenDept || selected.department})}>Continue</Btn>
           </div>
         )}
       </div>
@@ -109,7 +139,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
           <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',flexShrink:0}}>{staffMember.name[0]}</div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:'12px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{staffMember.name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>{staffMember.roleLabel}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{staffMember.roleLabel}{staffMember.department&&staffMember.department!=='All departments'&&` · ${staffMember.department}`}</div>
           </div>
         </div>
         <Btn style={{width:'100%',fontSize:'12px'}} onClick={onLogout}>Sign out</Btn>
@@ -906,7 +936,7 @@ export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
   const [screen,setScreen]=useState('overview')
   const [checkedInQueue,setCheckedInQueue]=useState([
-    {ticket:'A12', patientName:'Chan Tai-man', doctor:'Dr Lam', room:'Room 2', checkedInAt: Date.now() - 2*60*60*1000},
+    {ticket:'A12', patientName:'Chan Tai-man', doctor:'Dr Lam', room:'Room 2', checkedInAt: Date.now() - 2*60*60*1000, department:'Cardiology'},
   ])
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
@@ -919,11 +949,19 @@ export default function ClinicOpsApp() {
       doctor: staffMember?.role==='doctor' ? staffMember.name : 'Unassigned',
       room: '-',
       checkedInAt: Date.now(),
+      department: staffMember?.department || 'All departments',
     }
     setCheckedInQueue([...checkedInQueue, entry])
     setNextTicket(nextTicket+1)
     setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
   }
+
+  // Admin/clinic manager sees every department; everyone else sees only
+  // their own. A solo clinic never notices this since every entry shares
+  // one department anyway.
+  const scopedQueue = (staffMember?.department==='All departments' || !staffMember?.department)
+    ? checkedInQueue
+    : checkedInQueue.filter(q=>!q.department || q.department===staffMember.department)
 
   function handlePrescribed(rx) {
     setPendingPrescriptions([...pendingPrescriptions, {...rx, id: Date.now()}])
@@ -954,8 +992,8 @@ export default function ClinicOpsApp() {
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={checkedInQueue} pendingCount={pendingCount}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={checkedInQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
