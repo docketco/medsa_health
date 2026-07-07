@@ -693,6 +693,9 @@ function PaymentScreen() {
             <span style={{fontWeight:i===2?700:500,fontSize:i===2?'17px':'13px',color:i===2?C.green:C.text}}>{v}</span>
           </div>
         ))}
+        <div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+          {'\u25c7'} Direct billing: the insurer-covered portion above is automatically prepared as a claim in Claims once you charge the patient.
+        </div>
       </Card>
       <SecLabel>Payment method</SecLabel>
       <div style={{display:'flex',gap:'8px',marginBottom:'18px'}}>
@@ -762,35 +765,73 @@ function InventoryScreen() {
   )
 }
 
+// ── CLAIMS CLEARINGHOUSE ─────────────────────────────────────────────────────
+// Validates claims before they leave the clinic, calculates the per-claim
+// Medsa clearinghouse fee, and tracks status through the pipeline. Actual
+// transmission to an insurer is a manual/portal handoff until a real insurer
+// API or EDI contract exists - this is flagged honestly in the UI itself.
 function ClaimsScreen() {
   const [step,setStep]=useState('list')
   const [claimType,setClaimType]=useState('outpatient')
   const [selectedPatient,setSelectedPatient]=useState(null)
+  const [amount,setAmount]=useState('')
   const patients = [
-    {name:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', plan:'AIA Prime Care', consented:true},
-    {name:'Chan Tai-man', medsaId:'MDS-77213-HK', plan:'Bupa Gold Cover', consented:true},
-    {name:'Lee Siu-fong', medsaId:'MDS-90142-HK', plan:'Blue Cross Hospital Plan', consented:false},
+    {name:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', plan:'AIA Prime Care', insurer:'AIA', consented:true, policyOnFile:true},
+    {name:'Chan Tai-man', medsaId:'MDS-77213-HK', plan:'Bupa Gold Cover', insurer:'Bupa', consented:true, policyOnFile:true},
+    {name:'Lee Siu-fong', medsaId:'MDS-90142-HK', plan:'Blue Cross Hospital Plan', insurer:'Blue Cross', consented:false, policyOnFile:false},
   ]
   const existingClaims = [
-    {ref:'CLM-44823', patient:'Wong Mei-ling, Lisa', insurer:'AIA', amount:680, status:'pending', date:'3 Jul'},
-    {ref:'CLM-44821', patient:'Chan Tai-man', insurer:'Bupa', amount:1200, status:'approved', date:'28 Jun'},
+    {ref:'CLM-44823', patient:'Wong Mei-ling, Lisa', insurer:'AIA', amount:680, fee:20, status:'submitted', date:'3 Jul'},
+    {ref:'CLM-44821', patient:'Chan Tai-man', insurer:'Bupa', amount:1200, fee:35, status:'adjudicated', date:'28 Jun'},
+    {ref:'CLM-44790', patient:'Ho Ka-yee', insurer:'AIA', amount:450, fee:15, status:'validated', date:'2 Jul'},
   ]
 
+  // Medsa's clearinghouse fee - flat + small percentage, paid by the insurer
+  // for automated validation, routing, and reconciliation of this claim.
+  function calcFee(amt) {
+    const n = parseFloat(amt) || 0
+    return Math.round(n * 0.02 + 10) // 2% + HK$10 flat, illustrative rate
+  }
+
+  const statusMeta = {
+    validated: {label:'Validated', type:'waiting', desc:'Checked for completeness and coverage - not yet sent to insurer'},
+    submitted: {label:'Sent to insurer', type:'due', desc:'Awaiting adjudication'},
+    adjudicated: {label:'Adjudicated', type:'ok', desc:'Insurer has responded'},
+  }
+
   if (step==='list') return (
-    <PageWrap maxWidth={640}>
+    <PageWrap maxWidth={680}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Insurance Claims</h2>
-      <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'16px',marginBottom:'20px'}}>
-        <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'4px'}}>Direct-to-insurer submission</div>
-        <div style={{fontSize:'13px',color:C.textSub}}>Patient consent is already on file via Medsa. Submit the claim directly - no separate paperwork.</div>
+
+      <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'16px',marginBottom:'12px'}}>
+        <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'4px'}}>How this works</div>
+        <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Medsa validates each claim - checking patient consent, policy on file, and required documents - before it's sent to the insurer. A small clearinghouse fee is paid by the insurer per validated claim, not by your clinic.</div>
       </div>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
+        {'\u25c7'} Until Medsa has a direct connection with a given insurer, "Sent to insurer" means the validated package is ready for you to submit through that insurer's existing portal or email - this step automates fully once an insurer partnership is in place.
+      </div>
+
       <SecLabel>Recent claims</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
-        {existingClaims.map((c,i)=>(
-          <Card key={i} style={{padding:'14px 18px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{c.ref} - {c.patient}</div><div style={{fontSize:'12px',color:C.textSub}}>{c.insurer} - {c.date}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'15px',fontWeight:600,color:C.green}}>HK${c.amount}</div><Badge text={c.status==='approved'?'Approved':'Pending'} type={c.status==='approved'?'ok':'due'}/></div>
-          </Card>
-        ))}
+        {existingClaims.map((c,i)=>{
+          const meta = statusMeta[c.status]
+          return (
+            <Card key={i} style={{padding:'14px 18px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:500}}>{c.ref} - {c.patient}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{c.insurer} - {c.date}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:'15px',fontWeight:600,color:C.green}}>HK${c.amount}</div>
+                  <Badge text={meta.label} type={meta.type}/>
+                </div>
+              </div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{meta.desc}</div>
+              <div style={{fontSize:'11px',color:C.blue}}>Medsa clearinghouse fee: HK${c.fee} (paid by insurer)</div>
+            </Card>
+          )
+        })}
       </div>
       <div style={{textAlign:'center'}}><Btn variant="primary" onClick={()=>setStep('new')}>+ Submit new claim</Btn></div>
     </PageWrap>
@@ -816,15 +857,34 @@ function ClaimsScreen() {
             <div key={t} onClick={()=>setClaimType(t)} style={{padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:claimType===t?C.green:C.card,color:claimType===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
-        <SecLabel>Auto-attached from Medsa</SecLabel>
+
+        <SecLabel>Claim amount</SecLabel>
+        <input value={amount} onChange={e=>setAmount(e.target.value)} placeholder="HK$" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'20px'}}/>
+
+        <SecLabel>Validation checklist</SecLabel>
         <Card style={{padding:'16px',marginBottom:'20px'}}>
-          {['Consultation record','Diagnosis on file','Patient ID and policy number'].map((item,i,arr)=>(
+          {[
+            {label:'Patient consent on file', ok:selectedPatient.consented},
+            {label:'Insurance policy on file', ok:selectedPatient.policyOnFile},
+            {label:'Consultation record attached', ok:true},
+            {label:'Diagnosis on file', ok:true},
+          ].map((item,i,arr)=>(
             <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <span style={{color:C.green,fontSize:'13px'}}>{'\u2713'}</span><span style={{fontSize:'13px'}}>{item}</span>
+              <span style={{color:item.ok?C.green:C.red,fontSize:'13px'}}>{item.ok?'\u2713':'\u2715'}</span>
+              <span style={{fontSize:'13px',color:item.ok?C.text:C.red}}>{item.label}</span>
             </div>
           ))}
         </Card>
-        <div style={{textAlign:'center'}}><Btn variant="primary" onClick={()=>setStep('submitted')}>Submit to {selectedPatient.plan.split(' ')[0]}</Btn></div>
+
+        {amount&&<div style={{background:C.blueLight,borderRadius:'8px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.blue}}>
+          Medsa clearinghouse fee for this claim: <strong>HK${calcFee(amount)}</strong> (paid by {selectedPatient.insurer}, not deducted from your claim)
+        </div>}
+
+        <div style={{textAlign:'center'}}>
+          <Btn variant="primary" onClick={()=>setStep('submitted')} disabled={!selectedPatient.consented||!selectedPatient.policyOnFile||!amount}>
+            Validate & prepare for {selectedPatient.insurer}
+          </Btn>
+        </div>
       </>}
     </PageWrap>
   )
@@ -833,9 +893,10 @@ function ClaimsScreen() {
     <PageWrap maxWidth={480}>
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
-        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Claim submitted</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px'}}>Sent directly to {selectedPatient?.plan}. No separate paperwork needed.</div>
-        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null)}}>Done</Btn>
+        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Claim validated</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'8px'}}>Ready to send to {selectedPatient?.insurer}. Clearinghouse fee HK${calcFee(amount)} applies once submitted.</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPatient?.insurer}'s existing claims portal (manual handoff until direct integration is in place)</div>
+        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setAmount('')}}>Done</Btn>
       </div>
     </PageWrap>
   )
