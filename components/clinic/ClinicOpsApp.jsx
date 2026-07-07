@@ -155,6 +155,15 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
   const [searchTerm,setSearchTerm]=useState('')
   const [searchResult,setSearchResult]=useState(null)
   const [requestSent,setRequestSent]=useState(false)
+  const [checkingIn,setCheckingIn]=useState(false)
+
+  function handleCheckInClick() {
+    if (checkingIn) return // guard against rapid repeat clicks
+    setCheckingIn(true)
+    onCheckedIn(patient)
+    // stage resets when this component unmounts/remounts on nav away, but
+    // guard stays true so a slow double-click can't fire a second check-in
+  }
 
   async function simulateScan() {
     setStage('scanning')
@@ -215,9 +224,10 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
             </div>
           </div>
           <div style={{display:'flex',gap:'10px'}}>
-            <Btn onClick={()=>setStage('idle')}>Cancel</Btn>
-            <Btn variant="primary" onClick={()=>onCheckedIn(patient)}>Check in patient</Btn>
+            <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
+            <Btn variant="primary" onClick={handleCheckInClick} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
           </div>
+          {checkingIn&&<div style={{marginTop:'10px',fontSize:'12px',color:C.green,textAlign:'center'}}>{'\u2713'} {patient.full_name} checked in - redirecting...</div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
           <div style={{fontSize:'28px',marginBottom:'10px'}}>{'\u25ce'}</div>
@@ -555,7 +565,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
   )
 }
 
-function OverviewScreen({ queue, pendingCount }) {
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
   const inRoom = queue.length
 
   return (
@@ -578,6 +588,7 @@ function OverviewScreen({ queue, pendingCount }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
               </div>
               <Badge text={hrsLeft>0?`${Math.floor(hrsLeft)}h left`:'Expired'} type={hrsLeft>0?'ok':'full'}/>
+              {onRemoveFromQueue&&<span onClick={()=>onRemoveFromQueue(i)} style={{fontSize:'11px',color:C.red,cursor:'pointer',marginLeft:'4px'}}>Remove</span>}
             </Card>
           )
         })}
@@ -943,6 +954,15 @@ export default function ClinicOpsApp() {
   const [nextTicket,setNextTicket]=useState(13)
 
   function handleCheckedIn(patient) {
+    // Guard against duplicate check-ins - if this patient already has an
+    // active (not-expired) entry today, don't add another one.
+    const alreadyActive = checkedInQueue.some(q =>
+      q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
+    )
+    if (alreadyActive) {
+      setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
+      return
+    }
     const entry = {
       ticket: 'A'+nextTicket,
       patientName: patient.full_name,
@@ -971,6 +991,10 @@ export default function ClinicOpsApp() {
     setPendingPrescriptions(prev=>prev.map(p=>p.id===id?{...p,status:'printed'}:p))
   }
 
+  function handleRemoveFromQueue(index) {
+    setCheckedInQueue(prev => prev.filter((_, i) => i !== index))
+  }
+
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
 
   const allNavItems = [
@@ -992,7 +1016,7 @@ export default function ClinicOpsApp() {
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
