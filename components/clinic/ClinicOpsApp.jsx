@@ -356,6 +356,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [referralSearch,setReferralSearch]=useState('')
   const [referralSent,setReferralSent]=useState(false)
   const [drugInfoOpen,setDrugInfoOpen]=useState(null)
+  const [expandedRecord,setExpandedRecord]=useState(null)
+  const [reportRequests,setReportRequests]=useState({})
 
   useEffect(() => {
     async function load() {
@@ -449,12 +451,28 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
             </Card>}
           </div>
           <div style={{flex:2}}>
-            {records.slice(0,3).map((r,i)=>(
-              <Card key={i} style={{padding:'10px 14px',marginBottom:'6px'}}>
-                <div style={{fontSize:'12px',fontWeight:600}}>{r.title}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
-              </Card>
-            ))}
+            {records.slice(0,5).map((r,i)=>{
+              const isOpen = expandedRecord===i
+              const requested = reportRequests[i]
+              return (
+                <Card key={i} style={{padding:'10px 14px',marginBottom:'6px'}}>
+                  <div onClick={()=>setExpandedRecord(isOpen?null:i)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+                    <div>
+                      <div style={{fontSize:'12px',fontWeight:600}}>{r.title}</div>
+                      <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - {r.institutions?.name||'-'}</div>
+                    </div>
+                    <span style={{color:C.textMuted,fontSize:'12px'}}>{isOpen?'\u2212':'+'}</span>
+                  </div>
+                  {isOpen&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+                    {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
+                    {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
+                    {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
+                    {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>setReportRequests({...reportRequests,[i]:true})}>Request full/detailed report</Btn>
+                      :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>}
+                  </div>}
+                </Card>
+              )
+            })}
           </div>
         </div>}
       </> : <div style={{background:C.card,borderRadius:'10px',padding:'14px',fontSize:'12px',color:C.textMuted,textAlign:'center',marginBottom:'20px'}}>24-hour record access has expired for this visit. Request renewed access from Check-in / Search.</div>}
