@@ -173,11 +173,20 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
     setStage('found')
   }
 
+  const [searched,setSearched]=useState(false)
+
   async function handleSearch() {
     if (!searchTerm.trim()) return
-    const { data } = await supabase.from('patients').select('*').eq('medsa_id','MDS-84921-HK').single()
+    const term = searchTerm.trim()
+    const { data } = await supabase
+      .from('patients')
+      .select('*')
+      .or(`medsa_id.ilike.%${term}%,full_name.ilike.%${term}%`)
+      .limit(1)
+      .maybeSingle()
     setSearchResult(data || null)
     setRequestSent(false)
+    setSearched(true)
   }
 
   return (
@@ -244,12 +253,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
         {searchResult&&<Card style={{padding:'20px'}}>
           <div style={{fontSize:'17px',fontWeight:700}}>{searchResult.full_name}</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{searchResult.medsa_id} - DOB {new Date(searchResult.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
-          <div style={{display:'flex',gap:'10px',marginBottom:requestSent?'0':'10px'}}>
-            <Btn variant="primary" style={{flex:1}} onClick={onNavSchedule}>Schedule appointment</Btn>
-            {!requestSent&&<Btn style={{flex:1}} onClick={()=>setRequestSent(true)}>Request record access</Btn>}
+          <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>onCheckedIn(searchResult)}>Check in now</Btn>
+            <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
+          {!requestSent&&<Btn style={{width:'100%'}} onClick={()=>setRequestSent(true)}>Request record access ahead of visit</Btn>}
           {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
         </Card>}
+        {searched&&!searchResult&&<div style={{textAlign:'center',padding:'20px'}}>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>No patient found matching "{searchTerm}".</div>
+          <span onClick={onNewPatient} style={{fontSize:'13px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span>
+        </div>}
       </>}
     </PageWrap>
   )
