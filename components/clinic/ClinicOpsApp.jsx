@@ -361,7 +361,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [loading,setLoading]=useState(true)
   const [notes,setNotes]=useState('')
   const [diagnosis,setDiagnosis]=useState('')
-  const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:''}])
+  const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}])
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState(null)
@@ -372,6 +372,16 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [drugInfoOpen,setDrugInfoOpen]=useState(null)
   const [expandedRecord,setExpandedRecord]=useState(null)
   const [reportRequests,setReportRequests]=useState({})
+  const [inventoryItems,setInventoryItems]=useState([])
+  const [suggestOpen,setSuggestOpen]=useState(null)
+
+  useEffect(() => {
+    async function loadInventory() {
+      const { data } = await supabase.from('clinic_inventory').select('item_name')
+      setInventoryItems((data||[]).map(i=>i.item_name))
+    }
+    loadInventory()
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -391,9 +401,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     load()
   }, [queueEntry])
 
-  function addPrescriptionLine() { setPrescriptions([...prescriptions, {drug:'',dosage:'',frequency:''}]) }
+  function addPrescriptionLine() { setPrescriptions([...prescriptions, {drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}]) }
   function updateRx(i, field, value) {
-    setPrescriptions(prescriptions.map((p,idx)=>idx===i?{...p,[field]:value}:p))
+    setPrescriptions(prescriptions.map((p,idx)=>{
+      if (idx!==i) return p
+      const updated = {...p,[field]:value}
+      // Auto-suggest quantity whenever duration or times-per-day changes,
+      // but never override a quantity the doctor has manually typed in.
+      if ((field==='durationDays'||field==='timesPerDay') && !p.quantityManuallySet) {
+        const days = parseInt(field==='durationDays'?value:updated.durationDays) || 0
+        const times = parseInt(field==='timesPerDay'?value:updated.timesPerDay) || 0
+        if (days>0 && times>0) updated.quantity = String(days*times)
+      }
+      if (field==='quantity') updated.quantityManuallySet = true
+      return updated
+    }))
   }
 
   async function handleSave() {
@@ -404,6 +426,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       if (rxRows.length>0 && patient) {
         const dbRows = rxRows.map(p=>({
           patient_id: patient.id, medication_name: p.drug, dosage: p.dosage, frequency: p.frequency,
+          quantity: parseInt(p.quantity)||1,
+          duration_days: parseInt(p.durationDays)||null,
+          times_per_day: parseInt(p.timesPerDay)||null,
           active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
           prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
         }))
@@ -500,25 +525,60 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
 
       <SecLabel>Prescription</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px'}}>
-        {prescriptions.map((rx,i)=>(
-          <div key={i}>
+        {prescriptions.map((rx,i)=>{
+          const matches = rx.drug.trim() ? inventoryItems.filter(n=>n.toLowerCase().includes(rx.drug.toLowerCase()) && n.toLowerCase()!==rx.drug.toLowerCase()) : []
+          return (
+          <div key={i} style={{position:'relative'}}>
             <div style={{display:'flex',gap:'8px'}}>
-              <input value={rx.drug} onChange={e=>updateRx(i,'drug',e.target.value)} placeholder="Drug name" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+              <div style={{flex:2,position:'relative'}}>
+                <input
+                  value={rx.drug}
+                  onChange={e=>{updateRx(i,'drug',e.target.value);setSuggestOpen(i)}}
+                  onFocus={()=>setSuggestOpen(i)}
+                  onBlur={()=>setTimeout(()=>setSuggestOpen(null),150)}
+                  placeholder="Drug name"
+                  style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}
+                />
+                {suggestOpen===i&&matches.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)',maxHeight:150,overflowY:'auto'}}>
+                  {matches.slice(0,5).map((m,mi)=>(
+                    <div key={mi} onMouseDown={()=>{updateRx(i,'drug',m);setSuggestOpen(null)}} style={{padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:mi<matches.length-1?`0.5px solid ${C.border}`:'none'}}>{m}</div>
+                  ))}
+                </div>}
+              </div>
               <input value={rx.dosage} onChange={e=>updateRx(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
               <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
               {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
             </div>
+
+            {/* Doctor-friendly duration control - times/day x days auto-suggests quantity */}
+            <div style={{display:'flex',gap:'8px',alignItems:'center',marginTop:'6px',background:C.card,borderRadius:'8px',padding:'8px 10px'}}>
+              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Times/day</span>
+              <div style={{display:'flex',gap:'4px'}}>
+                {[1,2,3,4].map(n=>(
+                  <div key={n} onClick={()=>updateRx(i,'timesPerDay',String(n))} style={{width:26,height:26,borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',cursor:'pointer',background:String(rx.timesPerDay)===String(n)?C.green:'#fff',color:String(rx.timesPerDay)===String(n)?'#fff':C.text,border:`0.5px solid ${C.border}`}}>{n}</div>
+                ))}
+              </div>
+              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0,marginLeft:'8px'}}>for</span>
+              <input value={rx.durationDays} onChange={e=>updateRx(i,'durationDays',e.target.value)} type="number" placeholder="days" style={{width:56,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>days</span>
+              <div style={{flex:1}}/>
+              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Qty</span>
+              <input value={rx.quantity} onChange={e=>updateRx(i,'quantity',e.target.value)} placeholder="0" type="number" style={{width:56,flexShrink:0,border:`0.5px solid ${rx.quantity&&!rx.quantityManuallySet?C.green:C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              {rx.quantity&&!rx.quantityManuallySet&&<span style={{fontSize:'10px',color:C.green}}>auto</span>}
+            </div>
+
             {drugInfoOpen===i&&<div style={{marginTop:'6px',background:C.blueLight,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.text,lineHeight:1.6}}>
               <strong>{rx.drug} - drug information sheet</strong><br/>
               Standard adult dosing, common side effects, and interaction warnings will display here once linked to a drug reference database (e.g. HK Department of Health formulary). This same sheet is visible to the patient in their Medsa app alongside this prescription.
             </div>}
           </div>
-        ))}
+          )
+        })}
       </div>
       <Btn style={{marginBottom:'20px'}} onClick={addPrescriptionLine}>+ Add drug</Btn>
 
       {prescriptions.some(p=>p.drug.trim())&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 14px',fontSize:'12px',color:C.amber,marginBottom:'20px'}}>
-        {'\u25c7'} Saving will notify front desk immediately to prepare and label this prescription.
+        {'\u25c7'} Saving will notify front desk immediately to prepare and label this prescription. Quantity dispensed will auto-deduct from inventory once confirmed.
       </div>}
 
       <SecLabel>Refer to another doctor</SecLabel>
@@ -549,12 +609,86 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   )
 }
 
+// ── LABEL STICKER — one editable sticker per drug in a prescription ─────────
+// Pulls effects/intake/precautions from the drug_reference library if a
+// previous nurse/doctor already filled them in for this drug. If not, the
+// fields are empty and editable — saving here writes back to the shared
+// reference so it auto-populates next time this same drug is prescribed.
+function LabelSticker({ patientName, doctorName, drug, onFieldsChange }) {
+  const [effects,setEffects]=useState('')
+  const [intake,setIntake]=useState('')
+  const [precautions,setPrecautions]=useState('')
+  const [loading,setLoading]=useState(true)
+  const [hasReference,setHasReference]=useState(false)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data } = await supabase.from('drug_reference').select('*').eq('drug_name', drug.drug).maybeSingle()
+      if (data) {
+        setEffects(data.effects||''); setIntake(data.intake_info||''); setPrecautions(data.precautions||'')
+        setHasReference(true)
+      }
+      setLoading(false)
+    }
+    load()
+  }, [drug.drug])
+
+  useEffect(() => {
+    onFieldsChange({ effects, intake, precautions })
+  }, [effects, intake, precautions])
+
+  return (
+    <div style={{background:'#fff',border:`1.5px dashed ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+        <div>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px'}}>Medsa Clinic - Pacific Medical Group</div>
+          <div style={{fontSize:'14px',fontWeight:700}}>{drug.drug} {drug.dosage}</div>
+          <div style={{fontSize:'12px',color:C.textSub}}>{patientName} - Prescribed by {doctorName}</div>
+        </div>
+        {hasReference&&!loading&&<Badge text="From library" type="ok"/>}
+      </div>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
+        {drug.frequency||'-'} {drug.durationDays&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}
+      </div>
+      {loading?<div style={{fontSize:'11px',color:C.textMuted}}>Checking drug library...</div>:<>
+        <div style={{marginBottom:'8px'}}>
+          <div style={{fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'3px'}}>Effects</div>
+          <textarea value={effects} onChange={e=>setEffects(e.target.value)} rows={2} placeholder="What this drug does..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',resize:'vertical'}}/>
+        </div>
+        <div style={{marginBottom:'8px'}}>
+          <div style={{fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'3px'}}>Intake instructions</div>
+          <textarea value={intake} onChange={e=>setIntake(e.target.value)} rows={2} placeholder="How and when to take it..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',resize:'vertical'}}/>
+        </div>
+        <div>
+          <div style={{fontSize:'10px',fontWeight:600,color:C.red,textTransform:'uppercase',marginBottom:'3px'}}>Precautions & side effects</div>
+          <textarea value={precautions} onChange={e=>setPrecautions(e.target.value)} rows={2} placeholder="Warnings, side effects, interactions..." style={{width:'100%',border:`0.5px solid ${C.red}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',resize:'vertical'}}/>
+        </div>
+      </>}
+    </div>
+  )
+}
+
 function PrescriptionsQueueScreen({ pending, onConfirm }) {
   const [printingId,setPrintingId]=useState(null)
+  const [openLabelId,setOpenLabelId]=useState(null)
+  const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
 
-  function handleConfirm(id) {
-    setPrintingId(id)
-    setTimeout(()=>{ onConfirm(id); setPrintingId(null) }, 900)
+  async function handleConfirm(p) {
+    setPrintingId(p.id)
+    // Save/update the drug reference library with whatever is currently in
+    // each label's fields - this is what makes it "automated" next time.
+    for (let idx=0; idx<p.drugs.length; idx++) {
+      const drug = p.drugs[idx]
+      const fields = editedFields[idx]
+      if (fields && (fields.effects||fields.intake||fields.precautions)) {
+        await supabase.from('drug_reference').upsert({
+          drug_name: drug.drug, effects: fields.effects, intake_info: fields.intake,
+          precautions: fields.precautions, updated_by: p.doctorName, updated_at: new Date().toISOString(),
+        }, { onConflict: 'drug_name' })
+      }
+    }
+    setTimeout(()=>{ onConfirm(p); setPrintingId(null); setOpenLabelId(null); setEditedFields({}) }, 900)
   }
 
   const waiting = pending.filter(p=>p.status==='pending')
@@ -565,7 +699,9 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Prescriptions</h2>
       {waiting.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px',marginBottom:'20px'}}>No pending prescriptions right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
-        {waiting.map(p=>(
+        {waiting.map(p=>{
+          const isOpen = openLabelId===p.id
+          return (
           <Card key={p.id} style={{padding:'16px 18px',border:`1.5px solid ${C.amber}`}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
               <div>
@@ -574,22 +710,40 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
               </div>
               <Badge text="New" type="due"/>
             </div>
-            <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'12px'}}>
+            <div onClick={()=>setOpenLabelId(isOpen?null:p.id)} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'12px',cursor:'pointer'}}>
               {p.drugs.map((d,i)=>(<div key={i} style={{fontSize:'13px',padding:'3px 0'}}>{d.drug} {d.dosage&&('- '+d.dosage)} {d.frequency&&('- '+d.frequency)}</div>))}
+              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{isOpen?'Hide label sticker preview':'Tap to review & edit label stickers'}</div>
             </div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleConfirm(p.id)} disabled={printingId===p.id}>
-              {printingId===p.id?'Printing label...':'Confirm & print label'}
+
+            {isOpen&&<div style={{marginBottom:'12px'}}>
+              {p.drugs.map((drug,idx)=>(
+                <LabelSticker
+                  key={idx}
+                  patientName={p.patientName}
+                  doctorName={p.doctorName}
+                  drug={drug}
+                  onFieldsChange={(fields)=>setEditedFields(prev=>({...prev,[idx]:fields}))}
+                />
+              ))}
+            </div>}
+
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleConfirm(p)} disabled={printingId===p.id}>
+              {printingId===p.id?'Printing labels...':'Confirm & print labels'}
             </Btn>
           </Card>
-        ))}
+          )
+        })}
       </div>
       {done.length>0&&<>
         <SecLabel>Printed today</SecLabel>
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {done.map(p=>(
-            <Card key={p.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',opacity:0.7}}>
-              <div><div style={{fontSize:'13px',fontWeight:500}}>{p.patientName}</div><div style={{fontSize:'11px',color:C.textSub}}>{p.doctorName}</div></div>
-              <Badge text="Printed" type="ok"/>
+            <Card key={p.id} style={{padding:'12px 16px',opacity:0.85}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:p.dispensedBy?'4px':'0'}}>
+                <div><div style={{fontSize:'13px',fontWeight:500}}>{p.patientName}</div><div style={{fontSize:'11px',color:C.textSub}}>{p.doctorName}</div></div>
+                <Badge text="Printed" type="ok"/>
+              </div>
+              {p.dispensedBy&&<div style={{fontSize:'10px',color:C.textMuted}}>Confirmed by {p.dispensedBy} at {new Date(p.dispensedAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>}
             </Card>
           ))}
         </div>
@@ -798,10 +952,12 @@ function PaymentScreen() {
   )
 }
 
-function InventoryScreen() {
+function InventoryScreen({ staffMember }) {
   const [items,setItems]=useState([])
   const [loading,setLoading]=useState(true)
   const [showReorderOnly,setShowReorderOnly]=useState(false)
+  const [pendingDelta,setPendingDelta]=useState({}) // itemId -> uncommitted delta
+  const [confirming,setConfirming]=useState(null)
 
   useEffect(() => {
     async function load() {
@@ -818,11 +974,28 @@ function InventoryScreen() {
   const displayed = showReorderOnly ? items.filter(i=>i.stock<=i.reorderAt) : items
   const lowStockCount = items.filter(i=>i.stock<=i.reorderAt).length
 
-  async function adjustStock(id, delta) {
+  function adjustPending(id, delta) {
+    setPendingDelta(prev => ({ ...prev, [id]: (prev[id]||0) + delta }))
+  }
+
+  async function confirmChange(id) {
+    const delta = pendingDelta[id]
+    if (!delta) return
+    setConfirming(id)
     const item = items.find(i=>i.id===id)
-    const newStock = Math.max(0, item.stock+delta)
+    const newStock = Math.max(0, item.stock + delta)
+    const staffName = staffMember?.name || 'Unknown'
+    const now = new Date().toISOString()
+
+    await supabase.from('clinic_inventory').update({ stock: newStock, updated_at: now }).eq('id', id)
+    await supabase.from('inventory_movements').insert({
+      inventory_id: id, item_name: item.name, change_amount: delta,
+      new_stock: newStock, reason: 'manual_adjustment', staff_name: staffName,
+    })
+
     setItems(prev=>prev.map(i=>i.id===id?{...i,stock:newStock}:i))
-    await supabase.from('clinic_inventory').update({ stock: newStock, updated_at: new Date().toISOString() }).eq('id', id)
+    setPendingDelta(prev => { const next={...prev}; delete next[id]; return next })
+    setConfirming(null)
   }
 
   return (
@@ -840,21 +1013,32 @@ function InventoryScreen() {
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {displayed.map((item)=>{
           const low = item.stock <= item.reorderAt
+          const delta = pendingDelta[item.id] || 0
+          const previewStock = Math.max(0, item.stock + delta)
           return (
-            <Card key={item.id} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'16px'}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{item.supplier} - reorder at {item.reorderAt} {item.unit}</div>
-              </div>
-              {low&&<Badge text="Reorder" type="due"/>}
-              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                <button onClick={()=>adjustStock(item.id,-10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>-</button>
-                <div style={{width:70,textAlign:'center'}}>
-                  <span style={{fontSize:'15px',fontWeight:700,color:low?C.amber:C.text}}>{item.stock}</span>
-                  <span style={{fontSize:'11px',color:C.textMuted}}> {item.unit}</span>
+            <Card key={item.id} style={{padding:'14px 18px'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'16px'}}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{item.supplier} - reorder at {item.reorderAt} {item.unit}</div>
                 </div>
-                <button onClick={()=>adjustStock(item.id,10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>+</button>
+                {low&&!delta&&<Badge text="Reorder" type="due"/>}
+                <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                  <button onClick={()=>adjustPending(item.id,-10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>-</button>
+                  <div style={{width:70,textAlign:'center'}}>
+                    <span style={{fontSize:'15px',fontWeight:700,color:previewStock<=item.reorderAt?C.amber:C.text}}>{previewStock}</span>
+                    <span style={{fontSize:'11px',color:C.textMuted}}> {item.unit}</span>
+                  </div>
+                  <button onClick={()=>adjustPending(item.id,10)} style={{width:28,height:28,borderRadius:'6px',border:`0.5px solid ${C.border}`,background:'#fff',cursor:'pointer'}}>+</button>
+                </div>
               </div>
+              {delta!==0&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <span style={{fontSize:'11px',color:C.amber}}>Unsaved change: {delta>0?'+':''}{delta} {item.unit}</span>
+                <div style={{display:'flex',gap:'6px'}}>
+                  <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setPendingDelta(prev=>{const n={...prev};delete n[item.id];return n})}>Cancel</Btn>
+                  <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>confirmChange(item.id)} disabled={confirming===item.id}>{confirming===item.id?'Saving...':'Confirm'}</Btn>
+                </div>
+              </div>}
             </Card>
           )
         })}
@@ -1131,12 +1315,38 @@ export default function ClinicOpsApp() {
     setPendingPrescriptions([...pendingPrescriptions, {...rx, id: Date.now(), status:'pending'}])
   }
 
-  async function handleConfirmPrescription(id) {
-    setPendingPrescriptions(prev=>prev.map(p=>p.id===id?{...p,status:'printed'}:p))
-    // Best-effort sync back to Supabase if this id is a real row (not a
-    // locally-generated Date.now() id from the same-session prescribe flow)
+  async function handleConfirmPrescription(prescription) {
+    const id = prescription.id
+    const dispensedBy = staffMember?.name || 'Unknown'
+    const dispensedAt = new Date().toISOString()
+    setPendingPrescriptions(prev=>prev.map(p=>p.id===id?{...p,status:'printed',dispensedBy,dispensedAt}:p))
+
+    // Deduct each dispensed drug's quantity from inventory and log the
+    // movement with who confirmed it and when.
+    for (const line of prescription.drugs) {
+      const qty = parseInt(line.quantity) || 1
+      const { data: invItem } = await supabase
+        .from('clinic_inventory')
+        .select('*')
+        .ilike('item_name', line.drug)
+        .maybeSingle()
+
+      if (invItem) {
+        const newStock = Math.max(0, invItem.stock - qty)
+        await supabase.from('clinic_inventory').update({ stock: newStock, updated_at: dispensedAt }).eq('id', invItem.id)
+        await supabase.from('inventory_movements').insert({
+          inventory_id: invItem.id, item_name: invItem.item_name, change_amount: -qty,
+          new_stock: newStock, reason: 'dispensed', staff_name: dispensedBy,
+        })
+      }
+    }
+
+    // Record dispense attribution on the real medications row if this is a
+    // real Supabase-loaded prescription (has a UUID id, not a local Date.now()).
     if (typeof id === 'string') {
-      await supabase.from('medications').update({ dispense_status: 'printed' }).eq('id', id)
+      await supabase.from('medications').update({
+        dispense_status: 'printed', dispensed_by: dispensedBy, dispensed_at: dispensedAt,
+      }).eq('id', id)
     }
   }
 
@@ -1176,7 +1386,7 @@ export default function ClinicOpsApp() {
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
         {screen==='schedule'&&<ScheduleScreen/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription}/>}
-        {screen==='inventory'&&<InventoryScreen/>}
+        {screen==='inventory'&&<InventoryScreen staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen/>}
         {screen==='claims'&&<ClaimsScreen/>}
       </div>
