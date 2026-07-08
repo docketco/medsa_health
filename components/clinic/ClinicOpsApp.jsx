@@ -406,12 +406,20 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     setPrescriptions(prescriptions.map((p,idx)=>{
       if (idx!==i) return p
       const updated = {...p,[field]:value}
-      // Auto-suggest quantity whenever duration or times-per-day changes,
-      // but never override a quantity the doctor has manually typed in.
-      if ((field==='durationDays'||field==='timesPerDay') && !p.quantityManuallySet) {
+      const mode = field==='dosingMode' ? value : (p.dosingMode||'fixed')
+
+      // Auto-suggest quantity for fixed and interval modes, but never
+      // override a quantity the doctor has manually typed in. PRN has no
+      // fixed schedule, so it's never auto-calculated.
+      if (mode==='fixed' && (field==='durationDays'||field==='timesPerDay') && !p.quantityManuallySet) {
         const days = parseInt(field==='durationDays'?value:updated.durationDays) || 0
         const times = parseInt(field==='timesPerDay'?value:updated.timesPerDay) || 0
         if (days>0 && times>0) updated.quantity = String(days*times)
+      }
+      if (mode==='interval' && (field==='durationDays'||field==='intervalHours') && !p.quantityManuallySet) {
+        const days = parseInt(field==='durationDays'?value:updated.durationDays) || 0
+        const hours = parseInt(field==='intervalHours'?value:updated.intervalHours) || 0
+        if (days>0 && hours>0) updated.quantity = String(Math.round((24/hours)*days))
       }
       if (field==='quantity') updated.quantityManuallySet = true
       return updated
@@ -429,6 +437,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
           quantity: parseInt(p.quantity)||1,
           duration_days: parseInt(p.durationDays)||null,
           times_per_day: parseInt(p.timesPerDay)||null,
+          dosing_mode: p.dosingMode||'fixed',
+          interval_hours: parseInt(p.intervalHours)||null,
           active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
           prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
         }))
@@ -550,21 +560,48 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
               {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
             </div>
 
-            {/* Doctor-friendly duration control - times/day x days auto-suggests quantity */}
-            <div style={{display:'flex',gap:'8px',alignItems:'center',marginTop:'6px',background:C.card,borderRadius:'8px',padding:'8px 10px'}}>
-              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Times/day</span>
-              <div style={{display:'flex',gap:'4px'}}>
-                {[1,2,3,4].map(n=>(
-                  <div key={n} onClick={()=>updateRx(i,'timesPerDay',String(n))} style={{width:26,height:26,borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',cursor:'pointer',background:String(rx.timesPerDay)===String(n)?C.green:'#fff',color:String(rx.timesPerDay)===String(n)?'#fff':C.text,border:`0.5px solid ${C.border}`}}>{n}</div>
+            {/* Doctor-friendly dosing control - three common HK prescribing patterns */}
+            <div style={{marginTop:'6px',background:C.card,borderRadius:'8px',padding:'8px 10px'}}>
+              <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+                {[['fixed','Fixed times/day'],['interval','Every X hours'],['prn','PRN (as needed)']].map(([k,l])=>(
+                  <div key={k} onClick={()=>updateRx(i,'dosingMode',k)} style={{fontSize:'11px',padding:'5px 9px',borderRadius:'6px',cursor:'pointer',background:(rx.dosingMode||'fixed')===k?C.green:'#fff',color:(rx.dosingMode||'fixed')===k?'#fff':C.textSub,border:`0.5px solid ${C.border}`}}>{l}</div>
                 ))}
               </div>
-              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0,marginLeft:'8px'}}>for</span>
-              <input value={rx.durationDays} onChange={e=>updateRx(i,'durationDays',e.target.value)} type="number" placeholder="days" style={{width:56,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>days</span>
-              <div style={{flex:1}}/>
-              <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Qty</span>
-              <input value={rx.quantity} onChange={e=>updateRx(i,'quantity',e.target.value)} placeholder="0" type="number" style={{width:56,flexShrink:0,border:`0.5px solid ${rx.quantity&&!rx.quantityManuallySet?C.green:C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-              {rx.quantity&&!rx.quantityManuallySet&&<span style={{fontSize:'10px',color:C.green}}>auto</span>}
+
+              {(rx.dosingMode||'fixed')==='fixed'&&<div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Times/day</span>
+                <div style={{display:'flex',gap:'4px'}}>
+                  {[1,2,3,4].map(n=>(
+                    <div key={n} onClick={()=>updateRx(i,'timesPerDay',String(n))} style={{width:26,height:26,borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',cursor:'pointer',background:String(rx.timesPerDay)===String(n)?C.green:'#fff',color:String(rx.timesPerDay)===String(n)?'#fff':C.text,border:`0.5px solid ${C.border}`}}>{n}</div>
+                  ))}
+                </div>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0,marginLeft:'8px'}}>for</span>
+                <input value={rx.durationDays} onChange={e=>updateRx(i,'durationDays',e.target.value)} type="number" placeholder="days" style={{width:56,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>days</span>
+              </div>}
+
+              {rx.dosingMode==='interval'&&<div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Every</span>
+                <div style={{display:'flex',gap:'4px'}}>
+                  {[4,6,8,12].map(h=>(
+                    <div key={h} onClick={()=>updateRx(i,'intervalHours',String(h))} style={{padding:'5px 9px',borderRadius:'6px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',cursor:'pointer',background:String(rx.intervalHours)===String(h)?C.green:'#fff',color:String(rx.intervalHours)===String(h)?'#fff':C.text,border:`0.5px solid ${C.border}`}}>{h}h</div>
+                  ))}
+                </div>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0,marginLeft:'8px'}}>for</span>
+                <input value={rx.durationDays} onChange={e=>updateRx(i,'durationDays',e.target.value)} type="number" placeholder="days" style={{width:56,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>days</span>
+              </div>}
+
+              {rx.dosingMode==='prn'&&<div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <span style={{fontSize:'11px',color:C.textSub}}>Take as needed - specify max per day and any minimum gap in the Frequency field above (e.g. "1 lozenge as needed, max 8/day, at least 2 hours apart").</span>
+              </div>}
+
+              <div style={{display:'flex',alignItems:'center',marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.border}`}}>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Qty to dispense</span>
+                <div style={{flex:1}}/>
+                <input value={rx.quantity} onChange={e=>updateRx(i,'quantity',e.target.value)} placeholder="0" type="number" style={{width:56,flexShrink:0,border:`0.5px solid ${rx.quantity&&!rx.quantityManuallySet?C.green:C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                {rx.quantity&&!rx.quantityManuallySet&&<span style={{fontSize:'10px',color:C.green,marginLeft:'4px'}}>auto</span>}
+              </div>
             </div>
 
             {drugInfoOpen===i&&<div style={{marginTop:'6px',background:C.blueLight,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.text,lineHeight:1.6}}>
@@ -959,7 +996,7 @@ function PaymentScreen() {
   )
 }
 
-function InventoryScreen({ staffMember }) {
+function InventoryScreen({ staffMember, institutionId }) {
   const [items,setItems]=useState([])
   const [loading,setLoading]=useState(true)
   const [showReorderOnly,setShowReorderOnly]=useState(false)
@@ -981,20 +1018,35 @@ function InventoryScreen({ staffMember }) {
   async function handleStockFile(e) {
     const file = e.target.files[0]
     if (!file) return
+    if (!institutionId) { setImportResult({ type:'stock', imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
     const text = await file.text()
     const rows = parseCSV(text)
     let imported=0, skipped=0
     for (const row of rows) {
       if (!row.item_name) { skipped++; continue }
-      await supabase.from('clinic_inventory').upsert({
-        item_name: row.item_name, stock: parseInt(row.stock)||0, unit: row.unit||'units',
-        reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'item_name' })
+      // No DB-level unique constraint on (item_name, institution_id) yet,
+      // so check manually before deciding insert vs update - this keeps
+      // each institution's stock properly separate.
+      const { data: existing } = await supabase
+        .from('clinic_inventory').select('id')
+        .eq('item_name', row.item_name).eq('institution_id', institutionId).maybeSingle()
+
+      if (existing) {
+        await supabase.from('clinic_inventory').update({
+          stock: parseInt(row.stock)||0, unit: row.unit||'units',
+          reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', existing.id)
+      } else {
+        await supabase.from('clinic_inventory').insert({
+          item_name: row.item_name, institution_id: institutionId, stock: parseInt(row.stock)||0, unit: row.unit||'units',
+          reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
+        })
+      }
       imported++
     }
     setImportResult({ type:'stock', imported, skipped, total: rows.length })
-    const { data } = await supabase.from('clinic_inventory').select('*').order('item_name',{ascending:true})
+    const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name',{ascending:true})
     setItems((data||[]).map(r=>({ id:r.id, name:r.item_name, stock:r.stock, unit:r.unit, reorderAt:r.reorder_at, supplier:r.supplier })))
   }
 
@@ -1018,15 +1070,16 @@ function InventoryScreen({ staffMember }) {
 
   useEffect(() => {
     async function load() {
+      if (!institutionId) return
       setLoading(true)
-      const { data } = await supabase.from('clinic_inventory').select('*').order('item_name', { ascending: true })
+      const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name', { ascending: true })
       setItems((data||[]).map(r => ({
         id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier,
       })))
       setLoading(false)
     }
     load()
-  }, [])
+  }, [institutionId])
 
   const displayed = showReorderOnly ? items.filter(i=>i.stock<=i.reorderAt) : items
   const lowStockCount = items.filter(i=>i.stock<=i.reorderAt).length
@@ -1304,6 +1357,19 @@ export default function ClinicOpsApp() {
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [nextTicket,setNextTicket]=useState(13)
+  const [institutionId,setInstitutionId]=useState(null)
+
+  // Resolve which institution this Medsa Clinic deployment belongs to.
+  // Right now this looks up a single demo clinic by name - in production
+  // each clinic's deployment would be tied to its own institution_id at
+  // setup, so their stock/queue never mixes with another clinic's data.
+  useEffect(() => {
+    async function loadInstitution() {
+      const { data } = await supabase.from('institutions').select('id').eq('name', 'Pacific Medical Group').maybeSingle()
+      if (data) setInstitutionId(data.id)
+    }
+    loadInstitution()
+  }, [])
 
   // Load today's queue and pending prescriptions from Supabase once signed in
   useEffect(() => {
@@ -1405,6 +1471,7 @@ export default function ClinicOpsApp() {
       let { data: matches } = await supabase
         .from('clinic_inventory')
         .select('*')
+        .eq('institution_id', institutionId)
         .ilike('item_name', `%${line.drug}%`)
 
       let invItem = matches && matches.length===1 ? matches[0] : null
@@ -1476,7 +1543,7 @@ export default function ClinicOpsApp() {
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
         {screen==='schedule'&&<ScheduleScreen/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription}/>}
-        {screen==='inventory'&&<InventoryScreen staffMember={staffMember}/>}
+        {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='payment'&&<PaymentScreen/>}
         {screen==='claims'&&<ClaimsScreen/>}
       </div>
