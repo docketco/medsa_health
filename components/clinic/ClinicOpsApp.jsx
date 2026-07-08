@@ -673,9 +673,11 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
+  const [inventoryWarning,setInventoryWarning]=useState(null)
 
   async function handleConfirm(p) {
     setPrintingId(p.id)
+    setInventoryWarning(null)
     // Save/update the drug reference library with whatever is currently in
     // each label's fields - this is what makes it "automated" next time.
     for (let idx=0; idx<p.drugs.length; idx++) {
@@ -688,7 +690,11 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
         }, { onConflict: 'drug_name' })
       }
     }
-    setTimeout(()=>{ onConfirm(p); setPrintingId(null); setOpenLabelId(null); setEditedFields({}) }, 900)
+    const warnings = await onConfirm(p)
+    setTimeout(()=>{
+      setPrintingId(null); setOpenLabelId(null); setEditedFields({})
+      if (warnings && warnings.length>0) setInventoryWarning(`No inventory match found for: ${warnings.join(', ')} - stock was not deducted. Add these to Inventory or check the spelling matches.`)
+    }, 900)
   }
 
   const waiting = pending.filter(p=>p.status==='pending')
@@ -697,6 +703,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Prescriptions</h2>
+      {inventoryWarning&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.red}}>{'\u26a0'} {inventoryWarning}</div>}
       {waiting.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px',marginBottom:'20px'}}>No pending prescriptions right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
         {waiting.map(p=>{
@@ -958,6 +965,56 @@ function InventoryScreen({ staffMember }) {
   const [showReorderOnly,setShowReorderOnly]=useState(false)
   const [pendingDelta,setPendingDelta]=useState({}) // itemId -> uncommitted delta
   const [confirming,setConfirming]=useState(null)
+  const [importResult,setImportResult]=useState(null)
+
+  function parseCSV(text) {
+    const lines = text.trim().split('\n')
+    const headers = lines[0].split(',').map(h=>h.trim())
+    return lines.slice(1).filter(l=>l.trim()).map(line=>{
+      const values = (line.match(/(".*?"|[^",]+)(?=,|$)/g)||[]).map(v=>v.trim().replace(/^"|"$/g,''))
+      const row = {}
+      headers.forEach((h,i)=>row[h]=values[i]||'')
+      return row
+    })
+  }
+
+  async function handleStockFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported=0, skipped=0
+    for (const row of rows) {
+      if (!row.item_name) { skipped++; continue }
+      await supabase.from('clinic_inventory').upsert({
+        item_name: row.item_name, stock: parseInt(row.stock)||0, unit: row.unit||'units',
+        reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'item_name' })
+      imported++
+    }
+    setImportResult({ type:'stock', imported, skipped, total: rows.length })
+    const { data } = await supabase.from('clinic_inventory').select('*').order('item_name',{ascending:true})
+    setItems((data||[]).map(r=>({ id:r.id, name:r.item_name, stock:r.stock, unit:r.unit, reorderAt:r.reorder_at, supplier:r.supplier })))
+  }
+
+  async function handleReferenceFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported=0, skipped=0
+    for (const row of rows) {
+      if (!row.drug_name) { skipped++; continue }
+      await supabase.from('drug_reference').upsert({
+        drug_name: row.drug_name, effects: row.effects||null, intake_info: row.intake_info||null,
+        precautions: row.precautions||null, updated_by: staffMember?.name||'CSV import',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'drug_name' })
+      imported++
+    }
+    setImportResult({ type:'reference', imported, skipped, total: rows.length })
+  }
 
   useEffect(() => {
     async function load() {
@@ -1001,6 +1058,22 @@ function InventoryScreen({ staffMember }) {
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Inventory</h2>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',justifyContent:'center'}}>
+        <label style={{fontSize:'12px',padding:'8px 14px',borderRadius:'8px',cursor:'pointer',background:C.card,color:C.textSub,fontWeight:500,border:`0.5px solid ${C.border}`}}>
+          Import stock CSV
+          <input type="file" accept=".csv" onChange={handleStockFile} style={{display:'none'}}/>
+        </label>
+        <label style={{fontSize:'12px',padding:'8px 14px',borderRadius:'8px',cursor:'pointer',background:C.card,color:C.textSub,fontWeight:500,border:`0.5px solid ${C.border}`}}>
+          Import drug info CSV
+          <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
+        </label>
+      </div>
+      {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
+        {importResult.type==='stock'?'Stock':'Drug info'} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+      </div>}
+      <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
+        Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions
+      </div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {lowStockCount>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px'}}>
         <span style={{fontSize:'13px',fontWeight:600,color:C.amber}}>{'\u26a0'} {lowStockCount} item(s) at or below reorder level</span>
@@ -1262,7 +1335,7 @@ export default function ClinicOpsApp() {
         id: r.id,
         patientName: r.patients?.full_name || 'Unknown patient',
         doctorName: r.prescribed_by_staff,
-        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency }],
+        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency, quantity: r.quantity, durationDays: r.duration_days, timesPerDay: r.times_per_day }],
         timestamp: new Date(r.start_date).getTime(),
         status: r.dispense_status || 'pending',
       })))
@@ -1321,15 +1394,24 @@ export default function ClinicOpsApp() {
     const dispensedAt = new Date().toISOString()
     setPendingPrescriptions(prev=>prev.map(p=>p.id===id?{...p,status:'printed',dispensedBy,dispensedAt}:p))
 
+    const inventoryWarnings = []
+
     // Deduct each dispensed drug's quantity from inventory and log the
     // movement with who confirmed it and when.
     for (const line of prescription.drugs) {
       const qty = parseInt(line.quantity) || 1
-      const { data: invItem } = await supabase
+      // Fuzzy match first (handles "Metformin" matching "Metformin 500mg"),
+      // falls back to exact case-insensitive match.
+      let { data: matches } = await supabase
         .from('clinic_inventory')
         .select('*')
-        .ilike('item_name', line.drug)
-        .maybeSingle()
+        .ilike('item_name', `%${line.drug}%`)
+
+      let invItem = matches && matches.length===1 ? matches[0] : null
+      if (!invItem && matches && matches.length>1) {
+        // Multiple partial matches - prefer an exact (case-insensitive) one
+        invItem = matches.find(m => m.item_name.toLowerCase()===line.drug.toLowerCase()) || matches[0]
+      }
 
       if (invItem) {
         const newStock = Math.max(0, invItem.stock - qty)
@@ -1338,7 +1420,13 @@ export default function ClinicOpsApp() {
           inventory_id: invItem.id, item_name: invItem.item_name, change_amount: -qty,
           new_stock: newStock, reason: 'dispensed', staff_name: dispensedBy,
         })
+      } else {
+        inventoryWarnings.push(line.drug)
       }
+    }
+
+    if (inventoryWarnings.length>0) {
+      console.warn('No inventory match found for:', inventoryWarnings.join(', '), '- stock not deducted for these items.')
     }
 
     // Record dispense attribution on the real medications row if this is a
@@ -1348,6 +1436,8 @@ export default function ClinicOpsApp() {
         dispense_status: 'printed', dispensed_by: dispensedBy, dispensed_at: dispensedAt,
       }).eq('id', id)
     }
+
+    return inventoryWarnings
   }
 
   async function handleRemoveFromQueue(index) {
