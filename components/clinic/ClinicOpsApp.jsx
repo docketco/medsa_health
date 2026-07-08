@@ -651,7 +651,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
 // previous nurse/doctor already filled them in for this drug. If not, the
 // fields are empty and editable — saving here writes back to the shared
 // reference so it auto-populates next time this same drug is prescribed.
-function LabelSticker({ patientName, doctorName, drug, onFieldsChange }) {
+function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineType }) {
   const [effects,setEffects]=useState('')
   const [intake,setIntake]=useState('')
   const [precautions,setPrecautions]=useState('')
@@ -661,7 +661,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange }) {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data } = await supabase.from('drug_reference').select('*').eq('drug_name', drug.drug).maybeSingle()
+      const { data } = await supabase.from('drug_reference').select('*').eq('drug_name', drug.drug).eq('medicine_type', medicineType||'western').maybeSingle()
       if (data) {
         setEffects(data.effects||''); setIntake(data.intake_info||''); setPrecautions(data.precautions||'')
         setHasReference(true)
@@ -669,7 +669,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange }) {
       setLoading(false)
     }
     load()
-  }, [drug.drug])
+  }, [drug.drug, medicineType])
 
   useEffect(() => {
     onFieldsChange({ effects, intake, precautions })
@@ -706,7 +706,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange }) {
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -717,14 +717,16 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
     setInventoryWarning(null)
     // Save/update the drug reference library with whatever is currently in
     // each label's fields - this is what makes it "automated" next time.
+    // Scoped by medicine_type so Western and Chinese medicine formularies
+    // never mix, matching HK's two separate regulatory systems.
     for (let idx=0; idx<p.drugs.length; idx++) {
       const drug = p.drugs[idx]
       const fields = editedFields[idx]
       if (fields && (fields.effects||fields.intake||fields.precautions)) {
         await supabase.from('drug_reference').upsert({
-          drug_name: drug.drug, effects: fields.effects, intake_info: fields.intake,
+          drug_name: drug.drug, medicine_type: medicineType||'western', effects: fields.effects, intake_info: fields.intake,
           precautions: fields.precautions, updated_by: p.doctorName, updated_at: new Date().toISOString(),
-        }, { onConflict: 'drug_name' })
+        }, { onConflict: 'drug_name,medicine_type' })
       }
     }
     const warnings = await onConfirm(p)
@@ -766,6 +768,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm }) {
                   patientName={p.patientName}
                   doctorName={p.doctorName}
                   drug={drug}
+                  medicineType={medicineType}
                   onFieldsChange={(fields)=>setEditedFields(prev=>({...prev,[idx]:fields}))}
                 />
               ))}
@@ -883,7 +886,7 @@ function ScheduleScreen() {
   )
 }
 
-function PaymentScreen() {
+function PaymentScreen({ staffMember, institutionId }) {
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
@@ -891,7 +894,60 @@ function PaymentScreen() {
   const [printed,setPrinted]=useState(false)
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
+  const [ledger,setLedger]=useState([])
+  const [ledgerLoading,setLedgerLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
   const bill = {patient:'Wong Mei-ling, Lisa', consultFee:380, insurerCovers:300, patientPays:80}
+
+  // Card/Octopus carry a small processing fee Medsa earns on, matching the
+  // Stripe/Jane Payments model - cash has none.
+  function processingFee(method, amount) {
+    if (method==='card') return Math.round(amount*0.0275*100)/100
+    if (method==='octopus') return Math.round(amount*0.015*100)/100
+    return 0
+  }
+
+  async function loadLedger() {
+    setLedgerLoading(true)
+    const { data } = await supabase.from('transactions').select('*').order('created_at',{ascending:false}).limit(100)
+    setLedger(data||[])
+    setLedgerLoading(false)
+  }
+
+  async function handleCharge() {
+    setSaving(true)
+    const fee = processingFee(method, bill.patientPays)
+    await supabase.from('transactions').insert({
+      institution_id: institutionId,
+      patient_name: bill.patient,
+      consultation_fee: bill.consultFee,
+      insurer_covers: bill.insurerCovers,
+      patient_pays: bill.patientPays,
+      payment_method: method,
+      card_processing_fee: fee,
+      staff_name: staffMember?.name || 'Unknown',
+    })
+    setSaving(false)
+    setPaid(true)
+    loadLedger()
+  }
+
+  function exportCSV() {
+    const headers = ['Date','Patient','Consultation Fee','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
+    const rows = ledger.map(t => [
+      new Date(t.created_at).toLocaleString('en-HK'),
+      t.patient_name, t.consultation_fee, t.insurer_covers, t.patient_pays,
+      t.payment_method, t.card_processing_fee, t.claim_ref||'', t.clearinghouse_fee||0, t.staff_name,
+    ])
+    const csv = [headers, ...rows].map(r=>r.map(v=>`"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], {type:'text/csv'})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `medsa-financial-records-${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   useEffect(() => {
     async function load() {
@@ -908,12 +964,50 @@ function PaymentScreen() {
       setPlansLoading(false)
     }
     load()
+    loadLedger()
   }, [])
+
+  if (tab==='ledger') return (
+    <PageWrap maxWidth={720}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
+        {[['collect','Collect payment'],['plans','Treatment plans'],['ledger','Financial records']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+        <SecLabel>Income & Medsa fees - last 100 transactions</SecLabel>
+        <Btn variant="primary" style={{fontSize:'12px'}} onClick={exportCSV} disabled={ledger.length===0}>Export to Excel/CSV</Btn>
+      </div>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
+        {'\u25c7'} This covers income collected through Medsa and Medsa's own fees (card/Octopus processing, claims clearinghouse). It does not track inventory purchases or other clinic expenses paid outside the system.
+      </div>
+      {ledgerLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!ledgerLoading&&ledger.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No transactions recorded yet.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {ledger.map((t,i)=>(
+          <Card key={i} style={{padding:'12px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{t.patient_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{new Date(t.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} - {t.staff_name}</div>
+              </div>
+              <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${t.patient_pays}</div>
+            </div>
+            <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted}}>
+              <span>Method: {t.payment_method}</span>
+              {t.card_processing_fee>0&&<span>Processing fee: HK${t.card_processing_fee}</span>}
+              {t.clearinghouse_fee>0&&<span>Clearinghouse fee: HK${t.clearinghouse_fee}</span>}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </PageWrap>
+  )
 
   if (tab==='plans') return (
     <PageWrap maxWidth={640}>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
-        {[['collect','Collect payment'],['plans','Treatment plans']].map(([k,l])=>(
+        {[['collect','Collect payment'],['plans','Treatment plans'],['ledger','Financial records']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
         ))}
       </div>
@@ -966,7 +1060,7 @@ function PaymentScreen() {
   return (
     <PageWrap maxWidth={440}>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
-        {[['collect','Collect payment'],['plans','Treatment plans']].map(([k,l])=>(
+        {[['collect','Collect payment'],['plans','Treatment plans'],['ledger','Financial records']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
         ))}
       </div>
@@ -991,12 +1085,12 @@ function PaymentScreen() {
           </div>
         ))}
       </div>
-      <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={()=>setPaid(true)}>Charge HK${bill.patientPays}</Btn>
+      <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${bill.patientPays}`}</Btn>
     </PageWrap>
   )
 }
 
-function InventoryScreen({ staffMember, institutionId }) {
+function InventoryScreen({ staffMember, institutionId, medicineType }) {
   const [items,setItems]=useState([])
   const [loading,setLoading]=useState(true)
   const [showReorderOnly,setShowReorderOnly]=useState(false)
@@ -1058,11 +1152,14 @@ function InventoryScreen({ staffMember, institutionId }) {
     let imported=0, skipped=0
     for (const row of rows) {
       if (!row.drug_name) { skipped++; continue }
+      // Each row can specify its own medicine_type (western/chinese) if the
+      // CSV covers both; otherwise it defaults to this clinic's own type.
+      const rowType = (row.medicine_type||medicineType||'western').toLowerCase()
       await supabase.from('drug_reference').upsert({
-        drug_name: row.drug_name, effects: row.effects||null, intake_info: row.intake_info||null,
+        drug_name: row.drug_name, medicine_type: rowType, effects: row.effects||null, intake_info: row.intake_info||null,
         precautions: row.precautions||null, updated_by: staffMember?.name||'CSV import',
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'drug_name' })
+      }, { onConflict: 'drug_name,medicine_type' })
       imported++
     }
     setImportResult({ type:'reference', imported, skipped, total: rows.length })
@@ -1125,7 +1222,7 @@ function InventoryScreen({ staffMember, institutionId }) {
         {importResult.type==='stock'?'Stock':'Drug info'} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
-        Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions
+        Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
       </div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {lowStockCount>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px'}}>
@@ -1358,15 +1455,17 @@ export default function ClinicOpsApp() {
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [nextTicket,setNextTicket]=useState(13)
   const [institutionId,setInstitutionId]=useState(null)
+  const [medicineType,setMedicineType]=useState('western')
 
-  // Resolve which institution this Medsa Clinic deployment belongs to.
-  // Right now this looks up a single demo clinic by name - in production
-  // each clinic's deployment would be tied to its own institution_id at
-  // setup, so their stock/queue never mixes with another clinic's data.
+  // Resolve which institution this Medsa Clinic deployment belongs to, and
+  // which medicine system it operates under (Western - Pharmacy and
+  // Poisons Ordinance, or Chinese - Chinese Medicine Ordinance). These are
+  // two separate regulatory systems in Hong Kong, so a clinic's drug
+  // reference pool never mixes between them.
   useEffect(() => {
     async function loadInstitution() {
-      const { data } = await supabase.from('institutions').select('id').eq('name', 'Pacific Medical Group').maybeSingle()
-      if (data) setInstitutionId(data.id)
+      const { data } = await supabase.from('institutions').select('id, medicine_type').eq('name', 'Pacific Medical Group').maybeSingle()
+      if (data) { setInstitutionId(data.id); setMedicineType(data.medicine_type || 'western') }
     }
     loadInstitution()
   }, [])
@@ -1542,9 +1641,9 @@ export default function ClinicOpsApp() {
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
         {screen==='schedule'&&<ScheduleScreen/>}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription}/>}
-        {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId}/>}
-        {screen==='payment'&&<PaymentScreen/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
+        {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
+        {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='claims'&&<ClaimsScreen/>}
       </div>
     </div>
