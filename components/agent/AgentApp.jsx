@@ -352,40 +352,123 @@ function ClaimInquiriesScreen({ agent, inquiries, onStatusChange }) {
 // ── RENEWALS ──────────────────────────────────────────────────────────────
 // ── RENEW POLICY MODAL ────────────────────────────────────────────────────
 function RenewPolicyModal({ policy, onClose, onRenewed }) {
+  const inProgress = policy.status === 'renewal_in_progress'
+  const checklist = policy.renewal_checklist || {}
+  const [checks,setChecks]=useState({
+    confirmContact: checklist.confirmContact||false,
+    declareConditions: checklist.declareConditions||false,
+    confirmBeneficiary: checklist.confirmBeneficiary||false,
+    confirmBilling: checklist.confirmBilling||false,
+  })
   const [newDate,setNewDate]=useState(() => {
     const d = new Date(policy.renewal_date)
     d.setFullYear(d.getFullYear()+1)
     return d.toISOString().slice(0,10)
   })
   const [newPremium,setNewPremium]=useState(policy.premium||'')
+  const [contractFile,setContractFile]=useState(null)
   const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
 
-  async function handleRenew() {
+  const checklistItems = [
+    {key:'confirmContact', label:'Confirmed contact details are current'},
+    {key:'declareConditions', label:'Client has declared any new medical conditions'},
+    {key:'confirmBeneficiary', label:'Beneficiary / dependent info confirmed'},
+    {key:'confirmBilling', label:'Payment / billing details confirmed'},
+  ]
+
+  async function handleStartPrep() {
     setSaving(true)
     await supabase.from('agent_policies').update({
-      renewal_date: newDate,
-      premium: parseFloat(newPremium) || policy.premium,
-      status: 'active',
-      patient_requested_renewal_at: null,
+      status: 'renewal_in_progress',
+      renewal_started_at: new Date().toISOString(),
+      renewal_checklist: checks,
     }).eq('id', policy.id)
     setSaving(false)
     onRenewed()
   }
 
+  function toggleCheck(key) {
+    const updated = {...checks, [key]: !checks[key]}
+    setChecks(updated)
+    supabase.from('agent_policies').update({ renewal_checklist: updated }).eq('id', policy.id)
+  }
+
+  async function handleConfirmRenewal() {
+    if (!contractFile) { setError('Upload the new signed contract to confirm renewal.'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const filePath = `${policy.id}/${Date.now()}-${contractFile.name}`
+      const { error: upErr } = await supabase.storage.from('policy-contracts').upload(filePath, contractFile)
+      if (upErr) throw upErr
+
+      await supabase.from('agent_policies').update({
+        renewal_date: newDate,
+        premium: parseFloat(newPremium) || policy.premium,
+        status: 'active',
+        patient_requested_renewal_at: null,
+        contract_file_path: filePath,
+        contract_uploaded_at: new Date().toISOString(),
+      }).eq('id', policy.id)
+      onRenewed()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const allChecked = checklistItems.every(item => checks[item.key])
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>Renew policy</div>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>{inProgress?'Confirm renewal':'Start renewal'}</div>
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'18px'}}>{policy.patient_name} - {policy.plan_name}</div>
         {policy.patient_requested_renewal_at&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.green}}>Patient requested this renewal on {new Date(policy.patient_requested_renewal_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>}
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>New renewal date</div>
-        <input value={newDate} onChange={e=>setNewDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Premium (HK$/mo)</div>
-        <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'20px',boxSizing:'border-box'}}/>
-        <div style={{display:'flex',gap:'8px'}}>
-          <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" style={{flex:1}} onClick={handleRenew} disabled={saving}>{saving?'Renewing...':'Confirm renewal'}</Btn>
-        </div>
+
+        {!inProgress && <>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>This prepares the client for renewal. Work through this checklist with them, then come back here once you have everything you need to finalise the new contract.</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+            {checklistItems.map(item=>(
+              <div key={item.key} onClick={()=>setChecks({...checks,[item.key]:!checks[item.key]})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checks[item.key]?C.green:C.border}`,background:checks[item.key]?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{checks[item.key]?'\u2713':''}</div>
+                <span style={{fontSize:'12px'}}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleStartPrep} disabled={saving}>{saving?'Starting...':'Start renewal process'}</Btn>
+          </div>
+        </>}
+
+        {inProgress && <>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'8px'}}>Checklist</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'18px'}}>
+            {checklistItems.map(item=>(
+              <div key={item.key} onClick={()=>toggleCheck(item.key)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 10px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
+                <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${checks[item.key]?C.green:C.border}`,background:checks[item.key]?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{checks[item.key]?'\u2713':''}</div>
+                <span style={{fontSize:'12px'}}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+          {!allChecked&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'14px'}}>{'\u26a0'} Some checklist items are still unconfirmed - you can still proceed once the new contract is in hand.</div>}
+
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>New renewal date</div>
+          <input value={newDate} onChange={e=>setNewDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Premium (HK$/mo)</div>
+          <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Upload new signed contract</div>
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e=>setContractFile(e.target.files[0])} style={{width:'100%',fontSize:'12px',marginBottom:'20px'}}/>
+
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleConfirmRenewal} disabled={saving}>{saving?'Confirming...':'Confirm renewal'}</Btn>
+          </div>
+        </>}
       </div>
     </div>
   )
@@ -416,9 +499,10 @@ function RenewalsScreen({ agent, policies, onRenewed }) {
                   <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
                 </div>
               </div>
+              {p.status==='renewal_in_progress'&&<Badge text="Renewal in progress" type="waiting"/>}
               {p.patient_requested_renewal_at&&<Badge text="Patient requested renewal" type="due"/>}
               <div style={{marginTop:'10px'}}>
-                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setRenewingPolicy(p)}>Renew policy</Btn>
+                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setRenewingPolicy(p)}>{p.status==='renewal_in_progress'?'Continue renewal - confirm & upload':'Start renewal'}</Btn>
               </div>
             </Card>
           ))}
