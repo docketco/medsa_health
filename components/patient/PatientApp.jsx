@@ -938,7 +938,7 @@ function ClaimsTab({ isEn, claims=[] }) {
   )
 }
 
-function InsuranceScreen({ isEn, claims=[] }) {
+function InsuranceScreen({ isEn, claims=[], patient={} }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
@@ -946,6 +946,29 @@ function InsuranceScreen({ isEn, claims=[] }) {
   const [anonRating,setAnonRating]=useState(null)
   const [feedbackText,setFeedbackText]=useState('')
   const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
+  const [activePolicy,setActivePolicy]=useState(null)
+  const [policyLoading,setPolicyLoading]=useState(true)
+  const [renewalRequested,setRenewalRequested]=useState(false)
+
+  useEffect(() => {
+    async function loadPolicy() {
+      const medsaId = patient?.medsa_id
+      if (!medsaId) { setPolicyLoading(false); return }
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) { setPolicyLoading(false); return }
+      const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).eq('status','active').order('renewal_date',{ascending:true}).limit(1).maybeSingle()
+      setActivePolicy(data||null)
+      setRenewalRequested(!!data?.patient_requested_renewal_at)
+      setPolicyLoading(false)
+    }
+    loadPolicy()
+  }, [patient?.medsa_id])
+
+  async function handleRequestRenewal() {
+    if (!activePolicy) return
+    setRenewalRequested(true)
+    await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', activePolicy.id)
+  }
 
   const plans=[
     {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',sponsored:true,
@@ -964,16 +987,26 @@ function InsuranceScreen({ isEn, claims=[] }) {
 
   return (
     <div style={{background:C.beige,flex:1}}>
-      {/* Active plan banner */}
-      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>AIA Prime Care — Active plan</div>
-        <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK$1,200,000</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Annual limit · Renews Jan 2026':'年度限額 · 2026年1月續保'}</div>
-        <div style={{display:'flex',gap:'16px',marginTop:'14px'}}>
-          <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Used':'已使用'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$21,400</div></div>
-          <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Remaining':'剩餘'}</div><div style={{fontSize:'16px',fontWeight:600}}>HK$1,178,600</div></div>
+      {/* Active plan banner - real data from agent_policies */}
+      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading your plan...</div>}
+      {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
+      {!policyLoading&&activePolicy&&(() => {
+        const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
+        return (
+        <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
+          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
+          <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
+          <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
+          <div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
+            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Days left':'剩餘天數'}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
+            <div style={{flex:1}}/>
+            {daysLeft<=45&&(renewalRequested
+              ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
+              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
+          </div>
         </div>
-      </div>
+        )
+      })()}
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
@@ -1281,7 +1314,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
-        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims}/>}
+        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient}/>}
