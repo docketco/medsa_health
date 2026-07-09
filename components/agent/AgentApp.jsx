@@ -352,8 +352,8 @@ function ClaimInquiriesScreen({ agent, inquiries, onStatusChange }) {
 // ── RENEWALS ──────────────────────────────────────────────────────────────
 // ── RENEW POLICY MODAL ────────────────────────────────────────────────────
 function RenewPolicyModal({ policy, onClose, onRenewed }) {
-  const inProgress = policy.status === 'renewal_in_progress'
-  const checklist = policy.renewal_checklist || {}
+  const inProgress = policy?.status === 'renewal_in_progress'
+  const checklist = policy?.renewal_checklist || {}
   const [checks,setChecks]=useState({
     confirmContact: checklist.confirmContact||false,
     declareConditions: checklist.declareConditions||false,
@@ -361,14 +361,17 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
     confirmBilling: checklist.confirmBilling||false,
   })
   const [newDate,setNewDate]=useState(() => {
+    if (!policy?.renewal_date) return ''
     const d = new Date(policy.renewal_date)
     d.setFullYear(d.getFullYear()+1)
     return d.toISOString().slice(0,10)
   })
-  const [newPremium,setNewPremium]=useState(policy.premium||'')
+  const [newPremium,setNewPremium]=useState(policy?.premium||'')
   const [contractFile,setContractFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+
+  if (!policy) return null
 
   const checklistItems = [
     {key:'confirmContact', label:'Confirmed contact details are current'},
