@@ -623,6 +623,7 @@ export default function AgentApp() {
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} onBack={()=>setScreen('policies')} onSaved={()=>{loadData(agent);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
-      </div
+      </div>
+    </div>
   )
 }
