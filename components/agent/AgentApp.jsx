@@ -352,7 +352,12 @@ function ClaimInquiriesScreen({ agent, inquiries, onStatusChange }) {
 // ── RENEWALS ──────────────────────────────────────────────────────────────
 // ── RENEW POLICY MODAL ────────────────────────────────────────────────────
 function RenewPolicyModal({ policy, onClose, onRenewed }) {
-  const inProgress = policy?.status === 'renewal_in_progress'
+  const stage = !policy ? null
+    : policy.status==='active' || policy.status==='lapsed' ? 'prep'
+    : policy.status==='renewal_in_progress' && !policy.contract_ready_at ? 'checklist'
+    : policy.status==='renewal_in_progress' && policy.contract_ready_at ? 'awaiting_signature'
+    : 'prep'
+
   const checklist = policy?.renewal_checklist || {}
   const [checks,setChecks]=useState({
     confirmContact: checklist.confirmContact||false,
@@ -397,22 +402,18 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
     supabase.from('agent_policies').update({ renewal_checklist: updated }).eq('id', policy.id)
   }
 
-  async function handleConfirmRenewal() {
-    if (!contractFile) { setError('Upload the new signed contract to confirm renewal.'); return }
+  async function handleUploadForSignature() {
+    if (!contractFile) { setError('Upload the new contract to send for signature.'); return }
     setSaving(true)
     setError(null)
     try {
       const filePath = `${policy.id}/${Date.now()}-${contractFile.name}`
       const { error: upErr } = await supabase.storage.from('policy-contracts').upload(filePath, contractFile)
       if (upErr) throw upErr
-
       await supabase.from('agent_policies').update({
-        renewal_date: newDate,
-        premium: parseFloat(newPremium) || policy.premium,
-        status: 'active',
-        patient_requested_renewal_at: null,
         contract_file_path: filePath,
         contract_uploaded_at: new Date().toISOString(),
+        contract_ready_at: new Date().toISOString(),
       }).eq('id', policy.id)
       onRenewed()
     } catch (e) {
@@ -422,17 +423,33 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
     }
   }
 
-  const allChecked = checklistItems.every(item => checks[item.key])
+  async function handleConfirmRenewal() {
+    setSaving(true)
+    await supabase.from('agent_policies').update({
+      renewal_date: newDate,
+      premium: parseFloat(newPremium) || policy.premium,
+      status: 'active',
+      patient_requested_renewal_at: null,
+      contract_ready_at: null,
+      patient_signed_at: null,
+    }).eq('id', policy.id)
+    setSaving(false)
+    onRenewed()
+  }
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>{inProgress?'Confirm renewal':'Start renewal'}</div>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>
+          {stage==='prep'&&'Start renewal'}
+          {stage==='checklist'&&'Upload contract for signature'}
+          {stage==='awaiting_signature'&&'Confirm renewal'}
+        </div>
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'18px'}}>{policy.patient_name} - {policy.plan_name}</div>
         {policy.patient_requested_renewal_at&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.green}}>Patient requested this renewal on {new Date(policy.patient_requested_renewal_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>}
 
-        {!inProgress && <>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>This prepares the client for renewal. Work through this checklist with them, then come back here once you have everything you need to finalise the new contract.</div>
+        {stage==='prep' && <>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Starting this notifies the patient that you're working on their renewal. Work through this checklist with them, then come back to upload the new contract.</div>
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
             {checklistItems.map(item=>(
               <div key={item.key} onClick={()=>setChecks({...checks,[item.key]:!checks[item.key]})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
@@ -447,7 +464,7 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
           </div>
         </>}
 
-        {inProgress && <>
+        {stage==='checklist' && <>
           <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'8px'}}>Checklist</div>
           <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'18px'}}>
             {checklistItems.map(item=>(
@@ -457,18 +474,28 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
               </div>
             ))}
           </div>
-          {!allChecked&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'14px'}}>{'\u26a0'} Some checklist items are still unconfirmed - you can still proceed once the new contract is in hand.</div>}
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>Once you have the new contract drafted, upload it here. The patient will see it's ready and be asked to review and confirm.</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Upload new contract</div>
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e=>setContractFile(e.target.files[0])} style={{width:'100%',fontSize:'12px',marginBottom:'20px'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={onClose}>Close</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleUploadForSignature} disabled={saving}>{saving?'Uploading...':'Send for review & signature'}</Btn>
+          </div>
+        </>}
 
+        {stage==='awaiting_signature' && <>
+          <div style={{background:policy.patient_signed_at?C.greenXLight:C.amberLight,border:`0.5px solid ${policy.patient_signed_at?C.green:C.amber}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'18px',fontSize:'12px',color:policy.patient_signed_at?C.green:C.amber}}>
+            {policy.patient_signed_at
+              ? `\u2713 Patient reviewed and signed on ${new Date(policy.patient_signed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`
+              : '\u25c7 Contract sent - awaiting patient review and signature'}
+          </div>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>New renewal date</div>
           <input value={newDate} onChange={e=>setNewDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Premium (HK$/mo)</div>
-          <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Upload new signed contract</div>
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={e=>setContractFile(e.target.files[0])} style={{width:'100%',fontSize:'12px',marginBottom:'20px'}}/>
-
-          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
+          <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'20px',boxSizing:'border-box'}}/>
           <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+            <Btn style={{flex:1}} onClick={onClose}>Close</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={handleConfirmRenewal} disabled={saving}>{saving?'Confirming...':'Confirm renewal'}</Btn>
           </div>
         </>}
@@ -502,10 +529,16 @@ function RenewalsScreen({ agent, policies, onRenewed }) {
                   <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
                 </div>
               </div>
-              {p.status==='renewal_in_progress'&&<Badge text="Renewal in progress" type="waiting"/>}
+              {p.status==='renewal_in_progress'&&!p.contract_ready_at&&<Badge text="Renewal in progress" type="waiting"/>}
+              {p.status==='renewal_in_progress'&&p.contract_ready_at&&!p.patient_signed_at&&<Badge text="Awaiting signature" type="due"/>}
+              {p.status==='renewal_in_progress'&&p.patient_signed_at&&<Badge text="Signed - ready to confirm" type="ok"/>}
               {p.patient_requested_renewal_at&&<Badge text="Patient requested renewal" type="due"/>}
               <div style={{marginTop:'10px'}}>
-                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setRenewingPolicy(p)}>{p.status==='renewal_in_progress'?'Continue renewal - confirm & upload':'Start renewal'}</Btn>
+                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setRenewingPolicy(p)}>
+                  {p.status!=='renewal_in_progress' ? 'Start renewal'
+                    : p.contract_ready_at ? 'Confirm renewal'
+                    : 'Upload contract for signature'}
+                </Btn>
               </div>
             </Card>
           ))}
