@@ -1016,7 +1016,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
 
           {readyToSign&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
             <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Your new contract is ready':'您的新合約已準備就緒'}</div>
-            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Please review it with your agent, then confirm below once you\\'re ready to sign.':'請與您的代理人一同檢閱，準備好後在下方確認簽署。'}</div>
+            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Please review it with your agent, then confirm below once you're ready to sign.":'請與您的代理人一同檢閱，準備好後在下方確認簽署。'}</div>
             <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
           </div>}
 
@@ -1293,7 +1293,7 @@ function StorageScreen({ isEn, patient={} }) {
       <Card style={{padding:'16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
         <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
-        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?'At current rate you\'ll reach your limit in ~14 months.':'按目前速度，約14個月內達到限額。'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?"At current rate you'll reach your limit in ~14 months.":'按目前速度，約14個月內達到限額。'}</div>
       </Card>
       <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
       {tiers.map((tier,i)=>(
