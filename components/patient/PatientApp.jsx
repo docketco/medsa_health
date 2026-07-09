@@ -979,6 +979,15 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
     await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', activePolicy.id)
   }
 
+  const [viewError,setViewError]=useState(null)
+  async function handleViewContract() {
+    if (!activePolicy?.contract_file_path) return
+    setViewError(null)
+    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(activePolicy.contract_file_path, 300) // link valid 5 minutes
+    if (error || !data?.signedUrl) { setViewError('Could not open the contract - ask your agent to check the upload.'); return }
+    window.open(data.signedUrl, '_blank')
+  }
+
   const plans=[
     {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',sponsored:true,
      criteria:['Covers diabetes management','Includes outpatient visits','Includes lab tests'],
@@ -1016,8 +1025,12 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
 
           {readyToSign&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
             <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Your new contract is ready':'您的新合約已準備就緒'}</div>
-            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Please review it with your agent, then confirm below once you're ready to sign.":'請與您的代理人一同檢閱，準備好後在下方確認簽署。'}</div>
-            <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
+            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Review the document below, then confirm once you're ready to sign.":'請先查閱以下文件，準備好後確認簽署。'}</div>
+            {viewError&&<div style={{fontSize:'11px',color:'#ffb3b3',marginBottom:'10px'}}>{viewError}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={handleViewContract}>{isEn?'View contract':'查看合約'}</Btn>
+              <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
+            </div>
           </div>}
 
           {activePolicy.patient_signed_at&&inProgress&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px'}}>
