@@ -387,12 +387,14 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
 
   async function handleStartPrep() {
     setSaving(true)
-    await supabase.from('agent_policies').update({
+    setError(null)
+    const { error: updErr } = await supabase.from('agent_policies').update({
       status: 'renewal_in_progress',
       renewal_started_at: new Date().toISOString(),
       renewal_checklist: checks,
     }).eq('id', policy.id)
     setSaving(false)
+    if (updErr) { setError(`Could not start renewal: ${updErr.message}`); return }
     onRenewed()
   }
 
@@ -410,11 +412,12 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
       const filePath = `${policy.id}/${Date.now()}-${contractFile.name}`
       const { error: upErr } = await supabase.storage.from('policy-contracts').upload(filePath, contractFile)
       if (upErr) throw upErr
-      await supabase.from('agent_policies').update({
+      const { error: updErr } = await supabase.from('agent_policies').update({
         contract_file_path: filePath,
         contract_uploaded_at: new Date().toISOString(),
         contract_ready_at: new Date().toISOString(),
       }).eq('id', policy.id)
+      if (updErr) throw updErr
       onRenewed()
     } catch (e) {
       setError(e.message)
@@ -425,7 +428,8 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
 
   async function handleConfirmRenewal() {
     setSaving(true)
-    await supabase.from('agent_policies').update({
+    setError(null)
+    const { error: updErr } = await supabase.from('agent_policies').update({
       renewal_date: newDate,
       premium: parseFloat(newPremium) || policy.premium,
       status: 'active',
@@ -434,6 +438,7 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
       patient_signed_at: null,
     }).eq('id', policy.id)
     setSaving(false)
+    if (updErr) { setError(`Could not confirm renewal: ${updErr.message}`); return }
     onRenewed()
   }
 
@@ -458,6 +463,7 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
               </div>
             ))}
           </div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={handleStartPrep} disabled={saving}>{saving?'Starting...':'Start renewal process'}</Btn>
@@ -494,6 +500,7 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
           <input value={newDate} onChange={e=>setNewDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Premium (HK$/mo)</div>
           <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'20px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={onClose}>Close</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={handleConfirmRenewal} disabled={saving}>{saving?'Confirming...':'Confirm renewal'}</Btn>
