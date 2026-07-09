@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -133,12 +134,51 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
 }
 
 function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented, patient={} }) {
-  // Demo queue position — in production this reads from a shared `clinic_queue`
-  // Supabase table that both PatientApp and ClinicOpsApp read/write to, so a
-  // check-in on the clinic side updates this in real time on the patient side.
-  // Right now ClinicOpsApp's queue lives in local React state, not Supabase,
-  // so this is illustrative until that table exists.
-  const queueStatus = { checkedIn:true, position:2, ticket:'A14', clinic:'Pacific Medical Group', doctor:'Dr Chan Siu-ming' }
+  // Live queue position - reads from the real `clinic_queue` table that
+  // ClinicOpsApp writes to on check-in, so this updates the moment front
+  // desk checks the patient in, and clears once their status is no longer
+  // waiting/in_room.
+  const [queueStatus,setQueueStatus]=useState({ checkedIn:false })
+
+  useEffect(() => {
+    async function loadQueueStatus() {
+      const medsaId = patient?.medsa_id
+      if (!medsaId) return
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) return
+
+      const { data: myEntry } = await supabase
+        .from('clinic_queue')
+        .select('*, institutions(name)')
+        .eq('patient_id', patientRow.id)
+        .in('status', ['waiting','in_room'])
+        .order('checked_in_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!myEntry) { setQueueStatus({ checkedIn:false }); return }
+
+      // Position = how many other patients checked in earlier are still
+      // waiting ahead of this one, at the same institution.
+      const { count } = await supabase
+        .from('clinic_queue')
+        .select('id', { count: 'exact', head: true })
+        .eq('institution_id', myEntry.institution_id)
+        .eq('status', 'waiting')
+        .lt('checked_in_at', myEntry.checked_in_at)
+
+      setQueueStatus({
+        checkedIn: true,
+        position: count || 0,
+        ticket: myEntry.ticket,
+        clinic: myEntry.institutions?.name || 'Clinic',
+        doctor: myEntry.doctor_name || 'Unassigned',
+      })
+    }
+    loadQueueStatus()
+    const interval = setInterval(loadQueueStatus, 30000) // refresh every 30s while on this screen
+    return () => clearInterval(interval)
+  }, [patient?.medsa_id])
 
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
@@ -908,17 +948,17 @@ function InsuranceScreen({ isEn, claims=[] }) {
   const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
 
   const plans=[
-    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',match:98,sponsored:true,
-     why:'Covers your diabetes management, outpatient visits, and lab tests. Matches your usage history.',
+    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',sponsored:true,
+     criteria:['Covers diabetes management','Includes outpatient visits','Includes lab tests'],
      covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
-    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',match:87,sponsored:false,
-     why:'Strong hospital coverage at lower cost. Good if outpatient is secondary.',
+    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',sponsored:false,
+     criteria:['Hospitalisation-focused','Lower monthly cost','Limited outpatient coverage'],
      covers:['Hospitalisation','Specialist','Surgery']},
-    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',match:82,sponsored:false,
-     why:'Best for frequent travellers. Covers all HK needs plus global emergency care.',
+    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',sponsored:false,
+     criteria:['Includes travel emergency cover','Includes mental health','Higher monthly cost'],
      covers:['Hospitalisation','Outpatient','Travel emergency','Mental health']},
-    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',match:79,sponsored:true,
-     why:'Pays lump sum for critical diagnoses — cancer, heart attack, stroke. Add-on to existing plan.',
+    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',sponsored:true,
+     criteria:['Lump sum on diagnosis','57 covered conditions','Add-on, not standalone'],
      covers:['Critical illness lump sum','57 covered conditions']},
   ]
 
@@ -937,27 +977,27 @@ function InsuranceScreen({ isEn, claims=[] }) {
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Plans & AI picks':'計劃與AI推薦'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+        {[['plans',isEn?'Compare plans':'比較計劃'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
 
-      {/* ── PLANS & AI ── */}
+      {/* ── PLANS & COMPARISON ── */}
       {tab==='plans'&&<>
-        {/* How Medsa works with insurers — integration story visible in demo */}
+        {/* How Medsa connects patients to insurers — neutral comparison, not advice */}
         <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ How Medsa connects you to insurers</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
-            Medsa matches your health profile to publicly listed plans using AI — no questionnaires, no cold calls. When you inquire, your details are forwarded directly to the insurer. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.
+            Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.
           </div>
         </div>
 
         <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ AI plan recommendations</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Based on your verified health records. No agents involved in scoring — purely data-driven. Sponsored plans are clearly labelled and do not affect match scores.</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ Plan comparison, not advice</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn't rank plans or tell you which is "best" — that's a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.</div>
         </div>
 
-        <SecLabel>{isEn?'Recommended for you':'為您推薦'}</SecLabel>
+        <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
         {plans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
@@ -974,14 +1014,10 @@ function InsuranceScreen({ isEn, claims=[] }) {
                 <div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div>
               </div>
             </div>
-            {/* Match bar */}
-            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px'}}>
-              <div style={{flex:1,height:5,background:C.card,borderRadius:5,overflow:'hidden'}}>
-                <div style={{height:'100%',width:`${plan.match}%`,background:plan.match>=90?C.green:plan.match>=80?C.amber:C.textMuted,borderRadius:5}}/>
-              </div>
-              <span style={{fontSize:'11px',fontWeight:600,color:plan.match>=90?C.green:plan.match>=80?C.amber:C.textSub}}>{plan.match}% match</span>
+            {/* Objective criteria met - no ranking, no score */}
+            <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+              {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
             </div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px',fontStyle:'italic'}}>"{plan.why}"</div>
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
             </div>}
@@ -995,7 +1031,7 @@ function InsuranceScreen({ isEn, claims=[] }) {
             {inquired===i&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
               <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Not sure which plans to combine? An agent can help structure your coverage once assigned.</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Not sure which plans to combine? A licensed agent can help structure your coverage once assigned.</div>
             </div>}
           </Card>
         ))}
@@ -1010,7 +1046,7 @@ function InsuranceScreen({ isEn, claims=[] }) {
         </div>
         <div style={{padding:'0 16px 16px'}}>
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-            ◇ Sponsored plans are clearly labelled. AI match scores are independent of sponsorship. Medsa earns a referral fee from insurers — this does not affect your recommendations.
+            ◇ Sponsored plans are clearly labelled and filtered the same way as any other plan — sponsorship never changes what's shown. This is a comparison tool, not financial advice. Medsa earns a referral fee from insurers or licensed intermediaries for enquiries sent through this screen.
           </div>
         </div>
       </>}
