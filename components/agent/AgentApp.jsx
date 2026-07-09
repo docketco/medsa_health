@@ -219,7 +219,7 @@ function NewPolicyScreen({ agent, onBack, onSaved }) {
 
   useEffect(() => {
     if (agent.agent_type==='independent') {
-      supabase.from('institutions').select('id,name').then(({data})=>setInsurers(data||[]))
+      supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
     }
   }, [agent.agent_type])
 
