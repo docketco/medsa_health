@@ -956,7 +956,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       if (!medsaId) { setPolicyLoading(false); return }
       const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
       if (!patientRow) { setPolicyLoading(false); return }
-      const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).eq('status','active').order('renewal_date',{ascending:true}).limit(1).maybeSingle()
+      const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
       setActivePolicy(data||null)
       setRenewalRequested(!!data?.patient_requested_renewal_at)
       setPolicyLoading(false)
@@ -968,6 +968,13 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
     if (!activePolicy) return
     setRenewalRequested(true)
     await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', activePolicy.id)
+  }
+
+  async function handleSignContract() {
+    if (!activePolicy) return
+    const signedAt = new Date().toISOString()
+    setActivePolicy({...activePolicy, patient_signed_at: signedAt})
+    await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', activePolicy.id)
   }
 
   const plans=[
@@ -992,18 +999,36 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
       {!policyLoading&&activePolicy&&(() => {
         const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
+        const inProgress = activePolicy.status==='renewal_in_progress'
+        const readyToSign = inProgress && activePolicy.contract_ready_at && !activePolicy.patient_signed_at
+        const waitingOnAgent = inProgress && !activePolicy.contract_ready_at
         return (
         <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
           <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
           <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
-          <div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
+
+          {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
+            {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}
+          </div>}
+
+          {readyToSign&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
+            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Your new contract is ready':'您的新合約已準備就緒'}</div>
+            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Please review it with your agent, then confirm below once you\\'re ready to sign.':'請與您的代理人一同檢閱，準備好後在下方確認簽署。'}</div>
+            <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
+          </div>}
+
+          {activePolicy.patient_signed_at&&inProgress&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px'}}>
+            ✓ {isEn?'Signed — your agent will confirm the renewal shortly.':'已簽署 — 代理人將盡快確認續保。'}
+          </div>}
+
+          {!inProgress&&<div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
             <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Days left':'剩餘天數'}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
             <div style={{flex:1}}/>
             {daysLeft<=45&&(renewalRequested
               ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
               :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
-          </div>
+          </div>}
         </div>
         )
       })()}
