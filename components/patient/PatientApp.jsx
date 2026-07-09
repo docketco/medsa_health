@@ -962,6 +962,8 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       setPolicyLoading(false)
     }
     loadPolicy()
+    const interval = setInterval(loadPolicy, 30000) // keep renewal status live without a manual reload
+    return () => clearInterval(interval)
   }, [patient?.medsa_id])
 
   async function handleRequestRenewal() {
