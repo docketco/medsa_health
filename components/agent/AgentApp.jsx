@@ -350,7 +350,49 @@ function ClaimInquiriesScreen({ agent, inquiries, onStatusChange }) {
 }
 
 // ── RENEWALS ──────────────────────────────────────────────────────────────
-function RenewalsScreen({ agent, policies }) {
+// ── RENEW POLICY MODAL ────────────────────────────────────────────────────
+function RenewPolicyModal({ policy, onClose, onRenewed }) {
+  const [newDate,setNewDate]=useState(() => {
+    const d = new Date(policy.renewal_date)
+    d.setFullYear(d.getFullYear()+1)
+    return d.toISOString().slice(0,10)
+  })
+  const [newPremium,setNewPremium]=useState(policy.premium||'')
+  const [saving,setSaving]=useState(false)
+
+  async function handleRenew() {
+    setSaving(true)
+    await supabase.from('agent_policies').update({
+      renewal_date: newDate,
+      premium: parseFloat(newPremium) || policy.premium,
+      status: 'active',
+      patient_requested_renewal_at: null,
+    }).eq('id', policy.id)
+    setSaving(false)
+    onRenewed()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>Renew policy</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'18px'}}>{policy.patient_name} - {policy.plan_name}</div>
+        {policy.patient_requested_renewal_at&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.green}}>Patient requested this renewal on {new Date(policy.patient_requested_renewal_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>}
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>New renewal date</div>
+        <input value={newDate} onChange={e=>setNewDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Premium (HK$/mo)</div>
+        <input value={newPremium} onChange={e=>setNewPremium(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'20px',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleRenew} disabled={saving}>{saving?'Renewing...':'Confirm renewal'}</Btn>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RenewalsScreen({ agent, policies, onRenewed }) {
+  const [renewingPolicy,setRenewingPolicy]=useState(null)
   const withRenewal = policies.filter(p=>p.renewal_date).map(p=>({...p, d:daysUntil(p.renewal_date)})).sort((a,b)=>a.d-b.d)
   const overdue = withRenewal.filter(p=>p.d<0)
   const soon = withRenewal.filter(p=>p.d>=0&&p.d<=30)
@@ -363,14 +405,20 @@ function RenewalsScreen({ agent, policies }) {
         <SecLabel>{title}</SecLabel>
         <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
           {items.map((p,i)=>(
-            <Card key={i} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
-                <div style={{fontSize:'13px',fontWeight:500}}>{p.patient_name}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name}{agent.agent_type==='independent'&&p.institutions?.name?` - ${p.institutions.name}`:''}</div>
+            <Card key={i} style={{padding:'12px 16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:p.patient_requested_renewal_at?'8px':'0'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:500}}>{p.patient_name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name}{agent.agent_type==='independent'&&p.institutions?.name?` - ${p.institutions.name}`:''}</div>
+                </div>
+                <div style={{textAlign:'right'}}>
+                  <div style={{fontSize:'12px',fontWeight:600,color}}>{p.d<0?`${Math.abs(p.d)}d overdue`:`${p.d}d left`}</div>
+                  <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+                </div>
               </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'12px',fontWeight:600,color}}>{p.d<0?`${Math.abs(p.d)}d overdue`:`${p.d}d left`}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+              {p.patient_requested_renewal_at&&<Badge text="Patient requested renewal" type="due"/>}
+              <div style={{marginTop:'10px'}}>
+                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setRenewingPolicy(p)}>Renew policy</Btn>
               </div>
             </Card>
           ))}
@@ -383,15 +431,17 @@ function RenewalsScreen({ agent, policies }) {
     <PageWrap maxWidth={680}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Renewal Alerts</h2>
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'20px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
-        {'\u25c7'} Patients see the same renewal countdown on their side of Medsa, so both of you are working from the same date.
+        Patients see the same renewal countdown on their side of Medsa, and can flag that they'd like it renewed - you'll see that flag here.
       </div>
       <Group title="Overdue" items={overdue} color={C.red}/>
       <Group title="Due within 30 days" items={soon} color={C.amber}/>
       <Group title="Later" items={later} color={C.textSub}/>
       {withRenewal.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No policies with renewal dates yet.</div>}
+      <RenewPolicyModal policy={renewingPolicy} onClose={()=>setRenewingPolicy(null)} onRenewed={()=>{setRenewingPolicy(null);onRenewed()}}/>
     </PageWrap>
   )
 }
+
 
 // ── ROOT ──────────────────────────────────────────────────────────────────
 export default function AgentApp() {
@@ -445,7 +495,7 @@ export default function AgentApp() {
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>setScreen('newpolicy')}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} onBack={()=>setScreen('policies')} onSaved={()=>{loadData(agent);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
-        {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies}/>}
+        {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
       </div>
     </div>
   )
