@@ -274,22 +274,36 @@ function NewPatientScreen({ onBack }) {
   const [saving,setSaving]=useState(false)
   const [submitted,setSubmitted]=useState(false)
   const [error,setError]=useState(null)
+  const [claimCode,setClaimCode]=useState(null)
+
+  function generateClaimCode() {
+    return Math.random().toString(36).slice(2,8).toUpperCase()
+  }
 
   async function handleSubmit() {
     setSaving(true)
     setError(null)
     try {
+      if (!form.hkid) throw new Error('HKID is required so the patient can later claim this profile.')
+      if (!form.phone) throw new Error('Phone number is required to send the claim code.')
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      const code = generateClaimCode()
+      const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
       const { error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId,
         full_name: form.fullName,
         date_of_birth: form.dob,
-        hkid: form.hkid || null,
-        phone: form.phone || null,
+        hkid: form.hkid,
+        phone: form.phone,
         emergency_card_consent: false,
         emergency_card_active: false,
+        registration_path: 'unclaimed',
+        claim_code: code,
+        claim_code_expires_at: expiresAt,
+        claim_code_sent_to: form.phone,
       })
       if (insErr) throw insErr
+      setClaimCode(code)
       setSubmitted(true)
     } catch (e) {
       setError(e.message)
@@ -303,7 +317,11 @@ function NewPatientScreen({ onBack }) {
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Patient registered</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName || 'this patient'}. If they later download the Medsa app and register with matching details, their full record and this visit will sync automatically.</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName || 'this patient'}. A claim code has been sent to {form.phone} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
+        <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'20px'}}>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (demo - normally sent by SMS, not shown here)</div>
+          <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{claimCode}</div>
+        </div>
         <Btn variant="primary" onClick={onBack}>Back to check-in</Btn>
       </div>
     </PageWrap>
@@ -316,17 +334,18 @@ function NewPatientScreen({ onBack }) {
       <div style={{display:'flex',flexDirection:'column',gap:'12px',marginBottom:'16px'}}>
         <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-        <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (optional)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-        <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (required)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number (required - claim code sent here)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
       </div>
       <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
-        {'\u25c7'} This creates a placeholder Medsa profile so today's visit is on record. The patient owns and completes their own profile once they register with Medsa themselves.
+        {'\u25c7'} A claim code will be sent to this phone number, valid 48 hours. The patient enters their HKID plus this code in the Medsa app to securely link this record - only someone who actually received the code can claim it.
       </div>
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
       <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Saving...':'Create Medsa profile'}</Btn>
     </PageWrap>
   )
 }
+
 
 function MyPatientsScreen({ queue, onSelectPatient }) {
   return (
