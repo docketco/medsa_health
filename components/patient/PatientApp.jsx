@@ -1325,8 +1325,173 @@ function StorageScreen({ isEn, patient={} }) {
   )
 }
 
+// ── SIGN-UP GATE — two paths into Medsa ──────────────────────────────────────
+// Path A: a clinic already created a placeholder profile (CSV import or
+// manual registration). A claim code sent only to the phone/email the
+// CLINIC already had on file proves the real patient is claiming it.
+// Path B: no institution record exists yet. Since there's no prior anchor,
+// this requires document + liveness verification instead.
+function SignUpGate({ onComplete, onSkipDemo }) {
+  const [mode,setMode]=useState(null) // null | 'claim' | 'register'
+
+  if (!mode) return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380,textAlign:'center'}}>
+        <MedsaLogo height={28}/>
+        <div style={{fontSize:'14px',color:C.textSub,margin:'16px 0 28px'}}>Get started with your health passport</div>
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          <Card onClick={()=>setMode('claim')} style={{padding:'18px',textAlign:'left'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>A clinic already has my record</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Claim your existing profile using the code sent to your phone</div>
+          </Card>
+          <Card onClick={()=>setMode('register')} style={{padding:'18px',textAlign:'left'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I'm new to Medsa</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Register with ID verification</div>
+          </Card>
+        </div>
+        {onSkipDemo&&<div onClick={onSkipDemo} style={{marginTop:'20px',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>View demo instead →</div>}
+      </div>
+    </div>
+  )
+
+  if (mode==='claim') return <ClaimProfileFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
+  return <SelfRegisterFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
+}
+
+function ClaimProfileFlow({ onBack, onComplete }) {
+  const [hkid,setHkid]=useState('')
+  const [code,setCode]=useState('')
+  const [error,setError]=useState(null)
+  const [checking,setChecking]=useState(false)
+
+  async function handleClaim() {
+    setChecking(true)
+    setError(null)
+    const { data, error: qErr } = await supabase.from('patients').select('*').eq('hkid', hkid).eq('claim_code', code.toUpperCase()).maybeSingle()
+    setChecking(false)
+    if (qErr || !data) { setError('HKID and code do not match any record. Check with the clinic that registered you.'); return }
+    if (data.claimed_at) { setError('This profile has already been claimed.'); return }
+    if (new Date(data.claim_code_expires_at) < new Date()) { setError('This claim code has expired. Ask the clinic to issue a new one.'); return }
+
+    await supabase.from('patients').update({
+      registration_path: 'claimed',
+      claimed_at: new Date().toISOString(),
+      claim_code: null, // burn the code so it can't be reused
+    }).eq('id', data.id)
+
+    onComplete(data)
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Claim your profile</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Enter your HKID and the claim code sent to the phone number your clinic has on file.</div>
+        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'12px',boxSizing:'border-box'}}/>
+        <input value={code} onChange={e=>setCode(e.target.value)} placeholder="Claim code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'16px',boxSizing:'border-box',textTransform:'uppercase'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleClaim} disabled={checking||!hkid||!code}>{checking?'Checking...':'Claim my profile'}</Btn>
+      </div>
+    </div>
+  )
+}
+
+function SelfRegisterFlow({ onBack, onComplete }) {
+  const [step,setStep]=useState('form') // form | id_upload | selfie | pending
+  const [form,setForm]=useState({fullName:'',dob:'',hkid:''})
+  const [idFile,setIdFile]=useState(null)
+  const [selfieFile,setSelfieFile]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handleSubmit() {
+    setSaving(true)
+    setError(null)
+    try {
+      const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      let idPath = null, selfiePath = null
+      if (idFile) {
+        idPath = `${medsaId}/id-${Date.now()}-${idFile.name}`
+        await supabase.storage.from('id-verification').upload(idPath, idFile)
+      }
+      if (selfieFile) {
+        selfiePath = `${medsaId}/selfie-${Date.now()}-${selfieFile.name}`
+        await supabase.storage.from('id-verification').upload(selfiePath, selfieFile)
+      }
+      const { data, error: insErr } = await supabase.from('patients').insert({
+        medsa_id: medsaId,
+        full_name: form.fullName,
+        date_of_birth: form.dob,
+        hkid: form.hkid,
+        registration_path: 'self_registered',
+        id_verification_status: 'pending',
+        id_document_path: idPath,
+        selfie_verification_path: selfiePath,
+      }).select().single()
+      if (insErr) throw insErr
+      setStep('pending')
+      setTimeout(()=>onComplete(data), 2500) // demo only - real flow waits for actual verification result
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        {step!=='pending'&&<div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
+
+        {step==='form'&&<>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Register with Medsa</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Since there's no clinic record to verify against, we'll need your ID and a quick photo to confirm it's really you - this protects your medical information.</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'20px'}}>
+            <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name (as on ID)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+            <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+            <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          </div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('id_upload')} disabled={!form.fullName||!form.dob||!form.hkid}>Continue</Btn>
+        </>}
+
+        {step==='id_upload'&&<>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Upload your ID</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>A clear photo of your HKID card, both sides if possible.</div>
+          <input type="file" accept="image/*" onChange={e=>setIdFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('selfie')} disabled={!idFile}>Continue</Btn>
+        </>}
+
+        {step==='selfie'&&<>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Take a selfie</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person registering matches the ID provided.</div>
+          <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+            {'\u25c7'} Demo note: real liveness/anti-spoofing verification (confirming a live person, not a photo of a photo) requires a dedicated identity verification provider - this step captures the photo but the matching logic isn't live yet.
+          </div>
+          <input type="file" accept="image/*" capture="user" onChange={e=>setSelfieFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!selfieFile}>{saving?'Submitting...':'Submit for verification'}</Btn>
+        </>}
+
+        {step==='pending'&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Verification submitted</div>
+          <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Your documents are being reviewed. This usually takes a short while - continuing to your account now for this demo.</div>
+        </div>}
+      </div>
+    </div>
+  )
+}
+
 export default function PatientApp({ liveData={} }) {
-  const patient = liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
+  const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
+  const [showGate,setShowGate]=useState(!liveData.patient)
+
+  if (showGate && !signedInPatient) {
+    return <SignUpGate onComplete={(p)=>{setSignedInPatient(p);setShowGate(false)}} onSkipDemo={()=>setShowGate(false)}/>
+  }
+
+  const patient = signedInPatient || liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
   const liveRecords = liveData.records || []
   const liveConditions = liveData.conditions || []
   const liveAllergies = liveData.allergies || []
