@@ -1,5 +1,5 @@
 const C = {
-  green:'#4a7c59', greenMid:'#6b9e7a', greenLight:'#ddeae1', greenXLight:'#eef4f0',
+  green:'#006241', greenMid:'#1f7a5c', greenLight:'#d6e8e0', greenXLight:'#eaf3ef',
   beige:'#f0ede8', card:'#e8e4de', cream:'#faf8f5',
   brown:'#6b5344', brownLight:'#ede8e3',
   text:'#1a1a1a', textSub:'#6b6560', textMuted:'#9c9690', border:'#d8d4ce',
