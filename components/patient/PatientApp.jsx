@@ -1595,8 +1595,17 @@ function ShareForVisitModal({ open, onClose, patient }) {
 }
 
 export default function PatientApp({ liveData={} }) {
+  // All hooks must be declared before any conditional return, unconditionally,
+  // in the same order every render - otherwise React throws a hard crash the
+  // moment the gate's shown/hidden state changes and the hook count differs
+  // between renders. This was the actual cause of the sign-up gate crash.
   const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
   const [showGate,setShowGate]=useState(!liveData.patient)
+  const [screen,setScreen]=useState('home')
+  const [isEn,setIsEn]=useState(true)
+  const [emergencyOpen,setEmergencyOpen]=useState(false)
+  const [shareOpen,setShareOpen]=useState(false)
+  const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
   if (showGate && !signedInPatient) {
     return <SignUpGate onComplete={(p)=>{setSignedInPatient(p);setShowGate(false)}} onSkipDemo={()=>setShowGate(false)}/>
@@ -1610,11 +1619,6 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = liveData.vaccinations || []
   const liveAppointments = liveData.appointments || []
   const liveClaims = liveData.claims || []
-  const [screen,setScreen]=useState('home')
-  const [isEn,setIsEn]=useState(true)
-  const [emergencyOpen,setEmergencyOpen]=useState(false)
-  const [shareOpen,setShareOpen]=useState(false)
-  const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
   return (
