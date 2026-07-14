@@ -819,12 +819,137 @@ function PatientSearchScreen({ role, liveData={} }) {
 }
 
 // ── SCHEDULE ──────────────────────────────────────────────────────────────────
+// ── DOCTOR VIDEO CALL (mirrors patient-side VideoCallModal) ────────────────
+function DoctorVideoCallModal({ patientName, onClose }) {
+  if (!patientName) return null
+  return (
+    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff'}}>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'8px'}}>Video call (demo)</div>
+      <div style={{width:96,height:96,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700,marginBottom:'16px'}}>{patientName[0]}</div>
+      <div style={{fontSize:'18px',fontWeight:600,marginBottom:'6px'}}>{patientName}</div>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'40px'}}>Calling…</div>
+      <div onClick={onClose} style={{width:56,height:56,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'20px'}}>✕</div>
+    </div>
+  )
+}
+
+// ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall }) {
+  const [mode,setMode]=useState(null) // null | 'message' | 'log'
+  const [msgBody,setMsgBody]=useState('')
+  const [msgUrgent,setMsgUrgent]=useState(false)
+  const [msgSaving,setMsgSaving]=useState(false)
+  const [msgSaved,setMsgSaved]=useState(false)
+  const [logText,setLogText]=useState('')
+  const [logSaving,setLogSaving]=useState(false)
+  const [logSaved,setLogSaved]=useState(false)
+  const [error,setError]=useState(null)
+
+  if (!patient) return null
+
+  async function handleSendMessage() {
+    if (!msgBody.trim()) { setError('Write a message first.'); return }
+    setMsgSaving(true)
+    setError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.medsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('patient_messages').insert({
+        patient_id: patientRow.id, doctor_name: doctorLabel, body: msgBody, urgent: msgUrgent,
+      })
+      if (insErr) throw insErr
+      setMsgSaved(true); setMsgBody(''); setMsgUrgent(false)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setMsgSaving(false)
+    }
+  }
+
+  async function handleSaveLog() {
+    if (!logText.trim()) { setError('Write a note first.'); return }
+    setLogSaving(true)
+    setError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.medsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('medical_records').insert({
+        patient_id: patientRow.id, record_type: 'visit', title: patient.type || 'Consultation',
+        notes: logText, date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_todo',
+      })
+      if (insErr) throw insErr
+      setLogSaved(true); setLogText('')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLogSaving(false)
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{patient.name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{patient.time} · {patient.type}</div>
+          </div>
+          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
+        </div>
+
+        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('log')}>📝 Quick log</Btn>
+          <Btn style={{width:'100%'}} onClick={onClose}>View full record</Btn>
+        </div>}
+
+        {mode==='message'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Message {patient.name}</div>
+          <textarea value={msgBody} onChange={e=>setMsgBody(e.target.value)} rows={4} placeholder="Write a note to this patient…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div onClick={()=>setMsgUrgent(!msgUrgent)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:msgUrgent?C.redLight:C.card,border:`0.5px solid ${msgUrgent?C.red:C.border}`,borderRadius:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <Toggle checked={msgUrgent} onChange={setMsgUrgent}/>
+            <span style={{fontSize:'12px',fontWeight:600,color:msgUrgent?C.red:C.text}}>Mark as urgent</span>
+          </div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          {msgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Sent</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSendMessage} disabled={msgSaving}>{msgSaving?'Sending…':'Send'}</Btn>
+          </div>
+        </>}
+
+        {mode==='log'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Quick log for {patient.name}</div>
+          <textarea value={logText} onChange={e=>setLogText(e.target.value)} rows={4} placeholder="Consultation notes…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Saved to record</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSaveLog} disabled={logSaving}>{logSaving?'Saving…':'Save to record'}</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
 function ScheduleScreen({ role }) {
   const [view,setView]=useState('mine')
   const isLead=role==='admin'||role==='dept_head'
-  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:'Appointments'}].filter(Boolean)
+  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:role==='doctor'?"Today's patients":'Appointments'}].filter(Boolean)
   const myShifts=[{day:'Mon 23',time:'08:00 – 17:00',status:'Confirmed'},{day:'Tue 24',time:'08:00 – 17:00',status:'Confirmed'},{day:'Wed 25',time:'13:00 – 22:00',status:'Pending swap'},{day:'Thu 26',time:'OFF',status:'Day off'},{day:'Fri 27',time:'08:00 – 17:00',status:'Confirmed'}]
-  const appts=[{time:'09:00',name:'Wong Mei-ling',type:'Follow-up · Blood results',room:'3A'},{time:'10:00',name:'Chan Wai-man',type:'New patient · Chest pain',room:'3A'},{time:'10:30',name:'Lee Siu-fong',type:'Prescription review',room:'3B'},{time:'14:00',name:'Ng Ka-wai',type:'Post-op check',room:'4A'},{time:'15:30',name:'Lam Yee-ting',type:'Diabetes management',room:'3A'}]
+  const appts=[
+    {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',done:false},
+    {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',done:false},
+    {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',done:false},
+    {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',done:false},
+    {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',done:false},
+  ]
+  const [activeTodoPatient,setActiveTodoPatient]=useState(null)
+  const [callingPatientName,setCallingPatientName]=useState(null)
+  const myName = ROLES[role]?.label || 'Doctor'
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <LiveOverview role={role}/>
@@ -875,16 +1000,27 @@ function ScheduleScreen({ role }) {
         ))}
       </>}
       {view==='appts'&&<>
-        <SecLabel>Today · Tue 24 Jun</SecLabel>
+        <SecLabel>{role==='doctor'?"Today's patients · Tue 24 Jun":'Today · Tue 24 Jun'}</SecLabel>
+        {role==='doctor'&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+          ◇ Tap a patient to video call, message, log a note, or open their full record.
+        </div>}
         {appts.map((a,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+          <Card key={i} onClick={()=>role==='doctor'&&setActiveTodoPatient(a)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:role==='doctor'?'pointer':'default'}}>
             <div style={{width:44,textAlign:'center'}}><div style={{fontSize:'14px',fontWeight:700,color:C.green}}>{a.time}</div></div>
             <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:600}}>{a.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{a.type}</div></div>
             <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 9px',borderRadius:'20px'}}>Rm {a.room}</span>
+            {role==='doctor'&&<span style={{color:C.textMuted,fontSize:'14px'}}>›</span>}
           </Card>
         ))}
         <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ New appointment</Btn></div>
       </>}
+      <PatientTodoActionModal
+        patient={activeTodoPatient}
+        onClose={()=>setActiveTodoPatient(null)}
+        doctorLabel={myName}
+        onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
+      />
+      <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
     </div>
   )
 }
