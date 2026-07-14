@@ -138,22 +138,26 @@ function PullToRefresh({ onRefresh, children }) {
   const [pullDistance,setPullDistance]=useState(0)
   const [refreshing,setRefreshing]=useState(false)
   const startY = useRef(null)
+  const dragging = useRef(false)
   const containerRef = useRef(null)
   const THRESHOLD = 70
 
-  function handleTouchStart(e) {
+  function start(clientY) {
     if (containerRef.current && containerRef.current.scrollTop === 0) {
-      startY.current = e.touches[0].clientY
+      startY.current = clientY
+      dragging.current = true
     }
   }
-  function handleTouchMove(e) {
-    if (startY.current === null || refreshing) return
-    const delta = e.touches[0].clientY - startY.current
+  function move(clientY) {
+    if (startY.current === null || refreshing || !dragging.current) return
+    const delta = clientY - startY.current
     if (delta > 0 && containerRef.current && containerRef.current.scrollTop === 0) {
       setPullDistance(Math.min(delta * 0.5, 100))
     }
   }
-  async function handleTouchEnd() {
+  async function end() {
+    if (!dragging.current) return
+    dragging.current = false
     if (pullDistance > THRESHOLD && !refreshing) {
       setRefreshing(true)
       await onRefresh()
@@ -166,10 +170,14 @@ function PullToRefresh({ onRefresh, children }) {
   return (
     <div
       ref={containerRef}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      style={{overflowY:'auto',height:'100%',position:'relative'}}
+      onTouchStart={e=>start(e.touches[0].clientY)}
+      onTouchMove={e=>move(e.touches[0].clientY)}
+      onTouchEnd={end}
+      onMouseDown={e=>start(e.clientY)}
+      onMouseMove={e=>move(e.clientY)}
+      onMouseUp={end}
+      onMouseLeave={end}
+      style={{overflowY:'auto',height:'100%',position:'relative',cursor:pullDistance>0?'grabbing':'default'}}
     >
       <div style={{height: refreshing?50:pullDistance, transition: pullDistance===0?'height 0.2s':'none', display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
         <div style={{fontSize:'11px',color:C.textMuted}}>
