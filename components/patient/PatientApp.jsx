@@ -139,6 +139,19 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   // desk checks the patient in, and clears once their status is no longer
   // waiting/in_room.
   const [queueStatus,setQueueStatus]=useState({ checkedIn:false })
+  const [urgentMessages,setUrgentMessages]=useState([])
+
+  useEffect(() => {
+    async function loadUrgentMessages() {
+      const medsaId = patient?.medsa_id
+      if (!medsaId) return
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) return
+      const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).eq('urgent', true).eq('read_by_patient', false)
+      setUrgentMessages(data||[])
+    }
+    loadUrgentMessages()
+  }, [patient?.medsa_id])
 
   useEffect(() => {
     async function loadQueueStatus() {
@@ -182,6 +195,18 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
 
   return (
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
+
+      {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
+      {urgentMessages.length>0&&(
+        <div onClick={()=>onNav('records')} style={{margin:'14px 16px 0',background:C.red,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+          <span style={{fontSize:'20px'}}>⚠</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${urgentMessages.length} urgent message${urgentMessages.length>1?'s':''} from your doctor`:`${urgentMessages.length}則來自醫生的緊急訊息`}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{urgentMessages[0].doctor_name} · {urgentMessages[0].subject||urgentMessages[0].body}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
+        </div>
+      )}
 
       {/* ── Live queue position — shown only while checked in at a clinic ── */}
       {queueStatus.checkedIn&&(
@@ -462,13 +487,19 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           </Card>
         ) : (
           doctorMessages.map((m)=>(
-            <Card key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              <div style={{width:36,height:36,borderRadius:'10px',background:!m.read_by_patient?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read_by_patient?C.green:C.textMuted,flexShrink:0}}>{m.doctor_name[0]}</div>
+            <Card key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start',border:m.urgent?`1.5px solid ${C.red}`:undefined}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:m.urgent?C.redLight:(!m.read_by_patient?C.greenLight:C.card),display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:m.urgent?C.red:(!m.read_by_patient?C.green:C.textMuted),flexShrink:0}}>{m.doctor_name[0]}</div>
               <div style={{flex:1}}>
-                <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span><span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span></div>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'6px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                    <span style={{fontSize:'13px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
+                    {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px'}}>Urgent</span>}
+                  </div>
+                  <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+                </div>
                 <div style={{fontSize:'12px',color:!m.read_by_patient?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.subject||m.body}</div>
               </div>
-              {!m.read_by_patient&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
+              {!m.read_by_patient&&<div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:C.green,flexShrink:0,marginTop:'4px'}}/>}
             </Card>
           ))
         )}
