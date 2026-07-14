@@ -483,6 +483,7 @@ function PatientSearchScreen({ role, liveData={} }) {
   const [showPrescribeModal,setShowPrescribeModal]=useState(false)
   const [dispensedIds,setDispensedIds]=useState([])
   const [patientMsgSubject,setPatientMsgSubject]=useState('')
+  const [patientMsgUrgent,setPatientMsgUrgent]=useState(false)
   const [patientMsgBody,setPatientMsgBody]=useState('')
   const [patientMsgSaving,setPatientMsgSaving]=useState(false)
   const [patientMsgSaved,setPatientMsgSaved]=useState(false)
@@ -502,10 +503,11 @@ function PatientSearchScreen({ role, liveData={} }) {
         doctor_name: doctorLabel,
         subject: patientMsgSubject || null,
         body: patientMsgBody,
+        urgent: patientMsgUrgent,
       })
       if (insErr) throw insErr
       setPatientMsgSaved(true)
-      setPatientMsgSubject(''); setPatientMsgBody('')
+      setPatientMsgSubject(''); setPatientMsgBody(''); setPatientMsgUrgent(false)
       setTimeout(()=>setPatientMsgSaved(false), 3000)
     } catch (e) {
       setPatientMsgError(e.message)
@@ -761,6 +763,13 @@ function PatientSearchScreen({ role, liveData={} }) {
             <input value={patientMsgSubject} onChange={e=>setPatientMsgSubject(e.target.value)} placeholder="e.g. Follow-up on your last visit" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
             <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Message</div>
             <textarea value={patientMsgBody} onChange={e=>setPatientMsgBody(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px',boxSizing:'border-box'}} rows={4} placeholder="Write a personal note to this patient…"/>
+            <div onClick={()=>setPatientMsgUrgent(!patientMsgUrgent)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:patientMsgUrgent?C.redLight:C.card,border:`0.5px solid ${patientMsgUrgent?C.red:C.border}`,borderRadius:'8px',marginBottom:'12px',cursor:'pointer'}}>
+              <Toggle checked={patientMsgUrgent} onChange={setPatientMsgUrgent}/>
+              <div>
+                <div style={{fontSize:'12px',fontWeight:600,color:patientMsgUrgent?C.red:C.text}}>Mark as urgent</div>
+                <div style={{fontSize:'10px',color:C.textMuted}}>Shows with a red badge and appears prominently on the patient's home screen</div>
+              </div>
+            </div>
             {patientMsgError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{patientMsgError}</div>}
             {patientMsgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Message sent to patient</div>}
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleSendPatientMessage(patient.id, `Dr ${patient.name?.split(' ')[0]||''}`.trim()||'Your doctor')} disabled={patientMsgSaving}>{patientMsgSaving?'Sending…':'Send to patient'}</Btn>
