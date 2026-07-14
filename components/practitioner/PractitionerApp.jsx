@@ -839,28 +839,60 @@ function MessagesScreen({ role }) {
   const [composing,setComposing]=useState(false)
   const [msgs,setMsgs]=useState([])
   const [loading,setLoading]=useState(true)
-  const [openMsg,setOpenMsg]=useState(null)
+  const [openThread,setOpenThread]=useState(null) // array of messages in one conversation
   const [toField,setToField]=useState('')
   const [bodyField,setBodyField]=useState('')
   const [sending,setSending]=useState(false)
   const [error,setError]=useState(null)
+  const [showSuggestions,setShowSuggestions]=useState(false)
+  const [knownRecipients,setKnownRecipients]=useState([])
 
   const myName = ROLES[role]?.label || 'Staff'
 
   async function loadMessages() {
     setLoading(true)
-    const { data } = await supabase.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(50)
+    const { data } = await supabase.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(100)
     setMsgs(data||[])
+    // Build a recipient suggestion list from everyone who's appeared as a
+    // sender or recipient so far, since there's no separate staff directory.
+    const names = new Set()
+    ;(data||[]).forEach(m=>{ names.add(m.sender_name); names.add(m.recipient_name) })
+    Object.values(ROLES).forEach(r=>names.add(r.label))
+    names.add('All Staff')
+    setKnownRecipients([...names].filter(n=>n && n!==myName).sort())
     setLoading(false)
   }
 
   useEffect(() => { loadMessages() }, [])
 
+  // A thread is identified by thread_id if set, otherwise by the message's
+  // own id (meaning it's the root of its own conversation).
+  function threadKey(m) { return m.thread_id || m.id }
+
+  // Group all messages sharing a thread into one list, latest last, so
+  // opening any message in a conversation shows the whole conversation.
+  function getThread(m) {
+    const key = threadKey(m)
+    return msgs.filter(x=>threadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
+  }
+
+  // For the inbox list, only show the latest message per thread, not every
+  // individual reply as its own row.
+  const threadsLatestFirst = Object.values(
+    msgs.reduce((acc,m)=>{
+      const key = threadKey(m)
+      if (!acc[key] || new Date(m.created_at) > new Date(acc[key].created_at)) acc[key] = m
+      return acc
+    }, {})
+  ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
+
   async function handleOpen(m) {
-    setOpenMsg(m)
-    if (!m.read) {
-      await supabase.from('staff_messages').update({ read: true }).eq('id', m.id)
-      setMsgs(prev=>prev.map(x=>x.id===m.id?{...x,read:true}:x))
+    const thread = getThread(m)
+    setOpenThread(thread)
+    const unreadIds = thread.filter(x=>!x.read).map(x=>x.id)
+    if (unreadIds.length>0) {
+      await supabase.from('staff_messages').update({ read: true }).in('id', unreadIds)
+      setMsgs(prev=>prev.map(x=>unreadIds.includes(x.id)?{...x,read:true}:x))
     }
   }
 
@@ -868,36 +900,51 @@ function MessagesScreen({ role }) {
     if (!toField.trim() || !bodyField.trim()) { setError('Enter a recipient and a message.'); return }
     setSending(true)
     setError(null)
+    // If replying inside an open thread, attach to that same thread_id so
+    // it groups as one conversation instead of a disconnected new message.
+    const replyThreadId = openThread ? threadKey(openThread[0]) : null
     const { error: insErr } = await supabase.from('staff_messages').insert({
       sender_name: myName,
       recipient_name: toField,
       body: bodyField,
       read: false,
+      thread_id: replyThreadId,
     })
     setSending(false)
     if (insErr) { setError(insErr.message); return }
-    setToField(''); setBodyField(''); setComposing(false)
+    setToField(''); setBodyField(''); setComposing(false); setOpenThread(null)
     loadMessages()
   }
 
-  if (openMsg) return (
+  if (openThread) return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{padding:'12px 16px 4px'}}>
-        <div onClick={()=>setOpenMsg(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back to messages</div>
+        <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back to messages</div>
       </div>
-      <Card style={{padding:'18px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'10px'}}>
-          <div>
-            <div style={{fontSize:'14px',fontWeight:700}}>{openMsg.sender_name}</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>to {openMsg.recipient_name}</div>
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(openMsg.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+      <div style={{padding:'0 16px'}}>
+        {openThread.map((m,i)=>(
+          <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_name===myName?C.greenXLight:C.cream}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+              <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_name}</span>
+              <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+            </div>
+            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
+          </Card>
+        ))}
+      </div>
+      {!composing&&<div style={{padding:'8px 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setToField(openThread[0].sender_name===myName?openThread[0].recipient_name:openThread[0].sender_name);setComposing(true)}}>Reply</Btn>
+      </div>}
+      {composing&&(
+        <div style={{padding:'0 16px 16px'}}>
+          <Card style={{padding:'16px'}}>
+            <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Reply to {toField}</div>
+            <textarea value={bodyField} onChange={e=>setBodyField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}} rows={3} placeholder="Message…"/>
+            {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+            <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
+          </Card>
         </div>
-        <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{openMsg.body}</div>
-      </Card>
-      <div style={{padding:'0 16px 16px'}}>
-        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setToField(openMsg.sender_name);setOpenMsg(null);setComposing(true)}}>Reply</Btn>
-      </div>
+      )}
     </div>
   )
 
@@ -905,8 +952,8 @@ function MessagesScreen({ role }) {
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>Messages</SecLabel>
       {loading&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading…</div>}
-      {!loading&&msgs.length===0&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>No messages yet.</div>}
-      {msgs.map((m)=>(
+      {!loading&&threadsLatestFirst.length===0&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>No messages yet.</div>}
+      {threadsLatestFirst.map((m)=>(
         <Card key={m.id} onClick={()=>handleOpen(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
           <div style={{width:36,height:36,borderRadius:'10px',background:!m.read?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read?C.green:C.textMuted,flexShrink:0}}>{m.sender_name[0]}</div>
           <div style={{flex:1}}>
@@ -919,7 +966,21 @@ function MessagesScreen({ role }) {
       {composing&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New message</div>
-          <input value={toField} onChange={e=>setToField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',marginBottom:'8px',boxSizing:'border-box'}} placeholder="To: name or department…"/>
+          <div style={{position:'relative',marginBottom:'8px'}}>
+            <input
+              value={toField}
+              onChange={e=>{setToField(e.target.value);setShowSuggestions(true)}}
+              onFocus={()=>setShowSuggestions(true)}
+              onBlur={()=>setTimeout(()=>setShowSuggestions(false),150)}
+              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}
+              placeholder="To: name or department…"
+            />
+            {showSuggestions&&toField.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)',maxHeight:150,overflowY:'auto'}}>
+              {knownRecipients.filter(n=>n.toLowerCase().includes(toField.toLowerCase())).slice(0,6).map((n,i)=>(
+                <div key={i} onMouseDown={()=>{setToField(n);setShowSuggestions(false)}} style={{padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>{n}</div>
+              ))}
+            </div>}
+          </div>
           <textarea value={bodyField} onChange={e=>setBodyField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}} rows={3} placeholder="Message…"/>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
           <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
@@ -930,13 +991,34 @@ function MessagesScreen({ role }) {
   )
 }
 
-// ── ADMIN PERMISSIONS ─────────────────────────────────────────────────────────
 function AdminPermissions() {
   const permLabels={identity:'View patient identity',vitals:'View & record vitals',history:'View medical history',medications:'View medication records',allergies:'View allergy info',mental:'View mental health records',imaging:'View imaging & scans',labs:'View lab results',prescribe:'Prescribe medications',dispense:'Dispense medications',appointments:'Manage appointments',billing:'View billing info',musculoskeletal:'View musculoskeletal notes',specialty_notes:'Log specialty notes',critical_conditions:'View critical conditions (EMS)',emergency:'Emergency override',tasks:'Manage patient tasks'}
   const [perms,setPerms]=useState(Object.fromEntries(Object.entries(ACCESS).map(([r,a])=>[r,{...a}])))
   const [activeRole,setActiveRole]=useState('nurse')
-  const toggle=(role,perm)=>setPerms(p=>({...p,[role]:{...p[role],[perm]:!p[role][perm]}}))
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [error,setError]=useState(null)
+  const toggle=(role,perm)=>{setPerms(p=>({...p,[role]:{...p[role],[perm]:!p[role][perm]}}));setSaved(false)}
   const rolePerms=perms[activeRole]||{}
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const rows = Object.entries(rolePerms).map(([permission_key,enabled])=>({
+        role: activeRole, permission_key, enabled, updated_at: new Date().toISOString(),
+      }))
+      const { error: upErr } = await supabase.from('role_permission_overrides').upsert(rows, { onConflict: 'role,permission_key' })
+      if (upErr) throw upErr
+      setSaved(true)
+      setTimeout(()=>setSaved(false), 3000)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.purpleLight,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'12px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
@@ -946,7 +1028,7 @@ function AdminPermissions() {
       <SecLabel>Select role to configure</SecLabel>
       <div style={{display:'flex',gap:'6px',padding:'0 16px 12px',overflowX:'auto'}}>
         {Object.entries(ROLES).filter(([k])=>k!=='admin').map(([key,r])=>(
-          <div key={key} onClick={()=>setActiveRole(key)} style={{flexShrink:0,padding:'6px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:activeRole===key?r.color:C.card,color:activeRole===key?'#fff':C.textSub,border:`0.5px solid ${activeRole===key?r.color:C.border}`}}>{r.label}</div>
+          <div key={key} onClick={()=>{setActiveRole(key);setSaved(false)}} style={{flexShrink:0,padding:'6px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:activeRole===key?r.color:C.card,color:activeRole===key?'#fff':C.textSub,border:`0.5px solid ${activeRole===key?r.color:C.border}`}}>{r.label}</div>
         ))}
       </div>
       <div style={{padding:'0 16px 6px'}}>
@@ -966,7 +1048,12 @@ function AdminPermissions() {
           ))}
         </div>
       </div>
-      <div style={{padding:'16px'}}><Btn variant="purple" style={{width:'100%'}}>Save permission changes</Btn></div>
+      <div style={{margin:'0 16px 12px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+        ◇ Saved changes are stored and will persist on reload. Applying these overrides to live access checks throughout the rest of the app is a separate follow-up — right now this screen's toggles are the source of truth for review, not yet wired into every access check elsewhere.
+      </div>
+      {error&&<div style={{margin:'0 16px 12px',fontSize:'12px',color:C.red}}>{error}</div>}
+      {saved&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,textAlign:'center'}}>✓ Changes saved</div>}
+      <div style={{padding:'0 16px 16px'}}><Btn variant="purple" style={{width:'100%'}} onClick={handleSave} disabled={saving}>{saving?'Saving…':'Save permission changes'}</Btn></div>
     </div>
   )
 }
