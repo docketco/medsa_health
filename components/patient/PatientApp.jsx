@@ -402,6 +402,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
               <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
             </div>
             <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+            {m.sender_type==='patient'&&<span onClick={(e)=>{e.stopPropagation();handleDeleteOwnReply(m.id)}} style={{fontSize:'12px',color:C.red,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
           </div>
         ))}
       </Card>
