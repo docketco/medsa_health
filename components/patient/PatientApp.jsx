@@ -306,11 +306,36 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   )
 }
 
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[] }) {
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={} }) {
   // Use live Supabase data if available, otherwise fall back to demo records
   const hasLiveData = records.length > 0
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
+  const [doctorMessages,setDoctorMessages]=useState([])
+  const [messagesLoading,setMessagesLoading]=useState(true)
+  const [openDoctorMsg,setOpenDoctorMsg]=useState(null)
+
+  useEffect(() => {
+    async function loadDoctorMessages() {
+      const medsaId = patient?.medsa_id
+      if (!medsaId) { setMessagesLoading(false); return }
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) { setMessagesLoading(false); return }
+      const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false})
+      setDoctorMessages(data||[])
+      setMessagesLoading(false)
+    }
+    loadDoctorMessages()
+  }, [patient?.medsa_id])
+
+  async function handleOpenDoctorMsg(m) {
+    setOpenDoctorMsg(m)
+    if (!m.read_by_patient) {
+      await supabase.from('patient_messages').update({ read_by_patient: true }).eq('id', m.id)
+      setDoctorMessages(prev=>prev.map(x=>x.id===m.id?{...x,read_by_patient:true}:x))
+    }
+  }
+
   const demoRecords=[
     {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
     {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
@@ -424,6 +449,29 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[] }) {
           <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>Allergy test results.pdf</div><div style={{fontSize:'11px',color:C.textSub}}>Uploaded 9 Jan · Awaiting verification</div></div>
           <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}}>Send for review</Btn>
         </Card>
+
+        <SecLabel>{isEn?'Messages from your doctor':'醫生的訊息'}</SecLabel>
+        {messagesLoading&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
+        {!messagesLoading&&doctorMessages.length===0&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
+        {openDoctorMsg ? (
+          <Card style={{padding:'16px',margin:'0 16px'}}>
+            <div onClick={()=>setOpenDoctorMsg(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{isEn?'← Back':'← 返回'}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{openDoctorMsg.doctor_name} · {new Date(openDoctorMsg.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+            {openDoctorMsg.subject&&<div style={{fontSize:'14px',fontWeight:700,marginBottom:'8px'}}>{openDoctorMsg.subject}</div>}
+            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{openDoctorMsg.body}</div>
+          </Card>
+        ) : (
+          doctorMessages.map((m)=>(
+            <Card key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:!m.read_by_patient?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read_by_patient?C.green:C.textMuted,flexShrink:0}}>{m.doctor_name[0]}</div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span><span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span></div>
+                <div style={{fontSize:'12px',color:!m.read_by_patient?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.subject||m.body}</div>
+              </div>
+              {!m.read_by_patient&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
+            </Card>
+          ))
+        )}
       </>}
     </div>
   )
@@ -1632,7 +1680,7 @@ export default function PatientApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
