@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -133,6 +133,54 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
   )
 }
 
+// ── PULL TO REFRESH — real touch gesture, not a library ─────────────────────
+function PullToRefresh({ onRefresh, children }) {
+  const [pullDistance,setPullDistance]=useState(0)
+  const [refreshing,setRefreshing]=useState(false)
+  const startY = useRef(null)
+  const containerRef = useRef(null)
+  const THRESHOLD = 70
+
+  function handleTouchStart(e) {
+    if (containerRef.current && containerRef.current.scrollTop === 0) {
+      startY.current = e.touches[0].clientY
+    }
+  }
+  function handleTouchMove(e) {
+    if (startY.current === null || refreshing) return
+    const delta = e.touches[0].clientY - startY.current
+    if (delta > 0 && containerRef.current && containerRef.current.scrollTop === 0) {
+      setPullDistance(Math.min(delta * 0.5, 100))
+    }
+  }
+  async function handleTouchEnd() {
+    if (pullDistance > THRESHOLD && !refreshing) {
+      setRefreshing(true)
+      await onRefresh()
+      setRefreshing(false)
+    }
+    setPullDistance(0)
+    startY.current = null
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{overflowY:'auto',height:'100%',position:'relative'}}
+    >
+      <div style={{height: refreshing?50:pullDistance, transition: pullDistance===0?'height 0.2s':'none', display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
+        <div style={{fontSize:'11px',color:C.textMuted}}>
+          {refreshing ? '⟳ Refreshing…' : pullDistance>THRESHOLD ? '↓ Release to refresh' : pullDistance>10 ? '↓ Pull to refresh' : ''}
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
 function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={} }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
@@ -156,7 +204,11 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setMessagesLoading(false); return [] }
     setHomePatientId(patientRow.id)
-    const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false})
+    // Only load messages from the last 90 days - older ones are cleaned up
+    // by a scheduled job (see schema_message_expiry.sql) so this doesn't
+    // grow unbounded in storage.
+    const cutoff = new Date(Date.now() - 90*24*60*60*1000).toISOString()
+    const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).gte('created_at', cutoff).order('created_at',{ascending:false})
     setDoctorMessages(data||[])
     setMessagesLoading(false)
     return data||[]
@@ -222,47 +274,59 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
     }
   }
 
+  async function handleDeleteConversation(m) {
+    // Unlike the single-message delete, this removes the whole thread -
+    // the doctor's messages included - since deleting "this row" on the
+    // board is naturally understood as deleting the whole conversation.
+    const thread = getThreadFrom(doctorMessages, m)
+    await supabase.from('patient_messages').delete().in('id', thread.map(x=>x.id))
+    loadDoctorMessages()
+    if (openThread && msgThreadKey(openThread[0])===msgThreadKey(m)) setOpenThread(null)
+  }
+
+  async function loadQueueStatus() {
+    const medsaId = patient?.medsa_id
+    if (!medsaId) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) return
+
+    const { data: myEntry } = await supabase
+      .from('clinic_queue')
+      .select('*, institutions(name)')
+      .eq('patient_id', patientRow.id)
+      .in('status', ['waiting','in_room'])
+      .order('checked_in_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (!myEntry) { setQueueStatus({ checkedIn:false }); return }
+
+    // Position = how many other patients checked in earlier are still
+    // waiting ahead of this one, at the same institution.
+    const { count } = await supabase
+      .from('clinic_queue')
+      .select('id', { count: 'exact', head: true })
+      .eq('institution_id', myEntry.institution_id)
+      .eq('status', 'waiting')
+      .lt('checked_in_at', myEntry.checked_in_at)
+
+    setQueueStatus({
+      checkedIn: true,
+      position: count || 0,
+      ticket: myEntry.ticket,
+      clinic: myEntry.institutions?.name || 'Clinic',
+      doctor: myEntry.doctor_name || 'Unassigned',
+    })
+  }
+
   useEffect(() => {
-    async function loadQueueStatus() {
-      const medsaId = patient?.medsa_id
-      if (!medsaId) return
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) return
-
-      const { data: myEntry } = await supabase
-        .from('clinic_queue')
-        .select('*, institutions(name)')
-        .eq('patient_id', patientRow.id)
-        .in('status', ['waiting','in_room'])
-        .order('checked_in_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      if (!myEntry) { setQueueStatus({ checkedIn:false }); return }
-
-      // Position = how many other patients checked in earlier are still
-      // waiting ahead of this one, at the same institution.
-      const { count } = await supabase
-        .from('clinic_queue')
-        .select('id', { count: 'exact', head: true })
-        .eq('institution_id', myEntry.institution_id)
-        .eq('status', 'waiting')
-        .lt('checked_in_at', myEntry.checked_in_at)
-
-      setQueueStatus({
-        checkedIn: true,
-        position: count || 0,
-        ticket: myEntry.ticket,
-        clinic: myEntry.institutions?.name || 'Clinic',
-        doctor: myEntry.doctor_name || 'Unassigned',
-      })
-    }
     loadQueueStatus()
     const interval = setInterval(loadQueueStatus, 30000) // refresh every 30s while on this screen
     return () => clearInterval(interval)
   }, [patient?.medsa_id])
 
   return (
+    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus()]) }}>
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
 
       {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
@@ -402,7 +466,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
               <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
             </div>
             <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            {m.sender_type==='patient'&&<span onClick={(e)=>{e.stopPropagation();handleDeleteOwnReply(m.id)}} style={{fontSize:'12px',color:C.red,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
+            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
           </div>
         ))}
       </Card>
@@ -443,6 +507,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         </div>
       )}
     </div>
+    </PullToRefresh>
   )
 }
 
