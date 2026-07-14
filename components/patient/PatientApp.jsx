@@ -722,6 +722,8 @@ function DoctorsScreen({ isEn }) {
   const [sortBy,setSortBy]=useState('distance')
   const [videoCallDoc,setVideoCallDoc]=useState(null)
   const [whatsappReminder,setWhatsappReminder]=useState(true)
+  const [selectedDoctor,setSelectedDoctor]=useState(null)
+  const [consultType,setConsultType]=useState('in-person') // 'in-person' | 'video'
   const doctors=[
     {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok',distanceKm:0.8,videoAvail:true},
     {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due',distanceKm:3.2,videoAvail:false},
@@ -736,6 +738,18 @@ function DoctorsScreen({ isEn }) {
   })
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   const UNAVAIL=['9:30am','11:00am']
+  const DAYS=[['TUE','24'],['WED','25'],['THU','26'],['FRI','27'],['SAT','28']]
+  const [selDay,setSelDay]=useState('24')
+
+  function handleBookClick(doc, type) {
+    setSelectedDoctor(doc)
+    setConsultType(type)
+    setBooked(false)
+    setTab('book')
+  }
+
+  const activeDoctor = selectedDoctor || doctors[0]
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.green,padding:'0 16px 14px'}}>
@@ -774,10 +788,9 @@ function DoctorsScreen({ isEn }) {
             </div>
             <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
-              {doc.videoAvail&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setVideoCallDoc(doc)}>◈ Video</Btn>}
               {doc.type==='full'
                 ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setTab('book')}>Book</Btn>}
+                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, doc.videoAvail?'video':'in-person')}>{isEn?'Book':'預約'}</Btn>}
             </div>
           </Card>
         ))}
@@ -786,14 +799,24 @@ function DoctorsScreen({ isEn }) {
         <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
           <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan Siu-ming</div><div style={{fontSize:'12px',color:C.textSub}}>General Practice · Pacific Medical Group</div></div>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{activeDoctor.spec} · {activeDoctor.clinic}</div></div>
         </Card>
+
+        {activeDoctor.videoAvail&&<Card style={{padding:'14px 16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
+              <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
+            ))}
+          </div>
+        </Card>}
+
         <Card>
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
-              {[['TUE','24',true],['WED','25',false],['THU','26',false],['FRI','27',false],['SAT','28',false]].map(([day,date,sel])=>(
-                <div key={day} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:sel?C.green:C.card,color:sel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${sel?C.green:C.border}`}}>
+              {DAYS.map(([day,date])=>(
+                <div key={day} onClick={()=>setSelDay(date)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:selDay===date?C.green:C.card,color:selDay===date?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${selDay===date?C.green:C.border}`}}>
                   <div style={{fontSize:'10px',opacity:0.8}}>{day}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
                 </div>
               ))}
@@ -817,8 +840,8 @@ function DoctorsScreen({ isEn }) {
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[['Doctor','Dr Chan Siu-ming'],['Date',`Tue 24 Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i)=>(
-                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===5?700:400}}>{v}</span></div>
+              {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`Tue ${selDay} Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
+                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>
             <div onClick={()=>setWhatsappReminder(!whatsappReminder)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'12px',cursor:'pointer'}}>
@@ -838,8 +861,14 @@ function DoctorsScreen({ isEn }) {
           <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
             <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
             <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Dr Chan Siu-ming · Tue 24 Jun at {selTime}</div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · Tue {selDay} Jun at {selTime}</div>
+            {consultType==='video'
+              ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{isEn?'Join video call now (demo)':'立即加入視像通話（示範）'}</Btn>
+                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'In production, this unlocks at your actual appointment time.':'實際運作時，此按鈕將於預約時間開放。'}</div>
+                  <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{isEn?'Close':'關閉'}</Btn>
+                </div>
+              : <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>}
           </div>
         </div>}
       </>}
