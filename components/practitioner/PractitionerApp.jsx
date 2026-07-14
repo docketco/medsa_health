@@ -482,8 +482,38 @@ function PatientSearchScreen({ role, liveData={} }) {
   const [diagnosis,setDiagnosis]=useState('')
   const [showPrescribeModal,setShowPrescribeModal]=useState(false)
   const [dispensedIds,setDispensedIds]=useState([])
+  const [patientMsgSubject,setPatientMsgSubject]=useState('')
+  const [patientMsgBody,setPatientMsgBody]=useState('')
+  const [patientMsgSaving,setPatientMsgSaving]=useState(false)
+  const [patientMsgSaved,setPatientMsgSaved]=useState(false)
+  const [patientMsgError,setPatientMsgError]=useState(null)
   const canRegisterPatients = role==='receptionist'||role==='admin'
   const access=ACCESS[role]||{}
+
+  async function handleSendPatientMessage(patientMedsaId, doctorLabel) {
+    if (!patientMsgBody.trim()) { setPatientMsgError('Write a message first.'); return }
+    setPatientMsgSaving(true)
+    setPatientMsgError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patientMedsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('patient_messages').insert({
+        patient_id: patientRow.id,
+        doctor_name: doctorLabel,
+        subject: patientMsgSubject || null,
+        body: patientMsgBody,
+      })
+      if (insErr) throw insErr
+      setPatientMsgSaved(true)
+      setPatientMsgSubject(''); setPatientMsgBody('')
+      setTimeout(()=>setPatientMsgSaved(false), 3000)
+    } catch (e) {
+      setPatientMsgError(e.message)
+    } finally {
+      setPatientMsgSaving(false)
+    }
+  }
+
   const lp = liveData.patient
   const hasLive = !!lp
   const patient={
@@ -513,6 +543,7 @@ function PatientSearchScreen({ role, liveData={} }) {
       access.history&&{key:'history',label:'History'},
       access.medications&&{key:'medications',label:'Meds'},
       (access.prescribe||role==='doctor'||role==='dept_head')&&{key:'log',label:'Log'},
+      role==='doctor'&&{key:'message',label:'Message'},
     ].filter(Boolean)
     return (
       <>
@@ -719,6 +750,21 @@ function PatientSearchScreen({ role, liveData={} }) {
               <Btn variant="amber" style={{flex:1}}>Discharge</Btn>
             </div>
           </>}
+        </>}
+        {activeTab==='message'&&role==='doctor'&&<>
+          <SecLabel>Message this patient</SecLabel>
+          <div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+            ◇ Sent directly to {patient.name}'s Medsa app — visible to them under their own messages.
+          </div>
+          <Card style={{padding:'16px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Subject (optional)</div>
+            <input value={patientMsgSubject} onChange={e=>setPatientMsgSubject(e.target.value)} placeholder="e.g. Follow-up on your last visit" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Message</div>
+            <textarea value={patientMsgBody} onChange={e=>setPatientMsgBody(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px',boxSizing:'border-box'}} rows={4} placeholder="Write a personal note to this patient…"/>
+            {patientMsgError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{patientMsgError}</div>}
+            {patientMsgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Message sent to patient</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleSendPatientMessage(patient.id, `Dr ${patient.name?.split(' ')[0]||''}`.trim()||'Your doctor')} disabled={patientMsgSaving}>{patientMsgSaving?'Sending…':'Send to patient'}</Btn>
+          </Card>
         </>}
       </div>
       <PrescribeModal open={showPrescribeModal} onClose={()=>setShowPrescribeModal(false)} patientMedsaId={patient.id}/>
