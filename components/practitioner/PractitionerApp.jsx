@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -38,7 +38,7 @@ const ROLES = {
 }
 
 const ACCESS = {
-  admin:        {identity:true,vitals:true,history:true,medications:true,allergies:true,mental:true,imaging:true,labs:true,prescribe:false,dispense:false,admin_perms:true,admission_reason:true},
+  admin:        {identity:true,vitals:false,history:true,medications:true,allergies:true,mental:true,imaging:true,labs:true,prescribe:false,dispense:false,admin_perms:true,admission_reason:true},
   dept_head:    {identity:true,vitals:true,history:true,medications:true,allergies:true,imaging:true,labs:true,prescribe:true,dispense:false,admission_reason:true},
   doctor:       {identity:true,vitals:true,history:true,medications:true,allergies:true,imaging:true,labs:true,prescribe:true,dispense:false,admission_reason:true},
   nurse:        {identity:true,vitals:true,medications:true,allergies:true,tasks:true,prescribe:false,dispense:false,admission_reason:true},
@@ -512,7 +512,7 @@ function PatientSearchScreen({ role, liveData={} }) {
       access.vitals&&{key:'vitals',label:'Vitals'},
       access.history&&{key:'history',label:'History'},
       access.medications&&{key:'medications',label:'Meds'},
-      (access.prescribe||role==='doctor'||role==='dept_head'||role==='admin')&&{key:'log',label:'Log'},
+      (access.prescribe||role==='doctor'||role==='dept_head')&&{key:'log',label:'Log'},
     ].filter(Boolean)
     return (
       <>
@@ -741,7 +741,7 @@ function PatientSearchScreen({ role, liveData={} }) {
           {(role==='nurse'||role==='clinic_nurse')&&'Vitals, medications, allergies, care tasks. Clinic nurses can dispense.'}
           {role==='therapist'&&'Specialty notes + consented cross-specialty context — e.g. diabetes flag visible to optometrist if relevant to treatment'}
           {role==='allied'&&'Specialty view + relevant consented health context from other providers'}
-          {role==='admin'&&'Full administrative and clinical view across all departments'}
+          {role==='admin'&&'Administrative and operational view across all departments — staffing, bed management, records access. Not for clinical logging unless also rostered as a treating clinician.'}
         </div>
       </div>
       <SecLabel>Or search manually</SecLabel>
@@ -835,36 +835,97 @@ function ScheduleScreen({ role }) {
 }
 
 // ── MESSAGES ──────────────────────────────────────────────────────────────────
-function MessagesScreen() {
+function MessagesScreen({ role }) {
   const [composing,setComposing]=useState(false)
-  const msgs=[
-    {from:'Head of Dept',time:'Today 08:00',text:'New triage protocol effective Monday. See attached guidelines.',unread:true},
-    {from:'Admin',time:'Yesterday',text:'System maintenance Sat 02:00–04:00. Medsa will be in read-only mode.',unread:true},
-    {from:'Dr Ho Ka-fai',time:'Mon 23 Jun',text:'Can you cover my Friday afternoon slot?',unread:false},
-    {from:'Pharmacy',time:'Sun 22 Jun',text:'Metformin stock updated. All prescriptions cleared.',unread:false},
-  ]
+  const [msgs,setMsgs]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [openMsg,setOpenMsg]=useState(null)
+  const [toField,setToField]=useState('')
+  const [bodyField,setBodyField]=useState('')
+  const [sending,setSending]=useState(false)
+  const [error,setError]=useState(null)
+
+  const myName = ROLES[role]?.label || 'Staff'
+
+  async function loadMessages() {
+    setLoading(true)
+    const { data } = await supabase.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(50)
+    setMsgs(data||[])
+    setLoading(false)
+  }
+
+  useEffect(() => { loadMessages() }, [])
+
+  async function handleOpen(m) {
+    setOpenMsg(m)
+    if (!m.read) {
+      await supabase.from('staff_messages').update({ read: true }).eq('id', m.id)
+      setMsgs(prev=>prev.map(x=>x.id===m.id?{...x,read:true}:x))
+    }
+  }
+
+  async function handleSend() {
+    if (!toField.trim() || !bodyField.trim()) { setError('Enter a recipient and a message.'); return }
+    setSending(true)
+    setError(null)
+    const { error: insErr } = await supabase.from('staff_messages').insert({
+      sender_name: myName,
+      recipient_name: toField,
+      body: bodyField,
+      read: false,
+    })
+    setSending(false)
+    if (insErr) { setError(insErr.message); return }
+    setToField(''); setBodyField(''); setComposing(false)
+    loadMessages()
+  }
+
+  if (openMsg) return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{padding:'12px 16px 4px'}}>
+        <div onClick={()=>setOpenMsg(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back to messages</div>
+      </div>
+      <Card style={{padding:'18px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'10px'}}>
+          <div>
+            <div style={{fontSize:'14px',fontWeight:700}}>{openMsg.sender_name}</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>to {openMsg.recipient_name}</div>
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{new Date(openMsg.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+        </div>
+        <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{openMsg.body}</div>
+      </Card>
+      <div style={{padding:'0 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setToField(openMsg.sender_name);setOpenMsg(null);setComposing(true)}}>Reply</Btn>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>Messages</SecLabel>
-      {msgs.map((m,i)=>(
-        <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-          <div style={{width:36,height:36,borderRadius:'10px',background:m.unread?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:m.unread?C.green:C.textMuted,flexShrink:0}}>{m.from[0]}</div>
+      {loading&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading…</div>}
+      {!loading&&msgs.length===0&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>No messages yet.</div>}
+      {msgs.map((m)=>(
+        <Card key={m.id} onClick={()=>handleOpen(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+          <div style={{width:36,height:36,borderRadius:'10px',background:!m.read?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read?C.green:C.textMuted,flexShrink:0}}>{m.sender_name[0]}</div>
           <div style={{flex:1}}>
-            <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:m.unread?700:500}}>{m.from}</span><span style={{fontSize:'11px',color:C.textMuted}}>{m.time}</span></div>
-            <div style={{fontSize:'12px',color:m.unread?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.text}</div>
+            <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:!m.read?700:500}}>{m.sender_name}</span><span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span></div>
+            <div style={{fontSize:'12px',color:!m.read?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div>
           </div>
-          {m.unread&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
+          {!m.read&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
         </Card>
       ))}
       {composing&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New message</div>
-          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',marginBottom:'8px'}} placeholder="To: name or department…"/>
-          <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px'}} rows={3} placeholder="Message…"/>
-          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>setComposing(false)}>Cancel</Btn><Btn variant="primary" style={{flex:1}}>Send</Btn></div>
+          <input value={toField} onChange={e=>setToField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',marginBottom:'8px',boxSizing:'border-box'}} placeholder="To: name or department…"/>
+          <textarea value={bodyField} onChange={e=>setBodyField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}} rows={3} placeholder="Message…"/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
         </Card>
       )}
-      <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setComposing(true)}>+ Compose message</Btn></div>
+      {!composing&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setComposing(true)}>+ Compose message</Btn></div>}
     </div>
   )
 }
@@ -944,7 +1005,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
         {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData}/>}
         {screen==='schedule'&&<ScheduleScreen role={role}/>}
-        {screen==='messages'&&<MessagesScreen/>}
+        {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
