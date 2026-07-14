@@ -133,7 +133,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
   )
 }
 
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented, patient={} }) {
+function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, emergencyConsented, patient={} }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -241,6 +241,14 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, emergencyConsented, pat
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{isEn?'They see what their role permits · You control the rest':'他們只看到其職責所允許的內容'}</div>
           </div>
         </div>
+      </div>
+      <div onClick={onOpenShare} style={{margin:'10px 16px 0',background:C.card,borderRadius:'12px',padding:'12px 14px',cursor:'pointer',display:'flex',alignItems:'center',gap:'10px'}}>
+        <span style={{fontSize:'16px',color:C.textSub}}>{'\u25c7'}</span>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'12px',fontWeight:600}}>{isEn?'Share for this visit':'為此次診症分享'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'For a clinic that doesn\u2019t use Medsa - choose what to share':'為未使用Medsa的診所選擇分享內容'}</div>
+        </div>
+        <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
@@ -1483,6 +1491,108 @@ function SelfRegisterFlow({ onBack, onComplete }) {
   )
 }
 
+// ── SHARE FOR THIS VISIT — expiring, consent-scoped code for a non-Medsa clinic ──
+// The permanent QR still works instantly for participating clinics. This is
+// the separate mechanism for a clinic with no Medsa system at all: the
+// patient picks exactly what to disclose for this specific visit, generates
+// a short code with an expiry, and hands it to the clinic themselves - the
+// clinic then enters it on a public, non-authenticated page to view (and
+// download) just that tier of information.
+function ShareForVisitModal({ open, onClose, patient }) {
+  const [tiers,setTiers]=useState({ allergies:true, conditions:true, medications:true, vaccinations:false, fullHistory:false })
+  const [reason,setReason]=useState('')
+  const [expiryMinutes,setExpiryMinutes]=useState(60)
+  const [saving,setSaving]=useState(false)
+  const [generatedCode,setGeneratedCode]=useState(null)
+  const [error,setError]=useState(null)
+
+  if (!open) return null
+
+  function toggleTier(key) { setTiers({...tiers,[key]:!tiers[key]}) }
+
+  async function handleGenerate() {
+    setSaving(true)
+    setError(null)
+    try {
+      const medsaId = patient?.medsa_id
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
+
+      const code = Math.random().toString(36).slice(2,8).toUpperCase()
+      const expiresAt = new Date(Date.now() + expiryMinutes*60*1000).toISOString()
+
+      const { error: insErr } = await supabase.from('patient_share_links').insert({
+        patient_id: patientRow.id,
+        code,
+        include_allergies: tiers.allergies,
+        include_conditions: tiers.conditions,
+        include_medications: tiers.medications,
+        include_vaccinations: tiers.vaccinations,
+        include_full_history: tiers.fullHistory,
+        reason_note: reason || null,
+        expires_at: expiresAt,
+      })
+      if (insErr) throw insErr
+      setGeneratedCode(code)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleClose() {
+    setGeneratedCode(null); setReason(''); setError(null)
+    onClose()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={handleClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        {!generatedCode ? <>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Share for this visit</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>For a clinic that doesn't use Medsa. Choose what to share - a routine visit needs less than something like a vaccination.</div>
+
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
+            {[
+              {key:'allergies',label:'Allergies'},
+              {key:'conditions',label:'Active conditions'},
+              {key:'medications',label:'Current medications'},
+              {key:'vaccinations',label:'Vaccination history'},
+              {key:'fullHistory',label:'Full medical history'},
+            ].map(item=>(
+              <div key={item.key} onClick={()=>toggleTier(item.key)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${tiers[item.key]?C.green:C.border}`,background:tiers[item.key]?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{tiers[item.key]?'\u2713':''}</div>
+                <span style={{fontSize:'13px'}}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>What's this visit for? (optional, for your own reference)</div>
+          <input value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Flu vaccination" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box'}}/>
+
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Code expires after</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
+            {[[30,'30 min'],[60,'1 hour'],[240,'4 hours']].map(([mins,label])=>(
+              <div key={mins} onClick={()=>setExpiryMinutes(mins)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:expiryMinutes===mins?C.green:C.card,color:expiryMinutes===mins?'#fff':C.textSub}}>{label}</div>
+            ))}
+          </div>
+
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleGenerate} disabled={saving}>{saving?'Generating...':'Generate code'}</Btn>
+        </> : <>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>Give this code to the clinic</div>
+            <div style={{fontSize:'32px',fontWeight:700,letterSpacing:'4px',color:C.green,marginBottom:'10px'}}>{generatedCode}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Valid for {expiryMinutes>=60?`${expiryMinutes/60} hour(s)`:`${expiryMinutes} minutes`}. They'll enter it at medsa.health/share to view and download what you've chosen to share.</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleClose}>Done</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
 export default function PatientApp({ liveData={} }) {
   const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
   const [showGate,setShowGate]=useState(!liveData.patient)
@@ -1502,6 +1612,7 @@ export default function PatientApp({ liveData={} }) {
   const [screen,setScreen]=useState('home')
   const [isEn,setIsEn]=useState(true)
   const [emergencyOpen,setEmergencyOpen]=useState(false)
+  const [shareOpen,setShareOpen]=useState(false)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
@@ -1515,7 +1626,7 @@ export default function PatientApp({ liveData={} }) {
         <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} emergencyConsented={emergencyConsented} patient={patient}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} emergencyConsented={emergencyConsented} patient={patient}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
@@ -1542,6 +1653,7 @@ export default function PatientApp({ liveData={} }) {
         liveMedications={liveMedications}
         patient={patient}
       />
+      <ShareForVisitModal open={shareOpen} onClose={()=>setShareOpen(false)} patient={patient}/>
     </div>
   )
 }
