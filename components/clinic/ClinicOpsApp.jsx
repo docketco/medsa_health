@@ -895,7 +895,7 @@ function ScheduleScreen() {
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
           <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}} placeholder="Patient name or Medsa ID"/>
           <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
-            <input style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}} placeholder="Time"/>
+            <input style={{flex:1,border:`0.5px solid ${C.border}`,borde  rRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}} placeholder="Time"/>
             <select style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px'}}><option>Dr Chan</option><option>Dr Lam</option></select>
           </div>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowNewApptForm(false)}>Confirm booking</Btn>
