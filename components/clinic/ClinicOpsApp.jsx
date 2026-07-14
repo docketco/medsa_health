@@ -952,6 +952,7 @@ function PaymentScreen({ staffMember, institutionId }) {
   }
 
   function exportCSV() {
+    if (typeof window === 'undefined') return // SSR safety guard
     const headers = ['Date','Patient','Consultation Fee','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
     const rows = ledger.map(t => [
       new Date(t.created_at).toLocaleString('en-HK'),
@@ -1668,4 +1669,3 @@ export default function ClinicOpsApp() {
     </div>
   )
 }
-v
