@@ -836,7 +836,7 @@ function ScheduleScreen({ role }) {
 
 // ── MESSAGES ──────────────────────────────────────────────────────────────────
 function MessagesScreen({ role }) {
-  const isReadOnly = role==='admin' // institution admin can view messages but not compose, reply, or delete
+  const isReadOnly = false // reverted per feedback - admin can compose/reply/delete like everyone else
   const [composing,setComposing]=useState(false)
   const [msgs,setMsgs]=useState([])
   const [loading,setLoading]=useState(true)
