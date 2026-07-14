@@ -836,10 +836,11 @@ function ScheduleScreen({ role }) {
 
 // ── MESSAGES ──────────────────────────────────────────────────────────────────
 function MessagesScreen({ role }) {
+  const isReadOnly = role==='admin' // institution admin can view messages but not compose, reply, or delete
   const [composing,setComposing]=useState(false)
   const [msgs,setMsgs]=useState([])
   const [loading,setLoading]=useState(true)
-  const [openThread,setOpenThread]=useState(null) // array of messages in one conversation
+  const [openThread,setOpenThread]=useState(null)
   const [toField,setToField]=useState('')
   const [bodyField,setBodyField]=useState('')
   const [sending,setSending]=useState(false)
@@ -853,31 +854,24 @@ function MessagesScreen({ role }) {
     setLoading(true)
     const { data } = await supabase.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(100)
     setMsgs(data||[])
-    // Build a recipient suggestion list from everyone who's appeared as a
-    // sender or recipient so far, since there's no separate staff directory.
     const names = new Set()
     ;(data||[]).forEach(m=>{ names.add(m.sender_name); names.add(m.recipient_name) })
     Object.values(ROLES).forEach(r=>names.add(r.label))
     names.add('All Staff')
     setKnownRecipients([...names].filter(n=>n && n!==myName).sort())
     setLoading(false)
+    return data||[]
   }
 
   useEffect(() => { loadMessages() }, [])
 
-  // A thread is identified by thread_id if set, otherwise by the message's
-  // own id (meaning it's the root of its own conversation).
   function threadKey(m) { return m.thread_id || m.id }
 
-  // Group all messages sharing a thread into one list, latest last, so
-  // opening any message in a conversation shows the whole conversation.
-  function getThread(m) {
+  function getThreadFrom(list, m) {
     const key = threadKey(m)
-    return msgs.filter(x=>threadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
+    return list.filter(x=>threadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
   }
 
-  // For the inbox list, only show the latest message per thread, not every
-  // individual reply as its own row.
   const threadsLatestFirst = Object.values(
     msgs.reduce((acc,m)=>{
       const key = threadKey(m)
@@ -887,7 +881,7 @@ function MessagesScreen({ role }) {
   ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
 
   async function handleOpen(m) {
-    const thread = getThread(m)
+    const thread = getThreadFrom(msgs, m)
     setOpenThread(thread)
     const unreadIds = thread.filter(x=>!x.read).map(x=>x.id)
     if (unreadIds.length>0) {
@@ -900,9 +894,8 @@ function MessagesScreen({ role }) {
     if (!toField.trim() || !bodyField.trim()) { setError('Enter a recipient and a message.'); return }
     setSending(true)
     setError(null)
-    // If replying inside an open thread, attach to that same thread_id so
-    // it groups as one conversation instead of a disconnected new message.
-    const replyThreadId = openThread ? threadKey(openThread[0]) : null
+    const isReply = !!openThread
+    const replyThreadId = isReply ? threadKey(openThread[0]) : null
     const { error: insErr } = await supabase.from('staff_messages').insert({
       sender_name: myName,
       recipient_name: toField,
@@ -912,7 +905,31 @@ function MessagesScreen({ role }) {
     })
     setSending(false)
     if (insErr) { setError(insErr.message); return }
-    setToField(''); setBodyField(''); setComposing(false); setOpenThread(null)
+    setBodyField(''); setComposing(false); setError(null)
+    const fresh = await loadMessages()
+    if (isReply) {
+      // Stay inside the conversation, showing the reply appended - this is
+      // the actual fix: previously this closed back to the inbox, which
+      // made a reply look like a disconnected new message popping up top.
+      setOpenThread(getThreadFrom(fresh, openThread[0]))
+    } else {
+      setToField('')
+    }
+  }
+
+  async function handleDeleteMessage(id) {
+    await supabase.from('staff_messages').delete().eq('id', id)
+    const fresh = await loadMessages()
+    if (openThread) {
+      const remaining = getThreadFrom(fresh, openThread[0])
+      if (remaining.length===0) setOpenThread(null)
+      else setOpenThread(remaining)
+    }
+  }
+
+  async function handleDeleteThread(m) {
+    const thread = getThreadFrom(msgs, m)
+    await supabase.from('staff_messages').delete().in('id', thread.map(x=>x.id))
     loadMessages()
   }
 
@@ -922,19 +939,23 @@ function MessagesScreen({ role }) {
         <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back to messages</div>
       </div>
       <div style={{padding:'0 16px'}}>
-        {openThread.map((m,i)=>(
+        {openThread.map((m)=>(
           <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_name===myName?C.greenXLight:C.cream}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
               <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_name}</span>
-              <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+                {!isReadOnly&&<span onClick={()=>handleDeleteMessage(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title="Delete message">✕</span>}
+              </div>
             </div>
             <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
           </Card>
         ))}
       </div>
-      {!composing&&<div style={{padding:'8px 16px 16px'}}>
+      {!isReadOnly&&!composing&&<div style={{padding:'8px 16px 16px'}}>
         <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setToField(openThread[0].sender_name===myName?openThread[0].recipient_name:openThread[0].sender_name);setComposing(true)}}>Reply</Btn>
       </div>}
+      {isReadOnly&&<div style={{padding:'8px 16px 16px',fontSize:'11px',color:C.textMuted,textAlign:'center'}}>◇ Read-only view — Institution Admin cannot reply or delete</div>}
       {composing&&(
         <div style={{padding:'0 16px 16px'}}>
           <Card style={{padding:'16px'}}>
@@ -950,20 +971,21 @@ function MessagesScreen({ role }) {
 
   return (
     <div style={{background:C.beige,flex:1}}>
-      <SecLabel>Messages</SecLabel>
+      <SecLabel>Messages{isReadOnly&&' (Read-only)'}</SecLabel>
       {loading&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading…</div>}
       {!loading&&threadsLatestFirst.length===0&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>No messages yet.</div>}
       {threadsLatestFirst.map((m)=>(
-        <Card key={m.id} onClick={()=>handleOpen(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-          <div style={{width:36,height:36,borderRadius:'10px',background:!m.read?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read?C.green:C.textMuted,flexShrink:0}}>{m.sender_name[0]}</div>
-          <div style={{flex:1}}>
+        <Card key={m.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+          <div onClick={()=>handleOpen(m)} style={{width:36,height:36,borderRadius:'10px',background:!m.read?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read?C.green:C.textMuted,flexShrink:0,cursor:'pointer'}}>{m.sender_name[0]}</div>
+          <div onClick={()=>handleOpen(m)} style={{flex:1,cursor:'pointer'}}>
             <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:!m.read?700:500}}>{m.sender_name}</span><span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span></div>
             <div style={{fontSize:'12px',color:!m.read?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div>
           </div>
           {!m.read&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
+          {!isReadOnly&&<span onClick={()=>handleDeleteThread(m)} style={{fontSize:'13px',color:C.textMuted,cursor:'pointer',flexShrink:0}} title="Delete conversation">✕</span>}
         </Card>
       ))}
-      {composing&&(
+      {!isReadOnly&&composing&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New message</div>
           <div style={{position:'relative',marginBottom:'8px'}}>
@@ -986,7 +1008,8 @@ function MessagesScreen({ role }) {
           <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
         </Card>
       )}
-      {!composing&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setComposing(true)}>+ Compose message</Btn></div>}
+      {!isReadOnly&&!composing&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setComposing(true)}>+ Compose message</Btn></div>}
+      {isReadOnly&&<div style={{padding:'8px 16px 16px',fontSize:'11px',color:C.textMuted,textAlign:'center'}}>◇ Institution Admin has read-only access to messages</div>}
     </div>
   )
 }
