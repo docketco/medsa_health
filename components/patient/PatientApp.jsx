@@ -338,26 +338,81 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [expanded,setExpanded]=useState(null)
   const [doctorMessages,setDoctorMessages]=useState([])
   const [messagesLoading,setMessagesLoading]=useState(true)
-  const [openDoctorMsg,setOpenDoctorMsg]=useState(null)
+  const [openThread,setOpenThread]=useState(null) // array of messages in one conversation
+  const [patientPatientId,setPatientPatientId]=useState(null)
+  const [replyBody,setReplyBody]=useState('')
+  const [replying,setReplying]=useState(false)
+  const [replyError,setReplyError]=useState(null)
 
-  useEffect(() => {
-    async function loadDoctorMessages() {
-      const medsaId = patient?.medsa_id
-      if (!medsaId) { setMessagesLoading(false); return }
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) { setMessagesLoading(false); return }
-      const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false})
-      setDoctorMessages(data||[])
-      setMessagesLoading(false)
-    }
-    loadDoctorMessages()
-  }, [patient?.medsa_id])
+  function msgThreadKey(m) { return m.thread_id || m.id }
+
+  async function loadDoctorMessages() {
+    setMessagesLoading(true)
+    const medsaId = patient?.medsa_id
+    if (!medsaId) { setMessagesLoading(false); return [] }
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setMessagesLoading(false); return [] }
+    setPatientPatientId(patientRow.id)
+    const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false})
+    setDoctorMessages(data||[])
+    setMessagesLoading(false)
+    return data||[]
+  }
+
+  useEffect(() => { loadDoctorMessages() }, [patient?.medsa_id])
+
+  // One entry per conversation in the list, showing only the latest message.
+  const doctorThreadsLatestFirst = Object.values(
+    doctorMessages.reduce((acc,m)=>{
+      const key = msgThreadKey(m)
+      if (!acc[key] || new Date(m.created_at) > new Date(acc[key].created_at)) acc[key] = m
+      return acc
+    }, {})
+  ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
+
+  function getThreadFrom(list, m) {
+    const key = msgThreadKey(m)
+    return list.filter(x=>msgThreadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
+  }
 
   async function handleOpenDoctorMsg(m) {
-    setOpenDoctorMsg(m)
-    if (!m.read_by_patient) {
-      await supabase.from('patient_messages').update({ read_by_patient: true }).eq('id', m.id)
-      setDoctorMessages(prev=>prev.map(x=>x.id===m.id?{...x,read_by_patient:true}:x))
+    const thread = getThreadFrom(doctorMessages, m)
+    setOpenThread(thread)
+    const unreadIds = thread.filter(x=>!x.read_by_patient).map(x=>x.id)
+    if (unreadIds.length>0) {
+      await supabase.from('patient_messages').update({ read_by_patient: true }).in('id', unreadIds)
+      setDoctorMessages(prev=>prev.map(x=>unreadIds.includes(x.id)?{...x,read_by_patient:true}:x))
+    }
+  }
+
+  async function handleReplyToDoctor() {
+    if (!replyBody.trim() || !openThread) return
+    setReplying(true)
+    setReplyError(null)
+    const rootMsg = openThread[0]
+    const { error: insErr } = await supabase.from('patient_messages').insert({
+      patient_id: patientPatientId,
+      doctor_name: rootMsg.doctor_name, // kept so the conversation stays labelled with the same doctor
+      body: replyBody,
+      sender_type: 'patient',
+      thread_id: msgThreadKey(rootMsg),
+      read_by_patient: true, // the patient's own message doesn't need to show unread to themselves
+    })
+    setReplying(false)
+    if (insErr) { setReplyError(insErr.message); return }
+    setReplyBody('')
+    const fresh = await loadDoctorMessages()
+    setOpenThread(getThreadFrom(fresh, rootMsg))
+  }
+
+  async function handleDeleteOwnReply(id) {
+    // Patients can only delete their own replies, never the doctor's
+    // original message, since that may be clinically important to keep.
+    await supabase.from('patient_messages').delete().eq('id', id).eq('sender_type', 'patient')
+    const fresh = await loadDoctorMessages()
+    if (openThread) {
+      const remaining = getThreadFrom(fresh, openThread[0])
+      setOpenThread(remaining.length>0 ? remaining : null)
     }
   }
 
@@ -437,6 +492,53 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           </Card>
         ))}
         <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>
+
+        <SecLabel>{isEn?'Messages from your doctor':'醫生的訊息'}</SecLabel>
+        {messagesLoading&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
+        {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
+        {openThread ? (
+          <div style={{padding:'0 16px'}}>
+            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{isEn?'← Back':'← 返回'}</div>
+            {openThread.map((m)=>(
+              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?C.greenXLight:(m.urgent?C.redLight:C.cream)}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                    <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(isEn?'You':'您'):m.doctor_name}</span>
+                    {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                    <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+                    {m.sender_type==='patient'&&<span onClick={()=>handleDeleteOwnReply(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
+                  </div>
+                </div>
+                {m.subject&&<div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{m.subject}</div>}
+                <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
+              </Card>
+            ))}
+            <Card style={{padding:'14px 16px',marginTop:'8px'}}>
+              <textarea value={replyBody} onChange={e=>setReplyBody(e.target.value)} rows={3} placeholder={isEn?'Write a reply…':'撰寫回覆…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
+              {replyError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{replyError}</div>}
+              <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(isEn?'Sending…':'傳送中…'):(isEn?'Send reply':'傳送回覆')}</Btn>
+            </Card>
+          </div>
+        ) : (
+          doctorThreadsLatestFirst.map((m)=>(
+            <Card key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start',border:m.urgent?`1.5px solid ${C.red}`:undefined}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:m.urgent?C.redLight:(!m.read_by_patient?C.greenLight:C.card),display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:m.urgent?C.red:(!m.read_by_patient?C.green:C.textMuted),flexShrink:0}}>{m.doctor_name[0]}</div>
+              <div style={{flex:1}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'6px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                    <span style={{fontSize:'13px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
+                    {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px'}}>Urgent</span>}
+                  </div>
+                  <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+                </div>
+                <div style={{fontSize:'12px',color:!m.read_by_patient?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
+              </div>
+              {!m.read_by_patient&&<div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:C.green,flexShrink:0,marginTop:'4px'}}/>}
+            </Card>
+          ))
+        )}
       </>}
       {tab==='sharing'&&<>
         <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
@@ -474,35 +576,6 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>Allergy test results.pdf</div><div style={{fontSize:'11px',color:C.textSub}}>Uploaded 9 Jan · Awaiting verification</div></div>
           <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}}>Send for review</Btn>
         </Card>
-
-        <SecLabel>{isEn?'Messages from your doctor':'醫生的訊息'}</SecLabel>
-        {messagesLoading&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
-        {!messagesLoading&&doctorMessages.length===0&&<div style={{padding:'16px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
-        {openDoctorMsg ? (
-          <Card style={{padding:'16px',margin:'0 16px'}}>
-            <div onClick={()=>setOpenDoctorMsg(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{isEn?'← Back':'← 返回'}</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{openDoctorMsg.doctor_name} · {new Date(openDoctorMsg.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
-            {openDoctorMsg.subject&&<div style={{fontSize:'14px',fontWeight:700,marginBottom:'8px'}}>{openDoctorMsg.subject}</div>}
-            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{openDoctorMsg.body}</div>
-          </Card>
-        ) : (
-          doctorMessages.map((m)=>(
-            <Card key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start',border:m.urgent?`1.5px solid ${C.red}`:undefined}}>
-              <div style={{width:36,height:36,borderRadius:'10px',background:m.urgent?C.redLight:(!m.read_by_patient?C.greenLight:C.card),display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:m.urgent?C.red:(!m.read_by_patient?C.green:C.textMuted),flexShrink:0}}>{m.doctor_name[0]}</div>
-              <div style={{flex:1}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'6px'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                    <span style={{fontSize:'13px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
-                    {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px'}}>Urgent</span>}
-                  </div>
-                  <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-                </div>
-                <div style={{fontSize:'12px',color:!m.read_by_patient?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.subject||m.body}</div>
-              </div>
-              {!m.read_by_patient&&<div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:C.green,flexShrink:0,marginTop:'4px'}}/>}
-            </Card>
-          ))
-        )}
       </>}
     </div>
   )
