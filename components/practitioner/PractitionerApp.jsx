@@ -1292,7 +1292,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
           ◇ Tap a patient to video call, message, or open their full record.
         </div>}
         {isReceptionist&&<div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
-          ◇ Booking and scheduling changes work for any patient. Clinical details are only visible for patients within their own 12-hour consent window from booking - see each patient's badge below.
+          ◇ Booking and scheduling changes work for any patient. Clinical details are only visible for patients within their own 48-hour consent window from booking (12h before, the appointment day, 12h after) - see each patient's badge below.
         </div>}
         {appts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No appointments scheduled for {selectedDay}.</div>}
         {[...appts].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
