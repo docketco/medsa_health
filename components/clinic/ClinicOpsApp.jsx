@@ -992,15 +992,36 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
   const [notesDraft,setNotesDraft]=useState('')
+  const [fullPatient,setFullPatient]=useState(null)
+  const [loadingPatient,setLoadingPatient]=useState(true)
+
+  // Show real patient info here - the same view as when their Medsa ID is
+  // scanned at check-in - not just a bare scheduling row.
+  useEffect(() => {
+    async function loadPatient() {
+      if (!appt?.medsaId) { setLoadingPatient(false); return }
+      setLoadingPatient(true)
+      const { data } = await supabase.from('patients').select('*').eq('medsa_id', appt.medsaId).maybeSingle()
+      setFullPatient(data || null)
+      setLoadingPatient(false)
+    }
+    loadPatient()
+  }, [appt?.medsaId])
 
   if (!appt || appt.status==='open') return null
+
+  // Full diagnosis access requires both being within the patient's own
+  // consent window AND having actually checked in - being scheduled for
+  // today alone isn't enough to log a new diagnosis.
+  const isCheckedIn = appt.status==='checked_in'
+  const canLogDiagnosis = withinDataWindow && isCheckedIn
 
   // Only offer doctors in the same department/specialty as this
   // appointment - switching to an unrelated specialty wouldn't make sense.
@@ -1010,13 +1031,29 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:420,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
-          <div>
-            <div style={{fontSize:'16px',fontWeight:700}}>{appt.patient}</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>{appt.time} · {appt.doctor} · {appt.type}</div>
+        <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>Close</div>
+
+        {loadingPatient&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>Loading patient…</div>}
+
+        {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
+          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCheckedIn?'✓ Checked in':'Scheduled'}</div>
+          <div style={{fontSize:'17px',fontWeight:700}}>{fullPatient.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{fullPatient.medsa_id} · DOB {new Date(fullPatient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          <div style={{display:'flex',gap:'10px'}}>
+            <div style={{flex:1,background:'#fff',borderRadius:'8px',padding:'8px',textAlign:'center'}}>
+              <div style={{fontSize:'10px',color:C.textMuted}}>Blood type</div>
+              <div style={{fontSize:'15px',fontWeight:700,color:C.red}}>{fullPatient.blood_type||'-'}</div>
+            </div>
+            <div style={{flex:2,background:'#fff',borderRadius:'8px',padding:'8px'}}>
+              <div style={{fontSize:'10px',color:C.textMuted}}>Visit</div>
+              <div style={{fontSize:'12px',fontWeight:600}}>{appt.time} · {appt.type}</div>
+            </div>
           </div>
-          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
-        </div>
+        </div>}
+
+        {!loadingPatient&&!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
+          ◇ {appt.patient} · {appt.time} · {appt.type} — outside this patient's 48-hour consent window, so clinical details aren't shown here. Scheduling changes still work below.
+        </div>}
 
         {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
           <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
@@ -1036,6 +1073,9 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
           <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
+          {canLogDiagnosis
+            ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
+            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in{!withinDataWindow?' and is within their consent window':''}</div>}
         </div>}
 
         {mode==='reschedule'&&<>
@@ -1088,7 +1128,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
   )
 }
 
-function ScheduleScreen({ staffMember }) {
+function ScheduleScreen({ staffMember, onGoToConsultation }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -1099,6 +1139,45 @@ function ScheduleScreen({ staffMember }) {
     return d
   })
   const [showNewApptForm,setShowNewApptForm]=useState(false)
+  const [newApptSearch,setNewApptSearch]=useState('')
+  const [newApptPatient,setNewApptPatient]=useState(null)
+  const [newApptTime,setNewApptTime]=useState('')
+  const [newApptDoctor,setNewApptDoctor]=useState('Dr Chan Siu-ming')
+  const [newApptReason,setNewApptReason]=useState('')
+  const [newApptSaving,setNewApptSaving]=useState(false)
+  const [newApptError,setNewApptError]=useState(null)
+
+  async function handleNewApptSearch() {
+    if (!newApptSearch.trim()) return
+    const { data } = await supabase.from('patients').select('*')
+      .or(`medsa_id.ilike.%${newApptSearch}%,full_name.ilike.%${newApptSearch}%`).limit(1).maybeSingle()
+    setNewApptPatient(data || null)
+    setNewApptError(data ? null : 'No patient found matching that name or Medsa ID.')
+  }
+
+  async function handleConfirmNewAppt() {
+    if (!newApptPatient || !newApptTime) return
+    setNewApptSaving(true)
+    setNewApptError(null)
+    const doctorInfo = DOCTOR_DIRECTORY.find(d=>d.name===newApptDoctor)
+    const scheduledAt = new Date(selectedDay)
+    const [h,m] = newApptTime.split(':').map(Number)
+    scheduledAt.setHours(h||9, m||0, 0, 0)
+    const { error: insErr } = await supabase.from('appointments').insert({
+      patient_id: newApptPatient.id,
+      doctor_name: newApptDoctor,
+      department: doctorInfo?.department || null,
+      scheduled_at: scheduledAt.toISOString(),
+      appointment_type: newApptReason || 'Consultation',
+      status: 'confirmed',
+    })
+    setNewApptSaving(false)
+    if (insErr) { setNewApptError(insErr.message); return }
+    setShowNewApptForm(false)
+    setNewApptSearch(''); setNewApptPatient(null); setNewApptTime(''); setNewApptReason('')
+    loadRealAppointments(selectedDay)
+  }
+
   const demoAppointments = [
     {time:'09:00', patient:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
     {time:'09:30', patient:'Chan Tai-man', medsaId:'MDS-77213-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
@@ -1172,7 +1251,17 @@ function ScheduleScreen({ staffMember }) {
     return dataWindows[medsaId]?.allowed || false
   }
 
-  function handleSaveAppt(updated) {
+  async function handleSaveAppt(updated) {
+    if (updated.cancelled && updated.isReal && updated.medsaId) {
+      // Real booking (not demo data) - actually cancel it in Supabase,
+      // not just remove it from the local list.
+      const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', updated.medsaId).maybeSingle()
+      if (pRow) {
+        const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
+        const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+        await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+      }
+    }
     setAppointments(prev => {
       const idx = prev.indexOf(activeAppt)
       if (updated.cancelled) return prev.filter((_,i)=>i!==idx)
@@ -1215,16 +1304,24 @@ function ScheduleScreen({ staffMember }) {
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt}/>
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation}/>
       {showNewApptForm&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowNewApptForm(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
-          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}} placeholder="Patient name or Medsa ID"/>
-          <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
-            <input style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}} placeholder="Time"/>
-            <select style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px'}}><option>Dr Chan</option><option>Dr Lam</option></select>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input value={newApptSearch} onChange={e=>setNewApptSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleNewApptSearch()} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}} placeholder="Patient name or Medsa ID"/>
+            <Btn onClick={handleNewApptSearch}>Search</Btn>
           </div>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowNewApptForm(false)}>Confirm booking</Btn>
+          {newApptPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginBottom:'12px',fontSize:'12px',color:C.green}}>✓ {newApptPatient.full_name} ({newApptPatient.medsa_id})</div>}
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input value={newApptTime} onChange={e=>setNewApptTime(e.target.value)} type="time" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}}/>
+            <select value={newApptDoctor} onChange={e=>setNewApptDoctor(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px'}}>
+              {DOCTOR_DIRECTORY.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
+            </select>
+          </div>
+          <input value={newApptReason} onChange={e=>setNewApptReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{newApptError}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmNewAppt} disabled={!newApptPatient||!newApptTime||newApptSaving}>{newApptSaving?'Booking…':'Confirm booking'}</Btn>
         </div>
       </div>}
     </PageWrap>
@@ -1997,7 +2094,7 @@ export default function ClinicOpsApp() {
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
-        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember}/>}
+        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
