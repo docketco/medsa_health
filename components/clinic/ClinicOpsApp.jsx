@@ -1089,7 +1089,15 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
 }
 
 function ScheduleScreen({ staffMember }) {
-  const [selectedDay,setSelectedDay]=useState(24)
+  const [selectedDay,setSelectedDay]=useState(() => new Date().getDate())
+  // Real current week (today + 6 days ahead) instead of a fixed hardcoded
+  // month/week - this is what makes the schedule genuinely testable
+  // against real time.
+  const weekDates = Array.from({length:7}, (_,i) => {
+    const d = new Date()
+    d.setDate(d.getDate()+i)
+    return d
+  })
   const [showNewApptForm,setShowNewApptForm]=useState(false)
   const allAppointments = [
     {time:'09:00', patient:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
@@ -1145,11 +1153,11 @@ function ScheduleScreen({ staffMember }) {
         <Btn variant="primary" onClick={()=>setShowNewApptForm(true)}>+ New appointment</Btn>
       </div>
       <Card style={{padding:'16px',marginBottom:'20px'}}>
-        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>June 2026</div>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>{weekDates[0].toLocaleDateString('en-HK',{month:'long',year:'numeric'})}</div>
         <div style={{display:'flex',gap:'8px'}}>
-          {[22,23,24,25,26,27,28].map(d=>(
-            <div key={d} onClick={()=>setSelectedDay(d)} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',background:d===selectedDay?C.green:C.card,color:d===selectedDay?'#fff':C.text,cursor:'pointer'}}>
-              <div style={{fontSize:'16px',fontWeight:600}}>{d}</div>
+          {weekDates.map(d=>(
+            <div key={d.toISOString()} onClick={()=>setSelectedDay(d.getDate())} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',background:d.getDate()===selectedDay?C.green:C.card,color:d.getDate()===selectedDay?'#fff':C.text,cursor:'pointer'}}>
+              <div style={{fontSize:'16px',fontWeight:600}}>{d.getDate()}</div>
             </div>
           ))}
         </div>
