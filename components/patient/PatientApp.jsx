@@ -727,7 +727,7 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [reasonForVisit,setReasonForVisit]=useState('')
   const [symptoms,setSymptoms]=useState('')
   const [currentMeds,setCurrentMeds]=useState('')
-  const [intakeConsent,setIntakeConsent]=useState(false)
+  const [intakeConsent,setIntakeConsent]=useState(true) // opt-out: consented by default, patient can uncheck
   const [intakeSaving,setIntakeSaving]=useState(false)
   const [intakeError,setIntakeError]=useState(null)
   const doctors=[
@@ -744,8 +744,16 @@ function DoctorsScreen({ isEn, patient={} }) {
   })
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   const UNAVAIL=['9:30am','11:00am']
-  const DAYS=[['TUE','24'],['WED','25'],['THU','26'],['FRI','27'],['SAT','28']]
-  const [selDay,setSelDay]=useState('24')
+  // Real upcoming dates starting today, not a fixed hardcoded month - this
+  // is what makes the 48-hour consent window actually testable against
+  // the real current time, instead of always landing in the past.
+  const DAY_LABELS=['SUN','MON','TUE','WED','THU','FRI','SAT']
+  const DAYS = Array.from({length:5}, (_,i) => {
+    const d = new Date()
+    d.setDate(d.getDate()+i)
+    return { label: DAY_LABELS[d.getDay()], date: d.getDate(), fullDate: d }
+  })
+  const [selDay,setSelDay]=useState(DAYS[0].fullDate)
 
   function handleBookClick(doc, type) {
     setSelectedDoctor(doc)
@@ -765,18 +773,25 @@ function DoctorsScreen({ isEn, patient={} }) {
       const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
       if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
 
-      // Build the actual appointment datetime from the selected day/time so
-      // the 12-hour-before/after access window is real, not a placeholder.
+      // Build the actual appointment datetime from the selected day/time,
+      // using the real Date object picked in the calendar - not a fragile
+      // day-of-month string, so this works correctly across month/year
+      // boundaries too.
       const timeMatch = selTime.match(/(\d+):(\d+)(am|pm)/i)
       let hour = timeMatch ? parseInt(timeMatch[1]) : 10
       const minute = timeMatch ? parseInt(timeMatch[2]) : 0
       if (timeMatch && timeMatch[3].toLowerCase()==='pm' && hour!==12) hour += 12
-      const apptDate = new Date()
-      apptDate.setDate(apptDate.getDate() + (parseInt(selDay) - apptDate.getDate()))
+      const apptDate = new Date(selDay)
       apptDate.setHours(hour, minute, 0, 0)
 
-      const windowStart = new Date(apptDate.getTime() - 12*60*60*1000)
-      const windowEnd = new Date(apptDate.getTime() + 12*60*60*1000)
+      // The full window is genuinely 48 hours: 12 hours before the
+      // appointment day starts, the entire appointment day itself (24h),
+      // and 12 hours after the appointment day ends - not just 12h either
+      // side of the exact appointment minute.
+      const dayStart = new Date(apptDate); dayStart.setHours(0,0,0,0)
+      const dayEnd = new Date(apptDate); dayEnd.setHours(23,59,59,999)
+      const windowStart = new Date(dayStart.getTime() - 12*60*60*1000)
+      const windowEnd = new Date(dayEnd.getTime() + 12*60*60*1000)
 
       const { error: insErr } = await supabase.from('appointment_intake').insert({
         patient_id: patientRow.id,
@@ -864,11 +879,14 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
-              {DAYS.map(([day,date])=>(
-                <div key={day} onClick={()=>setSelDay(date)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:selDay===date?C.green:C.card,color:selDay===date?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${selDay===date?C.green:C.border}`}}>
-                  <div style={{fontSize:'10px',opacity:0.8}}>{day}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
+              {DAYS.map(({label,date,fullDate})=>{
+                const isSel = fullDate.toDateString()===selDay.toDateString()
+                return (
+                <div key={fullDate.toISOString()} onClick={()=>setSelDay(fullDate)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
+                  <div style={{fontSize:'10px',opacity:0.8}}>{label}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
                 </div>
-              ))}
+                )
+              })}
             </div>
             <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
               {TIMES.map(t=>{const u=UNAVAIL.includes(t);const s=t===selTime;return(
@@ -895,12 +913,24 @@ function DoctorsScreen({ isEn, patient={} }) {
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Current medications (optional)':'目前藥物（可選）'}</div>
             <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={isEn?'e.g. Metformin 500mg':'例如：二甲雙胍 500mg'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
 
+            <div style={{background:C.blueLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'11px',color:C.navy,lineHeight:1.5}}>
+              {(() => {
+                const dayStart = new Date(selDay); dayStart.setHours(0,0,0,0)
+                const dayEnd = new Date(selDay); dayEnd.setHours(23,59,59,999)
+                const wStart = new Date(dayStart.getTime() - 12*60*60*1000)
+                const wEnd = new Date(dayEnd.getTime() + 12*60*60*1000)
+                const fmt = (d) => d.toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})
+                return isEn
+                  ? `Access window for this booking: ${fmt(wStart)} → ${fmt(wEnd)}`
+                  : `此次預約的查閱時段：${fmt(wStart)} → ${fmt(wEnd)}`
+              })()}
+            </div>
             <div onClick={()=>setIntakeConsent(!intakeConsent)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:intakeConsent?C.greenXLight:C.card,border:`0.5px solid ${intakeConsent?C.green:C.border}`,borderRadius:'10px',cursor:'pointer'}}>
               <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${intakeConsent?C.green:C.border}`,background:intakeConsent?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{intakeConsent?'\u2713':''}</div>
               <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
                 {isEn
-                  ? 'I consent to my treating doctor accessing my relevant records for a window of 12 hours before and 12 hours after this appointment. Access automatically ends outside this window.'
-                  : '我同意主診醫生在此預約前後各12小時內查閱我的相關記錄。此時限以外將自動停止查閱。'}
+                  ? 'I consent to a 48-hour data access window around this appointment: 12 hours before, the full day of the appointment, and 12 hours after. My treating doctor can only access my relevant records during this window - access ends automatically outside it.'
+                  : '我同意一個48小時的資料查閱時段：預約前12小時、預約當日全日、以及預約後12小時。主診醫生只能在此時段內查閱我的相關記錄，時段以外將自動停止查閱。'}
               </div>
             </div>
             {intakeError&&<div style={{fontSize:'12px',color:C.red,marginTop:'10px'}}>{intakeError}</div>}
@@ -910,7 +940,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`Tue ${selDay} Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
+              {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
                 <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>
@@ -932,7 +962,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
             <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
             <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · Tue {selDay} Jun at {selTime}</div>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · {selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} at {selTime}</div>
             {consultType==='video'
               ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
                   <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{isEn?'Join video call now (demo)':'立即加入視像通話（示範）'}</Btn>
@@ -983,26 +1013,53 @@ function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
 }
 
 function CalendarScreen({ isEn, appointments=[], medications=[] }) {
+  const [viewMonth,setViewMonth]=useState(() => { const d=new Date(); d.setDate(1); return d })
+  const [selectedDate,setSelectedDate]=useState(() => new Date())
+
+  function changeMonth(delta) {
+    setViewMonth(prev => { const d=new Date(prev); d.setMonth(d.getMonth()+delta); return d })
+  }
+
+  const monthLabel = viewMonth.toLocaleDateString(isEn?'en-HK':'zh-HK',{month:'long',year:'numeric'})
+  const firstWeekday = (viewMonth.getDay()+6)%7 // Monday-first grid
+  const daysInMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0).getDate()
+  const today = new Date()
+  const isSameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate()
+
+  // Days that have something scheduled - marked with a dot, pulled from
+  // real appointment data when available.
+  const markedDays = new Set(appointments.map(a=>new Date(a.scheduled_at).getDate()).filter(d=>{
+    const apptDate = new Date(appointments.find(a=>new Date(a.scheduled_at).getDate()===d)?.scheduled_at)
+    return apptDate.getMonth()===viewMonth.getMonth() && apptDate.getFullYear()===viewMonth.getFullYear()
+  }))
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}}>
-          <span style={{fontSize:'15px',fontWeight:600}}>June 2025</span>
+          <span style={{fontSize:'15px',fontWeight:600}}>{monthLabel}</span>
           <div style={{display:'flex',gap:'8px'}}>
-            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>‹</button>
-            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>›</button>
+            <button onClick={()=>changeMonth(-1)} style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>‹</button>
+            <button onClick={()=>changeMonth(1)} style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>›</button>
           </div>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px',marginBottom:'8px'}}>
-          {['M','T','W','T','F','S','S'].map((d,i)=><div key={i} style={{textAlign:'center',fontSize:'11px',color:C.textMuted,fontWeight:600}}>{d}</div>)}
+          {(isEn?['M','T','W','T','F','S','S']:['一','二','三','四','五','六','日']).map((d,i)=><div key={i} style={{textAlign:'center',fontSize:'11px',color:C.textMuted,fontWeight:600}}>{d}</div>)}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px'}}>
-          {[16,17,18,19,20,21,22,23,24,25,26,27,28,29].map(d=>(
-            <div key={d} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:d===24?C.green:'transparent',color:d===24?'#fff':(d===25||d===27)?C.green:C.text,fontWeight:d===24?600:400}}>
-              {d}
-              {(d===25||d===27)&&<div style={{width:4,height:4,borderRadius:'50%',background:C.green,margin:'2px auto 0'}}/>}
-            </div>
-          ))}
+          {Array.from({length:firstWeekday}).map((_,i)=><div key={`pad-${i}`}/>)}
+          {Array.from({length:daysInMonth},(_, i)=>i+1).map(d=>{
+            const cellDate = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), d)
+            const isToday = isSameDay(cellDate, today)
+            const isSelected = isSameDay(cellDate, selectedDate)
+            const hasEvent = markedDays.has(d)
+            return (
+              <div key={d} onClick={()=>setSelectedDate(cellDate)} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:isSelected?C.green:isToday?C.greenLight:'transparent',color:isSelected?'#fff':hasEvent?C.green:C.text,fontWeight:isSelected||isToday?600:400}}>
+                {d}
+                {hasEvent&&!isSelected&&<div style={{width:4,height:4,borderRadius:'50%',background:C.green,margin:'2px auto 0'}}/>}
+              </div>
+            )
+          })}
         </div>
       </div>
       <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
