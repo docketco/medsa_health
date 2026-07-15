@@ -25,7 +25,12 @@ function InfoRow({ label, value, highlight=false, last=false }) {
 
 // ── Role definitions ──────────────────────────────────────────────────────────
 const DEPARTMENTS = ['Internal Medicine','Cardiology','Emergency / A&E','Surgery','Psychiatry']
-const DOCTOR_NAMES = ['Dr Chan Siu-ming','Dr Ho Ka-fai','Dr Lam Wai-yee']
+const DOCTOR_DIRECTORY = [
+  {name:'Dr Chan Siu-ming', department:'Internal Medicine'},
+  {name:'Dr Ho Ka-fai', department:'Cardiology'},
+  {name:'Dr Lam Wai-yee', department:'Cardiology'},
+]
+const DOCTOR_NAMES = DOCTOR_DIRECTORY.map(d=>d.name) // kept for the clock-in screen, which doesn't need department filtering
 
 const ROLES = {
   admin:        {label:'Institution Admin',   color:C.purple, bg:C.purpleLight, icon:'⬡'},
@@ -868,15 +873,20 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
-function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis }) {
-  const [mode,setMode]=useState(null) // null | 'message'
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor }) {
+  const [mode,setMode]=useState(null) // null | 'message' | 'switch'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
   const [msgSaving,setMsgSaving]=useState(false)
   const [msgSaved,setMsgSaved]=useState(false)
+  const [newDoctor,setNewDoctor]=useState('')
   const [error,setError]=useState(null)
 
   if (!patient) return null
+
+  // Only offer doctors in the same department as this patient's current
+  // doctor - switching to an unrelated specialty wouldn't make sense.
+  const sameDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department===patient.department && d.name!==patient.doctor).map(d=>d.name)
 
   async function handleSendMessage() {
     if (!msgBody.trim()) { setError('Write a message first.'); return }
@@ -912,6 +922,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Full diagnosis / log</Btn>
+          {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
         </div>}
 
         {mode==='message'&&<>
@@ -926,6 +937,21 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={handleSendMessage} disabled={msgSaving}>{msgSaving?'Sending…':'Send'}</Btn>
+          </div>
+        </>}
+
+        {mode==='switch'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {patient.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {patient.department||'the same department'} only</div>
+          {sameDeptDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {sameDeptDoctors.map(d=>(
+              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSwitchDoctor(newDoctor);setMode(null);onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
           </div>
         </>}
       </div>
@@ -944,7 +970,8 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
 
   if (!appt) return null
 
-  const DOCTORS = ['Dr Chan Siu-ming','Dr Ho Ka-fai','Dr Lam Wai-yee']
+  // Only offer doctors in the same department as this appointment.
+  const DOCTORS = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
   const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00','15:30']
 
   return (
@@ -997,6 +1024,8 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
 
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department||'the same department'} only</div>
+          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
             {DOCTORS.map(d=>(
               <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
@@ -1186,6 +1215,9 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         doctorLabel={myName}
         onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
+        onSwitchDoctor={(newDoctorName)=>{
+          setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,doctor:newDoctorName}:a))
+        }}
       />
       <ReceptionistScheduleActionModal
         appt={activeReceptionAppt?.appt}
