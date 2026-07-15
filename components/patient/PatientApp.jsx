@@ -813,6 +813,29 @@ function DoctorsScreen({ isEn, patient={} }) {
         access_window_end: windowEnd.toISOString(),
       })
       if (insErr) throw insErr
+
+      // This is the piece that was actually missing: booking only ever
+      // wrote the consent record above, never a real appointment the
+      // clinic side could see. Try to link a real practitioner_id if one
+      // matches this doctor's name; otherwise fall back to doctor_name as
+      // plain text so the booking still shows up either way.
+      const { data: practitionerRow } = await supabase.from('practitioners').select('id').ilike('full_name', `%${activeDoctor.name.replace('Dr ','')}%`).maybeSingle()
+      const { data: institutionRow } = await supabase.from('institutions').select('id').eq('name', 'Pacific Medical Group').maybeSingle()
+
+      const { error: apptErr } = await supabase.from('appointments').insert({
+        patient_id: patientRow.id,
+        practitioner_id: practitionerRow?.id || null,
+        institution_id: institutionRow?.id || null,
+        doctor_name: activeDoctor.name,
+        department: activeDoctor.spec || null,
+        scheduled_at: apptDate.toISOString(),
+        appointment_type: reasonForVisit || activeDoctor.spec || 'Consultation',
+        consult_type: consultType,
+        status: 'confirmed',
+        reason_for_visit: reasonForVisit || null,
+        patient_pays: 80,
+      })
+      if (apptErr) throw apptErr
       setBooked(true)
     } catch (e) {
       setIntakeError(e.message)
