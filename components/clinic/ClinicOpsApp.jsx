@@ -22,6 +22,14 @@ function StatCard({ label, value, sub, color=C.green, bg=C.greenLight }) {
     </div>
   )
 }
+function Toggle({ checked=false, onChange }) {
+  return (
+    <div onClick={()=>onChange(!checked)} style={{width:34,height:18,borderRadius:20,background:checked?C.green:C.border,position:'relative',flexShrink:0,cursor:'pointer'}}>
+      <div style={{position:'absolute',top:2,left:checked?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/>
+    </div>
+  )
+}
+
 function Badge({ text, type }) {
   const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red],waiting:[C.blueLight,C.blue]}
   const [bg,fg]=map[type]||map.ok
@@ -347,7 +355,87 @@ function NewPatientScreen({ onBack }) {
 }
 
 
-function MyPatientsScreen({ queue, onSelectPatient }) {
+// ── DOCTOR VIDEO CALL (demo) ─────────────────────────────────────────────────
+function DoctorVideoCallModal({ patientName, onClose }) {
+  if (!patientName) return null
+  return (
+    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff'}}>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'8px'}}>Video call (demo)</div>
+      <div style={{width:96,height:96,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700,marginBottom:'16px'}}>{patientName[0]}</div>
+      <div style={{fontSize:'18px',fontWeight:600,marginBottom:'6px'}}>{patientName}</div>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'40px'}}>Calling…</div>
+      <div onClick={onClose} style={{width:56,height:56,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'20px'}}>✕</div>
+    </div>
+  )
+}
+
+// ── PATIENT ACTION MODAL — quick actions before entering full consultation ──
+function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStartCall, doctorLabel }) {
+  const [mode,setMode]=useState(null) // null | 'message'
+  const [msgBody,setMsgBody]=useState('')
+  const [msgUrgent,setMsgUrgent]=useState(false)
+  const [msgSaving,setMsgSaving]=useState(false)
+  const [msgSaved,setMsgSaved]=useState(false)
+  const [error,setError]=useState(null)
+
+  if (!patient) return null
+
+  async function handleSendMessage() {
+    if (!msgBody.trim()) { setError('Write a message first.'); return }
+    if (!patient.patientMedsaId) { setError('This patient has no linked Medsa profile yet.'); return }
+    setMsgSaving(true)
+    setError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.patientMedsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('patient_messages').insert({
+        patient_id: patientRow.id, doctor_name: doctorLabel, body: msgBody, urgent: msgUrgent,
+      })
+      if (insErr) throw insErr
+      setMsgSaved(true); setMsgBody(''); setMsgUrgent(false)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setMsgSaving(false)
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+          <div style={{fontSize:'16px',fontWeight:700}}>{patient.patientName}</div>
+          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
+        </div>
+
+        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName)}>◈ Video call</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
+          <Btn style={{width:'100%'}} onClick={onGoToConsultation}>📋 Go to full consultation</Btn>
+        </div>}
+
+        {mode==='message'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Message {patient.patientName}</div>
+          <textarea value={msgBody} onChange={e=>setMsgBody(e.target.value)} rows={4} placeholder="Write a note to this patient…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div onClick={()=>setMsgUrgent(!msgUrgent)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:msgUrgent?C.redLight:C.card,border:`0.5px solid ${msgUrgent?C.red:C.border}`,borderRadius:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <Toggle checked={msgUrgent} onChange={setMsgUrgent}/>
+            <span style={{fontSize:'12px',fontWeight:600,color:msgUrgent?C.red:C.text}}>Mark as urgent</span>
+          </div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          {msgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Sent</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSendMessage} disabled={msgSaving}>{msgSaving?'Sending…':'Send'}</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+function MyPatientsScreen({ queue, onSelectPatient, staffMember }) {
+  const [actionPatient,setActionPatient]=useState(null)
+  const [callingName,setCallingName]=useState(null)
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>My Patients</h2>
@@ -356,7 +444,7 @@ function MyPatientsScreen({ queue, onSelectPatient }) {
         {queue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
           return (
-            <Card key={i} onClick={()=>onSelectPatient(q)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'14px'}}>
+            <Card key={i} onClick={()=>setActionPatient(q)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'14px'}}>
               <div style={{width:36,height:36,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:600}}>{q.patientName}</div>
@@ -368,6 +456,14 @@ function MyPatientsScreen({ queue, onSelectPatient }) {
           )
         })}
       </div>
+      <PatientQueueActionModal
+        patient={actionPatient}
+        onClose={()=>setActionPatient(null)}
+        doctorLabel={staffMember?.name || 'Doctor'}
+        onStartCall={(name)=>{setCallingName(name);setActionPatient(null)}}
+        onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
+      />
+      <DoctorVideoCallModal patientName={callingName} onClose={()=>setCallingName(null)}/>
     </PageWrap>
   )
 }
@@ -1497,12 +1593,13 @@ export default function ClinicOpsApp() {
       setQueueLoading(true)
       const { data: queueRows } = await supabase
         .from('clinic_queue')
-        .select('*')
+        .select('*, patients(medsa_id)')
         .order('checked_in_at', { ascending: true })
       setCheckedInQueue((queueRows||[]).map(r => ({
         id: r.id,
         ticket: r.ticket,
         patientName: r.patient_name,
+        patientMedsaId: r.patients?.medsa_id || null,
         doctor: r.doctor_name || 'Unassigned',
         room: r.room || '-',
         checkedInAt: new Date(r.checked_in_at).getTime(),
@@ -1656,7 +1753,7 @@ export default function ClinicOpsApp() {
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
