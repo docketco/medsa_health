@@ -714,7 +714,7 @@ function VideoCallModal({ doc, isEn, onClose }) {
   )
 }
 
-function DoctorsScreen({ isEn }) {
+function DoctorsScreen({ isEn, patient={} }) {
   const [tab,setTab]=useState('search')
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
@@ -724,6 +724,12 @@ function DoctorsScreen({ isEn }) {
   const [whatsappReminder,setWhatsappReminder]=useState(true)
   const [selectedDoctor,setSelectedDoctor]=useState(null)
   const [consultType,setConsultType]=useState('in-person') // 'in-person' | 'video'
+  const [reasonForVisit,setReasonForVisit]=useState('')
+  const [symptoms,setSymptoms]=useState('')
+  const [currentMeds,setCurrentMeds]=useState('')
+  const [intakeConsent,setIntakeConsent]=useState(false)
+  const [intakeSaving,setIntakeSaving]=useState(false)
+  const [intakeError,setIntakeError]=useState(null)
   const doctors=[
     {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok',distanceKm:0.8,videoAvail:true},
     {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due',distanceKm:3.2,videoAvail:false},
@@ -749,6 +755,49 @@ function DoctorsScreen({ isEn }) {
   }
 
   const activeDoctor = selectedDoctor || doctors[0]
+
+  async function handleConfirmBooking() {
+    if (!intakeConsent) return
+    setIntakeSaving(true)
+    setIntakeError(null)
+    try {
+      const medsaId = patient?.medsa_id
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
+
+      // Build the actual appointment datetime from the selected day/time so
+      // the 12-hour-before/after access window is real, not a placeholder.
+      const timeMatch = selTime.match(/(\d+):(\d+)(am|pm)/i)
+      let hour = timeMatch ? parseInt(timeMatch[1]) : 10
+      const minute = timeMatch ? parseInt(timeMatch[2]) : 0
+      if (timeMatch && timeMatch[3].toLowerCase()==='pm' && hour!==12) hour += 12
+      const apptDate = new Date()
+      apptDate.setDate(apptDate.getDate() + (parseInt(selDay) - apptDate.getDate()))
+      apptDate.setHours(hour, minute, 0, 0)
+
+      const windowStart = new Date(apptDate.getTime() - 12*60*60*1000)
+      const windowEnd = new Date(apptDate.getTime() + 12*60*60*1000)
+
+      const { error: insErr } = await supabase.from('appointment_intake').insert({
+        patient_id: patientRow.id,
+        appointment_time: apptDate.toISOString(),
+        doctor_name: activeDoctor.name,
+        reason_for_visit: reasonForVisit || null,
+        symptoms: symptoms || null,
+        current_medications: currentMeds || null,
+        consent_given: true,
+        consent_given_at: new Date().toISOString(),
+        access_window_start: windowStart.toISOString(),
+        access_window_end: windowEnd.toISOString(),
+      })
+      if (insErr) throw insErr
+      setBooked(true)
+    } catch (e) {
+      setIntakeError(e.message)
+    } finally {
+      setIntakeSaving(false)
+    }
+  }
 
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -837,7 +886,28 @@ function DoctorsScreen({ isEn }) {
           </div></div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Intake form':'問診表'}</div></div>
+          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Reason for visit':'求診原因'}</div>
+            <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={isEn?'e.g. Persistent cough':'例如：持續咳嗽'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Symptoms':'症狀'}</div>
+            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={isEn?'Describe what you\u2019re experiencing…':'描述您的症狀…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Current medications (optional)':'目前藥物（可選）'}</div>
+            <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={isEn?'e.g. Metformin 500mg':'例如：二甲雙胍 500mg'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+
+            <div onClick={()=>setIntakeConsent(!intakeConsent)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:intakeConsent?C.greenXLight:C.card,border:`0.5px solid ${intakeConsent?C.green:C.border}`,borderRadius:'10px',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${intakeConsent?C.green:C.border}`,background:intakeConsent?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{intakeConsent?'\u2713':''}</div>
+              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
+                {isEn
+                  ? 'I consent to my treating doctor accessing my relevant records for a window of 12 hours before and 12 hours after this appointment. Access automatically ends outside this window.'
+                  : '我同意主診醫生在此預約前後各12小時內查閱我的相關記錄。此時限以外將自動停止查閱。'}
+              </div>
+            </div>
+            {intakeError&&<div style={{fontSize:'12px',color:C.red,marginTop:'10px'}}>{intakeError}</div>}
+          </div>
+        </Card>
+        <Card>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
               {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`Tue ${selDay} Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
@@ -854,7 +924,8 @@ function DoctorsScreen({ isEn }) {
               </div>
               <span style={{fontSize:'18px',color:'#25D366'}}>◈</span>
             </div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(true)}>{isEn?'Confirm appointment':'確認預約'}</Btn>
+            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{isEn?'Complete the intake consent above to continue':'請先完成上方的問診同意'}</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={!intakeConsent||intakeSaving}>{intakeSaving?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm appointment':'確認預約')}</Btn>
           </div>
         </Card>
         {booked&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -1875,7 +1946,7 @@ export default function PatientApp({ liveData={} }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient}/>}
-        {screen==='doctors'&&<DoctorsScreen isEn={isEn}/>}
+        {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
