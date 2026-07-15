@@ -509,6 +509,88 @@ function NewPatientRegistration({ onBack }) {
   )
 }
 
+// ── CHECK-IN (receptionist) ─────────────────────────────────────────────────
+function CheckInScreen() {
+  const [mode,setMode]=useState('scan') // 'scan' | 'search'
+  const [scanChoices,setScanChoices]=useState([])
+  const [found,setFound]=useState(null)
+  const [searchTerm,setSearchTerm]=useState('')
+  const [searched,setSearched]=useState(false)
+  const [checkedIn,setCheckedIn]=useState(false)
+
+  async function loadScanChoices() {
+    const { data } = await supabase.from('patients').select('*').limit(10)
+    setScanChoices(data || [])
+  }
+
+  function handleScanPick(p) {
+    setFound(p)
+    setCheckedIn(false)
+  }
+
+  async function handleSearch() {
+    if (!searchTerm.trim()) return
+    const term = searchTerm.trim()
+    const { data } = await supabase.from('patients').select('*')
+      .or(`medsa_id.ilike.%${term}%,full_name.ilike.%${term}%`).limit(1).maybeSingle()
+    setFound(data || null)
+    setSearched(true)
+    setCheckedIn(false)
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Check-in</SecLabel>
+      <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
+        {[['scan','Scan to check in'],['search','Search patients']].map(([k,l])=>(
+          <div key={k} onClick={()=>{setMode(k);setFound(null);setCheckedIn(false)}} style={{flex:1,fontSize:'13px',padding:'9px 12px',borderRadius:'20px',cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub,fontWeight:500,textAlign:'center'}}>{l}</div>
+        ))}
+      </div>
+
+      {mode==='scan'&&!found&&<div style={{padding:'0 16px'}}>
+        {scanChoices.length===0&&<div onClick={loadScanChoices} style={{background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'40px 20px',textAlign:'center',cursor:'pointer'}}>
+          <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>⬡</div>
+          <div style={{fontSize:'14px',fontWeight:600}}>Tap to simulate scanning a patient's card</div>
+        </div>}
+        {scanChoices.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Demo: tap the patient whose card is being scanned</div>
+          {scanChoices.map(p=>(
+            <div key={p.id} onClick={()=>handleScanPick(p)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontSize:'14px',fontWeight:500}}>{p.full_name}</span>
+              <span style={{fontSize:'11px',color:C.textMuted}}>{p.medsa_id}</span>
+            </div>
+          ))}
+        </div>}
+      </div>}
+
+      {mode==='search'&&!found&&<div style={{padding:'0 16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+          <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()} placeholder="Search by name or Medsa ID…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',background:C.cream,outline:'none',boxSizing:'border-box'}}/>
+          <Btn variant="primary" onClick={handleSearch}>Search</Btn>
+        </div>
+        {searched&&!found&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No patient found matching "{searchTerm}".</div>}
+      </div>}
+
+      {found&&<div style={{padding:'0 16px'}}>
+        <Card style={{padding:'20px'}}>
+          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'8px'}}>✓ Patient found</div>
+          <div style={{fontSize:'18px',fontWeight:700}}>{found.full_name}</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{found.medsa_id} · DOB {new Date(found.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          {!checkedIn
+            ? <div style={{display:'flex',gap:'10px'}}>
+                <Btn onClick={()=>{setFound(null);setSearched(false)}}>Cancel</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={()=>setCheckedIn(true)}>Check in patient</Btn>
+              </div>
+            : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',textAlign:'center'}}>
+                <div style={{fontSize:'13px',color:C.green,fontWeight:600}}>✓ {found.full_name} checked in</div>
+                <Btn style={{marginTop:'10px'}} onClick={()=>{setFound(null);setSearched(false);setCheckedIn(false)}}>Check in another patient</Btn>
+              </div>}
+        </Card>
+      </div>}
+    </div>
+  )
+}
+
 function PatientSearchScreen({ role, liveData={}, autoOpenLog=false }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
@@ -1108,12 +1190,30 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
     setAppts(filterForRole(scheduleByDay[day] || []))
   }
 
-  function withinDataWindow(day) {
-    // Placeholder 48-hour check until the real patient consent window
-    // (tied to booking-time consent) is wired in - see schema_intake_consent
-    // work planned next. For now this just compares calendar days as a
-    // stand-in so the UI can show the right messaging ahead of that.
-    return day === 'Tue 24' // "today" in this demo data
+  // Real per-patient check against the consent window set at booking time
+  // (see schema_intake_consent.sql), replacing the earlier day-based
+  // placeholder. Looked up per patient since the window is a lawyer's-eye
+  // 12-hours-before/after their own specific appointment, not a blanket
+  // per-day rule. Demo appointments that were never booked through the
+  // real patient flow simply won't have a consent record - that's the
+  // honest, correct outcome, not a bug.
+  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked}
+
+  async function checkDataWindow(medsaId) {
+    if (dataWindows[medsaId]?.checked) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const now = new Date()
+    const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
+    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,windowEnd:data.access_window_end}}))
+  }
+
+  useEffect(() => { appts.forEach(a=>checkDataWindow(a.medsaId)) }, [appts])
+
+  function withinDataWindow(medsaId) {
+    return dataWindows[medsaId]?.allowed || false
   }
 
   const [activeTodoPatient,setActiveTodoPatient]=useState(null)
@@ -1191,8 +1291,8 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         {isClinicalTodoRole&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
           ◇ Tap a patient to video call, message, or open their full record.
         </div>}
-        {isReceptionist&&!withinDataWindow(selectedDay)&&<div style={{margin:'0 16px 12px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-          ◇ Booking and scheduling changes work for any day. Clinical details for this day are outside the 48-hour patient consent window.
+        {isReceptionist&&<div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+          ◇ Booking and scheduling changes work for any patient. Clinical details are only visible for patients within their own 12-hour consent window from booking - see each patient's badge below.
         </div>}
         {appts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No appointments scheduled for {selectedDay}.</div>}
         {[...appts].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
@@ -1203,6 +1303,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
               <div style={{fontSize:'12px',color:C.textSub}}>{a.type}{a.doctor?` · ${a.doctor}`:''}</div>
               {a.notes&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>◇ {a.notes}</div>}
             </div>
+            {isReceptionist&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
             <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 9px',borderRadius:'20px'}}>Rm {a.room}</span>
             {(isClinicalTodoRole||isReceptionist)&&<span style={{color:C.textMuted,fontSize:'14px'}}>›</span>}
           </Card>
@@ -1223,7 +1324,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         appt={activeReceptionAppt?.appt}
         onClose={()=>setActiveReceptionAppt(null)}
         onSave={(updated)=>handleReceptionSave(activeReceptionAppt.index, updated)}
-        withinDataWindow={withinDataWindow(selectedDay)}
+        withinDataWindow={activeReceptionAppt ? withinDataWindow(activeReceptionAppt.appt.medsaId) : false}
       />
       <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
     </div>
@@ -1499,9 +1600,9 @@ export default function PractitionerApp({ liveData={} }) {
   const [doctorName,setDoctorName]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
-  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen('id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -1512,6 +1613,7 @@ export default function PractitionerApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
+        {screen==='checkin'&&<CheckInScreen/>}
         {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog}/>}
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
