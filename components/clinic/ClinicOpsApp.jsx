@@ -950,11 +950,12 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
 function ClinicScheduleActionModal({ appt, onClose, onSave }) {
-  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup'
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
+  const [notesDraft,setNotesDraft]=useState('')
 
   if (!appt || appt.status==='open') return null
 
@@ -971,6 +972,19 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
           </div>
           <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
         </div>
+
+        {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
+          <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
+        </div>}
+
+        {mode==='notes'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Notes for {appt.patient}</div>
+          <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} rows={4} placeholder="Symptoms, patient-reported notes, anything relevant for the visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,notes:notesDraft});setMode(null)}}>Save notes</Btn>
+          </div>
+        </>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
@@ -1031,12 +1045,12 @@ function ScheduleScreen({ staffMember }) {
   const [selectedDay,setSelectedDay]=useState(24)
   const [showNewApptForm,setShowNewApptForm]=useState(false)
   const [appointments,setAppointments]=useState([
-    {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan', type:'Follow-up', status:'confirmed'},
-    {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam', type:'New patient', status:'confirmed'},
-    {time:'10:00', patient:'-', doctor:'Dr Chan', type:'Open slot', status:'open'},
-    {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan', type:'Vaccination', status:'confirmed'},
-    {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam', type:'Consultation', status:'confirmed'},
-    {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan', type:'Follow-up', status:'pending'},
+    {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
+    {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
+    {time:'10:00', patient:'-', doctor:'Dr Chan', type:'Open slot', status:'open', notes:''},
+    {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan', type:'Vaccination', status:'confirmed', notes:''},
+    {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
+    {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
   ])
   const [activeAppt,setActiveAppt]=useState(null)
 
