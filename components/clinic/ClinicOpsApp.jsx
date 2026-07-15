@@ -165,7 +165,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
   )
 }
 
-function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
+function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError }) {
   const [mode,setMode]=useState('scan')
   const [stage,setStage]=useState('idle')
   const [patient,setPatient]=useState(null)
@@ -219,6 +219,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
   return (
     <PageWrap maxWidth={560}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Check-In / Search</h2>
+      {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'\u26a0'} {checkInError}</div>}
 
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
         {[['scan','Scan to check in'],['search','Search patients']].map(([k,l])=>(
@@ -1711,6 +1712,7 @@ function ClaimsScreen() {
 
 export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
+  const [checkInError,setCheckInError]=useState(null)
   const [screen,setScreen]=useState('overview')
   const [checkedInQueue,setCheckedInQueue]=useState([])
   const [queueLoading,setQueueLoading]=useState(true)
@@ -1778,7 +1780,7 @@ export default function ClinicOpsApp() {
       q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
     )
     if (alreadyActive) {
-      setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
+      setCheckInError(`${patient.full_name} is already checked in and still active - check My Patients or Overview to find them, or wait for their access window to expire.`)
       return
     }
     const ticket = 'A'+nextTicket
@@ -1792,14 +1794,18 @@ export default function ClinicOpsApp() {
       status: 'waiting',
     }).select().single()
 
-    if (!error && data) {
-      setCheckedInQueue([...checkedInQueue, {
-        id: data.id, ticket: data.ticket, patientName: data.patient_name,
-        doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
-        department: data.department, status: data.status,
-      }])
-      setNextTicket(nextTicket+1)
+    if (error || !data) {
+      setCheckInError(`Could not check in ${patient.full_name}: ${error?.message || 'unknown error'}`)
+      return
     }
+
+    setCheckedInQueue([...checkedInQueue, {
+      id: data.id, ticket: data.ticket, patientName: data.patient_name,
+      doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
+      department: data.department, status: data.status,
+    }])
+    setNextTicket(nextTicket+1)
+    setCheckInError(null)
     setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
   }
 
@@ -1902,7 +1908,7 @@ export default function ClinicOpsApp() {
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
-        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
+        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
         {screen==='schedule'&&<ScheduleScreen staffMember={staffMember}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
