@@ -522,10 +522,33 @@ function CheckInScreen() {
   const [searchTerm,setSearchTerm]=useState('')
   const [searched,setSearched]=useState(false)
   const [checkedIn,setCheckedIn]=useState(false)
+  const [checkInNote,setCheckInNote]=useState(null)
 
   async function loadScanChoices() {
     const { data } = await supabase.from('patients').select('*').limit(10)
     setScanChoices(data || [])
+  }
+
+  // Real check-in: finds today's appointment for this patient and marks
+  // it checked_in, so the doctor's Today's Patients view can correctly
+  // gate full diagnosis access on actual arrival, not just being
+  // scheduled. Previously this button only set local state and never
+  // touched the real appointment at all.
+  async function handleRealCheckIn() {
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    const { data: todaysAppt } = await supabase.from('appointments').select('id')
+      .eq('patient_id', found.id)
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      .limit(1).maybeSingle()
+
+    if (todaysAppt) {
+      await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() }).eq('id', todaysAppt.id)
+      setCheckInNote(null)
+    } else {
+      setCheckInNote('No scheduled appointment found for today - checked in as a walk-in, not linked to a specific appointment.')
+    }
+    setCheckedIn(true)
   }
 
   function handleScanPick(p) {
@@ -584,11 +607,12 @@ function CheckInScreen() {
           {!checkedIn
             ? <div style={{display:'flex',gap:'10px'}}>
                 <Btn onClick={()=>{setFound(null);setSearched(false)}}>Cancel</Btn>
-                <Btn variant="primary" style={{flex:1}} onClick={()=>setCheckedIn(true)}>Check in patient</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={handleRealCheckIn}>Check in patient</Btn>
               </div>
             : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',textAlign:'center'}}>
                 <div style={{fontSize:'13px',color:C.green,fontWeight:600}}>✓ {found.full_name} checked in</div>
-                <Btn style={{marginTop:'10px'}} onClick={()=>{setFound(null);setSearched(false);setCheckedIn(false)}}>Check in another patient</Btn>
+                {checkInNote&&<div style={{fontSize:'11px',color:C.amber,marginTop:'8px'}}>{checkInNote}</div>}
+                <Btn style={{marginTop:'10px'}} onClick={()=>{setFound(null);setSearched(false);setCheckedIn(false);setCheckInNote(null)}}>Check in another patient</Btn>
               </div>}
         </Card>
       </div>}
@@ -960,16 +984,35 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
-function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor }) {
-  const [mode,setMode]=useState(null) // null | 'message' | 'switch'
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup }) {
+  const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
   const [msgSaving,setMsgSaving]=useState(false)
   const [msgSaved,setMsgSaved]=useState(false)
   const [newDoctor,setNewDoctor]=useState('')
+  const [followupDate,setFollowupDate]=useState('')
+  const [followupType,setFollowupType]=useState('')
   const [error,setError]=useState(null)
+  const [fullPatient,setFullPatient]=useState(null)
+  const [loadingPatient,setLoadingPatient]=useState(true)
+
+  // Show real patient info here, the same way it appears when their
+  // Medsa ID is scanned at check-in - not just the bare appointment row.
+  useEffect(() => {
+    async function loadPatient() {
+      if (!patient?.medsaId) { setLoadingPatient(false); return }
+      setLoadingPatient(true)
+      const { data } = await supabase.from('patients').select('*').eq('medsa_id', patient.medsaId).maybeSingle()
+      setFullPatient(data || null)
+      setLoadingPatient(false)
+    }
+    loadPatient()
+  }, [patient?.medsaId])
 
   if (!patient) return null
+
+  const isCheckedIn = patient.status === 'checked_in'
 
   // Only offer doctors in the same department as this patient's current
   // doctor - switching to an unrelated specialty wouldn't make sense.
@@ -997,19 +1040,35 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
-          <div>
-            <div style={{fontSize:'16px',fontWeight:700}}>{patient.name}</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>{patient.time} · {patient.type}</div>
+        <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>Close</div>
+
+        {loadingPatient&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>Loading patient…</div>}
+
+        {!loadingPatient&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
+          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCheckedIn?'✓ Checked in':'Scheduled'}</div>
+          <div style={{fontSize:'17px',fontWeight:700}}>{fullPatient.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{fullPatient.medsa_id} · DOB {new Date(fullPatient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          <div style={{display:'flex',gap:'10px'}}>
+            <div style={{flex:1,background:'#fff',borderRadius:'8px',padding:'8px',textAlign:'center'}}>
+              <div style={{fontSize:'10px',color:C.textMuted}}>Blood type</div>
+              <div style={{fontSize:'15px',fontWeight:700,color:C.red}}>{fullPatient.blood_type||'-'}</div>
+            </div>
+            <div style={{flex:2,background:'#fff',borderRadius:'8px',padding:'8px'}}>
+              <div style={{fontSize:'10px',color:C.textMuted}}>Visit</div>
+              <div style={{fontSize:'12px',fontWeight:600}}>{patient.time} · {patient.type}</div>
+            </div>
           </div>
-          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
-        </div>
+        </div>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
-          <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Full diagnosis / log</Btn>
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
+          {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
+          {onCancelAppt&&<Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>}
+          {isCheckedIn
+            ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Full diagnosis / log</Btn>
+            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in</div>}
         </div>}
 
         {mode==='message'&&<>
@@ -1039,6 +1098,25 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={()=>{onSwitchDoctor(newDoctor);setMode(null);onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+          </div>
+        </>}
+
+        {mode==='followup'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Book follow-up for {patient.name}</div>
+          <input value={followupDate} onChange={e=>setFollowupDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{const ok=await onBookFollowup(followupDate,followupType);if(ok){setMode(null);onClose()}else setError('Could not book follow-up - try again.')}} disabled={!followupDate||!followupType}>Confirm</Btn>
+          </div>
+        </>}
+
+        {mode==='cancel'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Cancel {patient.name}'s appointment at {patient.time}? This can't be undone from here.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep appointment</Btn>
+            <Btn variant="danger" style={{flex:1}} onClick={()=>{onCancelAppt();setMode(null);onClose()}}>Confirm cancel</Btn>
           </div>
         </>}
       </div>
@@ -1141,6 +1219,72 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
             <Btn variant="danger" style={{flex:1}} onClick={()=>{onSave({...appt,cancelled:true});onClose()}}>Confirm cancel</Btn>
           </div>
         </>}
+      </div>
+    </div>
+  )
+}
+
+// ── NEW APPOINTMENT — real, was previously a non-functional button ─────────
+function NewAppointmentModal({ open, onClose, onBooked }) {
+  const [searchTerm,setSearchTerm]=useState('')
+  const [foundPatient,setFoundPatient]=useState(null)
+  const [date,setDate]=useState('')
+  const [time,setTime]=useState('09:00')
+  const [doctor,setDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
+  const [reason,setReason]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  if (!open) return null
+
+  async function handleSearch() {
+    if (!searchTerm.trim()) return
+    const { data } = await supabase.from('patients').select('*')
+      .or(`medsa_id.ilike.%${searchTerm}%,full_name.ilike.%${searchTerm}%`).limit(1).maybeSingle()
+    setFoundPatient(data || null)
+    if (!data) setError('No patient found matching that name or Medsa ID.')
+    else setError(null)
+  }
+
+  async function handleBook() {
+    if (!foundPatient || !date || !time) return
+    setSaving(true)
+    setError(null)
+    const doctorInfo = DOCTOR_DIRECTORY.find(d=>d.name===doctor)
+    const { error: insErr } = await supabase.from('appointments').insert({
+      patient_id: foundPatient.id,
+      doctor_name: doctor,
+      department: doctorInfo?.department || null,
+      scheduled_at: new Date(`${date}T${time}:00`).toISOString(),
+      appointment_type: reason || 'Consultation',
+      status: 'confirmed',
+    })
+    setSaving(false)
+    if (insErr) { setError(insErr.message); return }
+    onBooked()
+    onClose()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:420,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()} placeholder="Patient name or Medsa ID" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <Btn onClick={handleSearch}>Search</Btn>
+        </div>
+        {foundPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginBottom:'12px',fontSize:'12px',color:C.green}}>✓ {foundPatient.full_name} ({foundPatient.medsa_id})</div>}
+        <input value={date} onChange={e=>setDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <input value={time} onChange={e=>setTime(e.target.value)} type="time" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <select value={doctor} onChange={e=>setDoctor(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+          {DOCTOR_DIRECTORY.map(d=><option key={d.name} value={d.name}>{d.name} · {d.department}</option>)}
+        </select>
+        <input value={reason} onChange={e=>setReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleBook} disabled={!foundPatient||!date||saving}>{saving?'Booking…':'Book appointment'}</Btn>
+        </div>
       </div>
     </div>
   )
@@ -1257,6 +1401,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
   const [activeTodoPatient,setActiveTodoPatient]=useState(null)
   const [callingPatientName,setCallingPatientName]=useState(null)
   const [activeReceptionAppt,setActiveReceptionAppt]=useState(null)
+  const [showNewApptModal,setShowNewApptModal]=useState(false)
   const myName = ROLES[role]?.label || 'Doctor'
 
   function handleReceptionSave(index, updated) {
@@ -1347,7 +1492,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
             {(isClinicalTodoRole||isReceptionist)&&<span style={{color:C.textMuted,fontSize:'14px'}}>›</span>}
           </Card>
         ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ New appointment</Btn></div>
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowNewApptModal(true)}>+ New appointment</Btn></div>
       </>}
       <PatientTodoActionModal
         patient={activeTodoPatient}
@@ -1358,6 +1503,29 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         onSwitchDoctor={(newDoctorName)=>{
           setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,doctor:newDoctorName}:a))
         }}
+        onCancelAppt={async()=>{
+          setAppts(prev=>prev.filter(a=>a!==activeTodoPatient))
+          // best-effort: if this is a real booked appointment (not demo
+          // data), also cancel it in Supabase so it doesn't linger
+          if (activeTodoPatient?.medsaId) {
+            const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', activeTodoPatient.medsaId).maybeSingle()
+            if (pRow) {
+              const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
+              const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+              await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+            }
+          }
+        }}
+        onBookFollowup={async(date,reason)=>{
+          if (!activeTodoPatient?.medsaId) return false
+          const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', activeTodoPatient.medsaId).maybeSingle()
+          if (!pRow) return false
+          const { error: apptErr } = await supabase.from('appointments').insert({
+            patient_id: pRow.id, doctor_name: activeTodoPatient.doctor, department: activeTodoPatient.department,
+            scheduled_at: new Date(date+'T10:00:00').toISOString(), appointment_type: reason, status: 'confirmed',
+          })
+          return !apptErr
+        }}
       />
       <ReceptionistScheduleActionModal
         appt={activeReceptionAppt?.appt}
@@ -1366,6 +1534,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         withinDataWindow={activeReceptionAppt ? withinDataWindow(activeReceptionAppt.appt.medsaId) : false}
       />
       <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
+      <NewAppointmentModal open={showNewApptModal} onClose={()=>setShowNewApptModal(false)} onBooked={()=>loadAppointmentsForDay(selectedDay)}/>
     </div>
   )
 }
