@@ -39,6 +39,15 @@ function PageWrap({ children, maxWidth=720 }) {
   return <div style={{maxWidth, margin:'0 auto', width:'100%'}}>{children}</div>
 }
 
+// Shared doctor directory - single source of truth for name + department,
+// used both at staff login and when filtering/switching doctors elsewhere,
+// so a doctor only ever gets swapped with another doctor in the same
+// department/specialty, never an unrelated one.
+const DOCTOR_DIRECTORY = [
+  {name:'Dr Chan Siu-ming', department:'Internal Medicine'},
+  {name:'Dr Lam Wai-yee', department:'Cardiology'},
+]
+
 function hoursRemaining(checkedInAt) {
   const elapsed = Date.now() - checkedInAt
   const remaining = 24*60*60*1000 - elapsed
@@ -959,7 +968,9 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
 
   if (!appt || appt.status==='open') return null
 
-  const DOCTORS = ['Dr Chan','Dr Lam']
+  // Only offer doctors in the same department/specialty as this
+  // appointment - switching to an unrelated specialty wouldn't make sense.
+  const DOCTORS = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
   const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00']
 
   return (
@@ -1008,6 +1019,8 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
 
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.patient}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department} only</div>
+          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
             {DOCTORS.map(d=>(
               <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
@@ -1044,14 +1057,20 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
 function ScheduleScreen({ staffMember }) {
   const [selectedDay,setSelectedDay]=useState(24)
   const [showNewApptForm,setShowNewApptForm]=useState(false)
-  const [appointments,setAppointments]=useState([
-    {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
-    {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
-    {time:'10:00', patient:'-', doctor:'Dr Chan', type:'Open slot', status:'open', notes:''},
-    {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan', type:'Vaccination', status:'confirmed', notes:''},
-    {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
-    {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
-  ])
+  const allAppointments = [
+    {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
+    {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
+    {time:'10:00', patient:'-', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Open slot', status:'open', notes:''},
+    {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Vaccination', status:'confirmed', notes:''},
+    {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
+    {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
+  ]
+  // Doctors see only their own named patients here - "today's patients" -
+  // not every appointment across every doctor/department. Front desk and
+  // admin still see everything, since managing the full schedule needs
+  // the complete picture.
+  const isDoctorView = staffMember?.role==='doctor'
+  const [appointments,setAppointments]=useState(isDoctorView ? allAppointments.filter(a=>a.doctor===staffMember.name) : allAppointments)
   const [activeAppt,setActiveAppt]=useState(null)
 
   function handleSaveAppt(updated) {
@@ -1079,7 +1098,7 @@ function ScheduleScreen({ staffMember }) {
           ))}
         </div>
       </Card>
-      <SecLabel>All doctors - today</SecLabel>
+      <SecLabel>{isDoctorView?`Today's patients · ${staffMember.name}`:'All doctors - today'}</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
           <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,cursor:a.status!=='open'?'pointer':'default'}}>
