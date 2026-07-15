@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
+// ── Atoms ─────────────────────────────────────────────────────────────────────
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
-  const V={primary:{background:C.green,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'},navy:{background:C.navy,color:'#fff'}}
+  const V={primary:{background:C.green,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'},purple:{background:C.purple,color:'#fff'}}
   return <button style={{...base,...V[variant]}} onClick={onClick} disabled={disabled}>{children}</button>
 }
 function Card({ children, style:sx={}, onClick }) {
@@ -18,1742 +19,451 @@ function Toggle({ checked=false, onChange }) {
   const [on,setOn]=useState(checked)
   return <div onClick={()=>{setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
 }
-function Badge({ text, type }) {
-  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
-  const [bg,fg]=map[type]||map.ok
-  return <span style={{fontSize:'10px',background:bg,color:fg,padding:'3px 9px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
+function InfoRow({ label, value, highlight=false, last=false }) {
+  return <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'8px 0',borderBottom:last?'none':`0.5px solid ${C.border}`,fontSize:'13px'}}><span style={{color:C.textSub,flexShrink:0,marginRight:'12px'}}>{label}</span><span style={{fontWeight:500,color:highlight?C.red:C.text,textAlign:'right',maxWidth:'60%'}}>{value}</span></div>
 }
 
-// ── EMERGENCY CARD SETUP + CONSENT FLOW ──────────────────────────────────────
-// This is shown to PATIENTS only for setup/consent — not for showing to EMS.
-// EMS access the emergency card automatically via QR scan in the practitioner portal.
-function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], patient }) {
-  const p = patient || { full_name:'Wong Mei-ling, Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx' }
-  const [step, setStep] = useState(consented ? 'view' : 'intro')
-  if (!open) return null
+// ── Role definitions ──────────────────────────────────────────────────────────
+const DEPARTMENTS = ['Internal Medicine','Cardiology','Emergency / A&E','Surgery','Psychiatry']
+const DOCTOR_DIRECTORY = [
+  {name:'Dr Chan Siu-ming', department:'Internal Medicine'},
+  {name:'Dr Ho Ka-fai', department:'Cardiology'},
+  {name:'Dr Lam Wai-yee', department:'Cardiology'},
+]
+const DOCTOR_NAMES = DOCTOR_DIRECTORY.map(d=>d.name) // kept for the clock-in screen, which doesn't need department filtering
+
+const ROLES = {
+  admin:        {label:'Institution Admin',   color:C.purple, bg:C.purpleLight, icon:'⬡'},
+  dept_head:    {label:'Department Head',     color:C.green,  bg:C.greenLight,  icon:'◈'},
+  doctor:       {label:'Doctor',              color:C.blue,   bg:C.blueLight,   icon:'◎'},
+  nurse:        {label:'Nurse',               color:C.green,  bg:C.greenLight,  icon:'◇'},
+  clinic_nurse: {label:'Clinic Nurse',        color:C.green,  bg:C.greenLight,  icon:'◇'},
+  receptionist: {label:'Receptionist',        color:C.brown,  bg:C.brownLight,  icon:'▣'},
+  pharmacist:   {label:'Pharmacist',          color:C.amber,  bg:C.amberLight,  icon:'◉'},
+  therapist:    {label:'Therapist',           color:C.brown,  bg:C.brownLight,  icon:'◌'},
+  ems:          {label:'EMS / Emergency',     color:C.red,    bg:C.redLight,    icon:'◈'},
+  allied:       {label:'Allied Health',       color:C.textMuted,bg:C.card,      icon:'◫'},
+}
+
+const ACCESS = {
+  admin:        {identity:true,vitals:false,history:true,medications:true,allergies:true,mental:true,imaging:true,labs:true,prescribe:false,dispense:false,admin_perms:true,admission_reason:true},
+  dept_head:    {identity:true,vitals:true,history:true,medications:true,allergies:true,imaging:true,labs:true,prescribe:true,dispense:false,admission_reason:true},
+  doctor:       {identity:true,vitals:true,history:true,medications:true,allergies:true,imaging:true,labs:true,prescribe:true,dispense:false,admission_reason:true},
+  nurse:        {identity:true,vitals:true,medications:true,allergies:true,tasks:true,prescribe:false,dispense:false,admission_reason:true},
+  clinic_nurse: {identity:true,vitals:true,medications:true,allergies:true,tasks:true,prescribe:false,dispense:true,admission_reason:true},
+  receptionist: {identity:true,appointments:true,billing:true,prescribe:false,dispense:false,admission_reason:false},
+  pharmacist:   {identity:true,medications:true,allergies:true,prescribe:false,dispense:true,admission_reason:false},
+  therapist:    {identity:true,vitals:true,musculoskeletal:true,allergies:true,prescribe:false,dispense:false,admission_reason:true},
+  ems:          {identity:true,vitals:true,emergency:true,allergies:true,critical_conditions:true,medications:true,prescribe:false,dispense:false,admission_reason:false},
+  allied:       {identity:true,specialty_notes:true,allergies:true,prescribe:false,dispense:false,admission_reason:true},
+}
+
+// ── CLOCK IN ─────────────────────────────────────────────────────────────────
+function ClockInScreen({ onLogin }) {
+  const [scanning,setScanning]=useState(false)
+  const [scanned,setScanned]=useState(false)
+  const [sel,setSel]=useState(null)
+  const [dept,setDept]=useState(null)
+  const [doctorName,setDoctorName]=useState(null)
+  const needsDoctorName = sel==='doctor'
+
+  function handleContinue() {
+    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null })
+  }
+
   return (
-    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'90vh',overflowY:'auto'}}>
-
-        {/* Step 1 — intro / not yet consented */}
-        {step==='intro'&&<>
-          <div style={{textAlign:'center',marginBottom:'20px'}}>
-            <div style={{fontSize:'36px',marginBottom:'10px'}}>🛡️</div>
-            <div style={{fontSize:'18px',fontWeight:700,color:C.text,marginBottom:'6px'}}>Emergency health card</div>
-            <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>When activated, verified emergency personnel can instantly access your critical medical info by scanning your Medsa QR — even if you can't speak or respond.</div>
-          </div>
-          <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'16px',marginBottom:'16px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.green,marginBottom:'10px'}}>What emergency personnel will see:</div>
-            {['Blood type','Critical conditions','Severe allergies','Current medications','Emergency contact'].map((item,i)=>(
-              <div key={i} style={{fontSize:'13px',color:C.text,padding:'4px 0',display:'flex',alignItems:'center',gap:'8px'}}><span style={{color:C.green,fontSize:'10px'}}>✓</span>{item}</div>
+    <div style={{background:C.beige,minHeight:'100vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:C.green,padding:'28px 20px 20px'}}>
+        <MedsaLogo height={26}/>
+        <div style={{fontSize:'10px',color:'rgba(255,255,255,0.5)',marginTop:'6px',letterSpacing:'1.5px',textTransform:'uppercase'}}>practitioner portal</div>
+      </div>
+      <div style={{flex:1,padding:'24px 20px'}}>
+        <div style={{fontSize:'20px',fontWeight:700,color:C.text,marginBottom:'6px'}}>Clock in to your shift</div>
+        <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6,marginBottom:'24px'}}>Scan your Medsa practitioner ID at your institution scanner. Patient data is only accessible during active clock-in hours.</div>
+        <div onClick={!scanned?()=>{setScanning(true);setTimeout(()=>{setScanning(false);setScanned(true)},1600)}:undefined}
+          style={{background:C.cream,border:`1.5px dashed ${scanned?C.green:C.border}`,borderRadius:'16px',padding:'36px 20px',textAlign:'center',marginBottom:'20px',cursor:scanned?'default':'pointer'}}>
+          {scanning?<><div style={{fontSize:'36px',marginBottom:'10px',color:C.green}}>⬡</div><div style={{fontSize:'14px',fontWeight:500,color:C.green}}>Scanning…</div><div style={{fontSize:'12px',color:C.textSub}}>Hold your ID card steady</div></>
+          :scanned?<><div style={{fontSize:'32px',marginBottom:'10px',color:C.green}}>✓</div><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>ID verified · QE Hospital</div><div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>Select your role to continue</div></>
+          :<><div style={{fontSize:'36px',marginBottom:'10px',color:C.textMuted}}>⬡</div><div style={{fontSize:'14px',fontWeight:500,color:C.textSub}}>Tap to simulate scan</div><div style={{fontSize:'12px',color:C.textMuted,marginTop:'4px'}}>In production: use institution QR scanner</div></>}
+        </div>
+        {scanned&&<>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Select your role</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+            {Object.entries(ROLES).map(([key,r])=>(
+              <div key={key} onClick={()=>{setSel(key);setDept(null);setDoctorName(null)}} style={{background:sel===key?r.bg:C.cream,border:`0.5px solid ${sel===key?r.color:C.border}`,borderRadius:'12px',padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
+                <span style={{fontSize:'18px',color:r.color}}>{r.icon}</span>
+                <span style={{fontSize:'14px',fontWeight:500,color:sel===key?r.color:C.text}}>{r.label}</span>
+                {sel===key&&<span style={{marginLeft:'auto',color:r.color,fontWeight:700}}>✓</span>}
+              </div>
             ))}
           </div>
-          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-            ◇ This information is auto-populated from your verified medical records and updates automatically. You cannot selectively hide fields — this ensures accuracy in a life-critical moment. You can deactivate the card at any time.
-          </div>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={()=>setStep('consent')}>Set up my emergency card</Btn>
-          <Btn style={{width:'100%'}} onClick={onClose}>Not now</Btn>
-        </>}
 
-        {/* Step 2 — consent */}
-        {step==='consent'&&<>
-          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'16px'}}>One-time consent</div>
-          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',marginBottom:'16px',fontSize:'13px',color:C.text,lineHeight:1.8}}>
-            I, <strong>Wong Mei-ling, Lisa</strong>, consent to Medsa making my critical medical information accessible to verified emergency medical personnel (EMS, A&E staff, and Medsa-registered practitioners in an emergency context) via QR scan.<br/><br/>
-            I understand that:<br/>
-            · This information is sourced from my verified medical records<br/>
-            · It updates automatically as my records are updated<br/>
-            · I cannot selectively withhold fields from the emergency card<br/>
-            · I can deactivate this consent at any time from Settings<br/>
-            · Medsa is not liable for information on any physical card I self-complete
-          </div>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={()=>{onConsent();setStep('view')}}>I agree — activate my emergency card</Btn>
-          <Btn style={{width:'100%'}} onClick={()=>setStep('intro')}>Back</Btn>
-        </>}
-
-        {/* Step 3 — active card view (for patient reference) */}
-        {step==='view'&&<>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
-            <div>
-              <div style={{fontSize:'17px',fontWeight:700}}>Emergency card</div>
-              <div style={{fontSize:'12px',color:C.green,marginTop:'2px'}}>● Active · Auto-updating from records</div>
-            </div>
-            <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px',fontWeight:600}}>Consented ✓</span>
-          </div>
-          <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
-            <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
-            <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{p.full_name}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>DOB {new Date(p.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · {p.medsa_id}</div>
-            <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
-              <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px',textAlign:'center'}}>
-                <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
-                <div style={{fontSize:'28px',fontWeight:800,color:C.red}}>{p.blood_type}</div>
-              </div>
-              <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
-                <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
-                <div style={{fontSize:'13px',fontWeight:600}}>Wong Tai (Mother)</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>+852 9xxx xxxx</div>
-              </div>
-            </div>
-            {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
-              <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c}</div>
-            ))}
-            <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-              {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
-                <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
+          {sel&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Select your department</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'8px',marginBottom:'20px'}}>
+              {DEPARTMENTS.map(d=>(
+                <div key={d} onClick={()=>setDept(d)} style={{padding:'9px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:dept===d?C.green:C.cream,color:dept===d?'#fff':C.textSub,border:`0.5px solid ${dept===d?C.green:C.border}`}}>{d}</div>
               ))}
             </div>
-            <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-              {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i)=>(
-                <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m}</div>
+          </>}
+
+          {needsDoctorName&&dept&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Which doctor are you?</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+              {DOCTOR_NAMES.map(name=>(
+                <div key={name} onClick={()=>setDoctorName(name)} style={{padding:'11px 16px',borderRadius:'10px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:doctorName===name?C.blueLight:C.cream,color:doctorName===name?C.blue:C.text,border:`0.5px solid ${doctorName===name?C.blue:C.border}`}}>{name}</div>
               ))}
             </div>
-          </div>
-          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
-            ◇ <strong>Physical card:</strong> Medsa provides a blank courtesy card with your QR pre-printed. Fill in fields by hand from the information above. Keep it in your wallet. Note: you are responsible for keeping the handwritten fields accurate. Scanning the QR always retrieves live verified data.
-          </div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-            <button onClick={()=>alert('Add your Medsa Emergency Card to Apple Wallet — coming in Phase 3.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
-              Apple Wallet
-            </button>
-            <button onClick={()=>alert('Add your Medsa Emergency Card to Google Wallet — coming in Phase 3.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
-              Google Wallet
-            </button>
-          </div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>alert('Request a physical courtesy card from Medsa — coming soon.')}>Request physical card</Btn>
-            <Btn variant="danger" style={{flex:1,fontSize:'12px'}} onClick={()=>{onConsent(false);setStep('intro')}}>Deactivate card</Btn>
-          </div>
-          <Btn style={{width:'100%',marginTop:'8px'}} onClick={onClose}>Close</Btn>
+          </>}
+
+          {sel&&dept&&(!needsDoctorName||doctorName)&&<Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleContinue}>Clock in as {ROLES[sel].label} →</Btn>}
         </>}
       </div>
     </div>
   )
 }
 
-// ── PULL TO REFRESH — real touch gesture, not a library ─────────────────────
-function PullToRefresh({ onRefresh, children }) {
-  const [pullDistance,setPullDistance]=useState(0)
-  const [refreshing,setRefreshing]=useState(false)
-  const startY = useRef(null)
-  const dragging = useRef(false)
-  const containerRef = useRef(null)
-  const THRESHOLD = 70
-
-  function start(clientY) {
-    if (containerRef.current && containerRef.current.scrollTop === 0) {
-      startY.current = clientY
-      dragging.current = true
-    }
-  }
-  function move(clientY) {
-    if (startY.current === null || refreshing || !dragging.current) return
-    const delta = clientY - startY.current
-    if (delta > 0 && containerRef.current && containerRef.current.scrollTop === 0) {
-      setPullDistance(Math.min(delta * 0.5, 100))
-    }
-  }
-  async function end() {
-    if (!dragging.current) return
-    dragging.current = false
-    if (pullDistance > THRESHOLD && !refreshing) {
-      setRefreshing(true)
-      await onRefresh()
-      setRefreshing(false)
-    }
-    setPullDistance(0)
-    startY.current = null
-  }
-
-  return (
-    <div
-      ref={containerRef}
-      onTouchStart={e=>start(e.touches[0].clientY)}
-      onTouchMove={e=>move(e.touches[0].clientY)}
-      onTouchEnd={end}
-      onMouseDown={e=>start(e.clientY)}
-      onMouseMove={e=>move(e.clientY)}
-      onMouseUp={end}
-      onMouseLeave={end}
-      style={{overflowY:'auto',height:'100%',position:'relative',cursor:pullDistance>0?'grabbing':'default'}}
-    >
-      <div style={{height: refreshing?50:pullDistance, transition: pullDistance===0?'height 0.2s':'none', display:'flex',alignItems:'center',justifyContent:'center',overflow:'hidden'}}>
-        <div style={{fontSize:'11px',color:C.textMuted}}>
-          {refreshing ? '⟳ Refreshing…' : pullDistance>THRESHOLD ? '↓ Release to refresh' : pullDistance>10 ? '↓ Pull to refresh' : ''}
-        </div>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={} }) {
-  // Live queue position - reads from the real `clinic_queue` table that
-  // ClinicOpsApp writes to on check-in, so this updates the moment front
-  // desk checks the patient in, and clears once their status is no longer
-  // waiting/in_room.
-  const [queueStatus,setQueueStatus]=useState({ checkedIn:false })
-  const [doctorMessages,setDoctorMessages]=useState([])
-  const [messagesLoading,setMessagesLoading]=useState(true)
-  const [openThread,setOpenThread]=useState(null) // array of messages in one conversation, shown in a modal
-  const [homePatientId,setHomePatientId]=useState(null)
-  const [replyBody,setReplyBody]=useState('')
-  const [replying,setReplying]=useState(false)
-  const [replyError,setReplyError]=useState(null)
-
-  function msgThreadKey(m) { return m.thread_id || m.id }
-
-  async function loadDoctorMessages() {
-    setMessagesLoading(true)
-    const medsaId = patient?.medsa_id
-    if (!medsaId) { setMessagesLoading(false); return [] }
-    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-    if (!patientRow) { setMessagesLoading(false); return [] }
-    setHomePatientId(patientRow.id)
-    // Only load messages from the last 90 days - older ones are cleaned up
-    // by a scheduled job (see schema_message_expiry.sql) so this doesn't
-    // grow unbounded in storage.
-    const cutoff = new Date(Date.now() - 90*24*60*60*1000).toISOString()
-    const { data } = await supabase.from('patient_messages').select('*').eq('patient_id', patientRow.id).gte('created_at', cutoff).order('created_at',{ascending:false})
-    setDoctorMessages(data||[])
-    setMessagesLoading(false)
-    return data||[]
-  }
-
-  useEffect(() => { loadDoctorMessages() }, [patient?.medsa_id])
-
-  // One entry per conversation, latest message first - this feeds both the
-  // message board list and the urgent banner at the top.
-  const doctorThreadsLatestFirst = Object.values(
-    doctorMessages.reduce((acc,m)=>{
-      const key = msgThreadKey(m)
-      if (!acc[key] || new Date(m.created_at) > new Date(acc[key].created_at)) acc[key] = m
-      return acc
-    }, {})
-  ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
-
-  const urgentMessages = doctorThreadsLatestFirst.filter(m=>m.urgent && !m.read_by_patient)
-
-  function getThreadFrom(list, m) {
-    const key = msgThreadKey(m)
-    return list.filter(x=>msgThreadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
-  }
-
-  async function handleOpenDoctorMsg(m) {
-    const thread = getThreadFrom(doctorMessages, m)
-    setOpenThread(thread)
-    const unreadIds = thread.filter(x=>!x.read_by_patient).map(x=>x.id)
-    if (unreadIds.length>0) {
-      await supabase.from('patient_messages').update({ read_by_patient: true }).in('id', unreadIds)
-      setDoctorMessages(prev=>prev.map(x=>unreadIds.includes(x.id)?{...x,read_by_patient:true}:x))
-    }
-  }
-
-  async function handleReplyToDoctor() {
-    if (!replyBody.trim() || !openThread) return
-    setReplying(true)
-    setReplyError(null)
-    const rootMsg = openThread[0]
-    const { error: insErr } = await supabase.from('patient_messages').insert({
-      patient_id: homePatientId,
-      doctor_name: rootMsg.doctor_name,
-      body: replyBody,
-      sender_type: 'patient',
-      thread_id: msgThreadKey(rootMsg),
-      read_by_patient: true,
-    })
-    setReplying(false)
-    if (insErr) { setReplyError(insErr.message); return }
-    setReplyBody('')
-    const fresh = await loadDoctorMessages()
-    setOpenThread(getThreadFrom(fresh, rootMsg))
-  }
-
-  async function handleDeleteOwnReply(id) {
-    // Patients can only delete their own replies, never the doctor's
-    // original message, since that may be clinically important to keep.
-    await supabase.from('patient_messages').delete().eq('id', id).eq('sender_type', 'patient')
-    const fresh = await loadDoctorMessages()
-    if (openThread) {
-      const remaining = getThreadFrom(fresh, openThread[0])
-      setOpenThread(remaining.length>0 ? remaining : null)
-    }
-  }
-
-  async function handleDeleteConversation(m) {
-    // Unlike the single-message delete, this removes the whole thread -
-    // the doctor's messages included - since deleting "this row" on the
-    // board is naturally understood as deleting the whole conversation.
-    const thread = getThreadFrom(doctorMessages, m)
-    await supabase.from('patient_messages').delete().in('id', thread.map(x=>x.id))
-    loadDoctorMessages()
-    if (openThread && msgThreadKey(openThread[0])===msgThreadKey(m)) setOpenThread(null)
-  }
-
-  async function loadQueueStatus() {
-    const medsaId = patient?.medsa_id
-    if (!medsaId) return
-    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-    if (!patientRow) return
-
-    const { data: myEntry } = await supabase
-      .from('clinic_queue')
-      .select('*, institutions(name)')
-      .eq('patient_id', patientRow.id)
-      .in('status', ['waiting','in_room'])
-      .order('checked_in_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (!myEntry) { setQueueStatus({ checkedIn:false }); return }
-
-    // Position = how many other patients checked in earlier are still
-    // waiting ahead of this one, at the same institution.
-    const { count } = await supabase
-      .from('clinic_queue')
-      .select('id', { count: 'exact', head: true })
-      .eq('institution_id', myEntry.institution_id)
-      .eq('status', 'waiting')
-      .lt('checked_in_at', myEntry.checked_in_at)
-
-    setQueueStatus({
-      checkedIn: true,
-      position: count || 0,
-      ticket: myEntry.ticket,
-      clinic: myEntry.institutions?.name || 'Clinic',
-      doctor: myEntry.doctor_name || 'Unassigned',
-    })
-  }
-
-  useEffect(() => {
-    loadQueueStatus()
-    const interval = setInterval(loadQueueStatus, 30000) // refresh every 30s while on this screen
-    return () => clearInterval(interval)
-  }, [patient?.medsa_id])
-
-  return (
-    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus()]) }}>
-    <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
-
-      {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
-      {urgentMessages.length>0&&(
-        <div onClick={()=>handleOpenDoctorMsg(urgentMessages[0])} style={{margin:'14px 16px 0',background:C.red,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
-          <span style={{fontSize:'20px'}}>⚠</span>
-          <div style={{flex:1}}>
-            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${urgentMessages.length} urgent message${urgentMessages.length>1?'s':''} from your doctor`:`${urgentMessages.length}則來自醫生的緊急訊息`}</div>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{urgentMessages[0].doctor_name} · {urgentMessages[0].subject||urgentMessages[0].body}</div>
-          </div>
-          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
-        </div>
-      )}
-
-      {/* ── Live queue position — shown only while checked in at a clinic ── */}
-      {queueStatus.checkedIn&&(
-        <div style={{margin:'14px 16px 0',background:C.navy,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
-          <div style={{width:44,height:44,borderRadius:'12px',background:'rgba(255,255,255,0.15)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-            <div style={{fontSize:'16px',fontWeight:800,color:'#fff',lineHeight:1}}>{queueStatus.position}</div>
-            <div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{isEn?'ahead':'位在前'}</div>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${queueStatus.position} people ahead of you`:`您前面有${queueStatus.position}位`}</div>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.7)',marginTop:'2px'}}>{queueStatus.ticket} · {queueStatus.clinic} · {queueStatus.doctor}</div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Emergency card reminder banner (shown until consented) ── */}
-      {!emergencyConsented&&(
-        <div onClick={onOpenEmergencySetup} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.amber} 0%,#c87000 100%)`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
-          <div style={{width:36,height:36,background:'rgba(255,255,255,0.2)',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',flexShrink:0}}>🛡️</div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?'Set up your emergency card':'設置緊急健康卡'}</div>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?'Let verified EMS access your critical info instantly on scan':'讓緊急人員即時掃描獲取您的關鍵資訊'}</div>
-          </div>
-          <span style={{color:'rgba(255,255,255,0.8)',fontSize:'18px'}}>›</span>
-        </div>
-      )}
-
-      {/* ── QR Health Passport — hero element ── */}
-      <div style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
-          <div>
-            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name||patient?.full_name?.split(',')[1]?.trim()||'Lisa'}`:'早晨，Lisa'}</div>
-            <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
-            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
-            {onOpenSignUp&&<div onClick={onOpenSignUp} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{isEn?'Not you? Claim or register a profile':'不是您？認領或註冊個人檔案'}</div>}
-          </div>
-          {/* Emergency card status badge */}
-          <div onClick={onOpenEmergencySetup} style={{cursor:'pointer'}}>
-            {emergencyConsented
-              ?<span style={{fontSize:'10px',background:'rgba(255,255,255,0.2)',color:'#fff',padding:'4px 10px',borderRadius:'20px',fontWeight:600,display:'flex',alignItems:'center',gap:'4px'}}><span style={{width:6,height:6,borderRadius:'50%',background:'#7fff7f',display:'inline-block'}}/>Emergency card ✓</span>
-              :<span style={{fontSize:'10px',background:'rgba(255,180,0,0.3)',color:'#ffe066',padding:'4px 10px',borderRadius:'20px',fontWeight:600}}>Emergency card — set up ›</span>
-            }
-          </div>
-        </div>
-        {/* QR Code — large and centred, the hero */}
-        <div style={{background:'#fff',borderRadius:'14px',padding:'20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'12px'}}>
-          <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
-            <rect x="2" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="2" y="28" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="28" width="4" height="4" fill={C.green}/><rect x="34" y="28" width="4" height="4" fill={C.green}/>
-            <rect x="40" y="28" width="6" height="4" fill={C.green}/><rect x="28" y="34" width="6" height="4" fill={C.green}/>
-            <rect x="36" y="34" width="4" height="4" fill={C.green}/><rect x="28" y="40" width="4" height="6" fill={C.green}/>
-            <rect x="34" y="42" width="12" height="4" fill={C.green}/>
-          </svg>
-          <div style={{textAlign:'center'}}>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{isEn?'Show this to any Medsa-registered provider':'向任何Medsa註冊醫療人員出示'}</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{isEn?'They see what their role permits · You control the rest':'他們只看到其職責所允許的內容'}</div>
-          </div>
-        </div>
-      </div>
-      <div onClick={onOpenShare} style={{margin:'10px 16px 0',background:C.card,borderRadius:'12px',padding:'12px 14px',cursor:'pointer',display:'flex',alignItems:'center',gap:'10px'}}>
-        <span style={{fontSize:'16px',color:C.textSub}}>{'\u25c7'}</span>
-        <div style={{flex:1}}>
-          <div style={{fontSize:'12px',fontWeight:600}}>{isEn?'Share for this visit':'為此次診症分享'}</div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'For a clinic that doesn\u2019t use Medsa - choose what to share':'為未使用Medsa的診所選擇分享內容'}</div>
-        </div>
-        <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
-      </div>
-      <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
-        {[
-          {key:'records',icon:'▣',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
-          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
-          {key:'prescriptions',icon:'◈',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
-          {key:'calendar',icon:'◇',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
-        ].map(item=>(
-          <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
-            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',marginBottom:'10px',color:C.green}}>{item.icon}</div>
-            <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.label}</div>
-            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.sub}</div>
-            {item.badge&&<span style={{position:'absolute',top:10,right:10,background:C.red,color:'#fff',fontSize:'10px',width:18,height:18,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>{item.badge}</span>}
-          </div>
-        ))}
-      </div>
-      <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
-      <div style={{padding:'0 16px'}}>
-        {[
-          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
-          {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
-        ].map(item=>(
-          <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
-            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
-          </div>
-        ))}
-      </div>
-      <SecLabel>{isEn?'Message board':'訊息板'}</SecLabel>
-      <Card>
-        <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
-        {[
-          {dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'},
-          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B.':'伊利沙伯醫院，3B室。'},
-          {dot:C.green,title:isEn?'Insurance claim approved':'保險索賠已批准',body:isEn?'AIA claim #44821 — HK$3,200 approved.':'AIA索賠#44821 — 港幣3,200元已批准。'},
-        ].map((m,i)=>(
-          <div key={i} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:'10px',alignItems:'flex-start'}}>
-            <div style={{width:8,height:8,borderRadius:'50%',background:m.dot,marginTop:'5px',flexShrink:0}}/>
-            <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
-          </div>
-        ))}
-        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {isEn?'Messages from your doctor':'醫生的訊息'}</div>
-        {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
-        {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
-        {doctorThreadsLatestFirst.map((m,i)=>(
-          <div key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'10px 14px',borderBottom:i<doctorThreadsLatestFirst.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer',background:m.urgent&&!m.read_by_patient?C.redLight:'transparent'}}>
-            <div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:(!m.read_by_patient?C.green:C.border),marginTop:'5px',flexShrink:0}}/>
-            <div style={{flex:1}}>
-              <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                <span style={{fontSize:'12px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
-                {m.urgent&&<span style={{fontSize:'8px',background:C.red,color:'#fff',padding:'1px 6px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
-              </div>
-              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
-            </div>
-            <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
-          </div>
-        ))}
-      </Card>
-      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
-        <span style={{color:C.brown}}>◇</span>
-        <div>
-          <div style={{fontSize:'12px',fontWeight:600,color:C.brown}}>{isEn?'You control your records':'您掌控自己的記錄'}</div>
-          <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{isEn?'Choose what each provider sees — anytime.':'隨時選擇每位醫療提供者可查看的內容。'}</div>
-        </div>
-      </div>
-
-      {openThread&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenThread(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
-            {openThread.map((m)=>(
-              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?C.greenXLight:(m.urgent?C.redLight:'#fff')}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                    <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(isEn?'You':'您'):m.doctor_name}</span>
-                    {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
-                  </div>
-                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                    <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
-                    {m.sender_type==='patient'&&<span onClick={()=>handleDeleteOwnReply(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
-                  </div>
-                </div>
-                {m.subject&&<div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{m.subject}</div>}
-                <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
-              </Card>
-            ))}
-            <Card style={{padding:'14px 16px'}}>
-              <textarea value={replyBody} onChange={e=>setReplyBody(e.target.value)} rows={3} placeholder={isEn?'Write a reply…':'撰寫回覆…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
-              {replyError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{replyError}</div>}
-              <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(isEn?'Sending…':'傳送中…'):(isEn?'Send reply':'傳送回覆')}</Btn>
-            </Card>
-          </div>
-        </div>
-      )}
-    </div>
-    </PullToRefresh>
-  )
-}
-
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={} }) {
-  // Use live Supabase data if available, otherwise fall back to demo records
-  const hasLiveData = records.length > 0
-  const [tab,setTab]=useState('all')
-  const [expanded,setExpanded]=useState(null)
-  const demoRecords=[
-    {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
-    {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
-    {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
-    {id:4,icon:'◇',bg:C.brownLight,title:'Allergy test results',sub:'Uploaded manually · PDF',date:'9 Jan 2025',src:'Manual',details:[['Penicillin','⚠ Severe allergy'],['Verified by','Pending review']]},
+// ── LIVE OVERVIEW (all roles) ─────────────────────────────────────────────────
+function LiveOverview({ role }) {
+  const [expanded,setExpanded]=useState(false)
+  const depts=[
+    {dept:'Internal Medicine',beds:20,occupied:16,waiting:3,avgWait:'22 min',staff:8},
+    {dept:'Cardiology',beds:12,occupied:9,waiting:2,avgWait:'35 min',staff:5},
+    {dept:'Emergency / A&E',beds:8,occupied:8,waiting:7,avgWait:'48 min',staff:12},
+    {dept:'Surgery',beds:10,occupied:5,waiting:0,avgWait:'—',staff:6},
+    {dept:'Psychiatry',beds:6,occupied:4,waiting:1,avgWait:'40 min',staff:3},
+    {dept:'Pharmacy',beds:null,occupied:null,waiting:14,avgWait:'8 min',staff:4},
   ]
-  const vaccines=[
-    {name:'COVID-19',status:'ok',label:'Up to date',doses:[['Dose 1 — BioNTech','12 Mar 2021'],['Dose 2 — BioNTech','3 Apr 2021'],['Booster 1','18 Jan 2022'],['Booster 2 — XBB','9 Oct 2023']]},
-    {name:'Influenza (seasonal)',status:'due',label:'Due soon',doses:[['2023–24 Quadrivalent','6 Oct 2023'],['2024–25 — Book now','Recommended']]},
-    {name:'Hepatitis B',status:'ok',label:'Complete',doses:[['Dose 1','Jan 1992'],['Dose 2','Mar 1992'],['Dose 3','Jul 1992']]},
-    {name:'HPV (Gardasil 9)',status:'ok',label:'Complete',doses:[['Dose 1','5 Sep 2018'],['Dose 2','5 Nov 2018'],['Dose 3','5 Mar 2019']]},
-    {name:'Tetanus / Td booster',status:'full',label:'Overdue',doses:[['Last booster','Mar 2013'],['Next due — every 10 yrs','Overdue 2023']]},
-  ]
-  const providers=[{init:'QE',name:'Queen Elizabeth Hospital',sub:'Medsa partner',on:true},{init:'MIH',name:'Matilda International',sub:'Medsa partner',on:true},{init:'DR',name:'Dr Chan Siu-ming',sub:'Private practitioner',on:true},{init:'VF',name:'Valley Fitness Clinic',sub:'Non-Medsa · Link share',on:false}]
+  const totalBeds=depts.filter(d=>d.beds).reduce((a,d)=>a+d.beds,0)
+  const totalOcc=depts.filter(d=>d.occupied).reduce((a,d)=>a+d.occupied,0)
+  const totalWait=depts.reduce((a,d)=>a+d.waiting,0)
+  const contextNote={
+    ems:'⚠ A&E is at full capacity. Consider diverting non-critical patients.',
+    nurse:'3 patients in Internal Medicine awaiting bed allocation.',
+    clinic_nurse:'3 patients in Internal Medicine awaiting bed allocation.',
+    doctor:'Discharge 4 patients flagged for today to free up beds.',
+    dept_head:'Discharge 4 patients flagged for today to free up beds.',
+    admin:'You can manage bed allocation from the Occupancy screen.',
+    receptionist:'Emergency is busy — let incoming patients know of wait times.',
+    pharmacist:'14 prescriptions pending in pharmacy queue.',
+    therapist:'All therapy rooms available. 1 patient waiting.',
+    allied:'Normal capacity across all departments.',
+  }
   return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{background:C.greenXLight,borderBottom:`0.5px solid ${C.greenLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
-        <span style={{color:C.green}}>◇</span>
-        <span style={{fontSize:'12px',color:C.green}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
-      </div>
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,overflowX:'auto'}}>
-        {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
-        ))}
-      </div>
-      {tab==='all'&&<>
-        <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
-        {(hasLiveData ? records.map(r=>({
-          id: r.id,
-          icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
-          bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:C.greenLight,
-          title: r.title,
-          sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
-          date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
-          src: r.source==='synced'?'Synced':'Manual',
-          details: [['Diagnosis',r.diagnosis||'—'],['Notes',r.notes||'—'],['Department',r.department||'—']],
-        })) : [
-          {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
-          {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
-          {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
-          {id:4,icon:'◇',bg:C.brownLight,title:'Allergy test results',sub:'Uploaded manually · PDF',date:'9 Jan 2025',src:'Manual',details:[['Penicillin','⚠ Severe allergy'],['Verified by','Pending review']]},
-        ]).map(r=>(
-          <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
-            <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
-              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{r.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{r.sub}</div></div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{r.src}</span></div>
-            </div>
-            {expanded===r.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-              {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
-              <div style={{display:'flex',gap:'8px',marginTop:'12px'}}>
-                <Btn style={{flex:1,fontSize:'12px'}}>Share</Btn>
-                <Btn style={{flex:1,fontSize:'12px'}}>Download</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>View full</Btn>
-              </div>
-            </div>}
-          </Card>
-        ))}
-      </>}
-      {tab==='vax'&&<>
-        <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
-        {vaccines.map(v=>(
-          <Card key={v.name}>
-            <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{v.name}</span><Badge text={v.label} type={v.status}/></div>
-            <div style={{padding:'0 16px 14px'}}>
-              {v.doses.map(([d,date])=>(
-                <div key={d} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
-                  <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:C.green,flexShrink:0}}/>
-                  <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{d}</strong></div>
-                  <span style={{fontSize:'11px',color:C.textMuted}}>{date}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>
-      </>}
-      {tab==='sharing'&&<>
-        <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
-        <Card>
-          {providers.map((p,i)=>(
-            <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:600,flexShrink:0}}>{p.init}</div>
-              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{p.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{p.sub}</div></div>
-              <Toggle checked={p.on}/>
-            </div>
-          ))}
-        </Card>
-        <SecLabel>{isEn?'Record type controls':'記錄類型控制'}</SecLabel>
-        <Card>
-          {['Lab results','Visit summaries','Imaging','Surgical history','Vaccinations','Mental health records','Allergy info'].map((item,i,arr)=>(
-            <div key={item} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
-              <span>{item}</span><Toggle checked={item!=='Mental health records'&&item!=='Surgical history'}/>
-            </div>
-          ))}
-        </Card>
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>◇ {isEn?'Create one-time access link':'建立一次性存取連結'}</Btn></div>
-      </>}
-      {tab==='upload'&&<>
-        <SecLabel>{isEn?'Upload a record':'上傳記錄'}</SecLabel>
-        <div style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer'}}>
-          <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
-          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{isEn?'Tap to upload':'點擊上傳'}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
-          <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
-            {['PDF','JPG/PNG','DICOM','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
+    <div style={{margin:'16px 16px 0'}}>
+      <div onClick={()=>setExpanded(!expanded)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:expanded?'14px 14px 0 0':'14px',padding:'12px 16px',cursor:'pointer'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+          <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>◈ Live hospital overview</div>
+          <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+            <div style={{width:7,height:7,borderRadius:'50%',background:C.green,animation:'pulse 2s infinite'}}/>
+            <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>Live</span>
+            <span style={{fontSize:'14px',color:C.textMuted,marginLeft:'4px'}}>{expanded?'▾':'▸'}</span>
           </div>
         </div>
-        <Card style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-          <div style={{width:36,height:36,borderRadius:'10px',background:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.amber,fontSize:'18px'}}>⏳</div>
-          <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>Allergy test results.pdf</div><div style={{fontSize:'11px',color:C.textSub}}>Uploaded 9 Jan · Awaiting verification</div></div>
-          <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}}>Send for review</Btn>
-        </Card>
-      </>}
-    </div>
-  )
-}
-
-// ── VIDEO CONSULTATION MODAL ─────────────────────────────────────────────────
-// Matches iMeddy's model: video call + medical certificate/referral issuance
-function VideoCallModal({ doc, isEn, onClose }) {
-  const [stage,setStage]=useState('connecting') // connecting | active | ended
-  const [docsIssued,setDocsIssued]=useState([])
-
-  useEffect(() => {
-    if (stage==='connecting') {
-      const t = setTimeout(()=>setStage('active'), 1800)
-      return () => clearTimeout(t)
-    }
-  }, [stage])
-
-  if (!doc) return null
-
-  function requestDoc(type) {
-    if (!docsIssued.includes(type)) setDocsIssued([...docsIssued, type])
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:400,display:'flex',flexDirection:'column'}}>
-      <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff',padding:'24px'}}>
-        {stage==='connecting'&&<>
-          <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green,marginBottom:'16px'}}>{doc.init}</div>
-          <div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px'}}>{doc.name}</div>
-          <div style={{fontSize:'13px',opacity:0.7,marginBottom:'24px'}}>{isEn?'Connecting…':'連接中…'}</div>
-          <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,0.2)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-          <div style={{position:'absolute',bottom:40}}>
-            <Btn variant="danger" onClick={onClose}>{isEn?'Cancel':'取消'}</Btn>
-          </div>
-        </>}
-        {stage==='active'&&<>
-          <div style={{width:'100%',maxWidth:360,aspectRatio:'3/4',background:'#1a1a1a',borderRadius:'16px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'16px',position:'relative'}}>
-            <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green}}>{doc.init}</div>
-            <div style={{position:'absolute',top:12,right:12,background:'rgba(0,0,0,0.5)',borderRadius:'20px',padding:'4px 10px',fontSize:'11px'}}>● {isEn?'Live':'直播中'}</div>
-            <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
-          </div>
-          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
-          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{doc.spec}</div>
-          <div style={{display:'flex',gap:'16px'}}>
-            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◉</button>
-            <button onClick={()=>setStage('ended')} style={{width:52,height:52,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>✕</button>
-            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◈</button>
-          </div>
-        </>}
-        {stage==='ended'&&<div style={{background:C.cream,borderRadius:'16px',padding:'24px',width:'100%',maxWidth:400,color:C.text}}>
-          <div style={{textAlign:'center',marginBottom:'16px'}}>
-            <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
-            <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {doc.spec}</div>
-          </div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
+        <div style={{display:'flex',gap:'12px'}}>
           {[
-            {key:'certificate',label:isEn?'Medical certificate':'醫療證明書'},
-            {key:'sickleave',label:isEn?'Sick leave note':'病假紙'},
-            {key:'referral',label:isEn?'Referral letter':'轉介信'},
-          ].map(d=>(
-            <div key={d.key} onClick={()=>requestDoc(d.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'8px',cursor:'pointer'}}>
-              <span style={{fontSize:'13px'}}>{d.label}</span>
-              {docsIssued.includes(d.key)
-                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Issued':'已發出'}</span>
-                :<span style={{fontSize:'11px',color:C.green}}>{isEn?'Request':'索取'} ›</span>}
-            </div>
-          ))}
-          <Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={onClose}>{isEn?'Done':'完成'}</Btn>
-        </div>}
-      </div>
-    </div>
-  )
-}
-
-function DoctorsScreen({ isEn, patient={} }) {
-  const [tab,setTab]=useState('search')
-  const [selTime,setSelTime]=useState('10:30am')
-  const [selLang,setSelLang]=useState('廣東話')
-  const [booked,setBooked]=useState(false)
-  const [sortBy,setSortBy]=useState('distance')
-  const [videoCallDoc,setVideoCallDoc]=useState(null)
-  const [whatsappReminder,setWhatsappReminder]=useState(true)
-  const [selectedDoctor,setSelectedDoctor]=useState(null)
-  const [consultType,setConsultType]=useState('in-person') // 'in-person' | 'video'
-  const [reasonForVisit,setReasonForVisit]=useState('')
-  const [symptoms,setSymptoms]=useState('')
-  const [currentMeds,setCurrentMeds]=useState('')
-  const [intakeConsent,setIntakeConsent]=useState(false)
-  const [intakeSaving,setIntakeSaving]=useState(false)
-  const [intakeError,setIntakeError]=useState(null)
-  const doctors=[
-    {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',rating:'4.9',avail:'Today',type:'ok',distanceKm:0.8,videoAvail:true},
-    {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'HK Sanatorium · Happy Valley',rating:'4.8',avail:'Tomorrow',type:'due',distanceKm:3.2,videoAvail:false},
-    {init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',rating:'4.6',avail:'Today',type:'ok',distanceKm:5.1,videoAvail:true},
-    {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',rating:'4.9',avail:'Thu',type:'due',distanceKm:1.5,videoAvail:true},
-    {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',rating:'4.5',avail:'Fully booked',type:'full',distanceKm:2.1,videoAvail:false},
-  ]
-  const sortedDoctors = [...doctors].sort((a,b)=>{
-    if (sortBy==='distance') return a.distanceKm - b.distanceKm
-    if (sortBy==='rating') return parseFloat(b.rating) - parseFloat(a.rating)
-    return 0
-  })
-  const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
-  const UNAVAIL=['9:30am','11:00am']
-  const DAYS=[['TUE','24'],['WED','25'],['THU','26'],['FRI','27'],['SAT','28']]
-  const [selDay,setSelDay]=useState('24')
-
-  function handleBookClick(doc, type) {
-    setSelectedDoctor(doc)
-    setConsultType(type)
-    setBooked(false)
-    setTab('book')
-  }
-
-  const activeDoctor = selectedDoctor || doctors[0]
-
-  async function handleConfirmBooking() {
-    if (!intakeConsent) return
-    setIntakeSaving(true)
-    setIntakeError(null)
-    try {
-      const medsaId = patient?.medsa_id
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
-
-      // Build the actual appointment datetime from the selected day/time so
-      // the 12-hour-before/after access window is real, not a placeholder.
-      const timeMatch = selTime.match(/(\d+):(\d+)(am|pm)/i)
-      let hour = timeMatch ? parseInt(timeMatch[1]) : 10
-      const minute = timeMatch ? parseInt(timeMatch[2]) : 0
-      if (timeMatch && timeMatch[3].toLowerCase()==='pm' && hour!==12) hour += 12
-      const apptDate = new Date()
-      apptDate.setDate(apptDate.getDate() + (parseInt(selDay) - apptDate.getDate()))
-      apptDate.setHours(hour, minute, 0, 0)
-
-      const windowStart = new Date(apptDate.getTime() - 12*60*60*1000)
-      const windowEnd = new Date(apptDate.getTime() + 12*60*60*1000)
-
-      const { error: insErr } = await supabase.from('appointment_intake').insert({
-        patient_id: patientRow.id,
-        appointment_time: apptDate.toISOString(),
-        doctor_name: activeDoctor.name,
-        reason_for_visit: reasonForVisit || null,
-        symptoms: symptoms || null,
-        current_medications: currentMeds || null,
-        consent_given: true,
-        consent_given_at: new Date().toISOString(),
-        access_window_start: windowStart.toISOString(),
-        access_window_end: windowEnd.toISOString(),
-      })
-      if (insErr) throw insErr
-      setBooked(true)
-    } catch (e) {
-      setIntakeError(e.message)
-    } finally {
-      setIntakeSaving(false)
-    }
-  }
-
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{background:C.green,padding:'0 16px 14px'}}>
-        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
-        </div>
-      </div>
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
-        {[['search',isEn?'Find doctors':'尋找醫生'],['book',isEn?'Book':'預約'],['payments',isEn?'Payments':'付款']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
-        ))}
-      </div>
-      {tab==='search'&&<>
-        <div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',alignItems:'center'}}>
-          <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Sort by':'排序方式'}</span>
-          {[['distance',isEn?'Nearest':'最近'],['rating',isEn?'Top rated':'評分最高']].map(([k,l])=>(
-            <div key={k} onClick={()=>setSortBy(k)} style={{fontSize:'11px',padding:'5px 12px',borderRadius:'20px',cursor:'pointer',background:sortBy===k?C.green:C.card,color:sortBy===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
-          ))}
-        </div>
-        <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
-        {sortedDoctors.map((doc,i)=>(
-          <Card key={i}>
-            <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
-                <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.spec}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{doc.clinic}</div>
-                <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center'}}>
-                  <span style={{fontSize:'11px',color:C.textMuted}}>◇ {doc.distanceKm}km</span>
-                  {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {isEn?'Video available':'視像問診'}</span>}
-                </div>
-              </div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',color:'#d4a017'}}>★★★★★</div><div style={{fontSize:'10px',color:C.textMuted}}>{doc.rating}</div><Badge text={doc.avail} type={doc.type}/></div>
-            </div>
-            <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
-              {doc.type==='full'
-                ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, doc.videoAvail?'video':'in-person')}>{isEn?'Book':'預約'}</Btn>}
-            </div>
-          </Card>
-        ))}
-      </>}
-      {tab==='book'&&<>
-        <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
-        <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
-          <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{activeDoctor.spec} · {activeDoctor.clinic}</div></div>
-        </Card>
-
-        {activeDoctor.videoAvail&&<Card style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
-          <div style={{display:'flex',gap:'8px'}}>
-            {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
-              <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
-            ))}
-          </div>
-        </Card>}
-
-        <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
-          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-            <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
-              {DAYS.map(([day,date])=>(
-                <div key={day} onClick={()=>setSelDay(date)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:selDay===date?C.green:C.card,color:selDay===date?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${selDay===date?C.green:C.border}`}}>
-                  <div style={{fontSize:'10px',opacity:0.8}}>{day}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
-              {TIMES.map(t=>{const u=UNAVAIL.includes(t);const s=t===selTime;return(
-                <div key={t} onClick={()=>!u&&setSelTime(t)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:u?'not-allowed':'pointer',background:s?C.green:u?C.beige:C.card,color:s?'#fff':u?C.textMuted:C.text,opacity:u?0.5:1}}>{t}</div>
-              )})}
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Language':'語言'}</div></div>
-          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-            {['廣東話','English','普通話','日本語'].map(l=>(
-              <div key={l} onClick={()=>setSelLang(l)} style={{border:`0.5px solid ${selLang===l?C.green:C.border}`,borderRadius:'8px',padding:'10px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:selLang===l?C.green:C.card,color:selLang===l?'#fff':C.text}}>{l}</div>
-            ))}
-          </div></div>
-        </Card>
-        <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Intake form':'問診表'}</div></div>
-          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Reason for visit':'求診原因'}</div>
-            <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={isEn?'e.g. Persistent cough':'例如：持續咳嗽'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Symptoms':'症狀'}</div>
-            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={isEn?'Describe what you\u2019re experiencing…':'描述您的症狀…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Current medications (optional)':'目前藥物（可選）'}</div>
-            <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={isEn?'e.g. Metformin 500mg':'例如：二甲雙胍 500mg'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
-
-            <div onClick={()=>setIntakeConsent(!intakeConsent)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:intakeConsent?C.greenXLight:C.card,border:`0.5px solid ${intakeConsent?C.green:C.border}`,borderRadius:'10px',cursor:'pointer'}}>
-              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${intakeConsent?C.green:C.border}`,background:intakeConsent?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{intakeConsent?'\u2713':''}</div>
-              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
-                {isEn
-                  ? 'I consent to my treating doctor accessing my relevant records for a window of 12 hours before and 12 hours after this appointment. Access automatically ends outside this window.'
-                  : '我同意主診醫生在此預約前後各12小時內查閱我的相關記錄。此時限以外將自動停止查閱。'}
-              </div>
-            </div>
-            {intakeError&&<div style={{fontSize:'12px',color:C.red,marginTop:'10px'}}>{intakeError}</div>}
-          </div>
-        </Card>
-        <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
-          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-            <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`Tue ${selDay} Jun · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
-                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
-              ))}
-            </div>
-            <div onClick={()=>setWhatsappReminder(!whatsappReminder)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'12px',cursor:'pointer'}}>
-              <div style={{width:34,height:18,borderRadius:20,background:whatsappReminder?C.green:C.border,position:'relative',flexShrink:0}}>
-                <div style={{position:'absolute',top:2,left:whatsappReminder?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'WhatsApp reminders':'WhatsApp提醒'}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Get appointment reminders via WhatsApp':'透過WhatsApp接收預約提醒'}</div>
-              </div>
-              <span style={{fontSize:'18px',color:'#25D366'}}>◈</span>
-            </div>
-            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{isEn?'Complete the intake consent above to continue':'請先完成上方的問診同意'}</div>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={!intakeConsent||intakeSaving}>{intakeSaving?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm appointment':'確認預約')}</Btn>
-          </div>
-        </Card>
-        {booked&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
-          <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
-            <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
-            <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · Tue {selDay} Jun at {selTime}</div>
-            {consultType==='video'
-              ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{isEn?'Join video call now (demo)':'立即加入視像通話（示範）'}</Btn>
-                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'In production, this unlocks at your actual appointment time.':'實際運作時，此按鈕將於預約時間開放。'}</div>
-                  <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{isEn?'Close':'關閉'}</Btn>
-                </div>
-              : <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>}
-          </div>
-        </div>}
-      </>}
-      {tab==='payments'&&<>
-        <SecLabel>{isEn?'Outstanding':'待付款'}</SecLabel>
-        <Card style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan — Jun 12</div><Badge text="Due HK$80" type="due"/></div>
-          {[['Consultation fee','HK$380'],['AIA covered','−HK$300'],['Balance','HK$80']].map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
-          <div style={{display:'flex',gap:'8px',marginTop:'12px'}}><Btn style={{flex:1,fontSize:'12px'}}>Receipt</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Pay HK$80</Btn></div>
-        </Card>
-        <SecLabel>{isEn?'Recent payments':'最近付款'}</SecLabel>
-        {[{title:'Ruttonjee Hospital — Feb 18',amount:'HK$1,200',status:'Paid',type:'ok'},{title:'Matilda International — May 3',amount:'HK$680',status:'Refund pending',type:'due'}].map((p,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'13px',fontWeight:500}}>{p.title}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{p.amount}</div><Badge text={p.status} type={p.type}/></div>
-          </Card>
-        ))}
-      </>}
-      <VideoCallModal doc={videoCallDoc} isEn={isEn} onClose={()=>setVideoCallDoc(null)}/>
-    </div>
-  )
-}
-
-function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
-  const [on,setOn]=useState(defaultOn)
-  const [t,setT]=useState(defaultTime)
-  return (
-    <Card style={{padding:'14px 16px'}}>
-      <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
-        <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
-        <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule} · Next: {next}</div></div>
-        <div onClick={()=>setOn(!on)} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
-      </div>
-      {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-        <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
-        <input type="time" value={t} onChange={e=>setT(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
-        <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
-      </div>}
-    </Card>
-  )
-}
-
-function CalendarScreen({ isEn, appointments=[], medications=[] }) {
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}}>
-          <span style={{fontSize:'15px',fontWeight:600}}>June 2025</span>
-          <div style={{display:'flex',gap:'8px'}}>
-            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>‹</button>
-            <button style={{background:C.card,border:'none',borderRadius:'50%',width:28,height:28,cursor:'pointer',fontSize:'14px'}}>›</button>
-          </div>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px',marginBottom:'8px'}}>
-          {['M','T','W','T','F','S','S'].map((d,i)=><div key={i} style={{textAlign:'center',fontSize:'11px',color:C.textMuted,fontWeight:600}}>{d}</div>)}
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'4px'}}>
-          {[16,17,18,19,20,21,22,23,24,25,26,27,28,29].map(d=>(
-            <div key={d} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:d===24?C.green:'transparent',color:d===24?'#fff':(d===25||d===27)?C.green:C.text,fontWeight:d===24?600:400}}>
-              {d}
-              {(d===25||d===27)&&<div style={{width:4,height:4,borderRadius:'50%',background:C.green,margin:'2px auto 0'}}/>}
+            {label:'Beds',value:`${totalOcc}/${totalBeds}`,color:totalOcc/totalBeds>0.85?C.red:totalOcc/totalBeds>0.7?C.amber:C.green},
+            {label:'Waiting',value:totalWait,color:totalWait>10?C.red:totalWait>5?C.amber:C.green},
+            {label:'Busiest',value:'A&E',color:C.amber},
+            {label:'Staff on',value:depts.reduce((a,d)=>a+d.staff,0),color:C.text},
+          ].map(s=>(
+            <div key={s.label} style={{flex:1,textAlign:'center'}}>
+              <div style={{fontSize:'16px',fontWeight:700,color:s.color}}>{s.value}</div>
+              <div style={{fontSize:'10px',color:C.textMuted}}>{s.label}</div>
             </div>
           ))}
         </div>
       </div>
-      <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
-      {appointments.length>0 ? appointments.map((appt,i)=>{
-        const dt = new Date(appt.scheduled_at)
-        const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
-        const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Hong_Kong'})
-        const drName = appt.practitioners?.full_name ? 'Dr '+appt.practitioners.full_name.split(',')[0] : appt.appointment_type
-        return(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'14px',fontWeight:500}}>{drName}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
-              <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
-            </div>
-            <div style={{textAlign:'right',flexShrink:0}}>
-              <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>{dateStr}</div>
-              {appt.patient_pays>0&&<div style={{fontSize:'11px',color:C.amber}}>HK${appt.patient_pays} due</div>}
-            </div>
-          </Card>
-        )
-      }) : [
-        {time:'10:30 am',date:'Tue 24 Jun',title:'Dr Chan Siu-ming',sub:'Pacific Medical Group · Wan Chai',bg:C.greenLight,icon:'◎'},
-        {time:'8:00 pm',date:'Tue 24 Jun',title:'Metformin 500mg',sub:'Take with dinner · Daily',bg:C.brownLight,icon:'◉'},
-        {time:'9:00 am',date:'Fri 27 Jun',title:'Flu vaccine — booking pending',sub:'Pacific Medical Group',bg:C.amberLight,icon:'◈'},
-      ].map((e,i)=>(
-        <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-          <div style={{width:40,height:40,borderRadius:'12px',background:e.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{e.icon}</div>
-          <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{e.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{e.sub}</div></div>
-          <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',fontWeight:600}}>{e.time}</div><div style={{fontSize:'11px',color:C.textMuted}}>{e.date}</div></div>
-        </Card>
-      ))}
-      <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
-      {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
-        <MedAlarmCard key={i} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} next="Check schedule" defaultOn={m.alarm_enabled||false} defaultTime={m.alarm_time?.slice(0,5)||'08:00'} isEn={isEn}/>
-      )) : <>
-        <MedAlarmCard med="Metformin 500mg" schedule="Daily with dinner" next="Tonight 8pm" defaultOn={true} defaultTime="20:00" isEn={isEn}/>
-        <MedAlarmCard med="Vitamin D3 1000IU" schedule="Daily with breakfast" next="Tomorrow 8am" defaultOn={true} defaultTime="08:00" isEn={isEn}/>
-        <MedAlarmCard med="Iron supplement 14mg" schedule="Every other day" next="Thu morning" defaultOn={false} defaultTime="09:00" isEn={isEn}/>
-      </>}
-      <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>
-    </div>
-  )
-}
-
-// ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({ isEn, claims=[] }) {
-  const hasLiveClaims = claims.length > 0
-  const [claimType,setClaimType]=useState(null)
-  const [checklist,setChecklist]=useState({})
-  const [bundleReady,setBundleReady]=useState(false)
-
-  // Documents that already exist in this patient's Medsa records
-  // In production these would be queried from the database
-  const MEDSA_RECORDS = {
-    'Lab results report': {title:'Blood panel — full CBC', date:'12 Jun 2025', institution:'QE Hospital'},
-    'Test results report': {title:'Blood panel — full CBC', date:'12 Jun 2025', institution:'QE Hospital'},
-    'Lab & imaging reports (if any)': {title:'Chest X-ray + Blood panel', date:'Feb & Jun 2025', institution:'QE Hospital / Ruttonjee'},
-    'Prescription copy': {title:'Metformin 500mg + Iron supplement', date:'3 May 2025', institution:'Matilda International'},
-    'Diagnosis and treatment notes': {title:'General check-up summary', date:'3 May 2025', institution:'Matilda International'},
-    'Patient ID copy': {title:'Wong Mei-ling, Lisa — MDS-84921-HK', date:'On file', institution:'Medsa profile'},
-    'Policy number': {title:'AIA Prime Care — Policy #AIA-84921-HK', date:'On file', institution:'Medsa profile'},
-  }
-
-  const CLAIM_TYPES=[
-    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:[
-      {name:'Consultation receipt',medsa:false},
-      {name:'Doctor diagnosis letter or stamp',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
-    ]},
-    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:[
-      {name:'Hospital admission & discharge summary',medsa:false},
-      {name:'All receipts and invoices',medsa:false},
-      {name:'Doctor report',medsa:false},
-      {name:'Lab & imaging reports (if any)',medsa:true},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
-    ]},
-    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:[
-      {name:'Specialist consultation receipt',medsa:false},
-      {name:'Referral letter from GP if required',medsa:false},
-      {name:'Diagnosis and treatment notes',medsa:true},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
-    ]},
-    {key:'lab',label:'Lab & imaging',icon:'◉',docs:[
-      {name:'Lab or imaging receipt',medsa:false},
-      {name:'Test results report',medsa:true},
-      {name:'Doctor referral or order',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
-    ]},
-    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:[
-      {name:'Pharmacy receipt',medsa:false},
-      {name:'Prescription copy',medsa:true},
-      {name:'Doctor diagnosis (if required)',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
-    ]},
-  ]
-
-  const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
-  // Medsa docs auto-checked, manual docs need patient action
-  const getKey = (type,i) => `${type}_${i}`
-  const isReady = (doc,key) => doc.medsa || checklist[key]
-  const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
-  const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
-  const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
-
-  return (
-    <div>
-      {/* Integration notice — greyed out past claims */}
-      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
-        ◈ <strong>Live claim tracking coming with insurer integration.</strong> Once your insurer connects with Medsa, claim submission, status updates, and approvals will sync here automatically.
-      </div>
-
-      {/* Greyed out past claims — for reference only */}
-      <SecLabel>{isEn?'Past claims (not yet synced)':'過往索賠（尚未同步）'}</SecLabel>
-      <div style={{opacity:hasLiveClaims?1:0.4,pointerEvents:hasLiveClaims?'auto':'none'}}>
-        {hasLiveClaims ? claims.map((c,i)=>{
-          const statusType = c.status==='approved'?'ok':c.status==='rejected'?'full':'due'
-          const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
-          return(
-            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
-                <div style={{fontSize:'13px',fontWeight:500}}>{c.claim_ref} · {c.institutions?.name||'—'}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name||'—'} · {c.claim_type}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>Submitted {date}</div>
-              </div>
-              <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${c.plan_covers?.toLocaleString()}</div>
-                <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
-              </div>
-            </Card>
-          )
-        }) : <>
-          <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Filed directly with AIA</div></div>
-            <Badge text="Pending" type="due"/>
-          </Card>
-          {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
-            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
-              <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
-            </Card>
-          ))}
-        </>}
-      </div>
-      {!hasLiveClaims&&<div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>}
-
-      {/* Medsa disclaimer */}
-      <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
-        ⚠ <strong>Important:</strong> Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.
-      </div>
-
-      {/* Claim preparation flow */}
-      <SecLabel>{isEn?'Prepare a claim package':'準備索賠文件包'}</SecLabel>
-
-      {!claimType&&<>
-        <div style={{padding:'0 16px 6px',fontSize:'12px',color:C.textSub}}>Select the type of claim you are preparing:</div>
-        {CLAIM_TYPES.map(t=>(
-          <Card key={t.key} onClick={()=>{setClaimType(t.key);setChecklist({});setBundleReady(false)}} style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px',cursor:'pointer'}}>
-            <div style={{width:40,height:40,background:C.greenLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{t.icon}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{t.label}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{t.docs.length} documents typically required</div></div>
-            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
-          </Card>
-        ))}
-      </>}
-
-      {claimType&&selectedType&&<>
-        <div style={{padding:'0 16px 10px',display:'flex',alignItems:'center',gap:'10px'}}>
-          <div onClick={()=>{setClaimType(null);setChecklist({});setBundleReady(false)}} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Change claim type</div>
-          <span style={{fontSize:'12px',color:C.textMuted}}>· {selectedType.label}</span>
-        </div>
-
-        {/* Auto-attach summary */}
-        <div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'12px 14px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◎ {medsaCount} of {selectedType.docs.length} documents auto-attached from your Medsa records</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{manualCount > 0 ? `${manualCount} item${manualCount>1?'s':''} need your attention — marked below.` : 'All documents are ready. You can bundle your claim now.'}</div>
-        </div>
-        <Card style={{padding:'16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>Documents checklist</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Green items are auto-attached from your Medsa records. Upload or confirm the remaining items.</div>
-          {selectedType.docs.map((doc,i)=>{
-            const key=getKey(claimType,i)
-            const ready=isReady(doc,key)
-            const medsaRecord=MEDSA_RECORDS[doc.name]
+      {expanded&&(
+        <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderTop:'none',borderRadius:'0 0 14px 14px',overflow:'hidden'}}>
+          {depts.map((d,i)=>{
+            const pct=d.beds?Math.round(d.occupied/d.beds*100):null
+            const barColor=pct>=90?C.red:pct>=70?C.amber:C.green
             return(
-              <div key={i} style={{display:'flex',gap:'12px',alignItems:'flex-start',padding:'12px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent',margin:doc.medsa?'0 -16px':undefined,padding:doc.medsa?'12px 16px':'12px 0'}}>
-                {/* Checkbox — auto-checked and locked for Medsa records */}
-                <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',cursor:doc.medsa?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}
-                  onClick={()=>!doc.medsa&&setChecklist(prev=>({...prev,[key]:!prev[key]}))}>
-                  {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+              <div key={i} style={{padding:'10px 16px',borderBottom:i<depts.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                  <span style={{fontSize:'13px',fontWeight:500}}>{d.dept}</span>
+                  <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textSub}}>
+                    {d.beds&&<span>Beds: <strong style={{color:pct>=90?C.red:pct>=70?C.amber:C.green}}>{d.occupied}/{d.beds}</strong></span>}
+                    <span>Waiting: <strong style={{color:d.waiting>5?C.red:d.waiting>2?C.amber:C.green}}>{d.waiting}</strong></span>
+                    <span>~{d.avgWait}</span>
+                  </div>
                 </div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                  {doc.medsa&&medsaRecord&&<>
-                    <div style={{fontSize:'11px',color:C.green,marginTop:'3px',fontWeight:500}}>◎ Auto-attached from Medsa records</div>
-                    <div style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
-                      <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{medsaRecord.title}</div>
-                      <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{medsaRecord.date} · {medsaRecord.institution}</div>
-                    </div>
-                  </>}
-                  {!doc.medsa&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
-                </div>
-                {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
-                {doc.medsa&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:600,flexShrink:0,alignSelf:'center'}}>From Medsa</span>}
+                {pct!==null&&<div style={{height:5,background:C.card,borderRadius:5,overflow:'hidden'}}><div style={{height:'100%',width:`${pct}%`,background:barColor,borderRadius:5}}/></div>}
               </div>
             )
           })}
-        </Card>
-
-        {/* Progress indicator */}
-        <div style={{padding:'0 16px 10px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>
-            <span style={{color:C.green}}>{medsaCount} auto-attached from Medsa</span>
-            {allChecked
-              ?<span style={{color:C.green,fontWeight:600}}>All documents ready ✓</span>
-              :<span>{manualCount - Object.values(checklist).filter(Boolean).length} still needed</span>}
+          <div style={{padding:'10px 16px',background:C.greenXLight,borderTop:`0.5px solid ${C.border}`}}>
+            <div style={{fontSize:'11px',color:C.green,lineHeight:1.5}}>{contextNote[role]||contextNote.allied}</div>
           </div>
-          <div style={{height:6,background:C.card,borderRadius:6,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${(selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length/selectedType.docs.length)*100}%`,background:allChecked?C.green:C.amber,borderRadius:6,transition:'width 0.3s'}}/>
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length} of {selectedType.docs.length} documents ready</div>
         </div>
-
-        {/* Bundle and submit */}
-        <div style={{padding:'0 16px 8px'}}>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} disabled={!allChecked} onClick={()=>setBundleReady(true)}>
-            {allChecked?'Bundle claim package for download':'Complete checklist to bundle'}
-          </Btn>
-          {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Your documents have been bundled. Download the package and submit it directly to your insurer, or hold it ready for when direct submission via Medsa is available.</div>
-            <Btn style={{width:'100%',marginBottom:'6px'}}>Download claim package (PDF)</Btn>
-            <div style={{textAlign:'center'}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>or</div>
-              <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px',textAlign:'center',opacity:0.5}}>
-                <div style={{fontSize:'12px',color:C.textSub,fontWeight:500}}>Submit directly via Medsa</div>
-                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Available once your insurer integrates with Medsa</div>
-              </div>
-            </div>
-          </div>}
-        </div>
-
-        {/* Final disclaimer */}
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-          ◇ This checklist covers standard requirements. Your insurer or agent may request additional documents specific to your plan or claim. Medsa is a preparation tool only — submission, review, and approval are handled entirely by your insurer. For plan-specific guidance, contact your assigned agent.
-        </div>
-      </>}
+      )}
     </div>
   )
 }
 
-function InsuranceScreen({ isEn, claims=[], patient={} }) {
-  const hasLiveClaims = claims.length > 0
-  const [tab,setTab]=useState('plans')
-  const [expanded,setExpanded]=useState(null)
-  const [inquired,setInquired]=useState(null)
-  const [anonRating,setAnonRating]=useState(null)
-  const [feedbackText,setFeedbackText]=useState('')
-  const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
-  const [activePolicy,setActivePolicy]=useState(null)
-  const [policyLoading,setPolicyLoading]=useState(true)
-  const [renewalRequested,setRenewalRequested]=useState(false)
-
-  useEffect(() => {
-    async function loadPolicy() {
-      const medsaId = patient?.medsa_id
-      if (!medsaId) { setPolicyLoading(false); return }
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) { setPolicyLoading(false); return }
-      const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
-      setActivePolicy(data||null)
-      setRenewalRequested(!!data?.patient_requested_renewal_at)
-      setPolicyLoading(false)
-    }
-    loadPolicy()
-    const interval = setInterval(loadPolicy, 30000) // keep renewal status live without a manual reload
-    return () => clearInterval(interval)
-  }, [patient?.medsa_id])
-
-  async function handleRequestRenewal() {
-    if (!activePolicy) return
-    setRenewalRequested(true)
-    await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', activePolicy.id)
-  }
-
-  async function handleSignContract() {
-    if (!activePolicy) return
-    const signedAt = new Date().toISOString()
-    setActivePolicy({...activePolicy, patient_signed_at: signedAt})
-    await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', activePolicy.id)
-  }
-
-  const [viewError,setViewError]=useState(null)
-  async function handleViewContract() {
-    if (!activePolicy?.contract_file_path) return
-    setViewError(null)
-    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(activePolicy.contract_file_path, 300) // link valid 5 minutes
-    if (error || !data?.signedUrl) { setViewError('Could not open the contract - ask your agent to check the upload.'); return }
-    window.open(data.signedUrl, '_blank')
-  }
-
-  const plans=[
-    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',sponsored:true,
-     criteria:['Covers diabetes management','Includes outpatient visits','Includes lab tests'],
-     covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
-    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',sponsored:false,
-     criteria:['Hospitalisation-focused','Lower monthly cost','Limited outpatient coverage'],
-     covers:['Hospitalisation','Specialist','Surgery']},
-    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',sponsored:false,
-     criteria:['Includes travel emergency cover','Includes mental health','Higher monthly cost'],
-     covers:['Hospitalisation','Outpatient','Travel emergency','Mental health']},
-    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',sponsored:true,
-     criteria:['Lump sum on diagnosis','57 covered conditions','Add-on, not standalone'],
-     covers:['Critical illness lump sum','57 covered conditions']},
-  ]
-
+// ── EMS EMERGENCY CARD ────────────────────────────────────────────────────────
+function EMSCard({ onClose }) {
   return (
     <div style={{background:C.beige,flex:1}}>
-      {/* Active plan banner - real data from agent_policies */}
-      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading your plan...</div>}
-      {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
-      {!policyLoading&&activePolicy&&(() => {
-        const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
-        const inProgress = activePolicy.status==='renewal_in_progress'
-        const readyToSign = inProgress && activePolicy.contract_ready_at && !activePolicy.patient_signed_at
-        const waitingOnAgent = inProgress && !activePolicy.contract_ready_at
-        return (
-        <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
-          <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
-          <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
-
-          {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
-            {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}
-          </div>}
-
-          {readyToSign&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Your new contract is ready':'您的新合約已準備就緒'}</div>
-            <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Review the document below, then confirm once you're ready to sign.":'請先查閱以下文件，準備好後確認簽署。'}</div>
-            {viewError&&<div style={{fontSize:'11px',color:'#ffb3b3',marginBottom:'10px'}}>{viewError}</div>}
-            <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={handleViewContract}>{isEn?'View contract':'查看合約'}</Btn>
-              <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
-            </div>
-          </div>}
-
-          {activePolicy.patient_signed_at&&inProgress&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px'}}>
-            ✓ {isEn?'Signed — your agent will confirm the renewal shortly.':'已簽署 — 代理人將盡快確認續保。'}
-          </div>}
-
-          {!inProgress&&<div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
-            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Days left':'剩餘天數'}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
-            <div style={{flex:1}}/>
-            {daysLeft<=45&&(renewalRequested
-              ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
-              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
-          </div>}
+      <div style={{background:C.red,margin:'16px 16px 0',borderRadius:'16px',padding:'20px',color:'#fff'}}>
+        <div style={{fontSize:'10px',opacity:0.7,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'6px'}}>⚠ emergency health card — auto-surfaced on scan</div>
+        <div style={{fontSize:'20px',fontWeight:700}}>Wong Mei-ling, Lisa</div>
+        <div style={{fontSize:'12px',opacity:0.8,marginTop:'2px'}}>DOB 14 Mar 1988 · MDS-84921-HK</div>
+        <div style={{marginTop:'14px',display:'flex',gap:'10px'}}>
+          <div style={{background:'rgba(255,255,255,0.18)',borderRadius:'10px',padding:'10px 14px',flex:1}}>
+            <div style={{fontSize:'10px',opacity:0.7}}>Blood type</div>
+            <div style={{fontSize:'26px',fontWeight:800}}>O+</div>
+          </div>
+          <div style={{background:'rgba(255,255,255,0.18)',borderRadius:'10px',padding:'10px 14px',flex:2}}>
+            <div style={{fontSize:'10px',opacity:0.7}}>Emergency contact</div>
+            <div style={{fontSize:'13px',fontWeight:600,marginTop:'2px'}}>Wong Tai (Mother)</div>
+            <div style={{fontSize:'12px',opacity:0.8}}>+852 9xxx xxxx</div>
+          </div>
         </div>
-        )
-      })()}
+      </div>
+      <SecLabel>Critical conditions</SecLabel>
+      <Card style={{padding:'12px 16px'}}>
+        {['Type 2 Diabetes (insulin-dependent)','Coronary artery disease','Iron deficiency anaemia'].map((c,i,arr)=>(
+          <div key={i} style={{padding:'7px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'14px',fontWeight:500,display:'flex',alignItems:'center',gap:'8px'}}>
+            <span style={{color:C.red,fontSize:'10px'}}>◎</span> {c}
+          </div>
+        ))}
+      </Card>
+      <SecLabel>Severe allergies</SecLabel>
+      <Card style={{padding:'12px 16px'}}>
+        {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i,arr)=>(
+          <div key={i} style={{padding:'7px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'14px',fontWeight:700,color:C.red}}>⚠ {a}</div>
+        ))}
+      </Card>
+      <SecLabel>Current medications</SecLabel>
+      <Card style={{padding:'12px 16px'}}>
+        {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i,arr)=>(
+          <div key={i} style={{fontSize:'13px',padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>◉ {m}</div>
+        ))}
+      </Card>
+      <div style={{padding:'0 16px 8px'}}><div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>✓ Verified Medsa record · Last updated 12 Jun 2025 · QE Hospital</div></div>
+      <div style={{padding:'0 16px 16px'}}><Btn style={{width:'100%'}} onClick={onClose}>← Back to patient search</Btn></div>
+    </div>
+  )
+}
 
-      {/* Tabs */}
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Compare plans':'比較計劃'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+// ── PRACTITIONER ID ───────────────────────────────────────────────────────────
+function PractitionerIDScreen({ role }) {
+  const r=ROLES[role]
+  const access=ACCESS[role]||{}
+  const [idTab,setIdTab]=useState('credentials')
+  const [lostReported,setLostReported]=useState(false)
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Your practitioner ID</SecLabel>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,margin:'0 0 0 0'}}>
+        {[['credentials','Credentials'],['qr','My QR code']].map(([k,l])=>(
+          <div key={k} onClick={()=>setIdTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:idTab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${idTab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
-
-      {/* ── PLANS & COMPARISON ── */}
-      {tab==='plans'&&<>
-        {/* How Medsa connects patients to insurers — neutral comparison, not advice */}
-        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ How Medsa connects you to insurers</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
-            Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.
+      {idTab==='qr'&&<>
+        <div style={{margin:'16px 16px 0',background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'28px 20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'16px'}}>
+          <svg width="160" height="160" viewBox="0 0 48 48" fill="none">
+            <rect x="2" y="2" width="18" height="18" rx="2" fill={r.color}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="2" width="18" height="18" rx="2" fill={r.color}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="2" y="28" width="18" height="18" rx="2" fill={r.color}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="28" width="4" height="4" fill={r.color}/><rect x="34" y="28" width="4" height="4" fill={r.color}/>
+            <rect x="40" y="28" width="6" height="4" fill={r.color}/><rect x="28" y="34" width="6" height="4" fill={r.color}/>
+            <rect x="36" y="34" width="4" height="4" fill={r.color}/><rect x="28" y="40" width="4" height="6" fill={r.color}/>
+            <rect x="34" y="42" width="12" height="4" fill={r.color}/>
+          </svg>
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:'14px',fontWeight:600,color:C.text}}>Chan Siu-ming, David</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{r.label} · QE Hospital</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>HK-MED-48291</div>
           </div>
+          <div style={{fontSize:'11px',color:C.textSub,textAlign:'center',lineHeight:1.5}}>This QR is used for clock-in at your institution and patient scanning. It encodes your role and permissions — scanning with different systems shows role-appropriate data.</div>
         </div>
-
-        <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ Plan comparison, not advice</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn't rank plans or tell you which is "best" — that's a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.</div>
+        <div style={{margin:'12px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
+          ◇ Your physical Medsa ID card was issued when your account was created and includes this QR. A replacement is sent automatically if your credentials change. If your card is lost or stolen, report it below.
         </div>
-
-        <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
-        {plans.map((plan,i)=>(
-          <Card key={i} style={{padding:'14px 16px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
-              <div style={{flex:1}}>
-                <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
-                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
-                  <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{plan.type}</span>
-                </div>
-                <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
-              </div>
-              <div style={{textAlign:'right',flexShrink:0}}>
-                <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div>
-              </div>
+        {!lostReported
+          ?<div style={{padding:'12px 16px 16px'}}>
+            <div onClick={()=>setLostReported(true)} style={{fontSize:'13px',color:C.red,textAlign:'center',cursor:'pointer',padding:'10px',borderRadius:'10px',border:`0.5px solid ${C.red}`,background:C.redLight}}>
+              ◎ Report lost or stolen card
             </div>
-            {/* Objective criteria met - no ranking, no score */}
-            <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-              {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
-            </div>
-            {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
-            </div>}
-            <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              {inquired===i
-                ?<div style={{flex:1,background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:500}}>✓ Enquiry sent</div>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setInquired(i)}>Inquire about plan</Btn>}
-            </div>
-            {/* Post-inquiry confirmation */}
-            {inquired===i&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
-              <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
-              <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Not sure which plans to combine? A licensed agent can help structure your coverage once assigned.</div>
-            </div>}
-          </Card>
+          </div>
+          :<div style={{margin:'12px 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Lost card reported</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>Your current card has been deactivated. Medsa will issue a replacement card to your registered address within 3–5 business days. Your QR above remains valid in the meantime.</div>
+          </div>
+        }
+      </>}
+      {idTab==='credentials'&&<>
+      <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${r.color} 0%,${r.color}cc 100%)`,borderRadius:'16px',padding:'24px',color:'#fff',position:'relative',overflow:'hidden'}}>
+        <div style={{position:'absolute',top:-20,right:-20,width:100,height:100,borderRadius:'50%',background:'rgba(255,255,255,0.07)'}}/>
+        <div style={{fontSize:'10px',opacity:0.6,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'4px'}}>medsa practitioner</div>
+        <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Dr Chan Siu-ming</div>
+        <div style={{fontSize:'13px',opacity:0.85,marginBottom:'16px'}}>{r.label} · Internal Medicine</div>
+        <div style={{display:'flex',gap:'20px'}}>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>License</div><div style={{fontSize:'13px',fontWeight:600}}>HK-MED-48291</div></div>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Institution</div><div style={{fontSize:'13px',fontWeight:600}}>QE Hospital</div></div>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Dept</div><div style={{fontSize:'13px',fontWeight:600}}>Internal Med.</div></div>
+        </div>
+        <div style={{position:'absolute',bottom:20,right:20,width:52,height:52,background:'#fff',borderRadius:'8px',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+            <rect x="1" y="1" width="13" height="13" rx="2" fill={r.color}/><rect x="4" y="4" width="7" height="7" rx="1" fill="white"/>
+            <rect x="22" y="1" width="13" height="13" rx="2" fill={r.color}/><rect x="25" y="4" width="7" height="7" rx="1" fill="white"/>
+            <rect x="1" y="22" width="13" height="13" rx="2" fill={r.color}/><rect x="4" y="25" width="7" height="7" rx="1" fill="white"/>
+            <rect x="22" y="22" width="4" height="4" fill={r.color}/><rect x="28" y="22" width="4" height="4" fill={r.color}/>
+            <rect x="22" y="28" width="4" height="6" fill={r.color}/><rect x="28" y="28" width="8" height="4" fill={r.color}/>
+          </svg>
+        </div>
+      </div>
+      <SecLabel>Credentials</SecLabel>
+      <Card style={{padding:'0 16px'}}>
+        {[['Full name','Chan Siu-ming, David'],['License no.','HK-MED-48291'],['Issued by','Medical Council of HK'],['Specialty','Internal Medicine'],['Position',r.label],['Institution','Queen Elizabeth Hospital'],['Valid until','31 Dec 2026']].map(([l,v],i,arr)=>(
+          <InfoRow key={l} label={l} value={v} last={i===arr.length-1}/>
         ))}
-
-        {/* Search all plans */}
-        <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
-        <div style={{padding:'0 16px 10px'}}>
-          <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-            <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
-          </div>
-        </div>
-        <div style={{padding:'0 16px 16px'}}>
-          <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-            ◇ Sponsored plans are clearly labelled and filtered the same way as any other plan — sponsorship never changes what's shown. This is a comparison tool, not financial advice. Medsa earns a referral fee from insurers or licensed intermediaries for enquiries sent through this screen.
-          </div>
-        </div>
-      </>}
-
-      {/* ── CLAIMS ── */}
-      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims}/>}
-
-      {/* ── AGENT RATINGS ── */}
-      {tab==='agents'&&<>
-        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ Agent ratings — coming with insurer integration</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
-            Once your insurer integrates with Medsa, verified agents will appear here with ratings, languages, specialties, and availability. You will be able to browse, choose, and switch agents directly. All ratings are anonymous and based on verified interactions only.
-          </div>
-        </div>
-
-        {/* Anonymous feedback explainer */}
-        <SecLabel>{isEn?'How feedback works':'如何提交評價'}</SecLabel>
-        <Card style={{padding:'14px 16px'}}>
-          {[
-            {icon:'◎',title:'Anonymous by default',body:'Your name is never attached to ratings or comments. Agents and insurers cannot identify who left feedback.'},
-            {icon:'◈',title:'Verified interactions only',body:'You can only rate an agent after a confirmed interaction — prevents fake reviews.'},
-            {icon:'◇',title:'Separate from complaints',body:'Ratings are public and anonymous. Formal complaints are named, private, and go to the insurer and Medsa support.'},
-          ].map((item,i,arr)=>(
-            <div key={i} style={{display:'flex',gap:'12px',padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <span style={{fontSize:'18px',color:C.green,flexShrink:0}}>{item.icon}</span>
-              <div><div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.title}</div><div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{item.body}</div></div>
-            </div>
-          ))}
-        </Card>
-
-        {/* Preview of what agent ratings will look like */}
-        <SecLabel>{isEn?'Preview — agent ratings once live':'預覽 — 代理人評分上線後'}</SecLabel>
-        <div style={{margin:'0 16px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',opacity:0.6}}>
-          <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px',textAlign:'center',fontStyle:'italic'}}>This is a preview — agent profiles will be verified and live once your insurer integrates with Medsa</div>
-          {[
-            {init:'張',name:'Agent A',company:'AIA',rating:4.9,reviews:62,spec:'Health + critical illness',langs:['廣東話','English'],avail:'Available'},
-            {init:'李',name:'Agent B',company:'Prudential',rating:4.8,reviews:41,spec:'Family & travel plans',langs:['English','普通話'],avail:'Busy'},
-          ].map((a,i)=>(
-            <div key={i} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 0',borderTop:i>0?`0.5px solid ${C.border}`:'none'}}>
-              <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{a.company} · {a.spec}</div>
-                <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(a.rating))} <span style={{fontSize:'11px',color:C.textMuted}}>{a.rating} ({a.reviews})</span></div>
-                <div style={{display:'flex',gap:'4px',marginTop:'4px',flexWrap:'wrap'}}>
-                  {a.langs.map(l=><span key={l} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'1px 7px',borderRadius:'20px'}}>{l}</span>)}
-                  <span style={{fontSize:'10px',background:a.avail==='Available'?C.greenLight:C.amberLight,color:a.avail==='Available'?C.green:C.amber,padding:'1px 7px',borderRadius:'20px'}}>{a.avail}</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Anonymous feedback form — available now for patients who have interacted */}
-        <SecLabel>{isEn?'Leave anonymous feedback':'留下匿名評價'}</SecLabel>
-        <Card style={{padding:'16px'}}>
-          {!feedbackSubmitted?<>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>Had a recent interaction with an agent through Medsa? Leave anonymous feedback — your identity will never be revealed.</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
-            <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-              {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAnonRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:anonRating&&anonRating>=n?1:0.25}}>★</div>)}
-            </div>
-            <textarea value={feedbackText} onChange={e=>setFeedbackText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px'}} rows={3} placeholder="Optional comment — anonymous, never attributed to you…"/>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>◇ Your name and account details are never stored with this feedback.</div>
-            <Btn variant="primary" style={{width:'100%'}} disabled={!anonRating} onClick={()=>setFeedbackSubmitted(true)}>Submit anonymously</Btn>
-          </>:<>
-            <div style={{textAlign:'center',padding:'16px 0'}}>
-              <div style={{fontSize:'28px',marginBottom:'10px'}}>✓</div>
-              <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'6px'}}>Feedback submitted anonymously</div>
-              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Thank you. Your feedback helps other patients make informed choices. It will appear on the agent's public profile once insurer integration is live.</div>
-            </div>
-          </>}
-        </Card>
-
-        {/* Complaint vs feedback distinction */}
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-          ◇ <strong>Feedback is anonymous and public.</strong> If you need to raise a formal complaint about an agent or insurer, use the Help section — complaints are named, private, and directed to Medsa support and the relevant insurer.
-        </div>
-      </>}
-    </div>
-  )
-}
-
-
-function PrescriptionsScreen({ isEn, medications=[] }) {
-  const hasLiveMeds = medications.length > 0
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
-      {(hasLiveMeds ? medications.map((m,idx)=>({
-        name:`${m.medication_name} ${m.dosage||''}`.trim(),
-        dose:m.frequency||'As prescribed',
-        dr:m.prescribed_by||'—',
-        refills:`${m.institution||''} · ${m.start_date?'Since '+new Date(m.start_date).toLocaleDateString('en-HK',{month:'short',year:'numeric'}):''}`.trim().replace(/^·\s*/,''),
-        icon:['◉','◈','◇','◎','▣'][idx%5],
-        bg:[C.greenLight,C.brownLight,C.amberLight,C.blueLight,C.greenLight][idx%5],
-      })) : [
-        {name:'Metformin 500mg',dose:'1 tablet twice daily with meals',dr:'Dr Chan Siu-ming',refills:'2 refills remaining',icon:'◉',bg:C.greenLight},
-        {name:'Vitamin D3 1000IU',dose:'1 capsule daily with breakfast',dr:'Dr Chan Siu-ming',refills:'Auto-refill on',icon:'◈',bg:C.brownLight},
-        {name:'Iron supplement 14mg',dose:'1 tablet every other day',dr:'Dr Lam Wai-yee',refills:'1 refill remaining',icon:'◇',bg:C.amberLight},
-      ]).map((rx,i)=>(
-        <Card key={i}>
-          <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{rx.icon}</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
-              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{rx.dose}</div>
-              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{rx.dr}</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{rx.refills}</div>
-            </div>
-          </div>
-          <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}}>Drug info</Btn>
-            <Btn style={{flex:1,fontSize:'12px'}}>Interactions</Btn>
-            <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Refill</Btn>
-          </div>
-        </Card>
-      ))}
-      <SecLabel>{isEn?'Drug reference':'藥物參考'}</SecLabel>
-      <Card style={{padding:'14px 16px'}}>
-        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
-        </div>
-        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage, interactions, contraindications, and side effects.':'查看劑量、相互作用、禁忌症和副作用。'}</div>
       </Card>
-    </div>
-  )
-}
-
-function FamilyScreen({ isEn }) {
-  const members=[
-    {name:'Wong Tai (Mum)',relation:'Mother',age:64,type:'Senior',status:'Active',alerts:2},
-    {name:'Wong Siu-lok',relation:'Son',age:14,type:'Minor',status:'Active',alerts:0},
-    {name:'Uncle Cheung Ho',relation:'Uncle',age:72,type:'Senior',status:'Pending',alerts:1},
-  ]
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Active · HK$38/mo</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Monitoring 2 of 3 members · Renews 1 Jul':'監護3名成員中的2名 · 7月1日續期'}</div>
-      </div>
-      <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
-      {members.map((m,i)=>(
-        <Card key={i} style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:m.type==='Minor'?C.blueLight:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:m.type==='Minor'?C.blue:C.amber,flexShrink:0}}>{m.name[0]}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:600}}>{m.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{m.relation} · Age {m.age} · {m.type}</div></div>
-            <div style={{textAlign:'right'}}>
-              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:m.status==='Active'?C.greenLight:C.amberLight,color:m.status==='Active'?C.green:C.amber}}>{m.status}</span>
-              {m.alerts>0&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>⚠ {m.alerts} alert{m.alerts>1?'s':''}</div>}
-            </div>
+      <SecLabel>Access permissions</SecLabel>
+      <Card>
+        {[['Scan patient QR',true],['View patient records',!!access.identity],['View medical history',!!access.history],['View medication records',!!access.medications],['Prescribe medications',!!access.prescribe],['Dispense medications',!!access.dispense],['View mental health records',!!access.mental],['Emergency override',!!access.emergency],['Manage role permissions',!!access.admin_perms]].map(([label,allowed],i,arr)=>(
+          <div key={label} style={{padding:'11px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
+            <span>{label}</span>
+            <span style={{fontSize:'11px',fontWeight:600,color:allowed?C.green:C.textMuted}}>{allowed?'✓ Allowed':'— Restricted'}</span>
           </div>
-          <div style={{background:C.beige,borderRadius:'10px',padding:'10px 12px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Guardian access':'監護人存取'}</div>
-            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {['Medication reminders','Appointment alerts','Emergency card','Vitals summary'].map(tag=>(
-                <span key={tag} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px'}}>{tag}</span>
-              ))}
-            </div>
-          </div>
-          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>View health</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Manage access</Btn></div>
-        </Card>
-      ))}
-      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
-      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
-      </div>
-    </div>
-  )
-}
-
-function StorageScreen({ isEn, patient={} }) {
-  const tiers=[
-    {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
-    {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
-    {name:'Family',price:'HK$38/mo',storage:'50 GB shared',perks:['Everything in Personal','Up to 5 family members','Guardian monitoring for seniors/minors','Priority support','Family emergency card'],current:false,color:C.brown,bg:C.brownLight},
-  ]
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{isEn?'Your storage':'您的儲存空間'}</SecLabel>
-      <Card style={{padding:'16px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
-        <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
-        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?"At current rate you'll reach your limit in ~14 months.":'按目前速度，約14個月內達到限額。'}</div>
+        ))}
       </Card>
-      <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
-      {tiers.map((tier,i)=>(
-        <div key={i} style={{background:C.cream,border:`0.5px solid ${tier.current?tier.color:C.border}`,borderRadius:'14px',margin:'0 16px 10px',padding:'16px',position:'relative'}}>
-          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{isEn?'Current plan':'目前計劃'}</span>}
-          <div style={{fontSize:'16px',fontWeight:700,color:tier.color,marginBottom:'2px'}}>{tier.name}</div>
-          <div style={{fontSize:'22px',fontWeight:800,color:C.text,marginBottom:'2px'}}>{tier.price}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {isEn?'cloud storage':'雲端儲存'}</div>
-          <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'14px'}}>
-            {tier.perks.map(p=><div key={p} style={{fontSize:'12px',color:C.text,display:'flex',alignItems:'center',gap:'7px'}}><span style={{color:tier.color,fontSize:'10px'}}>✓</span>{p}</div>)}
-          </div>
-          {!tier.current&&<button style={{width:'100%',border:'none',background:tier.color,borderRadius:'10px',padding:'11px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'inherit',color:'#fff'}}>{isEn?`Upgrade to ${tier.name}`:`升級至${tier.name}`}</button>}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── SIGN-UP GATE — two paths into Medsa ──────────────────────────────────────
-// Path A: a clinic already created a placeholder profile (CSV import or
-// manual registration). A claim code sent only to the phone/email the
-// CLINIC already had on file proves the real patient is claiming it.
-// Path B: no institution record exists yet. Since there's no prior anchor,
-// this requires document + liveness verification instead.
-function SignUpGate({ onComplete, onSkipDemo }) {
-  const [mode,setMode]=useState(null) // null | 'claim' | 'register'
-
-  if (!mode) return (
-    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:380,textAlign:'center'}}>
-        <MedsaLogo height={28}/>
-        <div style={{fontSize:'14px',color:C.textSub,margin:'16px 0 28px'}}>Get started with your health passport</div>
-        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-          <Card onClick={()=>setMode('claim')} style={{padding:'18px',textAlign:'left'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>A clinic already has my record</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Claim your existing profile using the code sent to your phone</div>
-          </Card>
-          <Card onClick={()=>setMode('register')} style={{padding:'18px',textAlign:'left'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I'm new to Medsa</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Register with ID verification</div>
-          </Card>
-        </div>
-        {onSkipDemo&&<div onClick={onSkipDemo} style={{marginTop:'20px',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>View demo instead →</div>}
-      </div>
-    </div>
-  )
-
-  if (mode==='claim') return <ClaimProfileFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
-  return <SelfRegisterFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
-}
-
-function ClaimProfileFlow({ onBack, onComplete }) {
-  const [hkid,setHkid]=useState('')
-  const [code,setCode]=useState('')
-  const [error,setError]=useState(null)
-  const [checking,setChecking]=useState(false)
-
-  async function handleClaim() {
-    setChecking(true)
-    setError(null)
-    const { data, error: qErr } = await supabase.from('patients').select('*').eq('hkid', hkid).eq('claim_code', code.toUpperCase()).maybeSingle()
-    setChecking(false)
-    if (qErr || !data) { setError('HKID and code do not match any record. Check with the clinic that registered you.'); return }
-    if (data.claimed_at) { setError('This profile has already been claimed.'); return }
-    if (new Date(data.claim_code_expires_at) < new Date()) { setError('This claim code has expired. Ask the clinic to issue a new one.'); return }
-
-    await supabase.from('patients').update({
-      registration_path: 'claimed',
-      claimed_at: new Date().toISOString(),
-      claim_code: null, // burn the code so it can't be reused
-    }).eq('id', data.id)
-
-    onComplete(data)
-  }
-
-  return (
-    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:380}}>
-        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Claim your profile</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Enter your HKID and the claim code sent to the phone number your clinic has on file.</div>
-        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'12px',boxSizing:'border-box'}}/>
-        <input value={code} onChange={e=>setCode(e.target.value)} placeholder="Claim code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'16px',boxSizing:'border-box',textTransform:'uppercase'}}/>
-        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={handleClaim} disabled={checking||!hkid||!code}>{checking?'Checking...':'Claim my profile'}</Btn>
+      </>}
+      <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
+        <button onClick={()=>alert('Add your Medsa Staff ID to Apple Wallet — coming in Phase 3. Use your physical card in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="white"><path d="M11.5 0C9.6 0 8.8 1 7.5 1 6.2 1 5.2 0 3.5 0 1.6 0 0 1.7 0 4.2c0 3.8 3.2 8.8 5.5 8.8.8 0 1.4-.5 2-.5s1.3.5 2 .5C12 13 15 8.5 15 4.2 15 1.7 13.4 0 11.5 0zM7.5 2.5c-.1-1.2.9-2.3 1.5-2.5.1 1.2-.9 2.3-1.5 2.5z"/></svg>
+          Staff ID — Apple Wallet
+        </button>
+        <button onClick={()=>alert('Add your Medsa Staff ID to Google Wallet — coming in Phase 3. Use your physical card in the meantime.')} style={{flex:1,border:'0.5px solid #4285f4',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#fff',color:'#4285f4',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="#4285f4" strokeWidth="1.5"/><text x="8" y="12" textAnchor="middle" fontSize="9" fill="#4285f4" fontWeight="bold">G</text></svg>
+          Staff ID — Google Wallet
+        </button>
       </div>
     </div>
   )
 }
 
-function SelfRegisterFlow({ onBack, onComplete }) {
-  const [step,setStep]=useState('form') // form | id_upload | selfie | pending
-  const [form,setForm]=useState({fullName:'',dob:'',hkid:''})
-  const [idFile,setIdFile]=useState(null)
-  const [selfieFile,setSelfieFile]=useState(null)
+// ── PATIENT SEARCH ────────────────────────────────────────────────────────────
+// ── PRESCRIBE MODAL — writes directly to Supabase medications table so it ────
+// syncs to the patient's Medsa app immediately, and becomes visible to any
+// nurse/pharmacist who scans the patient for dispensing.
+function PrescribeModal({ open, onClose, patientMedsaId }) {
+  const [lines,setLines]=useState([{drug:'',dosage:'',frequency:''}])
   const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
   const [error,setError]=useState(null)
+
+  if (!open) return null
+
+  function updateLine(i, field, value) {
+    setLines(lines.map((l,idx)=>idx===i?{...l,[field]:value}:l))
+  }
+  function addLine() { setLines([...lines, {drug:'',dosage:'',frequency:''}]) }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const { data: patient, error: pErr } = await supabase.from('patients').select('id').eq('medsa_id', patientMedsaId).single()
+      if (pErr || !patient) throw new Error('Patient not found in Medsa')
+      const rows = lines.filter(l=>l.drug.trim()).map(l=>({
+        patient_id: patient.id,
+        medication_name: l.drug,
+        dosage: l.dosage,
+        frequency: l.frequency,
+        active: true,
+        on_emergency_card: false,
+        start_date: new Date().toISOString().slice(0,10),
+      }))
+      if (rows.length===0) throw new Error('Add at least one drug')
+      const { error: insErr } = await supabase.from('medications').insert(rows)
+      if (insErr) throw insErr
+      setSaved(true)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:400,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        {!saved ? <>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>New prescription</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Syncs to the patient's Medsa app immediately. Any nurse or pharmacist scanning this patient will see exactly what to dispense.</div>
+          {lines.map((l,i)=>(
+            <div key={i} style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'10px',background:C.card,borderRadius:'10px',padding:'10px'}}>
+              <input value={l.drug} onChange={e=>updateLine(i,'drug',e.target.value)} placeholder="Drug name" style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input value={l.dosage} onChange={e=>updateLine(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+                <input value={l.frequency} onChange={e=>updateLine(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}/>
+              </div>
+            </div>
+          ))}
+          <Btn style={{width:'100%',marginBottom:'14px'}} onClick={addLine}>+ Add drug</Btn>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving}>{saving?'Saving…':'Save prescription'}</Btn>
+          </div>
+        </> : <>
+          <div style={{textAlign:'center',padding:'20px 0'}}>
+            <div style={{fontSize:'32px',marginBottom:'10px'}}>✓</div>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Prescription saved</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>Synced to the patient's Medsa record. Visible now to pharmacist and nurse roles for dispensing.</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={onClose}>Done</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+// ── NEW PATIENT REGISTRATION — for patients not yet on Medsa ─────────────────
+// Creates a placeholder profile. When the patient later downloads Medsa and
+// registers themselves with the same name/DOB or gets matched by HKID, their
+// full record picks up automatically — this is a front-desk convenience,
+// not a substitute for the patient owning their own account.
+function NewPatientRegistration({ onBack }) {
+  const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [error,setError]=useState(null)
+  const [claimCode,setClaimCode]=useState(null)
+
+  function generateClaimCode() {
+    return Math.random().toString(36).slice(2,8).toUpperCase()
+  }
 
   async function handleSubmit() {
     setSaving(true)
     setError(null)
     try {
+      if (!form.hkid) throw new Error('HKID is required so the patient can later claim this profile.')
+      if (!form.phone) throw new Error('Phone number is required to send the claim code.')
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
-      let idPath = null, selfiePath = null
-      if (idFile) {
-        idPath = `${medsaId}/id-${Date.now()}-${idFile.name}`
-        await supabase.storage.from('id-verification').upload(idPath, idFile)
-      }
-      if (selfieFile) {
-        selfiePath = `${medsaId}/selfie-${Date.now()}-${selfieFile.name}`
-        await supabase.storage.from('id-verification').upload(selfiePath, selfieFile)
-      }
-      const { data, error: insErr } = await supabase.from('patients').insert({
+      const code = generateClaimCode()
+      const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
+      const { error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId,
         full_name: form.fullName,
         date_of_birth: form.dob,
         hkid: form.hkid,
-        registration_path: 'self_registered',
-        id_verification_status: 'pending',
-        id_document_path: idPath,
-        selfie_verification_path: selfiePath,
-      }).select().single()
+        phone: form.phone,
+        emergency_card_consent: false,
+        emergency_card_active: false,
+        registration_path: 'unclaimed',
+        claim_code: code,
+        claim_code_expires_at: expiresAt,
+        claim_code_sent_to: form.phone,
+      })
       if (insErr) throw insErr
-      setStep('pending')
-      setTimeout(()=>onComplete(data), 2500) // demo only - real flow waits for actual verification result
+      setClaimCode(code)
+      setSaved(true)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1761,145 +471,569 @@ function SelfRegisterFlow({ onBack, onComplete }) {
     }
   }
 
+  if (saved) return (
+    <div style={{background:C.beige,flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'40px 24px',textAlign:'center'}}>
+      <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
+      <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Patient registered</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName}. A claim code has been sent to {form.phone} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
+      <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'20px'}}>
+        <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (demo - normally sent by SMS, not shown here)</div>
+        <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{claimCode}</div>
+      </div>
+      <Btn variant="primary" onClick={onBack}>Back to search</Btn>
+    </div>
+  )
+
   return (
-    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:380}}>
-        {step!=='pending'&&<div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
-
-        {step==='form'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Register with Medsa</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Since there's no clinic record to verify against, we'll need your ID and a quick photo to confirm it's really you - this protects your medical information.</div>
-          <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'20px'}}>
-            <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name (as on ID)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-            <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-            <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-          </div>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('id_upload')} disabled={!form.fullName||!form.dob||!form.hkid}>Continue</Btn>
-        </>}
-
-        {step==='id_upload'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Upload your ID</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>A clear photo of your HKID card, both sides if possible.</div>
-          <input type="file" accept="image/*" onChange={e=>setIdFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('selfie')} disabled={!idFile}>Continue</Btn>
-        </>}
-
-        {step==='selfie'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Take a selfie</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person registering matches the ID provided.</div>
-          <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-            {'\u25c7'} Demo note: real liveness/anti-spoofing verification (confirming a live person, not a photo of a photo) requires a dedicated identity verification provider - this step captures the photo but the matching logic isn't live yet.
-          </div>
-          <input type="file" accept="image/*" capture="user" onChange={e=>setSelfieFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
-          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!selfieFile}>{saving?'Submitting...':'Submit for verification'}</Btn>
-        </>}
-
-        {step==='pending'&&<div style={{textAlign:'center'}}>
-          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
-          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Verification submitted</div>
-          <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Your documents are being reviewed. This usually takes a short while - continuing to your account now for this demo.</div>
-        </div>}
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{padding:'12px 16px 4px'}}>
+        <div onClick={onBack} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back</div>
+      </div>
+      <SecLabel>Register new patient</SecLabel>
+      <Card style={{padding:'16px'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (required)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+          <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number (required - claim code sent here)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px'}}/>
+        </div>
+      </Card>
+      <div style={{margin:'0 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+        ◇ A claim code will be sent to this phone number, valid 48 hours. The patient enters their HKID plus this code in the Medsa app to securely link this record.
+      </div>
+      {error&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:C.red}}>{error}</div>}
+      <div style={{padding:'0 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Saving…':'Create Medsa profile'}</Btn>
       </div>
     </div>
   )
 }
 
-// ── SHARE FOR THIS VISIT — expiring, consent-scoped code for a non-Medsa clinic ──
-// The permanent QR still works instantly for participating clinics. This is
-// the separate mechanism for a clinic with no Medsa system at all: the
-// patient picks exactly what to disclose for this specific visit, generates
-// a short code with an expiry, and hands it to the clinic themselves - the
-// clinic then enters it on a public, non-authenticated page to view (and
-// download) just that tier of information.
-function ShareForVisitModal({ open, onClose, patient }) {
-  const [tiers,setTiers]=useState({ allergies:true, conditions:true, medications:true, vaccinations:false, fullHistory:false })
-  const [reason,setReason]=useState('')
-  const [expiryMinutes,setExpiryMinutes]=useState(60)
-  const [saving,setSaving]=useState(false)
-  const [generatedCode,setGeneratedCode]=useState(null)
-  const [error,setError]=useState(null)
+// ── CHECK-IN (receptionist) ─────────────────────────────────────────────────
+function CheckInScreen() {
+  const [mode,setMode]=useState('scan') // 'scan' | 'search'
+  const [scanChoices,setScanChoices]=useState([])
+  const [found,setFound]=useState(null)
+  const [searchTerm,setSearchTerm]=useState('')
+  const [searched,setSearched]=useState(false)
+  const [checkedIn,setCheckedIn]=useState(false)
 
-  if (!open) return null
-
-  function toggleTier(key) { setTiers({...tiers,[key]:!tiers[key]}) }
-
-  async function handleGenerate() {
-    setSaving(true)
-    setError(null)
-    try {
-      const medsaId = patient?.medsa_id
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
-
-      const code = Math.random().toString(36).slice(2,8).toUpperCase()
-      const expiresAt = new Date(Date.now() + expiryMinutes*60*1000).toISOString()
-
-      const { error: insErr } = await supabase.from('patient_share_links').insert({
-        patient_id: patientRow.id,
-        code,
-        include_allergies: tiers.allergies,
-        include_conditions: tiers.conditions,
-        include_medications: tiers.medications,
-        include_vaccinations: tiers.vaccinations,
-        include_full_history: tiers.fullHistory,
-        reason_note: reason || null,
-        expires_at: expiresAt,
-      })
-      if (insErr) throw insErr
-      setGeneratedCode(code)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setSaving(false)
-    }
+  async function loadScanChoices() {
+    const { data } = await supabase.from('patients').select('*').limit(10)
+    setScanChoices(data || [])
   }
 
-  function handleClose() {
-    setGeneratedCode(null); setReason(''); setError(null)
-    onClose()
+  function handleScanPick(p) {
+    setFound(p)
+    setCheckedIn(false)
+  }
+
+  async function handleSearch() {
+    if (!searchTerm.trim()) return
+    const term = searchTerm.trim()
+    const { data } = await supabase.from('patients').select('*')
+      .or(`medsa_id.ilike.%${term}%,full_name.ilike.%${term}%`).limit(1).maybeSingle()
+    setFound(data || null)
+    setSearched(true)
+    setCheckedIn(false)
   }
 
   return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={handleClose}>
-      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
-        {!generatedCode ? <>
-          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Share for this visit</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>For a clinic that doesn't use Medsa. Choose what to share - a routine visit needs less than something like a vaccination.</div>
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Check-in</SecLabel>
+      <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
+        {[['scan','Scan to check in'],['search','Search patients']].map(([k,l])=>(
+          <div key={k} onClick={()=>{setMode(k);setFound(null);setCheckedIn(false)}} style={{flex:1,fontSize:'13px',padding:'9px 12px',borderRadius:'20px',cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub,fontWeight:500,textAlign:'center'}}>{l}</div>
+        ))}
+      </div>
 
-          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
-            {[
-              {key:'allergies',label:'Allergies'},
-              {key:'conditions',label:'Active conditions'},
-              {key:'medications',label:'Current medications'},
-              {key:'vaccinations',label:'Vaccination history'},
-              {key:'fullHistory',label:'Full medical history'},
-            ].map(item=>(
-              <div key={item.key} onClick={()=>toggleTier(item.key)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${tiers[item.key]?C.green:C.border}`,background:tiers[item.key]?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{tiers[item.key]?'\u2713':''}</div>
-                <span style={{fontSize:'13px'}}>{item.label}</span>
+      {mode==='scan'&&!found&&<div style={{padding:'0 16px'}}>
+        {scanChoices.length===0&&<div onClick={loadScanChoices} style={{background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'40px 20px',textAlign:'center',cursor:'pointer'}}>
+          <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>⬡</div>
+          <div style={{fontSize:'14px',fontWeight:600}}>Tap to simulate scanning a patient's card</div>
+        </div>}
+        {scanChoices.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Demo: tap the patient whose card is being scanned</div>
+          {scanChoices.map(p=>(
+            <div key={p.id} onClick={()=>handleScanPick(p)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontSize:'14px',fontWeight:500}}>{p.full_name}</span>
+              <span style={{fontSize:'11px',color:C.textMuted}}>{p.medsa_id}</span>
+            </div>
+          ))}
+        </div>}
+      </div>}
+
+      {mode==='search'&&!found&&<div style={{padding:'0 16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+          <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()} placeholder="Search by name or Medsa ID…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',background:C.cream,outline:'none',boxSizing:'border-box'}}/>
+          <Btn variant="primary" onClick={handleSearch}>Search</Btn>
+        </div>
+        {searched&&!found&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No patient found matching "{searchTerm}".</div>}
+      </div>}
+
+      {found&&<div style={{padding:'0 16px'}}>
+        <Card style={{padding:'20px'}}>
+          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'8px'}}>✓ Patient found</div>
+          <div style={{fontSize:'18px',fontWeight:700}}>{found.full_name}</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{found.medsa_id} · DOB {new Date(found.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          {!checkedIn
+            ? <div style={{display:'flex',gap:'10px'}}>
+                <Btn onClick={()=>{setFound(null);setSearched(false)}}>Cancel</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={()=>setCheckedIn(true)}>Check in patient</Btn>
+              </div>
+            : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',textAlign:'center'}}>
+                <div style={{fontSize:'13px',color:C.green,fontWeight:600}}>✓ {found.full_name} checked in</div>
+                <Btn style={{marginTop:'10px'}} onClick={()=>{setFound(null);setSearched(false);setCheckedIn(false)}}>Check in another patient</Btn>
+              </div>}
+        </Card>
+      </div>}
+    </div>
+  )
+}
+
+function PatientSearchScreen({ role, liveData={}, autoOpenLog=false }) {
+  const [view,setView]=useState('search')
+  const [activeTab,setActiveTab]=useState('overview')
+
+  useEffect(() => {
+    if (autoOpenLog) { setView('patient'); setActiveTab('log') }
+  }, [autoOpenLog])
+  const [logText,setLogText]=useState('')
+  const [logSaved,setLogSaved]=useState(false)
+  const [diagnosis,setDiagnosis]=useState('')
+  const [showPrescribeModal,setShowPrescribeModal]=useState(false)
+  const [dispensedIds,setDispensedIds]=useState([])
+  const [patientMsgSubject,setPatientMsgSubject]=useState('')
+  const [patientMsgUrgent,setPatientMsgUrgent]=useState(false)
+  const [patientMsgBody,setPatientMsgBody]=useState('')
+  const [patientMsgSaving,setPatientMsgSaving]=useState(false)
+  const [patientMsgSaved,setPatientMsgSaved]=useState(false)
+  const [patientMsgError,setPatientMsgError]=useState(null)
+  const canRegisterPatients = role==='receptionist'||role==='admin'
+  const access=ACCESS[role]||{}
+
+  async function handleSendPatientMessage(patientMedsaId, doctorLabel) {
+    if (!patientMsgBody.trim()) { setPatientMsgError('Write a message first.'); return }
+    setPatientMsgSaving(true)
+    setPatientMsgError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patientMedsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('patient_messages').insert({
+        patient_id: patientRow.id,
+        doctor_name: doctorLabel,
+        subject: patientMsgSubject || null,
+        body: patientMsgBody,
+        urgent: patientMsgUrgent,
+      })
+      if (insErr) throw insErr
+      setPatientMsgSaved(true)
+      setPatientMsgSubject(''); setPatientMsgBody(''); setPatientMsgUrgent(false)
+      setTimeout(()=>setPatientMsgSaved(false), 3000)
+    } catch (e) {
+      setPatientMsgError(e.message)
+    } finally {
+      setPatientMsgSaving(false)
+    }
+  }
+
+  const lp = liveData.patient
+  const hasLive = !!lp
+  const patient={
+    name: hasLive ? lp.full_name : 'Wong Mei-ling, Lisa',
+    id: hasLive ? lp.medsa_id : 'MDS-84921-HK',
+    dob: hasLive ? new Date(lp.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : '14 Mar 1988',
+    age: hasLive ? Math.floor((Date.now()-new Date(lp.date_of_birth))/(365.25*24*60*60*1000)) : 37,
+    bloodType: hasLive ? lp.blood_type : 'O+',
+    allergies: hasLive && liveData.allergies?.length ? liveData.allergies.map(a=>`${a.allergen} (${a.severity})`) : ['Penicillin (severe)','Dust mites (moderate)'],
+    ward:'Ward 3B · Bed 12',status:'Admitted',
+    admissionReason:'Diabetic review — elevated glucose levels, persistent fatigue. Referred by Dr Chan for inpatient monitoring and medication adjustment.',
+    emergency: hasLive ? {name:lp.emergency_contact_name, relation:lp.emergency_contact_rel, phone:lp.emergency_contact_phone} : {name:'Wong Tai',relation:'Mother',phone:'+852 9xxx xxxx'},
+    vitals:{'Blood pressure':'118/76 mmHg','Heart rate':'72 bpm','Temperature':'36.8°C','SpO₂':'98%','Weight':'58 kg','Blood glucose':'5.9 mmol/L'},
+    currentMeds: hasLive && liveData.medications?.length ? liveData.medications.map(m=>`${m.medication_name} ${m.dosage||''} — ${m.frequency||''}`.trim()) : ['Metformin 500mg — twice daily','Vitamin D3 1000IU — daily','Aspirin 100mg — daily'],
+    criticalConditions: hasLive && liveData.conditions?.length ? liveData.conditions.map(c=>`${c.condition_name}${c.severity?' ('+c.severity+')':''}`) : ['Type 2 Diabetes (controlled)','Iron deficiency anaemia'],
+    institutionRecords: hasLive && liveData.records?.length ? liveData.records.slice(0,6).map(r=>`${new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} — ${r.title}, ${r.institutions?.name||''}`) : ['20 Jun — Admitted, Internal Medicine','21 Jun — Vitals recorded, Nurse Yip','22 Jun — Dr Chan consultation, symptom log updated','23 Jun — Blood panel ordered'],
+    consent:{history:true,imaging:true,mental:false,social:false},
+  }
+
+  if(view==='ems') return <EMSCard onClose={()=>setView('search')}/>
+  if(view==='newpatient') return <NewPatientRegistration onBack={()=>setView('search')}/>
+
+  if(view==='patient') {
+    const tabs=[
+      {key:'overview',label:'Overview'},
+      access.vitals&&{key:'vitals',label:'Vitals'},
+      access.history&&{key:'history',label:'History'},
+      access.medications&&{key:'medications',label:'Meds'},
+      (access.prescribe||role==='doctor'||role==='dept_head'||role==='therapist'||role==='allied')&&{key:'log',label:'Log'},
+      (role==='doctor'||role==='therapist'||role==='allied')&&{key:'message',label:'Message'},
+    ].filter(Boolean)
+    return (
+      <>
+      <div style={{background:C.beige,flex:1}}>
+        <div style={{background:C.cream,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'14px',padding:'16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+            <div>
+              <div style={{fontSize:'16px',fontWeight:700}}>{patient.name}</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{patient.id} · DOB {patient.dob} · Age {patient.age}</div>
+              <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
+                <span style={{fontSize:'10px',background:C.redLight,color:C.red,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Blood: {patient.bloodType}</span>
+                {patient.allergies.map(a=><span key={a} style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>⚠ {a}</span>)}
+              </div>
+            </div>
+            <button onClick={()=>setView('search')} style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'20px',padding:'4px 12px',fontSize:'11px',cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>← Back</button>
+          </div>
+          <div style={{marginTop:'10px',display:'flex',gap:'8px',flexWrap:'wrap'}}>
+            <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px',fontWeight:500}}>{patient.ward}</span>
+            <span style={{fontSize:'11px',background:C.blueLight,color:C.blue,padding:'3px 10px',borderRadius:'20px',fontWeight:500}}>{patient.status}</span>
+          </div>
+          {access.admission_reason&&<div style={{marginTop:'10px',background:C.beige,borderRadius:'10px',padding:'10px 12px'}}>
+            <div style={{fontSize:'10px',color:C.textMuted,fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'4px'}}>Reason for admission</div>
+            <div style={{fontSize:'13px',color:C.text,lineHeight:1.5,fontStyle:'italic'}}>"{patient.admissionReason}"</div>
+          </div>}
+        </div>
+        <div style={{margin:'10px 16px 0',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.brown}}>
+          ◇ Showing <strong>QE Hospital records only</strong>. Other institution records hidden unless patient grants access.
+        </div>
+        <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'10px',overflowX:'auto'}}>
+          {tabs.map(t=><div key={t.key} onClick={()=>setActiveTab(t.key)} style={{flex:1,padding:'10px 8px',fontSize:'12px',fontWeight:500,color:activeTab===t.key?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${activeTab===t.key?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{t.label}</div>)}
+        </div>
+
+        {activeTab==='overview'&&<>
+          <SecLabel>Critical info</SecLabel>
+          <Card style={{padding:'0 16px'}}>
+            <InfoRow label="Ward / Bed" value={patient.ward}/>
+            <InfoRow label="Status" value={patient.status}/>
+            <InfoRow label="Emergency contact" value={`${patient.emergency.name} (${patient.emergency.relation}) · ${patient.emergency.phone}`}/>
+            {patient.allergies.map((a,i,arr)=><InfoRow key={a} label="Allergy" value={a} highlight last={i===arr.length-1}/>)}
+          </Card>
+          <SecLabel>This institution's records</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {patient.institutionRecords.map((r,i,arr)=><div key={i} style={{fontSize:'13px',color:C.textSub,padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>{r}</div>)}
+          </Card>
+          <SecLabel>Patient consent</SecLabel>
+          <Card>
+            {[['Full medical history',patient.consent.history],['Imaging & scans',patient.consent.imaging],['Mental health records',patient.consent.mental],['Social history',patient.consent.social]].map(([l,v],i,arr)=>(
+              <div key={l} style={{padding:'10px 16px',display:'flex',justifyContent:'space-between',fontSize:'13px',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <span>{l}</span><span style={{fontSize:'11px',fontWeight:600,color:v?C.green:C.textMuted}}>{v?'✓ Consented':'— Not consented'}</span>
+              </div>
+            ))}
+          </Card>
+        </>}
+
+        {activeTab==='vitals'&&access.vitals&&<>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',padding:'16px 16px 0'}}>
+            {Object.entries(patient.vitals).map(([k,v])=>(
+              <div key={k} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+                <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px'}}>{k}</div>
+                <div style={{fontSize:'16px',fontWeight:700,marginTop:'4px'}}>{v}</div>
               </div>
             ))}
           </div>
+          <SecLabel>Record new vitals</SecLabel>
+          <Card style={{padding:'16px'}}>
+            {['Blood pressure','Heart rate','Temperature','SpO₂','Blood glucose'].map((v,i,arr)=>(
+              <div key={v} style={{marginBottom:i<arr.length-1?'12px':'0'}}>
+                <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{v}</div>
+                <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'14px',background:C.beige,outline:'none',fontFamily:'inherit'}} placeholder={`Enter ${v.toLowerCase()}…`}/>
+              </div>
+            ))}
+            <Btn variant="primary" style={{width:'100%',marginTop:'16px'}}>Save vitals</Btn>
+          </Card>
+        </>}
 
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>What's this visit for? (optional, for your own reference)</div>
-          <input value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Flu vaccination" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box'}}/>
+        {activeTab==='history'&&(access.history&&patient.consent.history?<>
+          <div style={{margin:'12px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>
+            ✓ Patient has consented to share full history across institutions · Demo view shows complete cross-institution timeline
+          </div>
+          <SecLabel>Active conditions</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              {condition:'Type 2 Diabetes (insulin-dependent)',since:'2018',severity:'Controlled',managing:'Dr Chan Siu-ming · QE Hospital'},
+              {condition:'Iron deficiency anaemia',since:'2020',severity:'Mild',managing:'Dr Chan Siu-ming · QE Hospital'},
+              {condition:'Coronary artery disease',since:'2021',severity:'Stable',managing:'Dr Lam Wai-yee · HK Sanatorium'},
+            ].map((c,i,arr)=>(
+              <div key={i} style={{padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>◎ {c.condition}</div>
+                <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textSub}}>
+                  <span>Since {c.since}</span>
+                  <span style={{color:C.green,fontWeight:500}}>{c.severity}</span>
+                  <span>{c.managing}</span>
+                </div>
+              </div>
+            ))}
+          </Card>
+          <SecLabel>Allergies & alerts</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              {allergen:'Penicillin',severity:'SEVERE — anaphylaxis risk',type:'Medication'},
+              {allergen:'Dust mites',severity:'Moderate — respiratory',type:'Environmental'},
+            ].map((a,i,arr)=>(
+              <div key={i} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div><div style={{fontSize:'13px',fontWeight:700,color:C.red}}>⚠ {a.allergen}</div><div style={{fontSize:'11px',color:C.textSub}}>{a.type}</div></div>
+                <span style={{fontSize:'11px',background:C.redLight,color:C.red,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>{a.severity}</span>
+              </div>
+            ))}
+          </Card>
+          <SecLabel>Full visit timeline — all institutions</SecLabel>
+          {[
+            {date:'20 Jun 2025',institution:'QE Hospital',type:'Admission',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Admitted for diabetic review. Elevated glucose 5.9 mmol/L. Fatigue reported. Blood panel ordered. Metformin dose reviewed.',icon:'▣',bg:C.blueLight},
+            {date:'12 Jun 2025',institution:'QE Hospital',type:'Lab results',doctor:'Dr Chan Siu-ming',dept:'Pathology',notes:'Full CBC. Haemoglobin 13.8 g/dL (normal). WBC 6.2 × 10⁹/L (normal). Glucose 5.9 mmol/L (slightly elevated). Iron 8.2 μmol/L (low).',icon:'◉',bg:C.greenLight},
+            {date:'3 May 2025',institution:'Matilda International',type:'Outpatient visit',doctor:'Dr Ho Siu-wai',dept:'General Practice',notes:'Annual check-up. BP 118/76 mmHg. BMI 22.4. Mild iron deficiency noted. Iron supplement prescribed. Flu vaccine recommended.',icon:'◎',bg:C.greenLight},
+            {date:'18 Feb 2025',institution:'Ruttonjee Hospital',type:'Imaging',doctor:'Dr Lam Wai-yee',dept:'Radiology',notes:'Chest X-ray. No active TB. Lungs clear. Cardiac silhouette normal. Incidental mild cardiomegaly — noted for cardiology follow-up.',icon:'▣',bg:C.amberLight},
+            {date:'9 Jan 2025',institution:'HK Sanatorium',type:'Specialist',doctor:'Dr Lam Wai-yee',dept:'Cardiology',notes:'Coronary artery disease annual review. ECG normal sinus rhythm. Atorvastatin continued. BP well controlled. Next review in 12 months.',icon:'◈',bg:C.blueLight},
+            {date:'14 Oct 2024',institution:'QE Hospital',type:'Outpatient visit',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Diabetes 6-month review. HbA1c 6.8% — good control. Metformin 500mg twice daily continued. Diet counselling provided.',icon:'◎',bg:C.greenLight},
+            {date:'22 Aug 2024',institution:'Matilda International',type:'Procedure',doctor:'Dr Wong Mei-ling',dept:'Ophthalmology',notes:'Diabetic retinopathy screening. Mild background retinopathy detected in left eye. Patient informed. Annual screening recommended.',icon:'◇',bg:C.brownLight},
+            {date:'5 Mar 2024',institution:'QE Hospital',type:'Emergency',doctor:'Dr Fung Ka-wai',dept:'A&E',notes:'Presented with chest pain. ECG showed no acute changes. Troponin negative. Diagnosed as musculoskeletal. Discharged same day.',icon:'◈',bg:C.redLight},
+          ].map((v,i)=>(
+            <Card key={i} style={{padding:'14px 16px'}}>
+              <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
+                <div style={{width:38,height:38,borderRadius:'10px',background:v.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{v.icon}</div>
+                <div style={{flex:1}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'4px'}}>
+                    <div><div style={{fontSize:'13px',fontWeight:600}}>{v.type}</div><div style={{fontSize:'11px',color:C.green,fontWeight:500}}>{v.institution} · {v.dept}</div></div>
+                    <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{v.date}</div><div style={{fontSize:'11px',color:C.textSub}}>{v.doctor}</div></div>
+                  </div>
+                  <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,fontStyle:'italic',marginTop:'4px'}}>"{v.notes}"</div>
+                </div>
+              </div>
+            </Card>
+          ))}
+          <SecLabel>Surgical & procedure history</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              {procedure:'Appendectomy',date:'Mar 2019',institution:'QE Hospital',surgeon:'Dr Ho Ka-fai',notes:'Laparoscopic. Uncomplicated. Full recovery.'},
+              {procedure:'Diabetic retinopathy laser treatment',date:'Nov 2021',institution:'HK Eye Hospital',surgeon:'Dr Chan Pui-shan',notes:'Left eye. Two sessions. No complications.'},
+            ].map((s,i,arr)=>(
+              <div key={i} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+                <div style={{fontSize:'13px',fontWeight:500}}>{s.procedure}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{s.date} · {s.institution} · {s.surgeon}</div>
+                <div style={{fontSize:'12px',color:C.textSub,marginTop:'3px',fontStyle:'italic'}}>"{s.notes}"</div>
+              </div>
+            ))}
+          </Card>
+          <SecLabel>Family history (patient-declared)</SecLabel>
+          <Card style={{padding:'12px 16px'}}>
+            {[
+              'Father — Type 2 Diabetes, coronary artery disease (deceased age 71)',
+              'Mother — Hypertension, osteoporosis',
+              'Maternal grandmother — Breast cancer (deceased age 68)',
+            ].map((f,i,arr)=>(
+              <div key={i} style={{fontSize:'13px',color:C.textSub,padding:'5px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>◇ {f}</div>
+            ))}
+          </Card>
+        </>:<div style={{padding:'40px 24px',textAlign:'center'}}>
+          <div style={{fontSize:'24px',marginBottom:'12px',color:C.textMuted}}>◎</div>
+          <div style={{fontSize:'14px',color:C.textSub}}>Patient has not consented to share medical history with this institution.</div>
+        </div>)}
 
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Code expires after</div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
-            {[[30,'30 min'],[60,'1 hour'],[240,'4 hours']].map(([mins,label])=>(
-              <div key={mins} onClick={()=>setExpiryMinutes(mins)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:expiryMinutes===mins?C.green:C.card,color:expiryMinutes===mins?'#fff':C.textSub}}>{label}</div>
+        {activeTab==='medications'&&access.medications&&<>
+          <SecLabel>Current medications</SecLabel>
+          {patient.currentMeds.map((m,i)=>(
+            <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+              <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
+              <div style={{flex:1,fontSize:'13px'}}>{m}</div>
+              {access.dispense&&(dispensedIds.includes(i)
+                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Dispensed</span>
+                :<Btn variant="amber" style={{fontSize:'11px',padding:'5px 10px'}} onClick={()=>setDispensedIds([...dispensedIds,i])}>Dispense</Btn>)}
+            </Card>
+          ))}
+          {access.prescribe&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Prescribe medication</Btn></div>}
+          {!access.prescribe&&!access.dispense&&<div style={{margin:'0 16px 16px',background:C.brownLight,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.brown}}>◇ Your role can view but not prescribe or dispense medications.</div>}
+          {access.dispense&&<div style={{margin:'0 16px 16px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>◇ Dispensing here syncs directly from the doctor's prescription — no separate paperwork needed.</div>}
+        </>}
+
+        {activeTab==='log'&&<>
+          <SecLabel>Consultation</SecLabel>
+          <Card style={{padding:'16px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Nurses can log symptoms and observations. Only doctors and dept heads can make diagnoses and prescriptions.</div>
+            {(role==='doctor'||role==='dept_head')&&<>
+              <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Diagnosis</div>
+              <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Type 2 Diabetes — glucose elevated" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+            </>}
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Notes</div>
+            <textarea value={logText} onChange={e=>setLogText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={4} placeholder="Log symptoms, observations, or clinical notes for this visit…"/>
+            {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Log saved to patient record</div>}
+            <div style={{display:'flex',gap:'8px',marginBottom:access.prescribe?'10px':'0'}}>
+              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false)}}>Clear</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>setLogSaved(true)}>Submit to record</Btn>
+            </div>
+            {access.prescribe&&<Btn variant="amber" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Add prescription to this visit</Btn>}
+          </Card>
+          {(role==='doctor'||role==='dept_head'||role==='admin')&&<>
+            <SecLabel>Bed / Location</SecLabel>
+            <Card style={{padding:'0 16px'}}>
+              <InfoRow label="Ward" value="Ward 3B"/>
+              <InfoRow label="Bed" value="Bed 12"/>
+              <InfoRow label="Admitted" value="20 Jun 2025"/>
+              <InfoRow label="Expected discharge" value="25 Jun 2025" last/>
+            </Card>
+            <div style={{padding:'0 16px 16px',display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}}>Transfer ward</Btn>
+              <Btn variant="amber" style={{flex:1}}>Discharge</Btn>
+            </div>
+          </>}
+        </>}
+        {activeTab==='message'&&(role==='doctor'||role==='therapist'||role==='allied')&&<>
+          <SecLabel>Message this patient</SecLabel>
+          <div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+            ◇ Sent directly to {patient.name}'s Medsa app — visible to them under their own messages.
+          </div>
+          <Card style={{padding:'16px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Subject (optional)</div>
+            <input value={patientMsgSubject} onChange={e=>setPatientMsgSubject(e.target.value)} placeholder="e.g. Follow-up on your last visit" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Message</div>
+            <textarea value={patientMsgBody} onChange={e=>setPatientMsgBody(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px',boxSizing:'border-box'}} rows={4} placeholder="Write a personal note to this patient…"/>
+            <div onClick={()=>setPatientMsgUrgent(!patientMsgUrgent)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:patientMsgUrgent?C.redLight:C.card,border:`0.5px solid ${patientMsgUrgent?C.red:C.border}`,borderRadius:'8px',marginBottom:'12px',cursor:'pointer'}}>
+              <Toggle checked={patientMsgUrgent} onChange={setPatientMsgUrgent}/>
+              <div>
+                <div style={{fontSize:'12px',fontWeight:600,color:patientMsgUrgent?C.red:C.text}}>Mark as urgent</div>
+                <div style={{fontSize:'10px',color:C.textMuted}}>Shows with a red badge and appears prominently on the patient's home screen</div>
+              </div>
+            </div>
+            {patientMsgError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{patientMsgError}</div>}
+            {patientMsgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Message sent to patient</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleSendPatientMessage(patient.id, ROLES[role]?.label || 'Your care team')} disabled={patientMsgSaving}>{patientMsgSaving?'Sending…':'Send to patient'}</Btn>
+          </Card>
+        </>}
+      </div>
+      <PrescribeModal open={showPrescribeModal} onClose={()=>setShowPrescribeModal(false)} patientMedsaId={patient.id}/>
+      </>
+    )
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Scan patient QR</SecLabel>
+      {/* Role-based scan — what each role sees on scan */}
+      <div style={{margin:'0 16px 10px',background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'24px 20px',textAlign:'center',cursor:'pointer'}} onClick={()=>role==='ems'?setView('ems'):setView('patient')}>
+        <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>⬡</div>
+        <div style={{fontSize:'14px',fontWeight:500,marginBottom:'6px'}}>Scan patient Medsa QR</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,maxWidth:'280px',margin:'0 auto'}}>
+          {role==='ems'&&'Emergency card immediately — blood type, allergies, critical conditions, medications, emergency contact'}
+          {role==='receptionist'&&'Check-in view — patient identity, appointments, billing only. No clinical data.'}
+          {role==='pharmacist'&&'Prescriptions with per-visit diagnosis context, allergies, interaction flags'}
+          {(role==='doctor'||role==='dept_head')&&'Full clinical view — history, vitals, labs, imaging, medications. Subject to patient consent per record type.'}
+          {(role==='nurse'||role==='clinic_nurse')&&'Vitals, medications, allergies, care tasks. Clinic nurses can dispense.'}
+          {role==='therapist'&&'Specialty notes + consented cross-specialty context — e.g. diabetes flag visible to optometrist if relevant to treatment'}
+          {role==='allied'&&'Specialty view + relevant consented health context from other providers'}
+          {role==='admin'&&'Administrative and operational view across all departments — staffing, bed management, records access. Not for clinical logging unless also rostered as a treating clinician.'}
+        </div>
+      </div>
+      <SecLabel>Or search manually</SecLabel>
+      <div style={{padding:'0 16px 10px'}}>
+        <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+          <span style={{position:'absolute',left:'12px',fontSize:'16px',color:C.green}}>◎</span>
+          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'11px 12px 11px 36px',fontSize:'14px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder="Search by name or Medsa ID…" onKeyDown={e=>{if(e.key==='Enter')role==='ems'?setView('ems'):setView('patient')}}/>
+        </div>
+      </div>
+      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',display:'flex',gap:'10px'}}>
+        <span style={{color:C.brown}}>◇</span>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}><strong style={{color:C.brown}}>One QR, role-based output.</strong> The same patient QR shows each role exactly what their function requires and what the patient has consented to share. No public or unauthenticated access.</div>
+      </div>
+      {canRegisterPatients&&<div style={{margin:'0 16px 16px',textAlign:'center'}}>
+        <span style={{fontSize:'12px',color:C.textSub}}>Patient not on Medsa yet? </span>
+        <span onClick={()=>setView('newpatient')} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them →</span>
+      </div>}
+    </div>
+  )
+}
+
+// ── SCHEDULE ──────────────────────────────────────────────────────────────────
+// ── DOCTOR VIDEO CALL (mirrors patient-side VideoCallModal) ────────────────
+function DoctorVideoCallModal({ patientName, onClose }) {
+  if (!patientName) return null
+  return (
+    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff'}}>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'8px'}}>Video call (demo)</div>
+      <div style={{width:96,height:96,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700,marginBottom:'16px'}}>{patientName[0]}</div>
+      <div style={{fontSize:'18px',fontWeight:600,marginBottom:'6px'}}>{patientName}</div>
+      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'40px'}}>Calling…</div>
+      <div onClick={onClose} style={{width:56,height:56,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'20px'}}>✕</div>
+    </div>
+  )
+}
+
+// ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor }) {
+  const [mode,setMode]=useState(null) // null | 'message' | 'switch'
+  const [msgBody,setMsgBody]=useState('')
+  const [msgUrgent,setMsgUrgent]=useState(false)
+  const [msgSaving,setMsgSaving]=useState(false)
+  const [msgSaved,setMsgSaved]=useState(false)
+  const [newDoctor,setNewDoctor]=useState('')
+  const [error,setError]=useState(null)
+
+  if (!patient) return null
+
+  // Only offer doctors in the same department as this patient's current
+  // doctor - switching to an unrelated specialty wouldn't make sense.
+  const sameDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department===patient.department && d.name!==patient.doctor).map(d=>d.name)
+
+  async function handleSendMessage() {
+    if (!msgBody.trim()) { setError('Write a message first.'); return }
+    setMsgSaving(true)
+    setError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.medsaId).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('patient_messages').insert({
+        patient_id: patientRow.id, doctor_name: doctorLabel, body: msgBody, urgent: msgUrgent,
+      })
+      if (insErr) throw insErr
+      setMsgSaved(true); setMsgBody(''); setMsgUrgent(false)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setMsgSaving(false)
+    }
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{patient.name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{patient.time} · {patient.type}</div>
+          </div>
+          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
+        </div>
+
+        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
+          <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Full diagnosis / log</Btn>
+          {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
+        </div>}
+
+        {mode==='message'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Message {patient.name}</div>
+          <textarea value={msgBody} onChange={e=>setMsgBody(e.target.value)} rows={4} placeholder="Write a note to this patient…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div onClick={()=>setMsgUrgent(!msgUrgent)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:msgUrgent?C.redLight:C.card,border:`0.5px solid ${msgUrgent?C.red:C.border}`,borderRadius:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <Toggle checked={msgUrgent} onChange={setMsgUrgent}/>
+            <span style={{fontSize:'12px',fontWeight:600,color:msgUrgent?C.red:C.text}}>Mark as urgent</span>
+          </div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          {msgSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Sent</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleSendMessage} disabled={msgSaving}>{msgSaving?'Sending…':'Send'}</Btn>
+          </div>
+        </>}
+
+        {mode==='switch'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {patient.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {patient.department||'the same department'} only</div>
+          {sameDeptDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {sameDeptDoctors.map(d=>(
+              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
             ))}
           </div>
-
-          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={handleGenerate} disabled={saving}>{saving?'Generating...':'Generate code'}</Btn>
-        </> : <>
-          <div style={{textAlign:'center'}}>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>Give this code to the clinic</div>
-            <div style={{fontSize:'32px',fontWeight:700,letterSpacing:'4px',color:C.green,marginBottom:'10px'}}>{generatedCode}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Valid for {expiryMinutes>=60?`${expiryMinutes/60} hour(s)`:`${expiryMinutes} minutes`}. They'll enter it at medsa.health/share to view and download what you've chosen to share.</div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={handleClose}>Done</Btn>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSwitchDoctor(newDoctor);setMode(null);onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
           </div>
         </>}
       </div>
@@ -1907,71 +1041,593 @@ function ShareForVisitModal({ open, onClose, patient }) {
   )
 }
 
-export default function PatientApp({ liveData={} }) {
-  // All hooks must be declared before any conditional return, unconditionally,
-  // in the same order every render - otherwise React throws a hard crash the
-  // moment the gate's shown/hidden state changes and the hook count differs
-  // between renders. This was the actual cause of the sign-up gate crash.
-  const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
-  const [showGate,setShowGate]=useState(!liveData.patient)
-  const [screen,setScreen]=useState('home')
-  const [isEn,setIsEn]=useState(true)
-  const [emergencyOpen,setEmergencyOpen]=useState(false)
-  const [shareOpen,setShareOpen]=useState(false)
-  const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
+// ── RECEPTIONIST SCHEDULING ACTIONS — reschedule, switch doctor, cancel, follow-up ──
+function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWindow }) {
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
+  const [newTime,setNewTime]=useState('')
+  const [newDoctor,setNewDoctor]=useState('')
+  const [followupDate,setFollowupDate]=useState('')
+  const [followupType,setFollowupType]=useState('')
+  const [notesDraft,setNotesDraft]=useState('')
 
-  if (showGate && !signedInPatient) {
-    return <SignUpGate onComplete={(p)=>{setSignedInPatient(p);setShowGate(false)}} onSkipDemo={()=>setShowGate(false)}/>
+  if (!appt) return null
+
+  // Only offer doctors in the same department as this appointment.
+  const DOCTORS = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00','15:30']
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{appt.name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{appt.time} · {appt.type} · Rm {appt.room}</div>
+          </div>
+          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
+        </div>
+
+        {!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+          ◇ Booking/scheduling changes are always available. Patient clinical details are only accessible within 48 hours of the appointment (once patient consent windows are fully wired in).
+        </div>}
+
+        {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
+          <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
+        </div>}
+
+        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+          <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
+        </div>}
+
+        {mode==='notes'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Notes for {appt.name}</div>
+          <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} rows={4} placeholder="Symptoms, patient-reported notes, anything relevant for the visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,notes:notesDraft});setMode(null)}}>Save notes</Btn>
+          </div>
+        </>}
+
+        {mode==='reschedule'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New time for {appt.name}</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px',marginBottom:'14px'}}>
+            {TIMES.map(t=>(
+              <div key={t} onClick={()=>setNewTime(t)} style={{border:`0.5px solid ${newTime===t?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newTime===t?C.green:C.card,color:newTime===t?'#fff':C.text}}>{t}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,time:newTime||appt.time});onClose()}} disabled={!newTime}>Confirm change</Btn>
+          </div>
+        </>}
+
+        {mode==='switch'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department||'the same department'} only</div>
+          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {DOCTORS.map(d=>(
+              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,doctor:newDoctor||appt.doctor});onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+          </div>
+        </>}
+
+        {mode==='followup'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Follow-up appointment for {appt.name}</div>
+          <input value={followupDate} onChange={e=>setFollowupDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={onClose} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
+          </div>
+        </>}
+
+        {mode==='cancel'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Cancel {appt.name}'s appointment at {appt.time}? This can't be undone from here.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep appointment</Btn>
+            <Btn variant="danger" style={{flex:1}} onClick={()=>{onSave({...appt,cancelled:true});onClose()}}>Confirm cancel</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
+  const [view,setView]=useState('mine')
+  const isLead=role==='admin'||role==='dept_head'
+  const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
+  const isReceptionist = role==='receptionist'
+  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
+  const myShifts=[{day:'Mon 23',time:'08:00 – 17:00',status:'Confirmed'},{day:'Tue 24',time:'08:00 – 17:00',status:'Confirmed'},{day:'Wed 25',time:'13:00 – 22:00',status:'Pending swap'},{day:'Thu 26',time:'OFF',status:'Day off'},{day:'Fri 27',time:'08:00 – 17:00',status:'Confirmed'}]
+
+  // One appointment set per day, so receptionists can browse ahead/back.
+  // Sorted by time so the list always reads in time order regardless of
+  // how entries are added, and stays visible for the whole day (nothing
+  // here hides past-time slots once the clock passes them). Each entry
+  // now carries a department, so doctors see only their own patients and
+  // therapists/allied staff see only their department's - not every
+  // patient across every department today.
+  const scheduleByDay = {
+    'Mon 23': [
+      {time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+    ],
+    'Tue 24': [
+      {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',notes:'',doctor:'Dr Ho Ka-fai',department:'Cardiology'},
+      {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Lam Wai-yee',department:'Cardiology'},
+    ],
+    'Wed 25': [
+      {time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+    ],
+  }
+  const DAY_OPTIONS = ['Mon 23','Tue 24','Wed 25','Thu 26','Fri 27']
+  const [selectedDay,setSelectedDay]=useState('Tue 24')
+
+  // Doctors see only their own named patients; therapists/allied/nurses
+  // see their department's patients; receptionist and admin/dept_head see
+  // everyone, since they need the full picture to manage the schedule.
+  function filterForRole(dayAppts) {
+    if (role==='doctor' && doctorName) return dayAppts.filter(a=>a.doctor===doctorName)
+    if ((role==='therapist'||role==='allied'||role==='nurse'||role==='clinic_nurse') && department) return dayAppts.filter(a=>a.department===department)
+    return dayAppts
   }
 
-  const patient = signedInPatient || liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
-  const liveRecords = liveData.records || []
-  const liveConditions = liveData.conditions || []
-  const liveAllergies = liveData.allergies || []
-  const liveMedications = liveData.medications || []
-  const liveVaccinations = liveData.vaccinations || []
-  const liveAppointments = liveData.appointments || []
-  const liveClaims = liveData.claims || []
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
-  const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
+  const [appts,setAppts]=useState(filterForRole(scheduleByDay['Tue 24']||[]))
+
+  function changeDay(day) {
+    setSelectedDay(day)
+    setAppts(filterForRole(scheduleByDay[day] || []))
+  }
+
+  // Real per-patient check against the consent window set at booking time
+  // (see schema_intake_consent.sql), replacing the earlier day-based
+  // placeholder. Looked up per patient since the window is a lawyer's-eye
+  // 12-hours-before/after their own specific appointment, not a blanket
+  // per-day rule. Demo appointments that were never booked through the
+  // real patient flow simply won't have a consent record - that's the
+  // honest, correct outcome, not a bug.
+  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked}
+
+  async function checkDataWindow(medsaId) {
+    if (dataWindows[medsaId]?.checked) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const now = new Date()
+    const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
+    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,windowEnd:data.access_window_end}}))
+  }
+
+  useEffect(() => { appts.forEach(a=>checkDataWindow(a.medsaId)) }, [appts])
+
+  function withinDataWindow(medsaId) {
+    return dataWindows[medsaId]?.allowed || false
+  }
+
+  const [activeTodoPatient,setActiveTodoPatient]=useState(null)
+  const [callingPatientName,setCallingPatientName]=useState(null)
+  const [activeReceptionAppt,setActiveReceptionAppt]=useState(null)
+  const myName = ROLES[role]?.label || 'Doctor'
+
+  function handleReceptionSave(index, updated) {
+    setAppts(prev => {
+      const next = [...prev]
+      if (updated.cancelled) { next.splice(index,1); return next }
+      next[index] = updated
+      return next
+    })
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <LiveOverview role={role}/>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'10px'}}>
+        {TABS.map(t=><div key={t.key} onClick={()=>setView(t.key)} style={{flex:1,padding:'11px 6px',fontSize:'11px',fontWeight:500,color:view===t.key?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${view===t.key?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{t.label}</div>)}
+      </div>
+      {view==='mine'&&<>
+        <div style={{margin:'16px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'13px',fontWeight:600,color:C.green}}>◎ Clocked in · QE Hospital</div><div style={{fontSize:'11px',color:C.textSub}}>Since 07:52 · Internal Medicine</div></div>
+          <Btn variant="danger" style={{fontSize:'12px',padding:'6px 12px'}}>Clock out</Btn>
+        </div>
+        <SecLabel>This week</SecLabel>
+        {myShifts.map((s,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+            <div style={{width:40,height:40,borderRadius:'10px',background:s.status==='Day off'?C.card:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+              <span style={{fontSize:'11px',fontWeight:700,color:s.status==='Day off'?C.textMuted:C.green,textAlign:'center',lineHeight:1.3}}>{s.day.split(' ')[0]}<br/>{s.day.split(' ')[1]}</span>
+            </div>
+            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{s.time}</div><div style={{fontSize:'11px',color:C.textSub}}>Internal Medicine</div></div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:500,background:s.status==='Confirmed'?C.greenLight:s.status==='Pending swap'?C.amberLight:C.card,color:s.status==='Confirmed'?C.green:s.status==='Pending swap'?C.amber:C.textMuted}}>{s.status}</span>
+          </Card>
+        ))}
+        <div style={{padding:'0 16px 16px'}}><Btn style={{width:'100%'}}>Request shift change</Btn></div>
+      </>}
+      {view==='dept'&&isLead&&<>
+        <SecLabel>Internal Medicine · Today</SecLabel>
+        {['Dr Chan Siu-ming','Dr Ho Ka-fai','Nurse Yip Mei','Nurse Wong Chi','Receptionist Lam'].map((name,i)=>(
+          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+            <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600}}>{name.split(' ').pop()[0]}</div>
+            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{name}</div><div style={{fontSize:'11px',color:C.textSub}}>08:00 – 17:00</div></div>
+            <div style={{width:8,height:8,borderRadius:'50%',background:i===3?C.amber:C.green}}/>
+          </Card>
+        ))}
+        <SecLabel>Post announcement</SecLabel>
+        <Card style={{padding:'16px'}}>
+          <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={3} placeholder="Write announcement to your department…"/>
+          <Btn variant="primary" style={{width:'100%'}}>Post to department</Btn>
+        </Card>
+      </>}
+      {view==='requests'&&isLead&&<>
+        <SecLabel>Pending shift change requests</SecLabel>
+        {[{from:'Nurse Yip Mei',wants:'Wed 25 Jun 13:00–22:00',swap:'Thu 26 Jun 08:00–17:00'},{from:'Dr Ho Ka-fai',wants:'Fri 27 Jun 08:00–17:00',swap:'Sat 28 Jun 08:00–17:00'}].map((r,i)=>(
+          <Card key={i} style={{padding:'14px 16px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>{r.from}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>Swap: <strong style={{color:C.text}}>{r.wants}</strong></div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>For: <strong style={{color:C.text}}>{r.swap}</strong></div>
+            <div style={{display:'flex',gap:'8px'}}><Btn variant="danger" style={{flex:1,fontSize:'12px'}}>Reject</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Approve</Btn></div>
+          </Card>
+        ))}
+      </>}
+      {view==='appts'&&<>
+        {isReceptionist&&<div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',overflowX:'auto'}}>
+          {DAY_OPTIONS.map(day=>(
+            <div key={day} onClick={()=>changeDay(day)} style={{flexShrink:0,padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDay===day?C.green:C.card,color:selectedDay===day?'#fff':C.textSub}}>{day}</div>
+          ))}
+        </div>}
+        <SecLabel>{isClinicalTodoRole?`Today's patients · ${selectedDay} Jun`:`${selectedDay} Jun`}</SecLabel>
+        {role==='doctor'&&doctorName&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing your patients only · {doctorName}</div>}
+        {(role==='therapist'||role==='allied')&&department&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing {department} patients only</div>}
+        {isClinicalTodoRole&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+          ◇ Tap a patient to video call, message, or open their full record.
+        </div>}
+        {isReceptionist&&<div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+          ◇ Booking and scheduling changes work for any patient. Clinical details are only visible for patients within their own 12-hour consent window from booking - see each patient's badge below.
+        </div>}
+        {appts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No appointments scheduled for {selectedDay}.</div>}
+        {[...appts].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
+          <Card key={i} onClick={()=>{ if(isClinicalTodoRole) setActiveTodoPatient(a); else if(isReceptionist) setActiveReceptionAppt({appt:a,index:appts.indexOf(a)}) }} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:(isClinicalTodoRole||isReceptionist)?'pointer':'default'}}>
+            <div style={{width:44,textAlign:'center'}}><div style={{fontSize:'14px',fontWeight:700,color:C.green}}>{a.time}</div></div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{a.name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{a.type}{a.doctor?` · ${a.doctor}`:''}</div>
+              {a.notes&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>◇ {a.notes}</div>}
+            </div>
+            {isReceptionist&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
+            <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 9px',borderRadius:'20px'}}>Rm {a.room}</span>
+            {(isClinicalTodoRole||isReceptionist)&&<span style={{color:C.textMuted,fontSize:'14px'}}>›</span>}
+          </Card>
+        ))}
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ New appointment</Btn></div>
+      </>}
+      <PatientTodoActionModal
+        patient={activeTodoPatient}
+        onClose={()=>setActiveTodoPatient(null)}
+        doctorLabel={myName}
+        onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
+        onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
+        onSwitchDoctor={(newDoctorName)=>{
+          setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,doctor:newDoctorName}:a))
+        }}
+      />
+      <ReceptionistScheduleActionModal
+        appt={activeReceptionAppt?.appt}
+        onClose={()=>setActiveReceptionAppt(null)}
+        onSave={(updated)=>handleReceptionSave(activeReceptionAppt.index, updated)}
+        withinDataWindow={activeReceptionAppt ? withinDataWindow(activeReceptionAppt.appt.medsaId) : false}
+      />
+      <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
+    </div>
+  )
+}
+
+// ── MESSAGES ──────────────────────────────────────────────────────────────────
+function MessagesScreen({ role }) {
+  const isReadOnly = false // reverted per feedback - admin can compose/reply/delete like everyone else
+  const [composing,setComposing]=useState(false)
+  const [msgs,setMsgs]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [openThread,setOpenThread]=useState(null)
+  const [toField,setToField]=useState('')
+  const [bodyField,setBodyField]=useState('')
+  const [sending,setSending]=useState(false)
+  const [error,setError]=useState(null)
+  const [showSuggestions,setShowSuggestions]=useState(false)
+  const [knownRecipients,setKnownRecipients]=useState([])
+
+  const myName = ROLES[role]?.label || 'Staff'
+
+  async function loadMessages() {
+    setLoading(true)
+    const { data } = await supabase.from('staff_messages').select('*').order('created_at',{ascending:false}).limit(100)
+    setMsgs(data||[])
+    const names = new Set()
+    ;(data||[]).forEach(m=>{ names.add(m.sender_name); names.add(m.recipient_name) })
+    Object.values(ROLES).forEach(r=>names.add(r.label))
+    names.add('All Staff')
+    setKnownRecipients([...names].filter(n=>n && n!==myName).sort())
+    setLoading(false)
+    return data||[]
+  }
+
+  useEffect(() => { loadMessages() }, [])
+
+  function threadKey(m) { return m.thread_id || m.id }
+
+  function getThreadFrom(list, m) {
+    const key = threadKey(m)
+    return list.filter(x=>threadKey(x)===key).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at))
+  }
+
+  const threadsLatestFirst = Object.values(
+    msgs.reduce((acc,m)=>{
+      const key = threadKey(m)
+      if (!acc[key] || new Date(m.created_at) > new Date(acc[key].created_at)) acc[key] = m
+      return acc
+    }, {})
+  ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
+
+  async function handleOpen(m) {
+    const thread = getThreadFrom(msgs, m)
+    setOpenThread(thread)
+    const unreadIds = thread.filter(x=>!x.read).map(x=>x.id)
+    if (unreadIds.length>0) {
+      await supabase.from('staff_messages').update({ read: true }).in('id', unreadIds)
+      setMsgs(prev=>prev.map(x=>unreadIds.includes(x.id)?{...x,read:true}:x))
+    }
+  }
+
+  async function handleSend() {
+    if (!toField.trim() || !bodyField.trim()) { setError('Enter a recipient and a message.'); return }
+    setSending(true)
+    setError(null)
+    const isReply = !!openThread
+    const replyThreadId = isReply ? threadKey(openThread[0]) : null
+    const { error: insErr } = await supabase.from('staff_messages').insert({
+      sender_name: myName,
+      recipient_name: toField,
+      body: bodyField,
+      read: false,
+      thread_id: replyThreadId,
+    })
+    setSending(false)
+    if (insErr) { setError(insErr.message); return }
+    setBodyField(''); setComposing(false); setError(null)
+    const fresh = await loadMessages()
+    if (isReply) {
+      // Stay inside the conversation, showing the reply appended - this is
+      // the actual fix: previously this closed back to the inbox, which
+      // made a reply look like a disconnected new message popping up top.
+      setOpenThread(getThreadFrom(fresh, openThread[0]))
+    } else {
+      setToField('')
+    }
+  }
+
+  async function handleDeleteMessage(id) {
+    await supabase.from('staff_messages').delete().eq('id', id)
+    const fresh = await loadMessages()
+    if (openThread) {
+      const remaining = getThreadFrom(fresh, openThread[0])
+      if (remaining.length===0) setOpenThread(null)
+      else setOpenThread(remaining)
+    }
+  }
+
+  async function handleDeleteThread(m) {
+    const thread = getThreadFrom(msgs, m)
+    await supabase.from('staff_messages').delete().in('id', thread.map(x=>x.id))
+    loadMessages()
+  }
+
+  if (openThread) return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{padding:'12px 16px 4px'}}>
+        <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Back to messages</div>
+      </div>
+      <div style={{padding:'0 16px'}}>
+        {openThread.map((m)=>(
+          <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_name===myName?C.greenXLight:C.cream}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+              <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_name}</span>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+                {!isReadOnly&&<span onClick={()=>handleDeleteMessage(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title="Delete message">✕</span>}
+              </div>
+            </div>
+            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
+          </Card>
+        ))}
+      </div>
+      {!isReadOnly&&!composing&&<div style={{padding:'8px 16px 16px'}}>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setToField(openThread[0].sender_name===myName?openThread[0].recipient_name:openThread[0].sender_name);setComposing(true)}}>Reply</Btn>
+      </div>}
+      {isReadOnly&&<div style={{padding:'8px 16px 16px',fontSize:'11px',color:C.textMuted,textAlign:'center'}}>◇ Read-only view — Institution Admin cannot reply or delete</div>}
+      {composing&&(
+        <div style={{padding:'0 16px 16px'}}>
+          <Card style={{padding:'16px'}}>
+            <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Reply to {toField}</div>
+            <textarea value={bodyField} onChange={e=>setBodyField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}} rows={3} placeholder="Message…"/>
+            {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+            <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
+          </Card>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Messages{isReadOnly&&' (Read-only)'}</SecLabel>
+      {loading&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading…</div>}
+      {!loading&&threadsLatestFirst.length===0&&<div style={{padding:'20px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>No messages yet.</div>}
+      {threadsLatestFirst.map((m)=>(
+        <Card key={m.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+          <div onClick={()=>handleOpen(m)} style={{width:36,height:36,borderRadius:'10px',background:!m.read?C.greenLight:C.card,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600,color:!m.read?C.green:C.textMuted,flexShrink:0,cursor:'pointer'}}>{m.sender_name[0]}</div>
+          <div onClick={()=>handleOpen(m)} style={{flex:1,cursor:'pointer'}}>
+            <div style={{display:'flex',justifyContent:'space-between'}}><span style={{fontSize:'13px',fontWeight:!m.read?700:500}}>{m.sender_name}</span><span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span></div>
+            <div style={{fontSize:'12px',color:!m.read?C.text:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div>
+          </div>
+          {!m.read&&<div style={{width:8,height:8,borderRadius:'50%',background:C.green,flexShrink:0,marginTop:'4px'}}/>}
+          {!isReadOnly&&<span onClick={()=>handleDeleteThread(m)} style={{fontSize:'13px',color:C.textMuted,cursor:'pointer',flexShrink:0}} title="Delete conversation">✕</span>}
+        </Card>
+      ))}
+      {!isReadOnly&&composing&&(
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New message</div>
+          <div style={{position:'relative',marginBottom:'8px'}}>
+            <input
+              value={toField}
+              onChange={e=>{setToField(e.target.value);setShowSuggestions(true)}}
+              onFocus={()=>setShowSuggestions(true)}
+              onBlur={()=>setTimeout(()=>setShowSuggestions(false),150)}
+              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}
+              placeholder="To: name or department…"
+            />
+            {showSuggestions&&toField.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)',maxHeight:150,overflowY:'auto'}}>
+              {knownRecipients.filter(n=>n.toLowerCase().includes(toField.toLowerCase())).slice(0,6).map((n,i)=>(
+                <div key={i} onMouseDown={()=>{setToField(n);setShowSuggestions(false)}} style={{padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>{n}</div>
+              ))}
+            </div>}
+          </div>
+          <textarea value={bodyField} onChange={e=>setBodyField(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}} rows={3} placeholder="Message…"/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1}} onClick={()=>{setComposing(false);setError(null)}}>Cancel</Btn><Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending}>{sending?'Sending…':'Send'}</Btn></div>
+        </Card>
+      )}
+      {!isReadOnly&&!composing&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setComposing(true)}>+ Compose message</Btn></div>}
+      {isReadOnly&&<div style={{padding:'8px 16px 16px',fontSize:'11px',color:C.textMuted,textAlign:'center'}}>◇ Institution Admin has read-only access to messages</div>}
+    </div>
+  )
+}
+
+function AdminPermissions() {
+  const permLabels={identity:'View patient identity',vitals:'View & record vitals',history:'View medical history',medications:'View medication records',allergies:'View allergy info',mental:'View mental health records',imaging:'View imaging & scans',labs:'View lab results',prescribe:'Prescribe medications',dispense:'Dispense medications',appointments:'Manage appointments',billing:'View billing info',musculoskeletal:'View musculoskeletal notes',specialty_notes:'Log specialty notes',critical_conditions:'View critical conditions (EMS)',emergency:'Emergency override',tasks:'Manage patient tasks'}
+  const [perms,setPerms]=useState(Object.fromEntries(Object.entries(ACCESS).map(([r,a])=>[r,{...a}])))
+  const [activeRole,setActiveRole]=useState('nurse')
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [error,setError]=useState(null)
+  const toggle=(role,perm)=>{setPerms(p=>({...p,[role]:{...p[role],[perm]:!p[role][perm]}}));setSaved(false)}
+  const rolePerms=perms[activeRole]||{}
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const rows = Object.entries(rolePerms).map(([permission_key,enabled])=>({
+        role: activeRole, permission_key, enabled, updated_at: new Date().toISOString(),
+      }))
+      const { error: upErr } = await supabase.from('role_permission_overrides').upsert(rows, { onConflict: 'role,permission_key' })
+      if (upErr) throw upErr
+      setSaved(true)
+      setTimeout(()=>setSaved(false), 3000)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{background:C.purpleLight,border:`0.5px solid ${C.border}`,margin:'16px 16px 0',borderRadius:'12px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
+        <span style={{fontSize:'16px',color:C.purple}}>⬡</span>
+        <div style={{fontSize:'12px',color:C.purple,lineHeight:1.5}}><strong>Admin permission control.</strong> Changes apply institution-wide for that role. Patient consent always takes precedence.</div>
+      </div>
+      <SecLabel>Select role to configure</SecLabel>
+      <div style={{display:'flex',gap:'6px',padding:'0 16px 12px',overflowX:'auto'}}>
+        {Object.entries(ROLES).filter(([k])=>k!=='admin').map(([key,r])=>(
+          <div key={key} onClick={()=>{setActiveRole(key);setSaved(false)}} style={{flexShrink:0,padding:'6px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:activeRole===key?r.color:C.card,color:activeRole===key?'#fff':C.textSub,border:`0.5px solid ${activeRole===key?r.color:C.border}`}}>{r.label}</div>
+        ))}
+      </div>
+      <div style={{padding:'0 16px 6px'}}>
+        <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',overflow:'hidden'}}>
+          <div style={{background:ROLES[activeRole]?.bg,padding:'12px 16px',borderBottom:`0.5px solid ${C.border}`}}>
+            <span style={{fontSize:'14px',fontWeight:600,color:ROLES[activeRole]?.color}}>{ROLES[activeRole]?.icon} {ROLES[activeRole]?.label}</span>
+          </div>
+          {Object.entries(permLabels).map(([perm,label],i,arr)=>(
+            <div key={perm} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <div>
+                <div style={{fontSize:'13px',color:C.text}}>{label}</div>
+                {(perm==='prescribe'||perm==='dispense')&&<div style={{fontSize:'10px',color:C.amber,marginTop:'2px'}}>Regulated — enable only for licensed roles</div>}
+                {perm==='mental'&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>Requires explicit patient consent regardless</div>}
+              </div>
+              <Toggle checked={!!rolePerms[perm]} onChange={()=>toggle(activeRole,perm)}/>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{margin:'0 16px 12px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+        ◇ Saved changes are stored and will persist on reload. Applying these overrides to live access checks throughout the rest of the app is a separate follow-up — right now this screen's toggles are the source of truth for review, not yet wired into every access check elsewhere.
+      </div>
+      {error&&<div style={{margin:'0 16px 12px',fontSize:'12px',color:C.red}}>{error}</div>}
+      {saved&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,textAlign:'center'}}>✓ Changes saved</div>}
+      <div style={{padding:'0 16px 16px'}}><Btn variant="purple" style={{width:'100%'}} onClick={handleSave} disabled={saving}>{saving?'Saving…':'Save permission changes'}</Btn></div>
+    </div>
+  )
+}
+
+// ── HELP ──────────────────────────────────────────────────────────────────────
+function HelpScreen() {
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <SecLabel>Help & support</SecLabel>
+      {[['Report a technical issue','Contact Medsa support team'],['Submit a complaint','About a patient, colleague, or process'],['FAQ','Common questions about the portal'],['Data & privacy','How patient data is protected']].map(([t,s],i)=>(
+        <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>{t}</div><div style={{fontSize:'12px',color:C.textSub}}>{s}</div></div>
+          <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+// ── ROOT ─────────────────────────────────────────────────────────────────────
+export default function PractitionerApp({ liveData={} }) {
+  const [role,setRole]=useState(null)
+  const [department,setDepartment]=useState(null)
+  const [doctorName,setDoctorName]=useState(null)
+  const [screen,setScreen]=useState('id')
+  const [jumpToLog,setJumpToLog]=useState(false)
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
+  const r=ROLES[role]
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
-        {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
-        {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
-        <div style={{flex:1}}/>
-        <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
+        <MedsaLogo height={20}/>
+        <span style={{flex:1,fontSize:'10px',color:'rgba(255,255,255,0.5)',letterSpacing:'1px',textTransform:'uppercase'}}>practitioner</span>
+        <button onClick={()=>setRole(null)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',fontFamily:'inherit'}}>Clock out</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient}/>}
-        {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
-        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
-        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
-        {screen==='family'&&<FamilyScreen isEn={isEn}/>}
-        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient}/>}
+        {screen==='id'&&<PractitionerIDScreen role={role}/>}
+        {screen==='checkin'&&<CheckInScreen/>}
+        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog}/>}
+        {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}}/>}
+        {screen==='messages'&&<MessagesScreen role={role}/>}
+        {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
+        {screen==='help'&&<HelpScreen/>}
       </div>
-      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
         {navItems.map(item=>(
-          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
-            <span style={{fontSize:'20px',lineHeight:1}}>{item.icon}</span>
-            <span>{isEn?item.en:item.zh}</span>
+          <div key={item.key} onClick={()=>{setScreen(item.key);setJumpToLog(false)}} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
+            <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
+            <span>{item.label}</span>
           </div>
         ))}
       </div>
-      <EmergencyCardSetup
-        open={emergencyOpen}
-        onClose={()=>setEmergencyOpen(false)}
-        consented={emergencyConsented}
-        onConsent={(val=true)=>setEmergencyConsented(val)}
-        liveConditions={liveConditions}
-        liveAllergies={liveAllergies}
-        liveMedications={liveMedications}
-        patient={patient}
-      />
-      <ShareForVisitModal open={shareOpen} onClose={()=>setShareOpen(false)} patient={patient}/>
     </div>
   )
 }
