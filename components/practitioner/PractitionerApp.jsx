@@ -19,6 +19,11 @@ function Toggle({ checked=false, onChange }) {
   const [on,setOn]=useState(checked)
   return <div onClick={()=>{setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
 }
+function Badge({ text, type }) {
+  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
+  const [bg,fg]=map[type]||map.ok
+  return <span style={{fontSize:'11px',background:bg,color:fg,padding:'4px 10px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
+}
 function InfoRow({ label, value, highlight=false, last=false }) {
   return <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'8px 0',borderBottom:last?'none':`0.5px solid ${C.border}`,fontSize:'13px'}}><span style={{color:C.textSub,flexShrink:0,marginRight:'12px'}}>{label}</span><span style={{fontWeight:500,color:highlight?C.red:C.text,textAlign:'right',maxWidth:'60%'}}>{value}</span></div>
 }
@@ -1149,30 +1154,30 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
   const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
   const myShifts=[{day:'Mon 23',time:'08:00 – 17:00',status:'Confirmed'},{day:'Tue 24',time:'08:00 – 17:00',status:'Confirmed'},{day:'Wed 25',time:'13:00 – 22:00',status:'Pending swap'},{day:'Thu 26',time:'OFF',status:'Day off'},{day:'Fri 27',time:'08:00 – 17:00',status:'Confirmed'}]
 
-  // One appointment set per day, so receptionists can browse ahead/back.
-  // Sorted by time so the list always reads in time order regardless of
-  // how entries are added, and stays visible for the whole day (nothing
-  // here hides past-time slots once the clock passes them). Each entry
-  // now carries a department, so doctors see only their own patients and
-  // therapists/allied staff see only their department's - not every
-  // patient across every department today.
-  const scheduleByDay = {
-    'Mon 23': [
-      {time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
-    ],
-    'Tue 24': [
+  // Real upcoming dates starting today, not hardcoded date-string keys
+  // like 'Mon 23' that never corresponded to any actual current date.
+  const DAY_LABELS_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+  const dayOptions = Array.from({length:5}, (_,i) => {
+    const d = new Date()
+    d.setDate(d.getDate()+i)
+    return d
+  })
+  const [selectedDay,setSelectedDay]=useState(dayOptions[0])
+
+  // Demo data only shown on today's view, keyed by real weekday so it
+  // still looks populated during testing without pretending to represent
+  // dates that don't actually exist yet.
+  const demoScheduleByWeekday = {
+    'Mon': [{time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'}],
+    'Tue': [
       {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
       {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
       {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',notes:'',doctor:'Dr Ho Ka-fai',department:'Cardiology'},
       {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
       {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Lam Wai-yee',department:'Cardiology'},
     ],
-    'Wed 25': [
-      {time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
-    ],
+    'Wed': [{time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'}],
   }
-  const DAY_OPTIONS = ['Mon 23','Tue 24','Wed 25','Thu 26','Fri 27']
-  const [selectedDay,setSelectedDay]=useState('Tue 24')
 
   // Doctors see only their own named patients; therapists/allied/nurses
   // see their department's patients; receptionist and admin/dept_head see
@@ -1183,12 +1188,45 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
     return dayAppts
   }
 
-  const [appts,setAppts]=useState(filterForRole(scheduleByDay['Tue 24']||[]))
+  const [appts,setAppts]=useState([])
+  const [loadingAppts,setLoadingAppts]=useState(true)
+
+  // Load real appointments booked through PatientApp for the selected day
+  // (see schema_connect_booking_to_schedule.sql), merged with illustrative
+  // demo data on today's view only - this is what makes a real patient
+  // booking actually show up here, not just in the old hardcoded lists.
+  async function loadAppointmentsForDay(dateObj) {
+    setLoadingAppts(true)
+    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      .order('scheduled_at', {ascending:true})
+
+    const realRows = (data||[]).map(a => ({
+      time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      name: a.patients?.full_name || 'Unknown patient',
+      medsaId: a.patients?.medsa_id || null,
+      type: a.appointment_type || 'Consultation',
+      room: '-',
+      notes: a.reason_for_visit || '',
+      doctor: a.doctor_name || 'Unassigned',
+      department: a.department || 'Internal Medicine',
+    }))
+
+    const isToday = dayStart.toDateString() === new Date().toDateString()
+    const weekdayShort = DAY_LABELS_SHORT[dateObj.getDay()]
+    const demoRows = isToday ? (demoScheduleByWeekday[weekdayShort] || []) : []
+
+    setAppts(filterForRole([...realRows, ...demoRows]))
+    setLoadingAppts(false)
+  }
 
   function changeDay(day) {
     setSelectedDay(day)
-    setAppts(filterForRole(scheduleByDay[day] || []))
   }
+
+  useEffect(() => { loadAppointmentsForDay(selectedDay) }, [selectedDay])
 
   // Real per-patient check against the consent window set at booking time
   // (see schema_intake_consent.sql), replacing the earlier day-based
@@ -1281,11 +1319,12 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
       </>}
       {view==='appts'&&<>
         {isReceptionist&&<div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',overflowX:'auto'}}>
-          {DAY_OPTIONS.map(day=>(
-            <div key={day} onClick={()=>changeDay(day)} style={{flexShrink:0,padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDay===day?C.green:C.card,color:selectedDay===day?'#fff':C.textSub}}>{day}</div>
+          {dayOptions.map(day=>(
+            <div key={day.toISOString()} onClick={()=>changeDay(day)} style={{flexShrink:0,padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:day.toDateString()===selectedDay.toDateString()?C.green:C.card,color:day.toDateString()===selectedDay.toDateString()?'#fff':C.textSub}}>{day.toLocaleDateString('en-HK',{weekday:'short',day:'numeric'})}</div>
           ))}
         </div>}
-        <SecLabel>{isClinicalTodoRole?`Today's patients · ${selectedDay} Jun`:`${selectedDay} Jun`}</SecLabel>
+        <SecLabel>{isClinicalTodoRole?`Today's patients · ${selectedDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})}`:selectedDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})}</SecLabel>
+        {loadingAppts&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>Loading...</div>}
         {role==='doctor'&&doctorName&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing your patients only · {doctorName}</div>}
         {(role==='therapist'||role==='allied')&&department&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing {department} patients only</div>}
         {isClinicalTodoRole&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
@@ -1294,7 +1333,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         {isReceptionist&&<div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
           ◇ Booking and scheduling changes work for any patient. Clinical details are only visible for patients within their own 48-hour consent window from booking (12h before, the appointment day, 12h after) - see each patient's badge below.
         </div>}
-        {appts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No appointments scheduled for {selectedDay}.</div>}
+        {appts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>No appointments scheduled for this day.</div>}
         {[...appts].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
           <Card key={i} onClick={()=>{ if(isClinicalTodoRole) setActiveTodoPatient(a); else if(isReceptionist) setActiveReceptionAppt({appt:a,index:appts.indexOf(a)}) }} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:(isClinicalTodoRole||isReceptionist)?'pointer':'default'}}>
             <div style={{width:44,textAlign:'center'}}><div style={{fontSize:'14px',fontWeight:700,color:C.green}}>{a.time}</div></div>
