@@ -165,7 +165,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
   )
 }
 
-function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError }) {
+function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError, onDoneCheckIn }) {
   const [mode,setMode]=useState('scan')
   const [stage,setStage]=useState('idle')
   const [patient,setPatient]=useState(null)
@@ -174,12 +174,16 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   const [requestSent,setRequestSent]=useState(false)
   const [checkingIn,setCheckingIn]=useState(false)
 
-  function handleCheckInClick() {
+  const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
+
+  async function handleCheckInClick() {
     if (checkingIn) return // guard against rapid repeat clicks
     setCheckingIn(true)
-    onCheckedIn(patient)
-    // stage resets when this component unmounts/remounts on nav away, but
-    // guard stays true so a slow double-click can't fire a second check-in
+    const success = await onCheckedIn(patient)
+    setCheckingIn(false)
+    if (success) setJustCheckedIn(patient.full_name)
+    // if it failed, checkInError (passed down from root) explains why -
+    // the screen stays as-is so the person can see the error and retry
   }
 
   const [scanChoices,setScanChoices]=useState([])
@@ -271,11 +275,13 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               </div>
             </div>
           </div>
-          <div style={{display:'flex',gap:'10px'}}>
+          {!justCheckedIn ? <div style={{display:'flex',gap:'10px'}}>
             <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
             <Btn variant="primary" onClick={handleCheckInClick} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
-          </div>
-          {checkingIn&&<div style={{marginTop:'10px',fontSize:'12px',color:C.green,textAlign:'center'}}>{'\u2713'} {patient.full_name} checked in - redirecting...</div>}
+          </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
+            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+          </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
           <div style={{fontSize:'28px',marginBottom:'10px'}}>{'\u25ce'}</div>
@@ -289,17 +295,23 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',background:C.cream,outline:'none',boxSizing:'border-box'}} placeholder="Search by name or Medsa ID..."/>
           <Btn variant="primary" onClick={handleSearch}>Search</Btn>
         </div>
-        {searchResult&&<Card style={{padding:'20px'}}>
+        {searchResult&&!justCheckedIn&&<Card style={{padding:'20px'}}>
           <div style={{fontSize:'17px',fontWeight:700}}>{searchResult.full_name}</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{searchResult.medsa_id} - DOB {new Date(searchResult.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>onCheckedIn(searchResult)}>Check in now</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{setCheckingIn(true);const ok=await onCheckedIn(searchResult);setCheckingIn(false);if(ok)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
           {!requestSent&&<Btn style={{width:'100%'}} onClick={()=>setRequestSent(true)}>Request record access ahead of visit</Btn>}
           {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
         </Card>}
-        {searched&&!searchResult&&<div style={{textAlign:'center',padding:'20px'}}>
+        {justCheckedIn&&<Card style={{padding:'20px'}}>
+          <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
+            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setSearchResult(null);setSearchTerm('');setSearched(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+          </div>
+        </Card>}
+        {searched&&!searchResult&&!justCheckedIn&&<div style={{textAlign:'center',padding:'20px'}}>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>No patient found matching "{searchTerm}".</div>
           <span onClick={onNewPatient} style={{fontSize:'13px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span>
         </div>}
@@ -1080,12 +1092,12 @@ function ScheduleScreen({ staffMember }) {
   const [selectedDay,setSelectedDay]=useState(24)
   const [showNewApptForm,setShowNewApptForm]=useState(false)
   const allAppointments = [
-    {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
-    {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
-    {time:'10:00', patient:'-', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Open slot', status:'open', notes:''},
-    {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Vaccination', status:'confirmed', notes:''},
-    {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
-    {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
+    {time:'09:00', patient:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
+    {time:'09:30', patient:'Chan Tai-man', medsaId:'MDS-77213-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
+    {time:'10:00', patient:'-', medsaId:null, doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Open slot', status:'open', notes:''},
+    {time:'10:30', patient:'Lee Siu-fong', medsaId:'MDS-90142-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Vaccination', status:'confirmed', notes:''},
+    {time:'11:00', patient:'Ho Ka-yee', medsaId:'MDS-65310-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
+    {time:'14:00', patient:'Yip Wing-sze', medsaId:'MDS-33017-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
   ]
   // Doctors see only their own named patients here - "today's patients" -
   // not every appointment across every doctor/department. Front desk and
@@ -1094,6 +1106,28 @@ function ScheduleScreen({ staffMember }) {
   const isDoctorView = staffMember?.role==='doctor'
   const [appointments,setAppointments]=useState(isDoctorView ? allAppointments.filter(a=>a.doctor===staffMember.name) : allAppointments)
   const [activeAppt,setActiveAppt]=useState(null)
+
+  // Real per-patient check against the consent window set at booking time
+  // (schema_intake_consent.sql) - this is what actually gates data access
+  // on the schedule now, not just whether they're physically checked in.
+  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked}
+
+  async function checkDataWindow(medsaId) {
+    if (!medsaId || dataWindows[medsaId]?.checked) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    const now = new Date()
+    const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
+    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true}}))
+  }
+
+  useEffect(() => { appointments.forEach(a=>checkDataWindow(a.medsaId)) }, [appointments])
+
+  function withinDataWindow(medsaId) {
+    return dataWindows[medsaId]?.allowed || false
+  }
 
   function handleSaveAppt(updated) {
     setAppointments(prev => {
@@ -1121,6 +1155,9 @@ function ScheduleScreen({ staffMember }) {
         </div>
       </Card>
       <SecLabel>{isDoctorView?`Today's patients · ${staffMember.name}`:'All doctors - today'}</SecLabel>
+      <div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+        ◇ Clinical data access is based on each patient's 48-hour consent window from booking, not just whether they're physically checked in - see the badge on each appointment.
+      </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
           <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,cursor:a.status!=='open'?'pointer':'default'}}>
@@ -1129,6 +1166,7 @@ function ScheduleScreen({ staffMember }) {
               <div style={{fontSize:'13px',fontWeight:500}}>{a.patient}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{a.doctor} - {a.type}</div>
             </div>
+            {a.status!=='open'&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
             {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<><Badge text={a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
           </Card>
         ))}
@@ -1781,7 +1819,7 @@ export default function ClinicOpsApp() {
     )
     if (alreadyActive) {
       setCheckInError(`${patient.full_name} is already checked in and still active - check My Patients or Overview to find them, or wait for their access window to expire.`)
-      return
+      return false
     }
     const ticket = 'A'+nextTicket
     const { data, error } = await supabase.from('clinic_queue').insert({
@@ -1796,7 +1834,7 @@ export default function ClinicOpsApp() {
 
     if (error || !data) {
       setCheckInError(`Could not check in ${patient.full_name}: ${error?.message || 'unknown error'}`)
-      return
+      return false
     }
 
     setCheckedInQueue([...checkedInQueue, {
@@ -1806,7 +1844,12 @@ export default function ClinicOpsApp() {
     }])
     setNextTicket(nextTicket+1)
     setCheckInError(null)
-    setScreen(staffMember?.role==='admin' ? 'overview' : 'checkin')
+    // Navigation is now handled by the check-in screen itself, after it
+    // shows a real confirmation - previously this navigated away
+    // immediately, which for non-admin staff sent them right back to the
+    // same check-in screen and silently reset it, looking like nothing
+    // had happened at all.
+    return true
   }
 
   // Admin/clinic manager sees every department; everyone else sees only
@@ -1908,7 +1951,7 @@ export default function ClinicOpsApp() {
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
-        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError}/>}
+        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
         {screen==='schedule'&&<ScheduleScreen staffMember={staffMember}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
