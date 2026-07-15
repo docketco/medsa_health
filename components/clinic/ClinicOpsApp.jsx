@@ -1089,7 +1089,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave }) {
 }
 
 function ScheduleScreen({ staffMember }) {
-  const [selectedDay,setSelectedDay]=useState(() => new Date().getDate())
+  const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
   // against real time.
@@ -1099,7 +1099,7 @@ function ScheduleScreen({ staffMember }) {
     return d
   })
   const [showNewApptForm,setShowNewApptForm]=useState(false)
-  const allAppointments = [
+  const demoAppointments = [
     {time:'09:00', patient:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
     {time:'09:30', patient:'Chan Tai-man', medsaId:'MDS-77213-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
     {time:'10:00', patient:'-', medsaId:null, doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Open slot', status:'open', notes:''},
@@ -1107,12 +1107,47 @@ function ScheduleScreen({ staffMember }) {
     {time:'11:00', patient:'Ho Ka-yee', medsaId:'MDS-65310-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
     {time:'14:00', patient:'Yip Wing-sze', medsaId:'MDS-33017-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
   ]
-  // Doctors see only their own named patients here - "today's patients" -
-  // not every appointment across every doctor/department. Front desk and
-  // admin still see everything, since managing the full schedule needs
-  // the complete picture.
   const isDoctorView = staffMember?.role==='doctor'
-  const [appointments,setAppointments]=useState(isDoctorView ? allAppointments.filter(a=>a.doctor===staffMember.name) : allAppointments)
+  const [appointments,setAppointments]=useState([])
+  const [loadingAppts,setLoadingAppts]=useState(true)
+
+  // Load real appointments booked through PatientApp for whichever day is
+  // selected, and merge them with the illustrative demo rows - this is
+  // what makes a real patient booking (e.g. through Lisa) actually show
+  // up here, which previously it never did since this screen only ever
+  // read local hardcoded demo data.
+  async function loadRealAppointments(dateObj) {
+    setLoadingAppts(true)
+    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      .order('scheduled_at', {ascending:true})
+
+    const realRows = (data||[]).map(a => ({
+      time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      patient: a.patients?.full_name || 'Unknown patient',
+      medsaId: a.patients?.medsa_id || null,
+      doctor: a.doctor_name || 'Unassigned',
+      department: a.department || 'Internal Medicine',
+      type: a.appointment_type || 'Consultation',
+      status: a.status || 'confirmed',
+      notes: a.reason_for_visit || '',
+      isReal: true,
+    }))
+
+    // Demo rows only show on today's view, so real bookings on other days
+    // aren't drowned out by illustrative data that was never meant to
+    // represent those specific dates.
+    const isToday = dayStart.toDateString() === new Date().toDateString()
+    const merged = isToday ? [...realRows, ...demoAppointments] : realRows
+
+    setAppointments(isDoctorView ? merged.filter(a=>a.doctor===staffMember.name) : merged)
+    setLoadingAppts(false)
+  }
+
+  useEffect(() => { loadRealAppointments(selectedDay) }, [selectedDay])
+
   const [activeAppt,setActiveAppt]=useState(null)
 
   // Real per-patient check against the consent window set at booking time
@@ -1156,13 +1191,14 @@ function ScheduleScreen({ staffMember }) {
         <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>{weekDates[0].toLocaleDateString('en-HK',{month:'long',year:'numeric'})}</div>
         <div style={{display:'flex',gap:'8px'}}>
           {weekDates.map(d=>(
-            <div key={d.toISOString()} onClick={()=>setSelectedDay(d.getDate())} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',background:d.getDate()===selectedDay?C.green:C.card,color:d.getDate()===selectedDay?'#fff':C.text,cursor:'pointer'}}>
+            <div key={d.toISOString()} onClick={()=>setSelectedDay(d)} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',background:d.toDateString()===selectedDay.toDateString()?C.green:C.card,color:d.toDateString()===selectedDay.toDateString()?'#fff':C.text,cursor:'pointer'}}>
               <div style={{fontSize:'16px',fontWeight:600}}>{d.getDate()}</div>
             </div>
           ))}
         </div>
       </Card>
-      <SecLabel>{isDoctorView?`Today's patients · ${staffMember.name}`:'All doctors - today'}</SecLabel>
+      <SecLabel>{isDoctorView?`Today's patients · ${staffMember.name}`:'All doctors'} · {selectedDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})}</SecLabel>
+      {loadingAppts&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>Loading...</div>}
       <div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
         ◇ Clinical data access is based on each patient's 48-hour consent window from booking, not just whether they're physically checked in - see the badge on each appointment.
       </div>
