@@ -24,6 +24,9 @@ function InfoRow({ label, value, highlight=false, last=false }) {
 }
 
 // ── Role definitions ──────────────────────────────────────────────────────────
+const DEPARTMENTS = ['Internal Medicine','Cardiology','Emergency / A&E','Surgery','Psychiatry']
+const DOCTOR_NAMES = ['Dr Chan Siu-ming','Dr Ho Ka-fai','Dr Lam Wai-yee']
+
 const ROLES = {
   admin:        {label:'Institution Admin',   color:C.purple, bg:C.purpleLight, icon:'⬡'},
   dept_head:    {label:'Department Head',     color:C.green,  bg:C.greenLight,  icon:'◈'},
@@ -55,6 +58,14 @@ function ClockInScreen({ onLogin }) {
   const [scanning,setScanning]=useState(false)
   const [scanned,setScanned]=useState(false)
   const [sel,setSel]=useState(null)
+  const [dept,setDept]=useState(null)
+  const [doctorName,setDoctorName]=useState(null)
+  const needsDoctorName = sel==='doctor'
+
+  function handleContinue() {
+    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null })
+  }
+
   return (
     <div style={{background:C.beige,minHeight:'100vh',display:'flex',flexDirection:'column'}}>
       <div style={{background:C.green,padding:'28px 20px 20px'}}>
@@ -72,16 +83,35 @@ function ClockInScreen({ onLogin }) {
         </div>
         {scanned&&<>
           <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Select your role</div>
-          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
             {Object.entries(ROLES).map(([key,r])=>(
-              <div key={key} onClick={()=>setSel(key)} style={{background:sel===key?r.bg:C.cream,border:`0.5px solid ${sel===key?r.color:C.border}`,borderRadius:'12px',padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
+              <div key={key} onClick={()=>{setSel(key);setDept(null);setDoctorName(null)}} style={{background:sel===key?r.bg:C.cream,border:`0.5px solid ${sel===key?r.color:C.border}`,borderRadius:'12px',padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
                 <span style={{fontSize:'18px',color:r.color}}>{r.icon}</span>
                 <span style={{fontSize:'14px',fontWeight:500,color:sel===key?r.color:C.text}}>{r.label}</span>
                 {sel===key&&<span style={{marginLeft:'auto',color:r.color,fontWeight:700}}>✓</span>}
               </div>
             ))}
           </div>
-          {sel&&<Btn variant="primary" style={{width:'100%',marginTop:'20px',padding:'14px'}} onClick={()=>onLogin(sel)}>Clock in as {ROLES[sel].label} →</Btn>}
+
+          {sel&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Select your department</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'8px',marginBottom:'20px'}}>
+              {DEPARTMENTS.map(d=>(
+                <div key={d} onClick={()=>setDept(d)} style={{padding:'9px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:dept===d?C.green:C.cream,color:dept===d?'#fff':C.textSub,border:`0.5px solid ${dept===d?C.green:C.border}`}}>{d}</div>
+              ))}
+            </div>
+          </>}
+
+          {needsDoctorName&&dept&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Which doctor are you?</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+              {DOCTOR_NAMES.map(name=>(
+                <div key={name} onClick={()=>setDoctorName(name)} style={{padding:'11px 16px',borderRadius:'10px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:doctorName===name?C.blueLight:C.cream,color:doctorName===name?C.blue:C.text,border:`0.5px solid ${doctorName===name?C.blue:C.border}`}}>{name}</div>
+              ))}
+            </div>
+          </>}
+
+          {sel&&dept&&(!needsDoctorName||doctorName)&&<Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleContinue}>Clock in as {ROLES[sel].label} →</Btn>}
         </>}
       </div>
     </div>
@@ -905,11 +935,12 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
 
 // ── RECEPTIONIST SCHEDULING ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWindow }) {
-  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup'
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
+  const [notesDraft,setNotesDraft]=useState('')
 
   if (!appt) return null
 
@@ -931,8 +962,8 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
           ◇ Booking/scheduling changes are always available. Patient clinical details are only accessible within 48 hours of the appointment (once patient consent windows are fully wired in).
         </div>}
 
-        {appt.notes&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
-          <div style={{fontWeight:600,color:C.text,marginBottom:'2px'}}>Patient notes</div>{appt.notes}
+        {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
+          <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
         </div>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -941,6 +972,15 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
           <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
         </div>}
+
+        {mode==='notes'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Notes for {appt.name}</div>
+          <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} rows={4} placeholder="Symptoms, patient-reported notes, anything relevant for the visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,notes:notesDraft});setMode(null)}}>Save notes</Btn>
+          </div>
+        </>}
 
         {mode==='reschedule'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New time for {appt.name}</div>
@@ -990,7 +1030,7 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
   )
 }
 
-function ScheduleScreen({ role, onGoToFullDiagnosis }) {
+function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
   const [view,setView]=useState('mine')
   const isLead=role==='admin'||role==='dept_head'
   const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
@@ -1001,29 +1041,42 @@ function ScheduleScreen({ role, onGoToFullDiagnosis }) {
   // One appointment set per day, so receptionists can browse ahead/back.
   // Sorted by time so the list always reads in time order regardless of
   // how entries are added, and stays visible for the whole day (nothing
-  // here hides past-time slots once the clock passes them).
+  // here hides past-time slots once the clock passes them). Each entry
+  // now carries a department, so doctors see only their own patients and
+  // therapists/allied staff see only their department's - not every
+  // patient across every department today.
   const scheduleByDay = {
     'Mon 23': [
-      {time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming'},
+      {time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
     ],
     'Tue 24': [
-      {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Chan Siu-ming'},
-      {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Chan Siu-ming'},
-      {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',notes:'',doctor:'Dr Ho Ka-fai'},
-      {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Chan Siu-ming'},
-      {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Lam Wai-yee'},
+      {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',notes:'',doctor:'Dr Ho Ka-fai',department:'Cardiology'},
+      {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Lam Wai-yee',department:'Cardiology'},
     ],
     'Wed 25': [
-      {time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming'},
+      {time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
     ],
   }
   const DAY_OPTIONS = ['Mon 23','Tue 24','Wed 25','Thu 26','Fri 27']
   const [selectedDay,setSelectedDay]=useState('Tue 24')
-  const [appts,setAppts]=useState(scheduleByDay['Tue 24']||[])
+
+  // Doctors see only their own named patients; therapists/allied/nurses
+  // see their department's patients; receptionist and admin/dept_head see
+  // everyone, since they need the full picture to manage the schedule.
+  function filterForRole(dayAppts) {
+    if (role==='doctor' && doctorName) return dayAppts.filter(a=>a.doctor===doctorName)
+    if ((role==='therapist'||role==='allied'||role==='nurse'||role==='clinic_nurse') && department) return dayAppts.filter(a=>a.department===department)
+    return dayAppts
+  }
+
+  const [appts,setAppts]=useState(filterForRole(scheduleByDay['Tue 24']||[]))
 
   function changeDay(day) {
     setSelectedDay(day)
-    setAppts(scheduleByDay[day] || [])
+    setAppts(filterForRole(scheduleByDay[day] || []))
   }
 
   function withinDataWindow(day) {
@@ -1104,6 +1157,8 @@ function ScheduleScreen({ role, onGoToFullDiagnosis }) {
           ))}
         </div>}
         <SecLabel>{isClinicalTodoRole?`Today's patients · ${selectedDay} Jun`:`${selectedDay} Jun`}</SecLabel>
+        {role==='doctor'&&doctorName&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing your patients only · {doctorName}</div>}
+        {(role==='therapist'||role==='allied')&&department&&<div style={{margin:'-4px 16px 10px',fontSize:'11px',color:C.textMuted}}>Showing {department} patients only</div>}
         {isClinicalTodoRole&&<div style={{margin:'0 16px 12px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
           ◇ Tap a patient to video call, message, or open their full record.
         </div>}
@@ -1408,9 +1463,11 @@ function HelpScreen() {
 // ── ROOT ─────────────────────────────────────────────────────────────────────
 export default function PractitionerApp({ liveData={} }) {
   const [role,setRole]=useState(null)
+  const [department,setDepartment]=useState(null)
+  const [doctorName,setDoctorName]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
-  if(!role) return <ClockInScreen onLogin={r=>{setRole(r);setScreen('id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen('id')}}/>
   const r=ROLES[role]
   const navItems=[{key:'id',icon:'◈',label:'My ID'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
@@ -1424,7 +1481,7 @@ export default function PractitionerApp({ liveData={} }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
         {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog}/>}
-        {screen==='schedule'&&<ScheduleScreen role={role} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}}/>}
+        {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='help'&&<HelpScreen/>}
