@@ -182,12 +182,22 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
     // guard stays true so a slow double-click can't fire a second check-in
   }
 
-  async function simulateScan() {
+  const [scanChoices,setScanChoices]=useState([])
+
+  async function loadScanChoices() {
+    const { data } = await supabase.from('patients').select('*').limit(10)
+    setScanChoices(data || [])
+  }
+
+  async function simulateScan(chosenPatient) {
     setStage('scanning')
-    const { data, error } = await supabase.from('patients').select('*').eq('medsa_id','MDS-84921-HK').single()
-    if (error || !data) { setStage('error'); return }
-    setPatient(data)
-    setStage('found')
+    // Real scan hardware isn't wired up yet - this simulates it by letting
+    // you pick which patient's card is being "scanned," pulled from real
+    // Supabase data, rather than always fetching one fixed demo patient.
+    setTimeout(() => {
+      setPatient(chosenPatient)
+      setStage('found')
+    }, 600)
   }
 
   const [searched,setSearched]=useState(false)
@@ -218,11 +228,22 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule }) {
 
       {mode==='scan'&&<>
         {stage==='idle'&&<>
-          <div onClick={simulateScan} style={{background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'44px 20px',textAlign:'center',cursor:'pointer',marginBottom:'16px'}}>
+          {scanChoices.length===0&&<div onClick={loadScanChoices} style={{background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'44px 20px',textAlign:'center',cursor:'pointer',marginBottom:'16px'}}>
             <div style={{fontSize:'36px',color:C.green,marginBottom:'10px'}}>{'\u2b21'}</div>
             <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>Scan patient QR code</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Checks the patient in - their consented records become visible for the next 24 hours</div>
-          </div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Tap to simulate scanning a patient's card</div>
+          </div>}
+          {scanChoices.length>0&&<div style={{marginBottom:'16px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',textAlign:'center'}}>Demo: tap the patient whose card is being scanned</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+              {scanChoices.map(p=>(
+                <div key={p.id} onClick={()=>simulateScan(p)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontSize:'14px',fontWeight:500}}>{p.full_name}</span>
+                  <span style={{fontSize:'11px',color:C.textMuted}}>{p.medsa_id}</span>
+                </div>
+              ))}
+            </div>
+          </div>}
           <div style={{textAlign:'center'}}>
             <span style={{fontSize:'12px',color:C.textSub}}>New patient, not yet on Medsa? </span>
             <span onClick={onNewPatient} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them {'\u2192'}</span>
