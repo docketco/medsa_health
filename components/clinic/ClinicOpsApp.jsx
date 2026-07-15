@@ -946,17 +946,109 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
   )
 }
 
-function ScheduleScreen() {
+// ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
+// Available to both doctors and front desk/admin - anyone with schedule
+// access should be able to make these changes, not just reception staff.
+function ClinicScheduleActionModal({ appt, onClose, onSave }) {
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup'
+  const [newTime,setNewTime]=useState('')
+  const [newDoctor,setNewDoctor]=useState('')
+  const [followupDate,setFollowupDate]=useState('')
+  const [followupType,setFollowupType]=useState('')
+
+  if (!appt || appt.status==='open') return null
+
+  const DOCTORS = ['Dr Chan','Dr Lam']
+  const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00']
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:420,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+          <div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{appt.patient}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{appt.time} · {appt.doctor} · {appt.type}</div>
+          </div>
+          <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer'}}>Close</div>
+        </div>
+
+        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+          <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
+        </div>}
+
+        {mode==='reschedule'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New time for {appt.patient}</div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px',marginBottom:'14px'}}>
+            {TIMES.map(t=>(
+              <div key={t} onClick={()=>setNewTime(t)} style={{border:`0.5px solid ${newTime===t?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newTime===t?C.green:C.card,color:newTime===t?'#fff':C.text}}>{t}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,time:newTime||appt.time});onClose()}} disabled={!newTime}>Confirm change</Btn>
+          </div>
+        </>}
+
+        {mode==='switch'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.patient}</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {DOCTORS.map(d=>(
+              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,doctor:newDoctor||appt.doctor});onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+          </div>
+        </>}
+
+        {mode==='followup'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Follow-up appointment for {appt.patient}</div>
+          <input value={followupDate} onChange={e=>setFollowupDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={onClose} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
+          </div>
+        </>}
+
+        {mode==='cancel'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Cancel {appt.patient}'s appointment at {appt.time}? This can't be undone from here.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep appointment</Btn>
+            <Btn variant="danger" style={{flex:1}} onClick={()=>{onSave({...appt,cancelled:true});onClose()}}>Confirm cancel</Btn>
+          </div>
+        </>}
+      </div>
+    </div>
+  )
+}
+
+function ScheduleScreen({ staffMember }) {
   const [selectedDay,setSelectedDay]=useState(24)
   const [showNewApptForm,setShowNewApptForm]=useState(false)
-  const appointments = [
+  const [appointments,setAppointments]=useState([
     {time:'09:00', patient:'Wong Mei-ling, Lisa', doctor:'Dr Chan', type:'Follow-up', status:'confirmed'},
     {time:'09:30', patient:'Chan Tai-man', doctor:'Dr Lam', type:'New patient', status:'confirmed'},
     {time:'10:00', patient:'-', doctor:'Dr Chan', type:'Open slot', status:'open'},
     {time:'10:30', patient:'Lee Siu-fong', doctor:'Dr Chan', type:'Vaccination', status:'confirmed'},
     {time:'11:00', patient:'Ho Ka-yee', doctor:'Dr Lam', type:'Consultation', status:'confirmed'},
     {time:'14:00', patient:'Yip Wing-sze', doctor:'Dr Chan', type:'Follow-up', status:'pending'},
-  ]
+  ])
+  const [activeAppt,setActiveAppt]=useState(null)
+
+  function handleSaveAppt(updated) {
+    setAppointments(prev => {
+      const idx = prev.indexOf(activeAppt)
+      if (updated.cancelled) return prev.filter((_,i)=>i!==idx)
+      const next = [...prev]
+      next[idx] = updated
+      return next
+    })
+  }
   return (
     <PageWrap maxWidth={640}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
@@ -975,17 +1067,18 @@ function ScheduleScreen() {
       </Card>
       <SecLabel>All doctors - today</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {appointments.map((a,i)=>(
-          <Card key={i} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1}}>
+        {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
+          <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,cursor:a.status!=='open'?'pointer':'default'}}>
             <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0}}>{a.time}</div>
             <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:500}}>{a.patient}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{a.doctor} - {a.type}</div>
             </div>
-            {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<Badge text={a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='confirmed'?'ok':'due'}/>}
+            {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<><Badge text={a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
           </Card>
         ))}
       </div>
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt}/>
       {showNewApptForm&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowNewApptForm(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
@@ -1757,7 +1850,7 @@ export default function ClinicOpsApp() {
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
-        {screen==='schedule'&&<ScheduleScreen/>}
+        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
