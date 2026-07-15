@@ -1138,7 +1138,6 @@ function ScheduleScreen({ role, onGoToFullDiagnosis }) {
         onSave={(updated)=>handleReceptionSave(activeReceptionAppt.index, updated)}
         withinDataWindow={withinDataWindow(selectedDay)}
       />
-      />
       <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
     </div>
   )
