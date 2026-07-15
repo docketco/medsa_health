@@ -743,7 +743,6 @@ function DoctorsScreen({ isEn, patient={} }) {
     return 0
   })
   const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
-  const UNAVAIL=['9:30am','11:00am']
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -754,6 +753,14 @@ function DoctorsScreen({ isEn, patient={} }) {
     return { label: DAY_LABELS[d.getDay()], date: d.getDate(), fullDate: d }
   })
   const [selDay,setSelDay]=useState(DAYS[0].fullDate)
+  // Unavailable slots vary by day so every day doesn't look identical -
+  // seeded off the date itself so it's consistent on re-render, not random.
+  function unavailForDay(dateObj) {
+    const seed = dateObj.getDate()
+    const pool = ['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
+    return pool.filter((_,i) => (seed + i) % 3 === 0)
+  }
+  const UNAVAIL = unavailForDay(selDay)
 
   function handleBookClick(doc, type) {
     setSelectedDoctor(doc)
@@ -882,7 +889,7 @@ function DoctorsScreen({ isEn, patient={} }) {
               {DAYS.map(({label,date,fullDate})=>{
                 const isSel = fullDate.toDateString()===selDay.toDateString()
                 return (
-                <div key={fullDate.toISOString()} onClick={()=>setSelDay(fullDate)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
+                <div key={fullDate.toISOString()} onClick={()=>{setSelDay(fullDate);if(unavailForDay(fullDate).includes(selTime)){const firstFree=TIMES.find(t=>!unavailForDay(fullDate).includes(t));if(firstFree)setSelTime(firstFree)}}} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
                   <div style={{fontSize:'10px',opacity:0.8}}>{label}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
                 </div>
                 )
