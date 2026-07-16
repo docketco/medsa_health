@@ -1995,6 +1995,17 @@ export default function ClinicOpsApp() {
     }])
     setNextTicket(nextTicket+1)
     setCheckInError(null)
+
+    // This check-in and the Schedule screen's status check were two
+    // disconnected systems - checking in here (clinic_queue) never
+    // updated the appointments table Schedule actually reads from. Now
+    // it also marks today's matching real appointment as checked_in.
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
+      .eq('patient_id', patient.id)
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+
     // Navigation is now handled by the check-in screen itself, after it
     // shows a real confirmation - previously this navigated away
     // immediately, which for non-admin staff sent them right back to the
