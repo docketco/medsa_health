@@ -1219,7 +1219,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
 }
 
 // ── RECEPTIONIST SCHEDULING ACTIONS — reschedule, switch doctor, cancel, follow-up ──
-function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWindow }) {
+function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onCancelCheckIn }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
@@ -1256,8 +1256,17 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+          {appt.status==='checked_in'&&onCancelCheckIn&&<Btn style={{width:'100%'}} onClick={()=>setMode('cancelcheckin')}>↩ Cancel check-in</Btn>}
           <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
         </div>}
+
+        {mode==='cancelcheckin'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Undo {appt.name}'s check-in? This puts the appointment back to "scheduled" - use this to fix a mistaken check-in or to check them out for testing.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep checked in</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onCancelCheckIn();setMode(null);onClose()}}>Confirm undo</Btn>
+          </div>
+        </>}
 
         {mode==='notes'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Notes for {appt.name}</div>
@@ -1649,6 +1658,16 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         onClose={()=>setActiveReceptionAppt(null)}
         onSave={(updated)=>handleReceptionSave(activeReceptionAppt.index, updated)}
         withinDataWindow={activeReceptionAppt ? withinDataWindow(activeReceptionAppt.appt.medsaId) : false}
+        onCancelCheckIn={async()=>{
+          const target = activeReceptionAppt?.appt
+          if (!target?.medsaId) return
+          const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', target.medsaId).maybeSingle()
+          if (!pRow) return
+          const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
+          const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+          await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','practitioner').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+          loadAppointmentsForDay(selectedDay)
+        }}
       />
       <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
       <NewAppointmentModal open={showNewApptModal} onClose={()=>setShowNewApptModal(false)} onBooked={()=>loadAppointmentsForDay(selectedDay)}/>
