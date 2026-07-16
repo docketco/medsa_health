@@ -1161,7 +1161,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Undo {patient.name}'s check-in? This puts the appointment back to "scheduled" - use this to fix a mistaken check-in or to check them out for testing.</div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep checked in</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onCancelCheckIn();setMode(null);onClose()}}>Confirm undo</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onCancelCheckIn();setMode(null);onClose()}}>Confirm undo</Btn>
           </div>
         </>}
 
