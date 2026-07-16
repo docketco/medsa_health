@@ -3,176 +3,6 @@ import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
-// ── CENTRALIZED TRANSLATIONS ─────────────────────────────────────────────────
-// Single source of truth for every translated string in this file, instead of
-// scattered per-section dictionaries - this is what makes new strings easy to
-// find and audit for translation coverage going forward.
-const TRANSLATIONS = {
-  ahead: {en:'ahead', zhTW:'位在前'},
-  set_up_your_emergency_card: {en:'Set up your emergency card', zhTW:'設置緊急健康卡'},
-  let_verified_ems_access_your: {en:'Let verified EMS access your critical info instantly on scan', zhTW:'讓緊急人員即時掃描獲取您的關鍵資訊'},
-  your_health_passport: {en:'Your health passport', zhTW:'您的健康護照'},
-  not_you_claim_or_register: {en:'Not you? Claim or register a profile', zhTW:'不是您？認領或註冊個人檔案'},
-  show_this_to_any_medsaregistered: {en:'Show this to any Medsa-registered provider', zhTW:'向任何Medsa註冊醫療人員出示'},
-  they_see_what_their_role: {en:'They see what their role permits · You control the rest', zhTW:'他們只看到其職責所允許的內容'},
-  share_for_this_visit: {en:'Share for this visit', zhTW:'為此次診症分享'},
-  for_a_clinic_that_doesnu2019t: {en:'For a clinic that doesn\\u2019t use Medsa - choose what to share', zhTW:'為未使用Medsa的診所選擇分享內容'},
-  your_health: {en:'Your health', zhTW:'您的健康'},
-  medical_records: {en:'Medical records', zhTW:'醫療記錄'},
-  history_vaccinations_share: {en:'History, vaccinations, share', zhTW:'病歷、疫苗、分享'},
-  insurance: {en:'Insurance', zhTW:'保險'},
-  plans_claims_agents: {en:'Plans, claims, agents', zhTW:'計劃、索賠、代理人'},
-  prescriptions: {en:'Prescriptions', zhTW:'處方'},
-  meds_drug_info: {en:'Meds, drug info', zhTW:'藥物、資訊'},
-  calendar: {en:'Calendar', zhTW:'日曆'},
-  appointments_alarms: {en:'Appointments, alarms', zhTW:'預約、提醒'},
-  find_care_manage: {en:'Find care & manage', zhTW:'尋找醫療'},
-  doctors_clinics: {en:'Doctors & clinics', zhTW:'醫生與診所'},
-  search_book_pay: {en:'Search, book, pay', zhTW:'搜索、預約、付款'},
-  family_guardians: {en:'Family & guardians', zhTW:'家庭與監護'},
-  monitor_family_members_hk38mo: {en:'Monitor family members · HK$38/mo', zhTW:'監護家庭成員'},
-  storage_plan: {en:'Storage & plan', zhTW:'儲存與計劃'},
-  free_08_gb_of_2: {en:'Free · 0.8 GB of 2 GB used', zhTW:'免費 · 已使用0.8 GB / 2 GB'},
-  message_board: {en:'Message board', zhTW:'訊息板'},
-  alerts_updates: {en:'Alerts & updates', zhTW:'警報與更新'},
-  flu_season_advisory: {en:'Flu season advisory', zhTW:'流感季節公告'},
-  hkdoh_recommends_vaccination_before_oct: {en:'HKDOH recommends vaccination before Oct 31.', zhTW:'衞生署建議於10月31日前接種疫苗。'},
-  reminder_dr_chan_tomorrow_10am: {en:'Reminder: Dr Chan — tomorrow 10am', zhTW:'提醒：陳醫生 — 明天上午10時'},
-  qe_hospital_room_3b: {en:'QE Hospital, Room 3B.', zhTW:'伊利沙伯醫院，3B室。'},
-  insurance_claim_approved: {en:'Insurance claim approved', zhTW:'保險索賠已批准'},
-  aia_claim_44821_hk3200_approved: {en:'AIA claim #44821 — HK$3,200 approved.', zhTW:'AIA索賠#44821 — 港幣3,200元已批准。'},
-  messages_from_your_doctor: {en:'Messages from your doctor', zhTW:'醫生的訊息'},
-  loading: {en:'Loading…', zhTW:'載入中…'},
-  no_messages_yet: {en:'No messages yet.', zhTW:'暫無訊息。'},
-  you: {en:'You: ', zhTW:'您：'},
-  delete_conversation: {en:'Delete conversation', zhTW:'刪除對話'},
-  you_control_your_records: {en:'You control your records', zhTW:'您掌控自己的記錄'},
-  choose_what_each_provider_sees: {en:'Choose what each provider sees — anytime.', zhTW:'隨時選擇每位醫療提供者可查看的內容。'},
-  close: {en:'← Close', zhTW:'← 關閉'},
-  you_2: {en:'You', zhTW:'您'},
-  delete_your_reply: {en:'Delete your reply', zhTW:'刪除您的回覆'},
-  write_a_reply: {en:'Write a reply…', zhTW:'撰寫回覆…'},
-  sending: {en:'Sending…', zhTW:'傳送中…'},
-  send_reply: {en:'Send reply', zhTW:'傳送回覆'},
-  you_control_exactly_what_each: {en:'You control exactly what each provider sees.', zhTW:'您完全掌控每位醫療提供者可查看的內容。'},
-  all_records: {en:'All records', zhTW:'所有記錄'},
-  vaccinations: {en:'Vaccinations', zhTW:'疫苗'},
-  sharing: {en:'Sharing', zhTW:'分享'},
-  upload: {en:'Upload', zhTW:'上傳'},
-  recent_records: {en:'Recent records', zhTW:'最近記錄'},
-  vaccination_passport: {en:'Vaccination passport', zhTW:'疫苗接種護照'},
-  book_overdue_vaccinations: {en:'Book overdue vaccinations', zhTW:'預約逾期疫苗'},
-  who_can_see_your_records: {en:'Who can see your records', zhTW:'誰可以查看您的記錄'},
-  record_type_controls: {en:'Record type controls', zhTW:'記錄類型控制'},
-  create_onetime_access_link: {en:'Create one-time access link', zhTW:'建立一次性存取連結'},
-  upload_a_record: {en:'Upload a record', zhTW:'上傳記錄'},
-  tap_to_upload: {en:'Tap to upload', zhTW:'點擊上傳'},
-  nonmedsa_hospitals_overseas_providers_personal: {en:'Non-Medsa hospitals, overseas providers, personal files', zhTW:'非Medsa醫院、海外醫療機構或個人文件'},
-  connecting: {en:'Connecting…', zhTW:'連接中…'},
-  cancel: {en:'Cancel', zhTW:'取消'},
-  live: {en:'Live', zhTW:'直播中'},
-  consultation_complete: {en:'Consultation complete', zhTW:'問診完成'},
-  request_documents: {en:'Request documents', zhTW:'索取文件'},
-  medical_certificate: {en:'Medical certificate', zhTW:'醫療證明書'},
-  sick_leave_note: {en:'Sick leave note', zhTW:'病假紙'},
-  referral_letter: {en:'Referral letter', zhTW:'轉介信'},
-  issued: {en:'Issued', zhTW:'已發出'},
-  request: {en:'Request', zhTW:'索取'},
-  done: {en:'Done', zhTW:'完成'},
-  search_by_name_specialty_clinic: {en:'Search by name, specialty, clinic…', zhTW:'按名稱、專科搜尋…'},
-  find_doctors: {en:'Find doctors', zhTW:'尋找醫生'},
-  book: {en:'Book', zhTW:'預約'},
-  payments: {en:'Payments', zhTW:'付款'},
-  sort_by: {en:'Sort by', zhTW:'排序方式'},
-  nearest: {en:'Nearest', zhTW:'最近'},
-  top_rated: {en:'Top rated', zhTW:'評分最高'},
-  doctors_near_you_wan_chai: {en:'Doctors near you · Wan Chai', zhTW:'附近的醫生 · 灣仔'},
-  video_available: {en:'Video available', zhTW:'視像問診'},
-  medsa_clinic: {en:'Medsa Clinic', zhTW:'Medsa診所'},
-  medsa_hospital: {en:'Medsa Hospital', zhTW:'Medsa醫院'},
-  new_appointment: {en:'New appointment', zhTW:'新預約'},
-  consultation_type: {en:'Consultation type', zhTW:'診症方式'},
-  inperson: {en:'In-person', zhTW:'親身診症'},
-  video_call: {en:'Video call', zhTW:'視像診症'},
-  date_time: {en:'Date & time', zhTW:'日期與時間'},
-  language: {en:'Language', zhTW:'語言'},
-  intake_form: {en:'Intake form', zhTW:'問診表'},
-  reason_for_visit: {en:'Reason for visit', zhTW:'求診原因'},
-  eg_persistent_cough: {en:'e.g. Persistent cough', zhTW:'例如：持續咳嗽'},
-  symptoms: {en:'Symptoms', zhTW:'症狀'},
-  describe_what_youu2019re_experiencing: {en:'Describe what you\\u2019re experiencing…', zhTW:'描述您的症狀…'},
-  current_medications_optional: {en:'Current medications (optional)', zhTW:'目前藥物（可選）'},
-  eg_metformin_500mg: {en:'e.g. Metformin 500mg', zhTW:'例如：二甲雙胍 500mg'},
-  confirm_pay: {en:'Confirm & pay', zhTW:'確認與付款'},
-  doctor: {en:'Doctor', zhTW:'醫生'},
-  type: {en:'Type', zhTW:'診症方式'},
-  date: {en:'Date', zhTW:'日期'},
-  consultation_fee: {en:'Consultation fee', zhTW:'診金'},
-  aia_covers: {en:'AIA covers', zhTW:'AIA承保'},
-  you_pay: {en:'You pay', zhTW:'您需支付'},
-  whatsapp_reminders: {en:'WhatsApp reminders', zhTW:'WhatsApp提醒'},
-  get_appointment_reminders_via_whatsapp: {en:'Get appointment reminders via WhatsApp', zhTW:'透過WhatsApp接收預約提醒'},
-  complete_the_intake_consent_above: {en:'Complete the intake consent above to continue', zhTW:'請先完成上方的問診同意'},
-  confirming: {en:'Confirming…', zhTW:'確認中…'},
-  confirm_appointment: {en:'Confirm appointment', zhTW:'確認預約'},
-  appointment_confirmed: {en:'Appointment confirmed', zhTW:'預約已確認'},
-  join_video_call_now_demo: {en:'Join video call now (demo)', zhTW:'立即加入視像通話（示範）'},
-  in_production_this_unlocks_at: {en:'In production, this unlocks at your actual appointment time.', zhTW:'實際運作時，此按鈕將於預約時間開放。'},
-  close_2: {en:'Close', zhTW:'關閉'},
-  outstanding: {en:'Outstanding', zhTW:'待付款'},
-  recent_payments: {en:'Recent payments', zhTW:'最近付款'},
-  alarm_at: {en:'Alarm at', zhTW:'鬧鐘'},
-  enhk: {en:'en-HK', zhTW:'zh-HK'},
-  upcoming: {en:'Upcoming', zhTW:'即將到來'},
-  medication_alarms: {en:'Medication alarms', zhTW:'用藥鬧鐘'},
-  add_reminder: {en:'Add reminder', zhTW:'新增提醒'},
-  past_claims_not_yet_synced: {en:'Past claims (not yet synced)', zhTW:'過往索賠（尚未同步）'},
-  important: {en:'Important:', zhTW:'重要提示:'},
-  prepare_a_claim_package: {en:'Prepare a claim package', zhTW:'準備索賠文件包'},
-  loading_your_plan: {en:'Loading your plan...', zhTW:'載入您的計劃中...'},
-  active_plan: {en:'Active plan', zhTW:'現行計劃'},
-  your_new_contract_is_ready: {en:'Your new contract is ready', zhTW:'您的新合約已準備就緒'},
-  view_contract: {en:'View contract', zhTW:'查看合約'},
-  signed_your_agent_will_confirm: {en:'Signed — your agent will confirm the renewal shortly.', zhTW:'已簽署 — 代理人將盡快確認續保。'},
-  days_left: {en:'Days left', zhTW:'剩餘天數'},
-  renewal_requested: {en:'Renewal requested', zhTW:'已請求續保'},
-  request_renewal: {en:'Request renewal', zhTW:'請求續保'},
-  compare_plans: {en:'Compare plans', zhTW:'比較計劃'},
-  claims: {en:'Claims', zhTW:'索賠'},
-  agent_ratings: {en:'Agent ratings', zhTW:'代理人評分'},
-  how_medsa_connects_you_to: {en:'How Medsa connects you to insurers', zhTW:'Medsa如何連接您與保險公司'},
-  plan_comparison_not_advice: {en:'Plan comparison, not advice', zhTW:'方案比較,並非建議'},
-  plans_are_filtered_against_your: {en:'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn\\u2019t rank plans or tell you which is "best" — that\\u2019s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.', zhTW:'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'},
-  plans_matching_your_profile: {en:'Plans matching your profile', zhTW:'符合您狀況的計劃'},
-  sponsored: {en:'Sponsored', zhTW:'贊助'},
-  search_all_plans: {en:'Search all plans', zhTW:'搜尋所有計劃'},
-  search_eg_dental_travel_critical: {en:'Search e.g. dental, travel, critical illness…', zhTW:'按關鍵字搜尋…'},
-  how_feedback_works: {en:'How feedback works', zhTW:'如何提交評價'},
-  preview_agent_ratings_once_live: {en:'Preview — agent ratings once live', zhTW:'預覽 — 代理人評分上線後'},
-  leave_anonymous_feedback: {en:'Leave anonymous feedback', zhTW:'留下匿名評價'},
-  active_prescriptions: {en:'Active prescriptions', zhTW:'有效處方'},
-  drug_reference: {en:'Drug reference', zhTW:'藥物參考'},
-  search_any_drug_name: {en:'Search any drug name…', zhTW:'搜尋任何藥物名稱…'},
-  check_dosage_interactions_contraindications_and: {en:'Check dosage, interactions, contraindications, and side effects.', zhTW:'查看劑量、相互作用、禁忌症和副作用。'},
-  family_guardian_plan: {en:'Family guardian plan', zhTW:'家庭監護計劃'},
-  monitoring_2_of_3_members: {en:'Monitoring 2 of 3 members · Renews 1 Jul', zhTW:'監護3名成員中的2名 · 7月1日續期'},
-  family_members: {en:'Family members', zhTW:'家庭成員'},
-  guardian_access: {en:'Guardian access', zhTW:'監護人存取'},
-  add_family_member: {en:'Add family member', zhTW:'新增家庭成員'},
-  guardian_access_is_consentbased_family: {en:'Guardian access is consent-based. Family members approve via their own Medsa account.', zhTW:'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'},
-  free: {en:'Free', zhTW:'免費'},
-  your_storage: {en:'Your storage', zhTW:'您的儲存空間'},
-  plans: {en:'Plans', zhTW:'計劃'},
-  current_plan: {en:'Current plan', zhTW:'目前計劃'},
-  cloud_storage: {en:'cloud storage', zhTW:'雲端儲存'},
-  en: {en:'EN', zhTW:'Traditional'},
-}
-function t(key, isEn) {
-  const entry = TRANSLATIONS[key]
-  if (!entry) return key // missing key - shows the raw key so gaps are visible, not silently blank
-  return isEn ? entry.en : entry.zhTW
-}
-
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
 // Chinese (the correct written register - not spoken Cantonese slang).
@@ -599,7 +429,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <div style={{margin:'14px 16px 0',background:C.navy,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
           <div style={{width:44,height:44,borderRadius:'12px',background:'rgba(255,255,255,0.15)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
             <div style={{fontSize:'16px',fontWeight:800,color:'#fff',lineHeight:1}}>{queueStatus.position}</div>
-            <div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{t('ahead',isEn)}</div>
+            <div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{isEn?'ahead':'位在前'}</div>
           </div>
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${queueStatus.position} people ahead of you`:`您前面有${queueStatus.position}位`}</div>
@@ -613,8 +443,8 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <div onClick={onOpenEmergencySetup} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.amber} 0%,#c87000 100%)`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
           <div style={{width:36,height:36,background:'rgba(255,255,255,0.2)',borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',flexShrink:0}}>🛡️</div>
           <div style={{flex:1}}>
-            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{t('set_up_your_emergency_card',isEn)}</div>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{t('let_verified_ems_access_your',isEn)}</div>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?'Set up your emergency card':'設置緊急健康卡'}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?'Let verified EMS access your critical info instantly on scan':'讓緊急人員即時掃描獲取您的關鍵資訊'}</div>
           </div>
           <span style={{color:'rgba(255,255,255,0.8)',fontSize:'18px'}}>›</span>
         </div>
@@ -625,9 +455,9 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
           <div>
             <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name||patient?.full_name?.split(',')[1]?.trim()||'Lisa'}`:'早晨，Lisa'}</div>
-            <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{t('your_health_passport',isEn)}</div>
+            <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
             <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
-            {onOpenSignUp&&<div onClick={onOpenSignUp} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{t('not_you_claim_or_register',isEn)}</div>}
+            {onOpenSignUp&&<div onClick={onOpenSignUp} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{isEn?'Not you? Claim or register a profile':'不是您？認領或註冊個人檔案'}</div>}
           </div>
           {/* Emergency card status badge */}
           <div onClick={onOpenEmergencySetup} style={{cursor:'pointer'}}>
@@ -649,26 +479,26 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
             <rect x="34" y="42" width="12" height="4" fill={C.green}/>
           </svg>
           <div style={{textAlign:'center'}}>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{t('show_this_to_any_medsaregistered',isEn)}</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{t('they_see_what_their_role',isEn)}</div>
+            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{isEn?'Show this to any Medsa-registered provider':'向任何Medsa註冊醫療人員出示'}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{isEn?'They see what their role permits · You control the rest':'他們只看到其職責所允許的內容'}</div>
           </div>
         </div>
       </div>
       <div onClick={onOpenShare} style={{margin:'10px 16px 0',background:C.card,borderRadius:'12px',padding:'12px 14px',cursor:'pointer',display:'flex',alignItems:'center',gap:'10px'}}>
         <span style={{fontSize:'16px',color:C.textSub}}>{'\u25c7'}</span>
         <div style={{flex:1}}>
-          <div style={{fontSize:'12px',fontWeight:600}}>{t('share_for_this_visit',isEn)}</div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{t('for_a_clinic_that_doesnu2019t',isEn)}</div>
+          <div style={{fontSize:'12px',fontWeight:600}}>{isEn?'Share for this visit':'為此次診症分享'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'For a clinic that doesn\\u2019t use Medsa - choose what to share':'為未使用Medsa的診所選擇分享內容'}</div>
         </div>
         <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
-      <SecLabel>{t('your_health',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
-          {key:'records',icon:'▣',label:t('medical_records',isEn),sub:t('history_vaccinations_share',isEn),bg:C.greenLight,badge:null},
-          {key:'insurance',icon:'◉',label:t('insurance',isEn),sub:t('plans_claims_agents',isEn),bg:C.blueLight,badge:'2'},
-          {key:'prescriptions',icon:'◈',label:t('prescriptions',isEn),sub:t('meds_drug_info',isEn),bg:C.brownLight,badge:null},
-          {key:'calendar',icon:'◇',label:t('calendar',isEn),sub:t('appointments_alarms',isEn),bg:C.amberLight,badge:'1'},
+          {key:'records',icon:'▣',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
+          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
+          {key:'prescriptions',icon:'◈',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
+          {key:'calendar',icon:'◇',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
             <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',marginBottom:'10px',color:C.green}}>{item.icon}</div>
@@ -678,12 +508,12 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           </div>
         ))}
       </div>
-      <SecLabel>{t('find_care_manage',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
-          {key:'doctors',icon:'◎',bg:C.greenLight,label:t('doctors_clinics',isEn),sub:t('search_book_pay',isEn)},
-          {key:'family',icon:'◇',bg:C.brownLight,label:t('family_guardians',isEn),sub:t('monitor_family_members_hk38mo',isEn)},
-          {key:'storage',icon:'▣',bg:C.card,label:t('storage_plan',isEn),sub:t('free_08_gb_of_2',isEn)},
+          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
+          {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
+          {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
@@ -692,22 +522,22 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           </div>
         ))}
       </div>
-      <SecLabel>{t('message_board',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Message board':'訊息板'}</SecLabel>
       <Card>
-        <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {t('alerts_updates',isEn)}</div>
+        <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
         {[
-          {dot:C.red,title:t('flu_season_advisory',isEn),body:t('hkdoh_recommends_vaccination_before_oct',isEn)},
-          {dot:'#d4a017',title:t('reminder_dr_chan_tomorrow_10am',isEn),body:t('qe_hospital_room_3b',isEn)},
-          {dot:C.green,title:t('insurance_claim_approved',isEn),body:t('aia_claim_44821_hk3200_approved',isEn)},
+          {dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'},
+          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B.':'伊利沙伯醫院，3B室。'},
+          {dot:C.green,title:isEn?'Insurance claim approved':'保險索賠已批准',body:isEn?'AIA claim #44821 — HK$3,200 approved.':'AIA索賠#44821 — 港幣3,200元已批准。'},
         ].map((m,i)=>(
           <div key={i} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:'10px',alignItems:'flex-start'}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:m.dot,marginTop:'5px',flexShrink:0}}/>
             <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
           </div>
         ))}
-        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {t('messages_from_your_doctor',isEn)}</div>
-        {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{t('loading',isEn)}</div>}
-        {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{t('no_messages_yet',isEn)}</div>}
+        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {isEn?'Messages from your doctor':'醫生的訊息'}</div>
+        {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
+        {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
         {doctorThreadsLatestFirst.map((m,i)=>(
           <div key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'10px 14px',borderBottom:i<doctorThreadsLatestFirst.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer',background:m.urgent&&!m.read_by_patient?C.redLight:'transparent'}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:(!m.read_by_patient?C.green:C.border),marginTop:'5px',flexShrink:0}}/>
@@ -716,35 +546,35 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
                 <span style={{fontSize:'12px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
                 {m.urgent&&<span style={{fontSize:'8px',background:C.red,color:'#fff',padding:'1px 6px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
               </div>
-              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(t('you',isEn))+m.body:(m.subject||m.body)}</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
             </div>
             <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={t('delete_conversation',isEn)}>✕</span>
+            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
           </div>
         ))}
       </Card>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
         <span style={{color:C.brown}}>◇</span>
         <div>
-          <div style={{fontSize:'12px',fontWeight:600,color:C.brown}}>{t('you_control_your_records',isEn)}</div>
-          <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{t('choose_what_each_provider_sees',isEn)}</div>
+          <div style={{fontSize:'12px',fontWeight:600,color:C.brown}}>{isEn?'You control your records':'您掌控自己的記錄'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{isEn?'Choose what each provider sees — anytime.':'隨時選擇每位醫療提供者可查看的內容。'}</div>
         </div>
       </div>
 
       {openThread&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenThread(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{t('close',isEn)}</div>
+            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
             {openThread.map((m)=>(
               <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?C.greenXLight:(m.urgent?C.redLight:'#fff')}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                    <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(t('you_2',isEn)):m.doctor_name}</span>
+                    <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(isEn?'You':'您'):m.doctor_name}</span>
                     {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                     <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
-                    {m.sender_type==='patient'&&<span onClick={()=>handleDeleteOwnReply(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title={t('delete_your_reply',isEn)}>✕</span>}
+                    {m.sender_type==='patient'&&<span onClick={()=>handleDeleteOwnReply(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
                   </div>
                 </div>
                 {m.subject&&<div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{m.subject}</div>}
@@ -752,9 +582,9 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
               </Card>
             ))}
             <Card style={{padding:'14px 16px'}}>
-              <textarea value={replyBody} onChange={e=>setReplyBody(e.target.value)} rows={3} placeholder={t('write_a_reply',isEn)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
+              <textarea value={replyBody} onChange={e=>setReplyBody(e.target.value)} rows={3} placeholder={isEn?'Write a reply…':'撰寫回覆…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
               {replyError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{replyError}</div>}
-              <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(t('sending',isEn)):(t('send_reply',isEn))}</Btn>
+              <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(isEn?'Sending…':'傳送中…'):(isEn?'Send reply':'傳送回覆')}</Btn>
             </Card>
           </div>
         </div>
@@ -813,15 +643,15 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.greenXLight,borderBottom:`0.5px solid ${C.greenLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
         <span style={{color:C.green}}>◇</span>
-        <span style={{fontSize:'12px',color:C.green}}>{t('you_control_exactly_what_each',isEn)}</span>
+        <span style={{fontSize:'12px',color:C.green}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,overflowX:'auto'}}>
-        {[['all',t('all_records',isEn)],['vax',t('vaccinations',isEn)],['sharing',t('sharing',isEn)],['upload',t('upload',isEn)]].map(([k,l])=>(
+        {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
         ))}
       </div>
       {tab==='all'&&<>
-        <SecLabel>{t('recent_records',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
         {(hasLiveData ? records.map(r=>({
           id: r.id,
           icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
@@ -855,7 +685,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         ))}
       </>}
       {tab==='vax'&&<>
-        <SecLabel>{t('vaccination_passport',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
         {vaccines.map(v=>(
           <Card key={v.name}>
             <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{mt(v.name)}</span><Badge text={mt(v.label)} type={v.status}/></div>
@@ -870,10 +700,10 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>
           </Card>
         ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {t('book_overdue_vaccinations',isEn)}</Btn></div>
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>
       </>}
       {tab==='sharing'&&<>
-        <SecLabel>{t('who_can_see_your_records',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
         <Card>
           {providers.map((p,i)=>(
             <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
@@ -883,7 +713,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>
           ))}
         </Card>
-        <SecLabel>{t('record_type_controls',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Record type controls':'記錄類型控制'}</SecLabel>
         <Card>
           {['Lab results','Visit summaries','Imaging','Surgical history','Vaccinations','Mental health records','Allergy info'].map((item,i,arr)=>(
             <div key={item} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
@@ -891,14 +721,14 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>
           ))}
         </Card>
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>◇ {t('create_onetime_access_link',isEn)}</Btn></div>
+        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>◇ {isEn?'Create one-time access link':'建立一次性存取連結'}</Btn></div>
       </>}
       {tab==='upload'&&<>
-        <SecLabel>{t('upload_a_record',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Upload a record':'上傳記錄'}</SecLabel>
         <div style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer'}}>
           <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
-          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{t('tap_to_upload',isEn)}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{t('nonmedsa_hospitals_overseas_providers_personal',isEn)}</div>
+          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{isEn?'Tap to upload':'點擊上傳'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
           <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
             {['PDF','JPG/PNG','DICOM','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
           </div>
@@ -938,17 +768,17 @@ function VideoCallModal({ doc, isEn, onClose }) {
         {stage==='connecting'&&<>
           <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green,marginBottom:'16px'}}>{doc.init}</div>
           <div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px'}}>{doc.name}</div>
-          <div style={{fontSize:'13px',opacity:0.7,marginBottom:'24px'}}>{t('connecting',isEn)}</div>
+          <div style={{fontSize:'13px',opacity:0.7,marginBottom:'24px'}}>{isEn?'Connecting…':'連接中…'}</div>
           <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,0.2)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
           <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
           <div style={{position:'absolute',bottom:40}}>
-            <Btn variant="danger" onClick={onClose}>{t('cancel',isEn)}</Btn>
+            <Btn variant="danger" onClick={onClose}>{isEn?'Cancel':'取消'}</Btn>
           </div>
         </>}
         {stage==='active'&&<>
           <div style={{width:'100%',maxWidth:360,aspectRatio:'3/4',background:'#1a1a1a',borderRadius:'16px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'16px',position:'relative'}}>
             <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green}}>{doc.init}</div>
-            <div style={{position:'absolute',top:12,right:12,background:'rgba(0,0,0,0.5)',borderRadius:'20px',padding:'4px 10px',fontSize:'11px'}}>● {t('live',isEn)}</div>
+            <div style={{position:'absolute',top:12,right:12,background:'rgba(0,0,0,0.5)',borderRadius:'20px',padding:'4px 10px',fontSize:'11px'}}>● {isEn?'Live':'直播中'}</div>
             <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
           </div>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
@@ -962,23 +792,23 @@ function VideoCallModal({ doc, isEn, onClose }) {
         {stage==='ended'&&<div style={{background:C.cream,borderRadius:'16px',padding:'24px',width:'100%',maxWidth:400,color:C.text}}>
           <div style={{textAlign:'center',marginBottom:'16px'}}>
             <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
-            <div style={{fontSize:'16px',fontWeight:700}}>{t('consultation_complete',isEn)}</div>
+            <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {dt(doc.spec)}</div>
           </div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{t('request_documents',isEn)}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
           {[
-            {key:'certificate',label:t('medical_certificate',isEn)},
-            {key:'sickleave',label:t('sick_leave_note',isEn)},
-            {key:'referral',label:t('referral_letter',isEn)},
+            {key:'certificate',label:isEn?'Medical certificate':'醫療證明書'},
+            {key:'sickleave',label:isEn?'Sick leave note':'病假紙'},
+            {key:'referral',label:isEn?'Referral letter':'轉介信'},
           ].map(d=>(
             <div key={d.key} onClick={()=>requestDoc(d.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'8px',cursor:'pointer'}}>
               <span style={{fontSize:'13px'}}>{d.label}</span>
               {docsIssued.includes(d.key)
-                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {t('issued',isEn)}</span>
-                :<span style={{fontSize:'11px',color:C.green}}>{t('request',isEn)} ›</span>}
+                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Issued':'已發出'}</span>
+                :<span style={{fontSize:'11px',color:C.green}}>{isEn?'Request':'索取'} ›</span>}
             </div>
           ))}
-          <Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={onClose}>{t('done',isEn)}</Btn>
+          <Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={onClose}>{isEn?'Done':'完成'}</Btn>
         </div>}
       </div>
     </div>
@@ -1138,22 +968,22 @@ function DoctorsScreen({ isEn, patient={} }) {
       <div style={{background:C.green,padding:'0 16px 14px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={t('search_by_name_specialty_clinic',isEn)}/>
+          <input style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
         </div>
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
-        {[['search',t('find_doctors',isEn)],['book',t('book',isEn)],['payments',t('payments',isEn)]].map(([k,l])=>(
+        {[['search',isEn?'Find doctors':'尋找醫生'],['book',isEn?'Book':'預約'],['payments',isEn?'Payments':'付款']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
       {tab==='search'&&<>
         <div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',alignItems:'center'}}>
-          <span style={{fontSize:'12px',color:C.textSub}}>{t('sort_by',isEn)}</span>
-          {[['distance',t('nearest',isEn)],['rating',t('top_rated',isEn)]].map(([k,l])=>(
+          <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Sort by':'排序方式'}</span>
+          {[['distance',isEn?'Nearest':'最近'],['rating',isEn?'Top rated':'評分最高']].map(([k,l])=>(
             <div key={k} onClick={()=>setSortBy(k)} style={{fontSize:'11px',padding:'5px 12px',borderRadius:'20px',cursor:'pointer',background:sortBy===k?C.green:C.card,color:sortBy===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
           ))}
         </div>
-        <SecLabel>{t('doctors_near_you_wan_chai',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
         {sortedDoctors.map((doc,i)=>(
           <Card key={i}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
@@ -1164,9 +994,9 @@ function DoctorsScreen({ isEn, patient={} }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}</div>
                 <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
                   <span style={{fontSize:'11px',color:C.textMuted}}>◇ {doc.distanceKm}km</span>
-                  {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {t('video_available',isEn)}</span>}
-                  {doc.institution==='clinic_ops'&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{t('medsa_clinic',isEn)}</span>}
-                  {doc.institution==='practitioner'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{t('medsa_hospital',isEn)}</span>}
+                  {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {isEn?'Video available':'視像問診'}</span>}
+                  {doc.institution==='clinic_ops'&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Clinic':'Medsa診所'}</span>}
+                  {doc.institution==='practitioner'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Hospital':'Medsa醫院'}</span>}
                 </div>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',color:'#d4a017'}}>★★★★★</div><div style={{fontSize:'10px',color:C.textMuted}}>{doc.rating}</div><Badge text={doc.avail} type={doc.type}/></div>
@@ -1175,29 +1005,29 @@ function DoctorsScreen({ isEn, patient={} }) {
               <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
               {doc.type==='full'
                 ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, doc.videoAvail?'video':'in-person')}>{t('book',isEn)}</Btn>}
+                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, doc.videoAvail?'video':'in-person')}>{isEn?'Book':'預約'}</Btn>}
             </div>
           </Card>
         ))}
       </>}
       {tab==='book'&&<>
-        <SecLabel>{t('new_appointment',isEn)}</SecLabel>
+        <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
           <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
           <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{dt(activeDoctor.spec)} · {dt(activeDoctor.clinic)}</div></div>
         </Card>
 
         {activeDoctor.videoAvail&&<Card style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{t('consultation_type',isEn)}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
           <div style={{display:'flex',gap:'8px'}}>
-            {[['in-person',t('inperson',isEn)],['video',t('video_call',isEn)]].map(([k,l])=>(
+            {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
               <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
             ))}
           </div>
         </Card>}
 
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{t('date_time',isEn)}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
               {DAYS.map(({label,date,fullDate})=>{
@@ -1217,7 +1047,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           </div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{t('language',isEn)}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Language':'語言'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
             {['廣東話','English','普通話','日本語'].map(l=>(
               <div key={l} onClick={()=>setSelLang(l)} style={{border:`0.5px solid ${selLang===l?C.green:C.border}`,borderRadius:'8px',padding:'10px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:selLang===l?C.green:C.card,color:selLang===l?'#fff':C.text}}>{l}</div>
@@ -1225,14 +1055,14 @@ function DoctorsScreen({ isEn, patient={} }) {
           </div></div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{t('intake_form',isEn)}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Intake form':'問診表'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{t('reason_for_visit',isEn)}</div>
-            <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={t('eg_persistent_cough',isEn)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{t('symptoms',isEn)}</div>
-            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={t('describe_what_youu2019re_experiencing',isEn)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{t('current_medications_optional',isEn)}</div>
-            <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={t('eg_metformin_500mg',isEn)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Reason for visit':'求診原因'}</div>
+            <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={isEn?'e.g. Persistent cough':'例如：持續咳嗽'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Symptoms':'症狀'}</div>
+            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={isEn?'Describe what you\\u2019re experiencing…':'描述您的症狀…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Current medications (optional)':'目前藥物（可選）'}</div>
+            <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={isEn?'e.g. Metformin 500mg':'例如：二甲雙胍 500mg'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
 
             <div style={{background:C.blueLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'11px',color:C.navy,lineHeight:1.5}}>
               {(() => {
@@ -1258,10 +1088,10 @@ function DoctorsScreen({ isEn, patient={} }) {
           </div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{t('confirm_pay',isEn)}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[[t('doctor',isEn),activeDoctor.name],[t('type',isEn),consultType==='video'?(t('video_call',isEn)):(t('inperson',isEn))],[t('date',isEn),`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[t('language',isEn),selLang],[t('consultation_fee',isEn),'HK$380'],[t('aia_covers',isEn),'HK$300'],[t('you_pay',isEn),'HK$80']].map(([l,v],i,arr)=>(
+              {[[isEn?'Doctor':'醫生',activeDoctor.name],[isEn?'Type':'診症方式',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],[isEn?'Date':'日期',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[isEn?'Language':'語言',selLang],[isEn?'Consultation fee':'診金','HK$380'],[isEn?'AIA covers':'AIA承保','HK$300'],[isEn?'You pay':'您需支付','HK$80']].map(([l,v],i,arr)=>(
                 <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>
@@ -1270,38 +1100,38 @@ function DoctorsScreen({ isEn, patient={} }) {
                 <div style={{position:'absolute',top:2,left:whatsappReminder?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/>
               </div>
               <div style={{flex:1}}>
-                <div style={{fontSize:'13px',fontWeight:500}}>{t('whatsapp_reminders',isEn)}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{t('get_appointment_reminders_via_whatsapp',isEn)}</div>
+                <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'WhatsApp reminders':'WhatsApp提醒'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Get appointment reminders via WhatsApp':'透過WhatsApp接收預約提醒'}</div>
               </div>
               <span style={{fontSize:'18px',color:'#25D366'}}>◈</span>
             </div>
-            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{t('complete_the_intake_consent_above',isEn)}</div>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={!intakeConsent||intakeSaving}>{intakeSaving?(t('confirming',isEn)):(t('confirm_appointment',isEn))}</Btn>
+            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{isEn?'Complete the intake consent above to continue':'請先完成上方的問診同意'}</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={!intakeConsent||intakeSaving}>{intakeSaving?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm appointment':'確認預約')}</Btn>
           </div>
         </Card>
         {booked&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
           <div style={{background:C.cream,borderRadius:'20px',width:'90%',maxWidth:380,padding:'32px 24px',textAlign:'center'}}>
             <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
-            <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{t('appointment_confirmed',isEn)}</div>
+            <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
             <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · {selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} at {selTime}</div>
             {consultType==='video'
               ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{t('join_video_call_now_demo',isEn)}</Btn>
-                  <div style={{fontSize:'10px',color:C.textMuted}}>{t('in_production_this_unlocks_at',isEn)}</div>
-                  <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{t('close_2',isEn)}</Btn>
+                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{isEn?'Join video call now (demo)':'立即加入視像通話（示範）'}</Btn>
+                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'In production, this unlocks at your actual appointment time.':'實際運作時，此按鈕將於預約時間開放。'}</div>
+                  <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{isEn?'Close':'關閉'}</Btn>
                 </div>
               : <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>}
           </div>
         </div>}
       </>}
       {tab==='payments'&&<>
-        <SecLabel>{t('outstanding',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Outstanding':'待付款'}</SecLabel>
         <Card style={{padding:'14px 16px'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan — Jun 12</div><Badge text="Due HK$80" type="due"/></div>
           {[['Consultation fee','HK$380'],['AIA covered','−HK$300'],['Balance','HK$80']].map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
           <div style={{display:'flex',gap:'8px',marginTop:'12px'}}><Btn style={{flex:1,fontSize:'12px'}}>Receipt</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Pay HK$80</Btn></div>
         </Card>
-        <SecLabel>{t('recent_payments',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Recent payments':'最近付款'}</SecLabel>
         {[{title:'Ruttonjee Hospital — Feb 18',amount:'HK$1,200',status:'Paid',type:'ok'},{title:'Matilda International — May 3',amount:'HK$680',status:'Refund pending',type:'due'}].map((p,i)=>(
           <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div><div style={{fontSize:'13px',fontWeight:500}}>{p.title}</div></div>
@@ -1325,7 +1155,7 @@ function MedAlarmCard({ med, schedule, next, defaultOn, defaultTime, isEn }) {
         <div onClick={()=>setOn(!on)} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
       </div>
       {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-        <span style={{fontSize:'12px',color:C.textSub}}>{t('alarm_at',isEn)}</span>
+        <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
         <input type="time" value={t} onChange={e=>setT(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
         <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
       </div>}
@@ -1341,7 +1171,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
     setViewMonth(prev => { const d=new Date(prev); d.setMonth(d.getMonth()+delta); return d })
   }
 
-  const monthLabel = viewMonth.toLocaleDateString(t('enhk',isEn),{month:'long',year:'numeric'})
+  const monthLabel = viewMonth.toLocaleDateString(isEn?'en-HK':'zh-HK',{month:'long',year:'numeric'})
   const firstWeekday = (viewMonth.getDay()+6)%7 // Monday-first grid
   const daysInMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0).getDate()
   const today = new Date()
@@ -1383,7 +1213,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
           })}
         </div>
       </div>
-      <SecLabel>{t('upcoming',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
       {appointments.length>0 ? appointments.map((appt,i)=>{
         const dt = new Date(appt.scheduled_at)
         const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
@@ -1415,7 +1245,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
           <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',fontWeight:600}}>{e.time}</div><div style={{fontSize:'11px',color:C.textMuted}}>{e.date}</div></div>
         </Card>
       ))}
-      <SecLabel>{t('medication_alarms',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
       {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
         <MedAlarmCard key={i} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} next="Check schedule" defaultOn={m.alarm_enabled||false} defaultTime={m.alarm_time?.slice(0,5)||'08:00'} isEn={isEn}/>
       )) : <>
@@ -1423,7 +1253,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
         <MedAlarmCard med="Vitamin D3 1000IU" schedule="Daily with breakfast" next="Tomorrow 8am" defaultOn={true} defaultTime="08:00" isEn={isEn}/>
         <MedAlarmCard med="Iron supplement 14mg" schedule="Every other day" next="Thu morning" defaultOn={false} defaultTime="09:00" isEn={isEn}/>
       </>}
-      <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {t('add_reminder',isEn)}</Btn></div>
+      <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>
     </div>
   )
 }
@@ -1501,7 +1331,7 @@ function ClaimsTab({ isEn, claims=[] }) {
       </div>
 
       {/* Greyed out past claims — for reference only */}
-      <SecLabel>{t('past_claims_not_yet_synced',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Past claims (not yet synced)':'過往索賠（尚未同步）'}</SecLabel>
       <div style={{opacity:hasLiveClaims?1:0.4,pointerEvents:hasLiveClaims?'auto':'none'}}>
         {hasLiveClaims ? claims.map((c,i)=>{
           const statusType = c.status==='approved'?'ok':c.status==='rejected'?'full':'due'
@@ -1536,13 +1366,13 @@ function ClaimsTab({ isEn, claims=[] }) {
 
       {/* Medsa disclaimer */}
       <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
-        ⚠ <strong>{t('important',isEn)}</strong> {isEn
+        ⚠ <strong>{isEn?'Important:':'重要提示:'}</strong> {isEn
           ? 'Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.'
           : '所需文件因保險公司、方案類型及個別索償而異。以下清單涵蓋一般標準要求——您的保險公司或代理人可能要求提供額外文件。Medsa對不完整或被拒的索償概不負責。如有疑問,請於提交前直接聯絡您的代理人或保險公司。'}
       </div>
 
       {/* Claim preparation flow */}
-      <SecLabel>{t('prepare_a_claim_package',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Prepare a claim package':'準備索賠文件包'}</SecLabel>
 
       {!claimType&&<>
         <div style={{padding:'0 16px 6px',fontSize:'12px',color:C.textSub}}>Select the type of claim you are preparing:</div>
@@ -1721,7 +1551,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       {/* Active plan banner - real data from agent_policies */}
-      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{t('loading_your_plan',isEn)}</div>}
+      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading your plan...':'載入您的計劃中...'}</div>}
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
       {!policyLoading&&activePolicy&&(() => {
         const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
@@ -1730,7 +1560,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         const waitingOnAgent = inProgress && !activePolicy.contract_ready_at
         return (
         <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {t('active_plan',isEn)}</div>
+          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
           <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
 
@@ -1739,25 +1569,25 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
           </div>}
 
           {readyToSign&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{t('your_new_contract_is_ready',isEn)}</div>
+            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Your new contract is ready':'您的新合約已準備就緒'}</div>
             <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Review the document below, then confirm once you're ready to sign.":'請先查閱以下文件，準備好後確認簽署。'}</div>
             {viewError&&<div style={{fontSize:'11px',color:'#ffb3b3',marginBottom:'10px'}}>{viewError}</div>}
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={handleViewContract}>{t('view_contract',isEn)}</Btn>
+              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={handleViewContract}>{isEn?'View contract':'查看合約'}</Btn>
               <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
             </div>
           </div>}
 
           {activePolicy.patient_signed_at&&inProgress&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px'}}>
-            ✓ {t('signed_your_agent_will_confirm',isEn)}
+            ✓ {isEn?'Signed — your agent will confirm the renewal shortly.':'已簽署 — 代理人將盡快確認續保。'}
           </div>}
 
           {!inProgress&&<div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
-            <div><div style={{fontSize:'11px',opacity:0.7}}>{t('days_left',isEn)}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
+            <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Days left':'剩餘天數'}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
             <div style={{flex:1}}/>
             {daysLeft<=45&&(renewalRequested
-              ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {t('renewal_requested',isEn)}</div>
-              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{t('request_renewal',isEn)}</Btn>)}
+              ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
+              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
           </div>}
         </div>
         )
@@ -1765,7 +1595,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',t('compare_plans',isEn)],['claims',t('claims',isEn)],['agents',t('agent_ratings',isEn)]].map(([k,l])=>(
+        {[['plans',isEn?'Compare plans':'比較計劃'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
@@ -1774,7 +1604,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       {tab==='plans'&&<>
         {/* How Medsa connects patients to insurers — neutral comparison, not advice */}
         <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ {t('how_medsa_connects_you_to',isEn)}</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ {isEn?'How Medsa connects you to insurers':'Medsa如何連接您與保險公司'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
             {isEn
               ? 'Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.'
@@ -1783,17 +1613,17 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </div>
 
         <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {t('plan_comparison_not_advice',isEn)}</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{t('plans_are_filtered_against_your',isEn)}</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn\\u2019t rank plans or tell you which is "best" — that\\u2019s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
         </div>
 
-        <SecLabel>{t('plans_matching_your_profile',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
         {plans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
-                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{t('sponsored',isEn)}</span>}
+                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Sponsored':'贊助'}</span>}
                   <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{pt(plan.type)}</span>
                 </div>
                 <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
@@ -1827,11 +1657,11 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         ))}
 
         {/* Search all plans */}
-        <SecLabel>{t('search_all_plans',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
         <div style={{padding:'0 16px 10px'}}>
           <div style={{position:'relative',display:'flex',alignItems:'center'}}>
             <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={t('search_eg_dental_travel_critical',isEn)}/>
+            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
           </div>
         </div>
         <div style={{padding:'0 16px 16px'}}>
@@ -1856,7 +1686,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </div>
 
         {/* Anonymous feedback explainer */}
-        <SecLabel>{t('how_feedback_works',isEn)}</SecLabel>
+        <SecLabel>{isEn?'How feedback works':'如何提交評價'}</SecLabel>
         <Card style={{padding:'14px 16px'}}>
           {[
             {icon:'◎',title:'Anonymous by default',body:'Your name is never attached to ratings or comments. Agents and insurers cannot identify who left feedback.'},
@@ -1871,7 +1701,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </Card>
 
         {/* Preview of what agent ratings will look like */}
-        <SecLabel>{t('preview_agent_ratings_once_live',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Preview — agent ratings once live':'預覽 — 代理人評分上線後'}</SecLabel>
         <div style={{margin:'0 16px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',opacity:0.6}}>
           <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px',textAlign:'center',fontStyle:'italic'}}>This is a preview — agent profiles will be verified and live once your insurer integrates with Medsa</div>
           {[
@@ -1894,7 +1724,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </div>
 
         {/* Anonymous feedback form — available now for patients who have interacted */}
-        <SecLabel>{t('leave_anonymous_feedback',isEn)}</SecLabel>
+        <SecLabel>{isEn?'Leave anonymous feedback':'留下匿名評價'}</SecLabel>
         <Card style={{padding:'16px'}}>
           {!feedbackSubmitted?<>
             <div style={{fontSize:'13px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>Had a recent interaction with an agent through Medsa? Leave anonymous feedback — your identity will never be revealed.</div>
@@ -1928,7 +1758,7 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
   const hasLiveMeds = medications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{t('active_prescriptions',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
       {(hasLiveMeds ? medications.map((m,idx)=>({
         name:`${m.medication_name} ${m.dosage||''}`.trim(),
         dose:m.frequency||'As prescribed',
@@ -1958,13 +1788,13 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
           </div>
         </Card>
       ))}
-      <SecLabel>{t('drug_reference',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Drug reference':'藥物參考'}</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={t('search_any_drug_name',isEn)}/>
+          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
         </div>
-        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{t('check_dosage_interactions_contraindications_and',isEn)}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage, interactions, contraindications, and side effects.':'查看劑量、相互作用、禁忌症和副作用。'}</div>
       </Card>
     </div>
   )
@@ -1979,11 +1809,11 @@ function FamilyScreen({ isEn }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{t('family_guardian_plan',isEn)}</div>
+        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
         <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Active · HK$38/mo</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{t('monitoring_2_of_3_members',isEn)}</div>
+        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Monitoring 2 of 3 members · Renews 1 Jul':'監護3名成員中的2名 · 7月1日續期'}</div>
       </div>
-      <SecLabel>{t('family_members',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
       {members.map((m,i)=>(
         <Card key={i} style={{padding:'14px 16px'}}>
           <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
@@ -1995,7 +1825,7 @@ function FamilyScreen({ isEn }) {
             </div>
           </div>
           <div style={{background:C.beige,borderRadius:'10px',padding:'10px 12px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{t('guardian_access',isEn)}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Guardian access':'監護人存取'}</div>
             <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {['Medication reminders','Appointment alerts','Emergency card','Vitals summary'].map(tag=>(
                 <span key={tag} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px'}}>{tag}</span>
@@ -2005,9 +1835,9 @@ function FamilyScreen({ isEn }) {
           <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>View health</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Manage access</Btn></div>
         </Card>
       ))}
-      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {t('add_family_member',isEn)}</Btn></div>
+      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-        ◇ {t('guardian_access_is_consentbased_family',isEn)}
+        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
       </div>
     </div>
   )
@@ -2015,25 +1845,25 @@ function FamilyScreen({ isEn }) {
 
 function StorageScreen({ isEn, patient={} }) {
   const tiers=[
-    {name:'Essential',price:t('free',isEn),storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
+    {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
     {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
     {name:'Family',price:'HK$38/mo',storage:'50 GB shared',perks:['Everything in Personal','Up to 5 family members','Guardian monitoring for seniors/minors','Priority support','Family emergency card'],current:false,color:C.brown,bg:C.brownLight},
   ]
   return (
     <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{t('your_storage',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Your storage':'您的儲存空間'}</SecLabel>
       <Card style={{padding:'16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
         <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
         <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?"At current rate you'll reach your limit in ~14 months.":'按目前速度，約14個月內達到限額。'}</div>
       </Card>
-      <SecLabel>{t('plans',isEn)}</SecLabel>
+      <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
       {tiers.map((tier,i)=>(
         <div key={i} style={{background:C.cream,border:`0.5px solid ${tier.current?tier.color:C.border}`,borderRadius:'14px',margin:'0 16px 10px',padding:'16px',position:'relative'}}>
-          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{t('current_plan',isEn)}</span>}
+          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{isEn?'Current plan':'目前計劃'}</span>}
           <div style={{fontSize:'16px',fontWeight:700,color:tier.color,marginBottom:'2px'}}>{tier.name}</div>
           <div style={{fontSize:'22px',fontWeight:800,color:C.text,marginBottom:'2px'}}>{tier.price}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {t('cloud_storage',isEn)}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {isEn?'cloud storage':'雲端儲存'}</div>
           <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'14px'}}>
             {tier.perks.map(p=><div key={p} style={{fontSize:'12px',color:C.text,display:'flex',alignItems:'center',gap:'7px'}}><span style={{color:tier.color,fontSize:'10px'}}>✓</span>{p}</div>)}
           </div>
@@ -2313,7 +2143,7 @@ export default function PatientApp({ liveData={} }) {
   const [showGate,setShowGate]=useState(!liveData.patient)
   const [screen,setScreen]=useState('home')
   const [lang,setLang]=useState('en') // 'en' | 'zh-TW' | 'zh-CN'
-  const isEn = lang==='en' // kept so every existing t('en',isEn) string throughout this file works unchanged
+  const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
   const [shareOpen,setShareOpen]=useState(false)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
@@ -2330,7 +2160,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = liveData.vaccinations || []
   const liveAppointments = liveData.appointments || []
   const liveClaims = liveData.claims || []
-  const titles={home:'medsa',records:t('medical_records',isEn),doctors:t('doctors_clinics',isEn),calendar:t('calendar',isEn),insurance:t('insurance',isEn),prescriptions:t('prescriptions',isEn),family:t('family_guardians',isEn),storage:t('storage_plan',isEn)}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
   const rootContent = (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
