@@ -636,6 +636,39 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
   const [logText,setLogText]=useState('')
   const [logSaved,setLogSaved]=useState(false)
   const [diagnosis,setDiagnosis]=useState('')
+  const [logSaving,setLogSaving]=useState(false)
+  const [logDraftSaving,setLogDraftSaving]=useState(false)
+  const [logDraftSaved,setLogDraftSaved]=useState(false)
+  const [logError,setLogError]=useState(null)
+
+  // Real writes to the patient's medical record - previously these
+  // buttons only set local state and never touched Supabase at all.
+  // "Save" writes a draft (editable, not final); "Submit" writes the
+  // final record - this replaces needing a separate prep-notes feature,
+  // since the same fields work for both pre-visit review and the actual
+  // visit note.
+  async function writeLogEntry(status) {
+    if (!logText.trim() && !diagnosis.trim()) return
+    const isDraft = status==='draft'
+    isDraft ? setLogDraftSaving(true) : setLogSaving(true)
+    setLogError(null)
+    try {
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.id).maybeSingle()
+      if (!patientRow) throw new Error('Could not find this patient in Medsa.')
+      const { error: insErr } = await supabase.from('medical_records').insert({
+        patient_id: patientRow.id, record_type: 'visit', title: diagnosis || 'Consultation note',
+        notes: logText || null, diagnosis: diagnosis || null,
+        date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_log', record_status: status,
+      })
+      if (insErr) throw insErr
+      if (isDraft) { setLogDraftSaved(true); setTimeout(()=>setLogDraftSaved(false), 2500) }
+      else setLogSaved(true)
+    } catch (e) {
+      setLogError(e.message)
+    } finally {
+      isDraft ? setLogDraftSaving(false) : setLogSaving(false)
+    }
+  }
   const [showPrescribeModal,setShowPrescribeModal]=useState(false)
   const [dispensedIds,setDispensedIds]=useState([])
   const [patientMsgSubject,setPatientMsgSubject]=useState('')
@@ -719,7 +752,7 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
             <button onClick={()=>setView('search')} style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'20px',padding:'4px 12px',fontSize:'11px',cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>← Back</button>
           </div>
           <div style={{marginTop:'10px',display:'flex',gap:'8px',flexWrap:'wrap'}}>
-            <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px',fontWeight:500}}>{patient.ward}</span>
+            <span style={{fontSize:'11px',background:isAdmitted?C.greenLight:C.card,color:isAdmitted?C.green:C.textSub,padding:'3px 10px',borderRadius:'20px',fontWeight:500}}>{isAdmitted?patient.ward:'Outpatient'}</span>
             <span style={{fontSize:'11px',background:C.blueLight,color:C.blue,padding:'3px 10px',borderRadius:'20px',fontWeight:500}}>{patient.status}</span>
           </div>
           {access.admission_reason&&<div style={{marginTop:'10px',background:C.beige,borderRadius:'10px',padding:'10px 12px'}}>
@@ -737,7 +770,7 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
         {activeTab==='overview'&&<>
           <SecLabel>Critical info</SecLabel>
           <Card style={{padding:'0 16px'}}>
-            <InfoRow label="Ward / Bed" value={patient.ward}/>
+            <InfoRow label="Ward / Bed" value={isAdmitted?patient.ward:'Not admitted - outpatient'}/>
             <InfoRow label="Status" value={patient.status}/>
             <InfoRow label="Emergency contact" value={`${patient.emergency.name} (${patient.emergency.relation}) · ${patient.emergency.phone}`}/>
             {patient.allergies.map((a,i,arr)=><InfoRow key={a} label="Allergy" value={a} highlight last={i===arr.length-1}/>)}
@@ -888,10 +921,13 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
             </>}
             <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Notes</div>
             <textarea value={logText} onChange={e=>setLogText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={4} placeholder="Log symptoms, observations, or clinical notes for this visit…"/>
-            {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Log saved to patient record</div>}
+            {logError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{logError}</div>}
+            {logDraftSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Draft saved - keep editing, or submit when ready</div>}
+            {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Submitted to patient record</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:access.prescribe?'10px':'0'}}>
-              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false)}}>Clear</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={()=>setLogSaved(true)}>Submit to record</Btn>
+              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false);setLogDraftSaved(false)}}>Clear</Btn>
+              <Btn style={{flex:1}} onClick={()=>writeLogEntry('draft')} disabled={logDraftSaving||logSaving}>{logDraftSaving?'Saving…':'Save'}</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>writeLogEntry('submitted')} disabled={logSaving||logDraftSaving}>{logSaving?'Submitting…':'Submit'}</Btn>
             </div>
             {access.prescribe&&<Btn variant="amber" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Add prescription to this visit</Btn>}
           </Card>
@@ -994,7 +1030,7 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
-function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord }) {
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord, onCancelCheckIn }) {
   const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup' | 'prepnotes'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
@@ -1009,9 +1045,6 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
   const [conditions,setConditions]=useState([])
   const [allergies,setAllergies]=useState([])
   const [medications,setMedications]=useState([])
-  const [prepNotesDraft,setPrepNotesDraft]=useState('')
-  const [prepNotesSaving,setPrepNotesSaving]=useState(false)
-  const [prepNotesSaved,setPrepNotesSaved]=useState(false)
 
   // Show real patient info here, the same way it appears when their
   // Medsa ID is scanned at check-in - not just the bare appointment row.
@@ -1111,39 +1144,26 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           {allergies.length===0&&conditions.length===0&&medications.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'12px'}}>No history on file yet.</div>}
         </div>}
 
-        {mode==='prepnotes'&&<>
-          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'6px'}}>Prep notes for {patient.name}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>For pre-visit review - not a diagnosis entry. Logging diagnosis still requires check-in.</div>
-          <textarea value={prepNotesDraft} onChange={e=>setPrepNotesDraft(e.target.value)} rows={4} placeholder="e.g. Reviewed history ahead of visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
-          {prepNotesSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Saved</div>}
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
-              if (!prepNotesDraft.trim()||!fullPatient) return
-              setPrepNotesSaving(true)
-              await supabase.from('medical_records').insert({
-                patient_id: fullPatient.id, record_type: 'prep_note', title: 'Pre-visit prep note',
-                notes: prepNotesDraft, date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_todo',
-              })
-              setPrepNotesSaving(false)
-              setPrepNotesSaved(true)
-              setTimeout(()=>{setPrepNotesSaved(false);setMode(null)}, 1200)
-            }} disabled={prepNotesSaving||!prepNotesDraft.trim()}>{prepNotesSaving?'Saving…':'Save prep note'}</Btn>
-          </div>
-        </>}
-
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
           {onViewFullRecord&&<Btn style={{width:'100%'}} onClick={onViewFullRecord}>📄 View full record</Btn>}
-          <Btn style={{width:'100%'}} onClick={()=>{setPrepNotesDraft('');setMode('prepnotes')}}>📝 Prep notes</Btn>
           {isCheckedIn
             ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Log diagnosis</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Logging new diagnosis unlocks once this patient has checked in</div>}
+          {isCheckedIn&&onCancelCheckIn&&<Btn style={{width:'100%'}} onClick={()=>setMode('cancelcheckin')}>↩ Cancel check-in</Btn>}
           {onCancelAppt&&<Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>}
         </div>}
+
+        {mode==='cancelcheckin'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Undo {patient.name}'s check-in? This puts the appointment back to "scheduled" - use this to fix a mistaken check-in or to check them out for testing.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep checked in</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onCancelCheckIn();setMode(null);onClose()}}>Confirm undo</Btn>
+          </div>
+        </>}
 
         {mode==='message'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Message {patient.name}</div>
@@ -1602,6 +1622,15 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
               await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','practitioner').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
             }
           }
+        }}
+        onCancelCheckIn={async()=>{
+          if (!activeTodoPatient?.medsaId) return
+          const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', activeTodoPatient.medsaId).maybeSingle()
+          if (!pRow) return
+          const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
+          const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+          await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','practitioner').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+          setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,status:'confirmed'}:a))
         }}
         onBookFollowup={async(date,reason)=>{
           if (!activeTodoPatient?.medsaId) return false
