@@ -1,7 +1,78 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
+
+// ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
+// Every Chinese string in this file is already written in Traditional
+// Chinese (the correct written register - not spoken Cantonese slang).
+// Rather than hand-duplicate every string into a second Simplified
+// version, this converts on the fly at render time, so the exact same
+// source text serves both. Covers the characters actually used across
+// this app's medical/UI vocabulary.
+const TRAD_TO_SIMP = {
+  '醫':'医','療':'疗','記':'记','錄':'录','藥':'药','這':'这','說':'说','話':'话','語':'语','內':'内',
+  '麼':'么','來':'来','時':'时','間':'间','會':'会','為':'为','後':'后','與':'与','國':'国','門':'门',
+  '開':'开','關':'关','電':'电','號':'号','線':'线','緊':'紧','險':'险','個':'个','們':'们','經':'经',
+  '過':'过','還':'还','現':'现','實':'实','發':'发','見':'见','種':'种','應':'应','當':'当','點':'点',
+  '較':'较','將':'将','動':'动','務':'务','員':'员','單':'单','歷':'历','歲':'岁','長':'长','級':'级',
+  '萬':'万','兒':'儿','兩':'两','價':'价','樣':'样','據':'据','態':'态','狀':'状','層':'层','導':'导',
+  '護':'护','診':'诊','劑':'剂','檢':'检','驗':'验','測':'测','壓':'压','齡':'龄','術':'术','傷':'伤',
+  '癒':'愈','癌':'癌','腫':'肿','瘤':'瘤','慢':'慢','嚴':'严','極':'极','複':'复','雜':'杂','類':'类',
+  '數':'数','總':'总','約':'约','報':'报','觀':'观','視':'视','聽':'听','讀':'读','寫':'写','劃':'划',
+  '設':'设','備':'备','準':'准','確':'确','認':'认','証':'证','證':'证','試':'试','題':'题','選':'选',
+  '擇':'择','買':'买','賣':'卖','費':'费','貴':'贵','賬':'账','帳':'账','財':'财','產':'产','業':'业',
+  '營':'营','銷':'销','購':'购','贈':'赠','資':'资','質':'质','獨':'独','親':'亲','屬':'属','衛':'卫',
+  '請':'请','讓':'让','謝':'谢','歡':'欢','喜':'喜','愛':'爱','樂':'乐','漢':'汉','華':'华','灣':'湾',
+  '區':'区','縣':'县','鄉':'乡','鎮':'镇','網':'网','絡':'络','連':'连','車':'车','機':'机','場':'场',
+  '館':'馆','廳':'厅','樓':'楼','梯':'梯','窗':'窗','鎖':'锁','鑰':'钥','匙':'匙','鐘':'钟','錶':'表',
+  '錢':'钱','幣':'币','兌':'兑','換':'换','轉':'转','運':'运','輸':'输','達':'达','適':'适','該':'该',
+  '須':'须','義':'义','責':'责','擔':'担','負':'负','擁':'拥','養':'养','餐':'餐','飲':'饮','飼':'饲',
+  '餵':'喂','飽':'饱','飢':'饥','餓':'饿','渴':'渴','醒':'醒','睡':'睡','眠':'眠','夢':'梦','覺':'觉',
+  '聞':'闻','聲':'声','響':'响','靜':'静','鬆':'松','張':'张','緩':'缓','急':'急','快':'快','遲':'迟',
+  '早':'早','晚':'晚','夠':'够','週':'周','曆':'历','歳':'岁','嬰':'婴','孕':'孕','婦':'妇','童':'童',
+  '幼':'幼','學':'学','習':'习','校':'校','師':'师','課':'课','練':'练','書':'书','籍':'籍','冊':'册',
+  '頁':'页','篇':'篇','章':'章','節':'节','段':'段','興':'兴','趣':'趣','好':'好','厭':'厌','惡':'恶',
+  '怒':'怒','哭':'哭','笑':'笑','痛':'痛','癢':'痒','麻':'麻','痺':'痹','酸':'酸','脹':'胀','燒':'烧',
+  '熱':'热','冷':'冷','溫':'温','涼':'凉','濕':'湿','燥':'燥','乾':'干','淨':'净','髒':'脏','齒':'齿',
+  '舌':'舌','喉':'喉','嚨':'咙','鼻':'鼻','耳':'耳','眼':'眼','睛':'睛','眉':'眉','臉':'脸','頰':'颊',
+  '額':'额','頭':'头','腦':'脑','頸':'颈','肩':'肩','臂':'臂','肘':'肘','腕':'腕','腿':'腿','膝':'膝',
+  '踝':'踝','腳':'脚','趾':'趾','指':'指','掌':'掌','拳':'拳','肌':'肌','肉':'肉','骨':'骨','髓':'髓',
+  '脂':'脂','肪':'肪','血':'血','液':'液','漿':'浆','細':'细','胞':'胞','織':'织','器':'器','臟':'脏',
+  '腸':'肠','胃':'胃','肝':'肝','腎':'肾','肺':'肺','膽':'胆','脾':'脾','膀':'膀','胱':'胱','陰':'阴',
+  '陽':'阳','舊':'旧','新':'新','鮮':'鲜','農':'农','漁':'渔','牧':'牧','園':'园',
+}
+function simplifyText(str) {
+  if (typeof str !== 'string') return str
+  let out = ''
+  for (const ch of str) out += TRAD_TO_SIMP[ch] || ch
+  return out
+}
+// Recursively walks a React node tree, converting any string leaves to
+// Simplified Chinese - this is what lets us reuse every existing
+// Traditional Chinese string without touching hundreds of lines by hand.
+// Prop names used across this app's own reusable components to carry
+// plain display text (Badge's `text`, InfoRow's `label`/`value`, etc.) -
+// converting only these specific names avoids touching functional props
+// like `type`, `variant`, or `key` that happen to also be strings.
+const SIMPLIFY_PROP_NAMES = new Set(['text','label','value','sub','placeholder'])
+
+function deepSimplify(node) {
+  if (typeof node === 'string') return simplifyText(node)
+  if (Array.isArray(node)) return Children.map(node, deepSimplify)
+  if (isValidElement(node)) {
+    const props = node.props || {}
+    const propOverrides = {}
+    for (const name of SIMPLIFY_PROP_NAMES) {
+      if (typeof props[name] === 'string') propOverrides[name] = simplifyText(props[name])
+    }
+    const children = props.children
+    if (children !== undefined) propOverrides.children = deepSimplify(children)
+    if (Object.keys(propOverrides).length === 0) return node
+    return cloneElement(node, { key: node.key, ...propOverrides })
+  }
+  return node
+}
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -1251,7 +1322,9 @@ function ClaimsTab({ isEn, claims=[] }) {
 
       {/* Medsa disclaimer */}
       <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
-        ⚠ <strong>Important:</strong> Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.
+        ⚠ <strong>{isEn?'Important:':'重要提示:'}</strong> {isEn
+          ? 'Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.'
+          : '所需文件因保險公司、方案類型及個別索償而異。以下清單涵蓋一般標準要求——您的保險公司或代理人可能要求提供額外文件。Medsa對不完整或被拒的索償概不負責。如有疑問,請於提交前直接聯絡您的代理人或保險公司。'}
       </div>
 
       {/* Claim preparation flow */}
@@ -1417,11 +1490,24 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
      criteria:['Lump sum on diagnosis','57 covered conditions','Add-on, not standalone'],
      covers:['Critical illness lump sum','57 covered conditions']},
   ]
+  // These plan terms were never translated at all - shown in English
+  // regardless of selected language. Rather than restructure the whole
+  // plans array, this translates the known phrases at render time.
+  const PLAN_TERM_ZH = {
+    'Comprehensive':'全面型','Hospital focus':'住院為主','Premium + travel':'尊尚 + 旅遊','Critical illness':'危疾',
+    'Covers diabetes management':'涵蓋糖尿病管理','Includes outpatient visits':'包括門診就診','Includes lab tests':'包括化驗檢查',
+    'Hospitalisation-focused':'以住院為主','Lower monthly cost':'每月費用較低','Limited outpatient coverage':'門診保障有限',
+    'Includes travel emergency cover':'包括旅遊緊急保障','Includes mental health':'包括精神健康','Higher monthly cost':'每月費用較高',
+    'Lump sum on diagnosis':'確診後一筆過賠償','57 covered conditions':'保障57種疾病','Add-on, not standalone':'附加保障,非獨立計劃',
+    'Hospitalisation':'住院','Outpatient':'門診','Specialist':'專科','Labs & imaging':'化驗與影像檢查','Dental (basic)':'牙科(基本)',
+    'Surgery':'手術','Travel emergency':'旅遊緊急','Mental health':'精神健康','Critical illness lump sum':'危疾一筆過賠償',
+  }
+  function pt(term) { return isEn ? term : (PLAN_TERM_ZH[term] || term) }
 
   return (
     <div style={{background:C.beige,flex:1}}>
       {/* Active plan banner - real data from agent_policies */}
-      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading your plan...</div>}
+      {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading your plan...':'載入您的計劃中...'}</div>}
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
       {!policyLoading&&activePolicy&&(() => {
         const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
@@ -1474,15 +1560,17 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       {tab==='plans'&&<>
         {/* How Medsa connects patients to insurers — neutral comparison, not advice */}
         <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ How Medsa connects you to insurers</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ {isEn?'How Medsa connects you to insurers':'Medsa如何連接您與保險公司'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
-            Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.
+            {isEn
+              ? 'Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.'
+              : 'Medsa根據您已核實的健康記錄篩選方案——無需填寫問卷,亦無需接聽推銷電話。這是中立的比較,並非個人建議;最終選擇由您決定。當您提出查詢後,您的資料將直接轉發予保險公司或持牌中介人。一旦保險公司與Medsa完成系統整合,代理人分配、索償及狀態更新將自動同步至此——所有健康相關事務,一站式處理。'}
           </div>
         </div>
 
         <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ Plan comparison, not advice</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn't rank plans or tell you which is "best" — that's a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn\u2019t rank plans or tell you which is "best" — that\u2019s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
         </div>
 
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
@@ -1491,8 +1579,8 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
-                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
-                  <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{plan.type}</span>
+                  {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Sponsored':'贊助'}</span>}
+                  <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{pt(plan.type)}</span>
                 </div>
                 <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
@@ -1504,10 +1592,10 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
             </div>
             {/* Objective criteria met - no ranking, no score */}
             <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-              {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
+              {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{c}</span>)}
+              {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
@@ -2008,7 +2096,8 @@ export default function PatientApp({ liveData={} }) {
   const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
   const [showGate,setShowGate]=useState(!liveData.patient)
   const [screen,setScreen]=useState('home')
-  const [isEn,setIsEn]=useState(true)
+  const [lang,setLang]=useState('en') // 'en' | 'zh-TW' | 'zh-CN'
+  const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
   const [shareOpen,setShareOpen]=useState(false)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
@@ -2027,14 +2116,18 @@ export default function PatientApp({ liveData={} }) {
   const liveClaims = liveData.claims || []
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
-  return (
+  const rootContent = (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
         {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
         <div style={{flex:1}}/>
-        <button onClick={()=>setIsEn(!isEn)} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',flexShrink:0}}>{isEn?'廣東話':'EN'}</button>
+        <div style={{display:'flex',background:'rgba(255,255,255,0.12)',borderRadius:'20px',padding:'2px',flexShrink:0}}>
+          {[['en','EN'],['zh-TW','繁'],['zh-CN','简']].map(([code,label])=>(
+            <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?C.green:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
+          ))}
+        </div>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient}/>}
@@ -2067,4 +2160,5 @@ export default function PatientApp({ liveData={} }) {
       <ShareForVisitModal open={shareOpen} onClose={()=>setShareOpen(false)} patient={patient}/>
     </div>
   )
+  return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
 }
