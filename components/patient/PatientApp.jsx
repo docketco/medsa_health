@@ -860,7 +860,6 @@ function DoctorsScreen({ isEn, patient={} }) {
     if (sortBy==='rating') return parseFloat(b.rating) - parseFloat(a.rating)
     return 0
   })
-  const TIMES=['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -871,14 +870,72 @@ function DoctorsScreen({ isEn, patient={} }) {
     return { label: DAY_LABELS[d.getDay()], date: d.getDate(), fullDate: d }
   })
   const [selDay,setSelDay]=useState(DAYS[0].fullDate)
-  // Unavailable slots vary by day so every day doesn't look identical -
-  // seeded off the date itself so it's consistent on re-render, not random.
-  function unavailForDay(dateObj) {
-    const seed = dateObj.getDate()
-    const pool = ['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm']
-    return pool.filter((_,i) => (seed + i) % 3 === 0)
+  const activeDoctor = selectedDoctor || doctors[0]
+
+  // Real availability, synced from what an admin actually set up for this
+  // doctor - replacing the previous hardcoded/pseudo-random time list.
+  const [availableSlots,setAvailableSlots]=useState([])
+  const [slotsLoading,setSlotsLoading]=useState(true)
+  const [dayClosed,setDayClosed]=useState(false)
+
+  function formatTime12h(timeStr) {
+    const [h,m] = timeStr.split(':').map(Number)
+    const period = h>=12 ? 'pm' : 'am'
+    const h12 = h%12===0 ? 12 : h%12
+    return `${h12}:${String(m).padStart(2,'0')}${period}`
   }
-  const UNAVAIL = unavailForDay(selDay)
+
+  async function loadAvailability(doctor, dateObj) {
+    setSlotsLoading(true)
+    setDayClosed(false)
+    if (!doctor?.institution) {
+      // Specialists outside the two core institutions (TCM, dentist, etc.)
+      // don't yet have admin-configured hours - fall back to a reasonable
+      // fixed default rather than showing nothing at all.
+      setAvailableSlots(['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm'])
+      setSlotsLoading(false)
+      return
+    }
+    const { data: availRow } = await supabase.from('doctor_availability').select('*')
+      .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).eq('day_of_week', dateObj.getDay()).maybeSingle()
+
+    if (!availRow || availRow.is_off) {
+      setDayClosed(true)
+      setAvailableSlots([])
+      setSlotsLoading(false)
+      return
+    }
+
+    // Generate every slot between start and end at the configured duration.
+    const [startH,startM] = availRow.start_time.slice(0,5).split(':').map(Number)
+    const [endH,endM] = availRow.end_time.slice(0,5).split(':').map(Number)
+    const duration = availRow.slot_duration_minutes || 30
+    const slots = []
+    let cur = startH*60+startM
+    const end = endH*60+endM
+    while (cur < end) {
+      slots.push(formatTime12h(`${String(Math.floor(cur/60)).padStart(2,'0')}:${String(cur%60).padStart(2,'0')}`))
+      cur += duration
+    }
+
+    // Exclude times already booked for this doctor on this exact date.
+    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    const { data: existing } = await supabase.from('appointments').select('scheduled_at')
+      .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).neq('status','cancelled')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+    const bookedTimes = new Set((existing||[]).map(a => {
+      const d = new Date(a.scheduled_at)
+      return formatTime12h(`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`)
+    }))
+
+    const finalSlots = slots.filter(s => !bookedTimes.has(s))
+    setAvailableSlots(finalSlots)
+    if (!finalSlots.includes(selTime) && finalSlots.length>0) setSelTime(finalSlots[0])
+    setSlotsLoading(false)
+  }
+
+  useEffect(() => { loadAvailability(activeDoctor, selDay) }, [activeDoctor?.name, selDay])
 
   function handleBookClick(doc, type) {
     setSelectedDoctor(doc)
@@ -886,8 +943,6 @@ function DoctorsScreen({ isEn, patient={} }) {
     setBooked(false)
     setTab('book')
   }
-
-  const activeDoctor = selectedDoctor || doctors[0]
 
   async function handleConfirmBooking() {
     if (!intakeConsent) return
@@ -1033,17 +1088,20 @@ function DoctorsScreen({ isEn, patient={} }) {
               {DAYS.map(({label,date,fullDate})=>{
                 const isSel = fullDate.toDateString()===selDay.toDateString()
                 return (
-                <div key={fullDate.toISOString()} onClick={()=>{setSelDay(fullDate);if(unavailForDay(fullDate).includes(selTime)){const firstFree=TIMES.find(t=>!unavailForDay(fullDate).includes(t));if(firstFree)setSelTime(firstFree)}}} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
+                <div key={fullDate.toISOString()} onClick={()=>setSelDay(fullDate)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
                   <div style={{fontSize:'10px',opacity:0.8}}>{label}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
                 </div>
                 )
               })}
             </div>
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
-              {TIMES.map(t=>{const u=UNAVAIL.includes(t);const s=t===selTime;return(
-                <div key={t} onClick={()=>!u&&setSelTime(t)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:u?'not-allowed':'pointer',background:s?C.green:u?C.beige:C.card,color:s?'#fff':u?C.textMuted:C.text,opacity:u?0.5:1}}>{t}</div>
+            {slotsLoading&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading availability…':'載入可預約時段…'}</div>}
+            {!slotsLoading&&dayClosed&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?`${activeDoctor.name} isn't available on this day.`:`${activeDoctor.name}此日不應診。`}</div>}
+            {!slotsLoading&&!dayClosed&&availableSlots.length===0&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'No slots left for this day - try another date.':'此日已無可預約時段,請選擇其他日期。'}</div>}
+            {!slotsLoading&&!dayClosed&&availableSlots.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
+              {availableSlots.map(time=>{const s=time===selTime;return(
+                <div key={time} onClick={()=>setSelTime(time)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:s?C.green:C.card,color:s?'#fff':C.text}}>{time}</div>
               )})}
-            </div>
+            </div>}
           </div>
         </Card>
         <Card>
