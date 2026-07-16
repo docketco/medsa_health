@@ -588,6 +588,33 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     }))
   }
 
+  const [draftSaved,setDraftSaved]=useState(false)
+  const [savingDraft,setSavingDraft]=useState(false)
+
+  // Saves current notes/diagnosis as a draft - stays on this screen so
+  // the doctor can keep editing before finally submitting. This is what
+  // replaces having a separate "prep notes" feature - the same
+  // notes/diagnosis fields work for both prep and the final visit.
+  async function handleSaveDraft() {
+    if (!patient || (!diagnosis.trim() && !notes.trim())) return
+    setSavingDraft(true)
+    setError(null)
+    try {
+      const { error: recErr } = await supabase.from('medical_records').insert({
+        patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Draft consultation note',
+        notes: notes || null, diagnosis: diagnosis || null,
+        date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'draft',
+      })
+      if (recErr) throw recErr
+      setDraftSaved(true)
+      setTimeout(()=>setDraftSaved(false), 2500)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSavingDraft(false)
+    }
+  }
+
   async function handleSave() {
     setSaving(true)
     setError(null)
@@ -611,7 +638,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
         const { error: recErr } = await supabase.from('medical_records').insert({
           patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Clinic consultation',
           notes: notes || null, diagnosis: diagnosis || null,
-          date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops',
+          date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
         })
         if (recErr) throw recErr
       }
@@ -803,7 +830,11 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       </div>}
 
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" onClick={handleSave} disabled={saving}>{saving?'Saving...':'Save consultation'}</Btn>
+      {draftSaved&&<div style={{fontSize:'13px',color:C.green,marginBottom:'12px'}}>✓ Draft saved - keep editing, or submit when ready</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1}} onClick={handleSaveDraft} disabled={savingDraft||saving}>{savingDraft?'Saving…':'Save'}</Btn>
+        <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||savingDraft}>{saving?'Submitting...':'Submit'}</Btn>
+      </div>
     </PageWrap>
   )
 }
@@ -996,16 +1027,13 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation, onCancelCheckIn }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
   const [notesDraft,setNotesDraft]=useState('')
-  const [prepNotesDraft,setPrepNotesDraft]=useState('')
-  const [prepNotesSaving,setPrepNotesSaving]=useState(false)
-  const [prepNotesSaved,setPrepNotesSaved]=useState(false)
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
   const [patientFetchError,setPatientFetchError]=useState(null)
@@ -1124,31 +1152,18 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
-          {withinDataWindow&&<Btn style={{width:'100%'}} onClick={()=>{setPrepNotesDraft('');setMode('prepnotes')}}>📝 Prep notes</Btn>}
           {canLogDiagnosis
             ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in{!withinDataWindow?' and is within their consent window':''}</div>}
+          {isCheckedIn&&onCancelCheckIn&&<Btn style={{width:'100%'}} onClick={()=>setMode('cancelcheckin')}>↩ Cancel check-in</Btn>}
           <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
         </div>}
 
-        {mode==='prepnotes'&&<>
-          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'6px'}}>Prep notes for {appt.patient}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>For pre-visit review - not a diagnosis entry. Full diagnosis logging still requires check-in.</div>
-          <textarea value={prepNotesDraft} onChange={e=>setPrepNotesDraft(e.target.value)} rows={4} placeholder="e.g. Reviewed history ahead of visit - watch for interaction between current meds and planned prescription…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
-          {prepNotesSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Saved</div>}
+        {mode==='cancelcheckin'&&<>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Undo {appt.patient}'s check-in? This puts the appointment back to "scheduled" and removes them from today's active queue - use this to fix a mistaken check-in or to check them out for testing.</div>
           <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
-              if (!prepNotesDraft.trim()||!fullPatient) return
-              setPrepNotesSaving(true)
-              await supabase.from('medical_records').insert({
-                patient_id: fullPatient.id, record_type: 'prep_note', title: 'Pre-visit prep note',
-                notes: prepNotesDraft, date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_schedule',
-              })
-              setPrepNotesSaving(false)
-              setPrepNotesSaved(true)
-              setTimeout(()=>{setPrepNotesSaved(false);setMode(null)}, 1200)
-            }} disabled={prepNotesSaving||!prepNotesDraft.trim()}>{prepNotesSaving?'Saving…':'Save prep note'}</Btn>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep checked in</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onCancelCheckIn(appt);setMode(null);onClose()}}>Confirm undo</Btn>
           </div>
         </>}
 
@@ -1202,7 +1217,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -1389,7 +1404,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation}/>
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation} onCancelCheckIn={onCancelCheckIn}/>
       {showNewApptForm&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowNewApptForm(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
@@ -2191,7 +2206,22 @@ export default function ClinicOpsApp() {
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
         {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
-        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}}/>}
+        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
+          if (!appt?.medsaId) return
+          const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
+          if (!pRow) return
+          const dayStart=new Date(); dayStart.setHours(0,0,0,0)
+          const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
+          await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+          // Also remove them from today's active clinic_queue, since
+          // ClinicOps check-in writes there too - undoing check-in should
+          // undo both, not just the appointment status.
+          const matching = checkedInQueue.find(q=>q.patientName===appt.patient && hoursRemaining(q.checkedInAt)>0)
+          if (matching) {
+            await supabase.from('clinic_queue').delete().eq('id', matching.id)
+            setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
+          }
+        }}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
