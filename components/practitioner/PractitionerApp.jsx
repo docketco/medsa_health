@@ -1394,13 +1394,122 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
   )
 }
 
+// ── WORKING HOURS — admin sets each doctor's weekly availability ───────────
+// Same real source of truth as the ClinicOps side, tagged with its own
+// institution_source so the two institutions' hours never mix.
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+
+function WorkingHoursScreen() {
+  const [selectedDoctor,setSelectedDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
+  const [hours,setHours]=useState({})
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [slotDuration,setSlotDuration]=useState(30)
+
+  async function loadHours(doctorName) {
+    setLoading(true)
+    const { data } = await supabase.from('doctor_availability').select('*')
+      .eq('doctor_name', doctorName).eq('institution_source', 'practitioner')
+    const byDay = {}
+    for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 }
+    ;(data||[]).forEach(row => {
+      byDay[row.day_of_week] = { start: row.start_time?.slice(0,5)||'09:00', end: row.end_time?.slice(0,5)||'17:00', is_off: row.is_off }
+      setSlotDuration(row.slot_duration_minutes || 30)
+    })
+    setHours(byDay)
+    setLoading(false)
+  }
+
+  useEffect(() => { loadHours(selectedDoctor) }, [selectedDoctor])
+
+  function updateDay(day, field, value) {
+    setHours(prev => ({ ...prev, [day]: { ...prev[day], [field]: value } }))
+    setSaved(false)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    const rows = Object.entries(hours).map(([day, h]) => ({
+      doctor_name: selectedDoctor, institution_source: 'practitioner', day_of_week: parseInt(day),
+      start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: slotDuration,
+      updated_at: new Date().toISOString(),
+    }))
+    await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
+    setSaving(false)
+    setSaved(true)
+    setTimeout(()=>setSaved(false), 2500)
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{fontSize:'12px',color:C.textSub,textAlign:'center',marginBottom:'16px'}}>Sets each doctor's availability - syncs to their schedule and patient booking</div>
+
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+        {DOCTOR_DIRECTORY.map(d=>(
+          <div key={d.name} onClick={()=>setSelectedDoctor(d.name)} style={{padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDoctor===d.name?C.green:C.card,color:selectedDoctor===d.name?'#fff':C.textSub}}>{d.name}</div>
+        ))}
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+
+      {!loading&&<>
+        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Appointment slot length</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            {[15,20,30,45,60].map(m=>(
+              <div key={m} onClick={()=>{setSlotDuration(m);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:slotDuration===m?C.green:C.card,color:slotDuration===m?'#fff':C.text}}>{m}m</div>
+            ))}
+          </div>
+        </Card>
+
+        {DAY_NAMES.map((dayName,i)=>{
+          const h = hours[i] || {start:'09:00',end:'17:00',is_off:false}
+          return (
+            <Card key={i} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px'}}>
+              <div style={{width:80,fontSize:'13px',fontWeight:500,flexShrink:0}}>{dayName}</div>
+              {h.is_off ? (
+                <div style={{flex:1,fontSize:'12px',color:C.textMuted}}>Closed</div>
+              ) : (
+                <div style={{flex:1,display:'flex',gap:'8px',alignItems:'center'}}>
+                  <input type="time" value={h.start} onChange={e=>updateDay(i,'start',e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px'}}/>
+                  <span style={{color:C.textMuted,fontSize:'12px'}}>to</span>
+                  <input type="time" value={h.end} onChange={e=>updateDay(i,'end',e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px'}}/>
+                </div>
+              )}
+              <Toggle checked={!h.is_off} onChange={(on)=>updateDay(i,'is_off',!on)}/>
+            </Card>
+          )
+        })}
+
+        {saved&&<div style={{fontSize:'13px',color:C.green,textAlign:'center',marginBottom:'10px'}}>✓ Saved - synced to {selectedDoctor}'s schedule and patient booking</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving}>{saving?'Saving…':`Save hours for ${selectedDoctor}`}</Btn>
+      </>}
+    </div>
+  )
+}
+
 function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onViewFullRecord }) {
   const [view,setView]=useState('mine')
   const isLead=role==='admin'||role==='dept_head'
   const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
   const isReceptionist = role==='receptionist'
   const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
-  const myShifts=[{day:'Mon 23',time:'08:00 – 17:00',status:'Confirmed'},{day:'Tue 24',time:'08:00 – 17:00',status:'Confirmed'},{day:'Wed 25',time:'13:00 – 22:00',status:'Pending swap'},{day:'Thu 26',time:'OFF',status:'Day off'},{day:'Fri 27',time:'08:00 – 17:00',status:'Confirmed'}]
+  const [myHours,setMyHours]=useState({})
+  const [myHoursLoading,setMyHoursLoading]=useState(true)
+
+  useEffect(() => {
+    async function loadMyHours() {
+      if (role!=='doctor'||!doctorName) { setMyHoursLoading(false); return }
+      setMyHoursLoading(true)
+      const { data } = await supabase.from('doctor_availability').select('*').eq('doctor_name', doctorName).eq('institution_source','practitioner')
+      const byDay = {}
+      ;(data||[]).forEach(row => { byDay[row.day_of_week] = row })
+      setMyHours(byDay)
+      setMyHoursLoading(false)
+    }
+    loadMyHours()
+  }, [role, doctorName])
 
   // Real upcoming dates starting today, not hardcoded date-string keys
   // like 'Mon 23' that never corresponded to any actual current date.
@@ -1540,15 +1649,21 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
           <Btn variant="danger" style={{fontSize:'12px',padding:'6px 12px'}}>Clock out</Btn>
         </div>
         <SecLabel>This week</SecLabel>
-        {myShifts.map((s,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:40,height:40,borderRadius:'10px',background:s.status==='Day off'?C.card:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-              <span style={{fontSize:'11px',fontWeight:700,color:s.status==='Day off'?C.textMuted:C.green,textAlign:'center',lineHeight:1.3}}>{s.day.split(' ')[0]}<br/>{s.day.split(' ')[1]}</span>
-            </div>
-            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{s.time}</div><div style={{fontSize:'11px',color:C.textSub}}>Internal Medicine</div></div>
-            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:500,background:s.status==='Confirmed'?C.greenLight:s.status==='Pending swap'?C.amberLight:C.card,color:s.status==='Confirmed'?C.green:s.status==='Pending swap'?C.amber:C.textMuted}}>{s.status}</span>
-          </Card>
-        ))}
+        {role!=='doctor'&&<div style={{margin:'0 16px',fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Working hours are set per-doctor by an admin.</div>}
+        {role==='doctor'&&myHoursLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+        {role==='doctor'&&!myHoursLoading&&dayOptions.map((d,i)=>{
+          const row = myHours[d.getDay()]
+          const isOff = !row || row.is_off
+          return (
+            <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
+              <div style={{width:40,height:40,borderRadius:'10px',background:isOff?C.card:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                <span style={{fontSize:'11px',fontWeight:700,color:isOff?C.textMuted:C.green,textAlign:'center',lineHeight:1.3}}>{d.toLocaleDateString('en-HK',{weekday:'short'})}<br/>{d.getDate()}</span>
+              </div>
+              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{isOff?'OFF':`${row.start_time?.slice(0,5)} – ${row.end_time?.slice(0,5)}`}</div><div style={{fontSize:'11px',color:C.textSub}}>{department||'—'}</div></div>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:500,background:isOff?C.card:C.greenLight,color:isOff?C.textMuted:C.green}}>{isOff?'Day off':'Confirmed'}</span>
+            </Card>
+          )
+        })}
         <div style={{padding:'0 16px 16px'}}><Btn style={{width:'100%'}}>Request shift change</Btn></div>
       </>}
       {view==='dept'&&isLead&&<>
@@ -1947,7 +2062,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -1963,6 +2078,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
+        {screen==='workinghours'&&role==='admin'&&<WorkingHoursScreen/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
