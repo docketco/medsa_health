@@ -1175,6 +1175,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
       scheduled_at: scheduledAt.toISOString(),
       appointment_type: newApptReason || 'Consultation',
       status: 'confirmed',
+      institution_source: 'clinic_ops',
     })
     setNewApptSaving(false)
     if (insErr) { setNewApptError(insErr.message); return }
@@ -1204,7 +1205,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
     setLoadingAppts(true)
     const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
     const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    // Only this clinic's own bookings - ClinicOps and PractitionerApp
+    // represent two different institutions and shouldn't see each other's
+    // appointments just because they happen to share the same database.
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .eq('institution_source', 'clinic_ops')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
 
@@ -1269,7 +1274,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
       if (pRow) {
         const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
         const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
-        await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+        await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
       }
     }
     setAppointments(prev => {
@@ -2004,6 +2009,7 @@ export default function ClinicOpsApp() {
     const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
     await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
       .eq('patient_id', patient.id)
+      .eq('institution_source', 'clinic_ops')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
 
     // Navigation is now handled by the check-in screen itself, after it
