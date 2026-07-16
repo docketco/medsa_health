@@ -18,29 +18,33 @@ const TRAD_TO_SIMP = {
   '較':'较','將':'将','動':'动','務':'务','員':'员','單':'单','歷':'历','歲':'岁','長':'长','級':'级',
   '萬':'万','兒':'儿','兩':'两','價':'价','樣':'样','據':'据','態':'态','狀':'状','層':'层','導':'导',
   '護':'护','診':'诊','劑':'剂','檢':'检','驗':'验','測':'测','壓':'压','齡':'龄','術':'术','傷':'伤',
-  '癒':'愈','癌':'癌','腫':'肿','瘤':'瘤','慢':'慢','嚴':'严','極':'极','複':'复','雜':'杂','類':'类',
-  '數':'数','總':'总','約':'约','報':'报','觀':'观','視':'视','聽':'听','讀':'读','寫':'写','劃':'划',
-  '設':'设','備':'备','準':'准','確':'确','認':'认','証':'证','證':'证','試':'试','題':'题','選':'选',
-  '擇':'择','買':'买','賣':'卖','費':'费','貴':'贵','賬':'账','帳':'账','財':'财','產':'产','業':'业',
-  '營':'营','銷':'销','購':'购','贈':'赠','資':'资','質':'质','獨':'独','親':'亲','屬':'属','衛':'卫',
-  '請':'请','讓':'让','謝':'谢','歡':'欢','喜':'喜','愛':'爱','樂':'乐','漢':'汉','華':'华','灣':'湾',
-  '區':'区','縣':'县','鄉':'乡','鎮':'镇','網':'网','絡':'络','連':'连','車':'车','機':'机','場':'场',
-  '館':'馆','廳':'厅','樓':'楼','梯':'梯','窗':'窗','鎖':'锁','鑰':'钥','匙':'匙','鐘':'钟','錶':'表',
-  '錢':'钱','幣':'币','兌':'兑','換':'换','轉':'转','運':'运','輸':'输','達':'达','適':'适','該':'该',
-  '須':'须','義':'义','責':'责','擔':'担','負':'负','擁':'拥','養':'养','餐':'餐','飲':'饮','飼':'饲',
-  '餵':'喂','飽':'饱','飢':'饥','餓':'饿','渴':'渴','醒':'醒','睡':'睡','眠':'眠','夢':'梦','覺':'觉',
-  '聞':'闻','聲':'声','響':'响','靜':'静','鬆':'松','張':'张','緩':'缓','急':'急','快':'快','遲':'迟',
-  '早':'早','晚':'晚','夠':'够','週':'周','曆':'历','歳':'岁','嬰':'婴','孕':'孕','婦':'妇','童':'童',
-  '幼':'幼','學':'学','習':'习','校':'校','師':'师','課':'课','練':'练','書':'书','籍':'籍','冊':'册',
-  '頁':'页','篇':'篇','章':'章','節':'节','段':'段','興':'兴','趣':'趣','好':'好','厭':'厌','惡':'恶',
-  '怒':'怒','哭':'哭','笑':'笑','痛':'痛','癢':'痒','麻':'麻','痺':'痹','酸':'酸','脹':'胀','燒':'烧',
-  '熱':'热','冷':'冷','溫':'温','涼':'凉','濕':'湿','燥':'燥','乾':'干','淨':'净','髒':'脏','齒':'齿',
-  '舌':'舌','喉':'喉','嚨':'咙','鼻':'鼻','耳':'耳','眼':'眼','睛':'睛','眉':'眉','臉':'脸','頰':'颊',
-  '額':'额','頭':'头','腦':'脑','頸':'颈','肩':'肩','臂':'臂','肘':'肘','腕':'腕','腿':'腿','膝':'膝',
-  '踝':'踝','腳':'脚','趾':'趾','指':'指','掌':'掌','拳':'拳','肌':'肌','肉':'肉','骨':'骨','髓':'髓',
-  '脂':'脂','肪':'肪','血':'血','液':'液','漿':'浆','細':'细','胞':'胞','織':'织','器':'器','臟':'脏',
-  '腸':'肠','胃':'胃','肝':'肝','腎':'肾','肺':'肺','膽':'胆','脾':'脾','膀':'膀','胱':'胱','陰':'阴',
-  '陽':'阳','舊':'旧','新':'新','鮮':'鲜','農':'农','漁':'渔','牧':'牧','園':'园',
+  '癒':'愈','癌':'癌','腫':'肿','瘤':'瘤','嚴':'严','極':'极','複':'复','雜':'杂','類':'类','數':'数',
+  '總':'总','約':'约','報':'报','觀':'观','視':'视','聽':'听','讀':'读','寫':'写','劃':'划','設':'设',
+  '備':'备','準':'准','確':'确','認':'认','証':'证','證':'证','試':'试','題':'题','選':'选','擇':'择',
+  '買':'买','賣':'卖','費':'费','貴':'贵','賬':'账','帳':'账','財':'财','產':'产','業':'业','營':'营',
+  '銷':'销','購':'购','贈':'赠','資':'资','質':'质','獨':'独','親':'亲','屬':'属','衛':'卫','請':'请',
+  '讓':'让','謝':'谢','歡':'欢','樂':'乐','漢':'汉','華':'华','灣':'湾','區':'区','縣':'县','鄉':'乡',
+  '鎮':'镇','網':'网','絡':'络','連':'连','車':'车','機':'机','場':'场','館':'馆','廳':'厅','樓':'楼',
+  '梯':'梯','窗':'窗','鎖':'锁','鑰':'钥','匙':'匙','鐘':'钟','錶':'表','錢':'钱','幣':'币','兌':'兑',
+  '換':'换','轉':'转','運':'运','輸':'输','達':'达','適':'适','該':'该','須':'须','義':'义','責':'责',
+  '擔':'担','負':'负','擁':'拥','養':'养','飲':'饮','飼':'饲','餵':'喂','飽':'饱','飢':'饥','餓':'饿',
+  '渴':'渴','醒':'醒','睡':'睡','眠':'眠','夢':'梦','覺':'觉','聞':'闻','聲':'声','響':'响','靜':'静',
+  '鬆':'松','張':'张','緩':'缓','急':'急','慢':'慢','快':'快','遲':'迟','早':'早','晚':'晚','週':'周',
+  '曆':'历','嬰':'婴','孕':'孕','婦':'妇','童':'童','幼':'幼','學':'学','習':'习','校':'校','師':'师',
+  '課':'课','練':'练','書':'书','籍':'籍','冊':'册','頁':'页','篇':'篇','章':'章','節':'节','興':'兴',
+  '趣':'趣','愛':'爱','厭':'厌','惡':'恶','怒':'怒','痛':'痛','癢':'痒','脹':'胀','燒':'烧','熱':'热',
+  '溫':'温','涼':'凉','濕':'湿','燥':'燥','乾':'干','淨':'净','髒':'脏','齒':'齿','喉':'喉','嚨':'咙',
+  '臉':'脸','頰':'颊','額':'额','頭':'头','腦':'脑','頸':'颈','肩':'肩','臟':'脏','腸':'肠','腎':'肾',
+  '肺':'肺','膽':'胆','脾':'脾','膀':'膀','胱':'胱','陰':'阴','陽':'阳','舊':'旧','鮮':'鲜','農':'农',
+  '漁':'渔','牧':'牧','園':'园','傳':'传','儲':'储','償':'偿','偽':'伪','倫':'伦','偵':'侦','側':'侧',
+  '僑':'侨','傾':'倾','偷':'偷','偏':'偏','停':'停','假':'假','爭':'争','虧':'亏','於':'于','頻':'频',
+  '症':'症','斷':'断','保':'保','賠':'赔','索':'索','核':'核','投':'投','預':'预','掛':'挂','排':'排',
+  '隊':'队','等':'等','候':'候','叫':'叫','取':'取','消':'消','更':'更','改':'改','期':'期','姓':'姓',
+  '名':'名','性':'性','別':'别','出':'出','生':'生','日':'日','身':'身','份':'份','碼':'码','址':'址',
+  '郵':'邮','箱':'箱','聯':'联','繫':'系','糖':'糖','脂':'脂','氧':'氧','率':'率','敏':'敏','物':'物',
+  '反':'反','副':'副','作':'作','用':'用','禁':'禁','忌':'忌','理':'理','史':'史','家':'家','族':'族',
+  '手':'手','查':'查','化':'化','告':'告','結':'结','果':'果','常':'常','異':'异','升':'升','高':'高',
+  '降':'降','住':'住','院':'院','留':'留','床':'床','入':'入',
 }
 function simplifyText(str) {
   if (typeof str !== 'string') return str
@@ -609,6 +613,32 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     {name:'Tetanus / Td booster',status:'full',label:'Overdue',doses:[['Last booster','Mar 2013'],['Next due — every 10 yrs','Overdue 2023']]},
   ]
   const providers=[{init:'QE',name:'Queen Elizabeth Hospital',sub:'Medsa partner',on:true},{init:'MIH',name:'Matilda International',sub:'Medsa partner',on:true},{init:'DR',name:'Dr Chan Siu-ming',sub:'Private practitioner',on:true},{init:'VF',name:'Valley Fitness Clinic',sub:'Non-Medsa · Link share',on:false}]
+  // Medical record and vaccination titles/labels were never translated -
+  // shown in English regardless of selected language. One dictionary
+  // covers records, vaccines, and providers since they share phrasing.
+  const MED_TERM_ZH = {
+    'Blood panel — full CBC':'血液檢查——全血細胞計數','General check-up':'一般身體檢查','Chest X-ray':'胸部X光',
+    'Allergy test results':'過敏測試結果','Queen Elizabeth Hospital':'伊利沙伯醫院','Lab':'化驗所',
+    'Matilda International':'明德國際醫院','Visit':'診症','Ruttonjee Hospital':'律敦治醫院','Imaging':'影像檢查',
+    'Uploaded manually':'手動上傳','PDF':'PDF','Synced':'已同步','Manual':'手動',
+    'Haemoglobin':'血紅蛋白','WBC':'白血球','Glucose':'血糖','Ordered by':'醫囑醫生',
+    'Blood pressure':'血壓','BMI':'身高體重指數','Heart rate':'心率','Notes':'備註',
+    'Findings':'檢查結果','No active TB. Lungs clear.':'沒有活躍肺結核,肺部清晰。','Radiologist':'放射科醫生',
+    'Penicillin':'青黴素','⚠ Severe allergy':'⚠ 嚴重過敏','Verified by':'核實人','Pending review':'待審核',
+    'Mild iron deficiency':'輕度缺鐵',
+    'COVID-19':'2019冠狀病毒病','Influenza (seasonal)':'季節性流感','Hepatitis B':'乙型肝炎','HPV (Gardasil 9)':'HPV(加衛苗9)',
+    'Tetanus / Td booster':'破傷風/Td加強劑','Up to date':'已完成','Due soon':'即將到期','Complete':'已完成','Overdue':'已逾期',
+    'Dose 1 — BioNTech':'第1劑——BioNTech','Dose 2 — BioNTech':'第2劑——BioNTech','Booster 1':'第1劑加強劑','Booster 2 — XBB':'第2劑加強劑——XBB',
+    '2023–24 Quadrivalent':'2023–24四價疫苗','2024–25 — Book now':'2024–25——立即預約','Recommended':'建議接種',
+    'Dose 1':'第1劑','Dose 2':'第2劑','Dose 3':'第3劑','Last booster':'上次加強劑',
+    'Next due — every 10 yrs':'下次應接種——每10年一次','Overdue 2023':'2023年已逾期',
+    'Medsa partner':'Medsa合作夥伴','Private practitioner':'私人執業醫生','Valley Fitness Clinic':'谷澤健身診所',
+    'Non-Medsa':'非Medsa','Link share':'連結分享',
+  }
+  function mt(term) {
+    if (isEn || !term) return term
+    return String(term).split(' · ').map(part => MED_TERM_ZH[part] || part).join(' · ')
+  }
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.greenXLight,borderBottom:`0.5px solid ${C.greenLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
@@ -640,11 +670,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
-              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{r.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{r.sub}</div></div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{r.src}</span></div>
+              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{mt(r.title)}</div><div style={{fontSize:'12px',color:C.textSub}}>{mt(r.sub)}</div></div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(r.src)}</span></div>
             </div>
             {expanded===r.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-              {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
+              {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{mt(l)}</span><span style={{fontWeight:500}}>{mt(v)}</span></div>)}
               <div style={{display:'flex',gap:'8px',marginTop:'12px'}}>
                 <Btn style={{flex:1,fontSize:'12px'}}>Share</Btn>
                 <Btn style={{flex:1,fontSize:'12px'}}>Download</Btn>
@@ -658,12 +688,12 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
         {vaccines.map(v=>(
           <Card key={v.name}>
-            <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{v.name}</span><Badge text={v.label} type={v.status}/></div>
+            <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{mt(v.name)}</span><Badge text={mt(v.label)} type={v.status}/></div>
             <div style={{padding:'0 16px 14px'}}>
               {v.doses.map(([d,date])=>(
                 <div key={d} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
                   <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:C.green,flexShrink:0}}/>
-                  <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{d}</strong></div>
+                  <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{mt(d)}</strong></div>
                   <span style={{fontSize:'11px',color:C.textMuted}}>{date}</span>
                 </div>
               ))}
@@ -678,7 +708,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           {providers.map((p,i)=>(
             <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
               <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:600,flexShrink:0}}>{p.init}</div>
-              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{p.name}</div><div style={{fontSize:'11px',color:C.textSub}}>{p.sub}</div></div>
+              <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{mt(p.name)}</div><div style={{fontSize:'11px',color:C.textSub}}>{mt(p.sub)}</div></div>
               <Toggle checked={p.on}/>
             </div>
           ))}
@@ -752,7 +782,7 @@ function VideoCallModal({ doc, isEn, onClose }) {
             <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
           </div>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
-          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{doc.spec}</div>
+          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{dt(doc.spec)}</div>
           <div style={{display:'flex',gap:'16px'}}>
             <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◉</button>
             <button onClick={()=>setStage('ended')} style={{width:52,height:52,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>✕</button>
@@ -763,7 +793,7 @@ function VideoCallModal({ doc, isEn, onClose }) {
           <div style={{textAlign:'center',marginBottom:'16px'}}>
             <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
             <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {doc.spec}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {dt(doc.spec)}</div>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
           {[
@@ -811,6 +841,20 @@ function DoctorsScreen({ isEn, patient={} }) {
     {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',institution:null,rating:'4.9',avail:'Thu',type:'due',distanceKm:1.5,videoAvail:true},
     {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',institution:null,rating:'4.5',avail:'Fully booked',type:'full',distanceKm:2.1,videoAvail:false},
   ]
+  // Doctor specialty and clinic/location terms were never translated -
+  // shown in English regardless of selected language. Translated here at
+  // render time rather than restructuring the whole doctors array.
+  const DR_TERM_ZH = {
+    'General Practice':'全科','Cardiologist':'心臟科專科醫生','Internal Medicine':'內科','TCM Practitioner':'中醫師',
+    'Psychiatrist':'精神科專科醫生','Dentist':'牙醫',
+    'Pacific Medical Group':'太平醫療集團','QE Hospital':'伊利沙伯醫院','Tong Wah TCM':'東華中醫',
+    'Mind Health HK':'心靈健康香港','Smile Dental':'笑容牙科',
+    'Wan Chai':'灣仔','Yau Ma Tei':'油麻地','Sham Shui Po':'深水埗','Central':'中環','Causeway Bay':'銅鑼灣',
+  }
+  function dt(term) {
+    if (isEn || !term) return term
+    return term.split(' · ').map(part => DR_TERM_ZH[part] || part).join(' · ')
+  }
   const sortedDoctors = [...doctors].sort((a,b)=>{
     if (sortBy==='distance') return a.distanceKm - b.distanceKm
     if (sortBy==='rating') return parseFloat(b.rating) - parseFloat(a.rating)
@@ -946,8 +990,8 @@ function DoctorsScreen({ isEn, patient={} }) {
               <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
-                <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.spec}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{doc.clinic}</div>
+                <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}</div>
                 <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
                   <span style={{fontSize:'11px',color:C.textMuted}}>◇ {doc.distanceKm}km</span>
                   {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {isEn?'Video available':'視像問診'}</span>}
@@ -970,7 +1014,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
           <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
-          <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{activeDoctor.spec} · {activeDoctor.clinic}</div></div>
+          <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{dt(activeDoctor.spec)} · {dt(activeDoctor.clinic)}</div></div>
         </Card>
 
         {activeDoctor.videoAvail&&<Card style={{padding:'14px 16px'}}>
@@ -1047,7 +1091,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[['Doctor',activeDoctor.name],['Type',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],['Date',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],['Language',selLang],['Consultation fee','HK$380'],['AIA covers','HK$300'],['You pay','HK$80']].map(([l,v],i,arr)=>(
+              {[[isEn?'Doctor':'醫生',activeDoctor.name],[isEn?'Type':'診症方式',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],[isEn?'Date':'日期',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[isEn?'Language':'語言',selLang],[isEn?'Consultation fee':'診金','HK$380'],[isEn?'AIA covers':'AIA承保','HK$300'],[isEn?'You pay':'您需支付','HK$80']].map(([l,v],i,arr)=>(
                 <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>
@@ -1622,7 +1666,9 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </div>
         <div style={{padding:'0 16px 16px'}}>
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-            ◇ Sponsored plans are clearly labelled and filtered the same way as any other plan — sponsorship never changes what's shown. This is a comparison tool, not financial advice. Medsa earns a referral fee from insurers or licensed intermediaries for enquiries sent through this screen.
+            ◇ {isEn
+              ? "Sponsored plans are clearly labelled and filtered the same way as any other plan — sponsorship never changes what's shown. This is a comparison tool, not financial advice. Medsa earns a referral fee from insurers or licensed intermediaries for enquiries sent through this screen."
+              : '贊助方案會清楚標示,並與其他方案採用相同的篩選方式——贊助狀態不會影響顯示內容。此為比較工具,並非財務建議。Medsa會就透過此頁面發出的查詢,向保險公司或持牌中介人收取轉介費用。'}
           </div>
         </div>
       </>}
