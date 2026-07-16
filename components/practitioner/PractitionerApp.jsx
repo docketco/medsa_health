@@ -31,9 +31,9 @@ function InfoRow({ label, value, highlight=false, last=false }) {
 // ── Role definitions ──────────────────────────────────────────────────────────
 const DEPARTMENTS = ['Internal Medicine','Cardiology','Emergency / A&E','Surgery','Psychiatry']
 const DOCTOR_DIRECTORY = [
-  {name:'Dr Chan Siu-ming', department:'Internal Medicine'},
+  {name:'Dr Yeung Chi-hong', department:'Internal Medicine'},
   {name:'Dr Ho Ka-fai', department:'Cardiology'},
-  {name:'Dr Lam Wai-yee', department:'Cardiology'},
+  {name:'Dr Tsang Wing-lam', department:'Cardiology'},
 ]
 const DOCTOR_NAMES = DOCTOR_DIRECTORY.map(d=>d.name) // kept for the clock-in screen, which doesn't need department filtering
 
@@ -304,7 +304,7 @@ function PractitionerIDScreen({ role }) {
       <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${r.color} 0%,${r.color}cc 100%)`,borderRadius:'16px',padding:'24px',color:'#fff',position:'relative',overflow:'hidden'}}>
         <div style={{position:'absolute',top:-20,right:-20,width:100,height:100,borderRadius:'50%',background:'rgba(255,255,255,0.07)'}}/>
         <div style={{fontSize:'10px',opacity:0.6,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'4px'}}>medsa practitioner</div>
-        <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Dr Chan Siu-ming</div>
+        <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Dr Yeung Chi-hong</div>
         <div style={{fontSize:'13px',opacity:0.85,marginBottom:'16px'}}>{r.label} · Internal Medicine</div>
         <div style={{display:'flex',gap:'20px'}}>
           <div><div style={{fontSize:'10px',opacity:0.6}}>License</div><div style={{fontSize:'13px',fontWeight:600}}>HK-MED-48291</div></div>
@@ -539,6 +539,7 @@ function CheckInScreen() {
     const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
     const { data: todaysAppt } = await supabase.from('appointments').select('id')
       .eq('patient_id', found.id)
+      .eq('institution_source', 'practitioner')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .limit(1).maybeSingle()
 
@@ -782,9 +783,9 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
           <SecLabel>Active conditions</SecLabel>
           <Card style={{padding:'12px 16px'}}>
             {[
-              {condition:'Type 2 Diabetes (insulin-dependent)',since:'2018',severity:'Controlled',managing:'Dr Chan Siu-ming · QE Hospital'},
-              {condition:'Iron deficiency anaemia',since:'2020',severity:'Mild',managing:'Dr Chan Siu-ming · QE Hospital'},
-              {condition:'Coronary artery disease',since:'2021',severity:'Stable',managing:'Dr Lam Wai-yee · HK Sanatorium'},
+              {condition:'Type 2 Diabetes (insulin-dependent)',since:'2018',severity:'Controlled',managing:'Dr Yeung Chi-hong · QE Hospital'},
+              {condition:'Iron deficiency anaemia',since:'2020',severity:'Mild',managing:'Dr Yeung Chi-hong · QE Hospital'},
+              {condition:'Coronary artery disease',since:'2021',severity:'Stable',managing:'Dr Tsang Wing-lam · HK Sanatorium'},
             ].map((c,i,arr)=>(
               <div key={i} style={{padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
                 <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>◎ {c.condition}</div>
@@ -810,12 +811,12 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
           </Card>
           <SecLabel>Full visit timeline — all institutions</SecLabel>
           {[
-            {date:'20 Jun 2025',institution:'QE Hospital',type:'Admission',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Admitted for diabetic review. Elevated glucose 5.9 mmol/L. Fatigue reported. Blood panel ordered. Metformin dose reviewed.',icon:'▣',bg:C.blueLight},
-            {date:'12 Jun 2025',institution:'QE Hospital',type:'Lab results',doctor:'Dr Chan Siu-ming',dept:'Pathology',notes:'Full CBC. Haemoglobin 13.8 g/dL (normal). WBC 6.2 × 10⁹/L (normal). Glucose 5.9 mmol/L (slightly elevated). Iron 8.2 μmol/L (low).',icon:'◉',bg:C.greenLight},
+            {date:'20 Jun 2025',institution:'QE Hospital',type:'Admission',doctor:'Dr Yeung Chi-hong',dept:'Internal Medicine',notes:'Admitted for diabetic review. Elevated glucose 5.9 mmol/L. Fatigue reported. Blood panel ordered. Metformin dose reviewed.',icon:'▣',bg:C.blueLight},
+            {date:'12 Jun 2025',institution:'QE Hospital',type:'Lab results',doctor:'Dr Yeung Chi-hong',dept:'Pathology',notes:'Full CBC. Haemoglobin 13.8 g/dL (normal). WBC 6.2 × 10⁹/L (normal). Glucose 5.9 mmol/L (slightly elevated). Iron 8.2 μmol/L (low).',icon:'◉',bg:C.greenLight},
             {date:'3 May 2025',institution:'Matilda International',type:'Outpatient visit',doctor:'Dr Ho Siu-wai',dept:'General Practice',notes:'Annual check-up. BP 118/76 mmHg. BMI 22.4. Mild iron deficiency noted. Iron supplement prescribed. Flu vaccine recommended.',icon:'◎',bg:C.greenLight},
-            {date:'18 Feb 2025',institution:'Ruttonjee Hospital',type:'Imaging',doctor:'Dr Lam Wai-yee',dept:'Radiology',notes:'Chest X-ray. No active TB. Lungs clear. Cardiac silhouette normal. Incidental mild cardiomegaly — noted for cardiology follow-up.',icon:'▣',bg:C.amberLight},
-            {date:'9 Jan 2025',institution:'HK Sanatorium',type:'Specialist',doctor:'Dr Lam Wai-yee',dept:'Cardiology',notes:'Coronary artery disease annual review. ECG normal sinus rhythm. Atorvastatin continued. BP well controlled. Next review in 12 months.',icon:'◈',bg:C.blueLight},
-            {date:'14 Oct 2024',institution:'QE Hospital',type:'Outpatient visit',doctor:'Dr Chan Siu-ming',dept:'Internal Medicine',notes:'Diabetes 6-month review. HbA1c 6.8% — good control. Metformin 500mg twice daily continued. Diet counselling provided.',icon:'◎',bg:C.greenLight},
+            {date:'18 Feb 2025',institution:'Ruttonjee Hospital',type:'Imaging',doctor:'Dr Tsang Wing-lam',dept:'Radiology',notes:'Chest X-ray. No active TB. Lungs clear. Cardiac silhouette normal. Incidental mild cardiomegaly — noted for cardiology follow-up.',icon:'▣',bg:C.amberLight},
+            {date:'9 Jan 2025',institution:'HK Sanatorium',type:'Specialist',doctor:'Dr Tsang Wing-lam',dept:'Cardiology',notes:'Coronary artery disease annual review. ECG normal sinus rhythm. Atorvastatin continued. BP well controlled. Next review in 12 months.',icon:'◈',bg:C.blueLight},
+            {date:'14 Oct 2024',institution:'QE Hospital',type:'Outpatient visit',doctor:'Dr Yeung Chi-hong',dept:'Internal Medicine',notes:'Diabetes 6-month review. HbA1c 6.8% — good control. Metformin 500mg twice daily continued. Diet counselling provided.',icon:'◎',bg:C.greenLight},
             {date:'22 Aug 2024',institution:'Matilda International',type:'Procedure',doctor:'Dr Wong Mei-ling',dept:'Ophthalmology',notes:'Diabetic retinopathy screening. Mild background retinopathy detected in left eye. Patient informed. Annual screening recommended.',icon:'◇',bg:C.brownLight},
             {date:'5 Mar 2024',institution:'QE Hospital',type:'Emergency',doctor:'Dr Fung Ka-wai',dept:'A&E',notes:'Presented with chest pain. ECG showed no acute changes. Troponin negative. Diagnosed as musculoskeletal. Discharged same day.',icon:'◈',bg:C.redLight},
           ].map((v,i)=>(
@@ -1268,6 +1269,7 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
       scheduled_at: new Date(`${date}T${time}:00`).toISOString(),
       appointment_type: reason || 'Consultation',
       status: 'confirmed',
+      institution_source: 'practitioner',
     })
     setSaving(false)
     if (insErr) { setError(insErr.message); return }
@@ -1322,15 +1324,15 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   // still looks populated during testing without pretending to represent
   // dates that don't actually exist yet.
   const demoScheduleByWeekday = {
-    'Mon': [{time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'}],
+    'Mon': [{time:'09:30',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Consultation',room:'3B',notes:'Reports mild fever, 2 days',doctor:'Dr Yeung Chi-hong',department:'Internal Medicine'}],
     'Tue': [
-      {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
-      {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
+      {time:'09:00',name:'Wong Mei-ling',medsaId:'MDS-84921-HK',type:'Follow-up · Blood results',room:'3A',notes:'No new symptoms reported',doctor:'Dr Yeung Chi-hong',department:'Internal Medicine'},
+      {time:'10:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'New patient · Chest pain',room:'3A',notes:'Chest tightness on exertion, started yesterday',doctor:'Dr Yeung Chi-hong',department:'Internal Medicine'},
       {time:'10:30',name:'Lee Siu-fong',medsaId:'MDS-90142-HK',type:'Prescription review',room:'3B',notes:'',doctor:'Dr Ho Ka-fai',department:'Cardiology'},
-      {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'},
-      {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Lam Wai-yee',department:'Cardiology'},
+      {time:'14:00',name:'Ho Ka-yee',medsaId:'MDS-65310-HK',type:'Post-op check',room:'4A',notes:'Wound healing well per patient',doctor:'Dr Yeung Chi-hong',department:'Internal Medicine'},
+      {time:'15:30',name:'Yip Wing-sze',medsaId:'MDS-33017-HK',type:'Diabetes management',room:'3A',notes:'Requesting review of insulin dosage',doctor:'Dr Tsang Wing-lam',department:'Cardiology'},
     ],
-    'Wed': [{time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Chan Siu-ming',department:'Internal Medicine'}],
+    'Wed': [{time:'11:00',name:'Chan Tai-man',medsaId:'MDS-77213-HK',type:'Follow-up',room:'3A',notes:'',doctor:'Dr Yeung Chi-hong',department:'Internal Medicine'}],
   }
 
   // Doctors see only their own named patients; therapists/allied/nurses
@@ -1353,7 +1355,11 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
     setLoadingAppts(true)
     const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
     const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    // Only this institution's own bookings - ClinicOps and PractitionerApp
+    // represent two different institutions and shouldn't see each other's
+    // appointments just because they happen to share the same database.
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .eq('institution_source', 'practitioner')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
 
@@ -1454,7 +1460,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       </>}
       {view==='dept'&&isLead&&<>
         <SecLabel>Internal Medicine · Today</SecLabel>
-        {['Dr Chan Siu-ming','Dr Ho Ka-fai','Nurse Yip Mei','Nurse Wong Chi','Receptionist Lam'].map((name,i)=>(
+        {['Dr Yeung Chi-hong','Dr Ho Ka-fai','Nurse Yip Mei','Nurse Wong Chi','Receptionist Lam'].map((name,i)=>(
           <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
             <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600}}>{name.split(' ').pop()[0]}</div>
             <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{name}</div><div style={{fontSize:'11px',color:C.textSub}}>08:00 – 17:00</div></div>
@@ -1529,7 +1535,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
             if (pRow) {
               const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
               const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
-              await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+              await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','practitioner').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
             }
           }
         }}
@@ -1540,6 +1546,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
           const { error: apptErr } = await supabase.from('appointments').insert({
             patient_id: pRow.id, doctor_name: activeTodoPatient.doctor, department: activeTodoPatient.department,
             scheduled_at: new Date(date+'T10:00:00').toISOString(), appointment_type: reason, status: 'confirmed',
+            institution_source: 'practitioner',
           })
           return !apptErr
         }}
