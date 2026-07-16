@@ -624,6 +624,7 @@ function CheckInScreen() {
 function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRecord=false }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
+  const [isAdmitted,setIsAdmitted]=useState(false) // demo toggle - Bed/Location only shows once actually admitted
 
   useEffect(() => {
     if (autoOpenLog) { setView('patient'); setActiveTab('log') }
@@ -680,7 +681,7 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
     age: hasLive ? Math.floor((Date.now()-new Date(lp.date_of_birth))/(365.25*24*60*60*1000)) : 37,
     bloodType: hasLive ? lp.blood_type : 'O+',
     allergies: hasLive && liveData.allergies?.length ? liveData.allergies.map(a=>`${a.allergen} (${a.severity})`) : ['Penicillin (severe)','Dust mites (moderate)'],
-    ward:'Ward 3B · Bed 12',status:'Admitted',
+    ward:'Ward 3B · Bed 12',status:'Outpatient',
     admissionReason:'Diabetic review — elevated glucose levels, persistent fatigue. Referred by Dr Chan for inpatient monitoring and medication adjustment.',
     emergency: hasLive ? {name:lp.emergency_contact_name, relation:lp.emergency_contact_rel, phone:lp.emergency_contact_phone} : {name:'Wong Tai',relation:'Mother',phone:'+852 9xxx xxxx'},
     vitals:{'Blood pressure':'118/76 mmHg','Heart rate':'72 bpm','Temperature':'36.8°C','SpO₂':'98%','Weight':'58 kg','Blood glucose':'5.9 mmol/L'},
@@ -895,17 +896,21 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
             {access.prescribe&&<Btn variant="amber" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Add prescription to this visit</Btn>}
           </Card>
           {(role==='doctor'||role==='dept_head'||role==='admin')&&<>
-            <SecLabel>Bed / Location</SecLabel>
-            <Card style={{padding:'0 16px'}}>
-              <InfoRow label="Ward" value="Ward 3B"/>
-              <InfoRow label="Bed" value="Bed 12"/>
-              <InfoRow label="Admitted" value="20 Jun 2025"/>
-              <InfoRow label="Expected discharge" value="25 Jun 2025" last/>
-            </Card>
-            <div style={{padding:'0 16px 16px',display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}}>Transfer ward</Btn>
-              <Btn variant="amber" style={{flex:1}}>Discharge</Btn>
-            </div>
+            {isAdmitted ? <>
+              <SecLabel>Bed / Location</SecLabel>
+              <Card style={{padding:'0 16px'}}>
+                <InfoRow label="Ward" value="Ward 3B"/>
+                <InfoRow label="Bed" value="Bed 12"/>
+                <InfoRow label="Admitted" value={new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}/>
+                <InfoRow label="Expected discharge" value="TBC" last/>
+              </Card>
+              <div style={{padding:'0 16px 16px',display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1}}>Transfer ward</Btn>
+                <Btn variant="amber" style={{flex:1}} onClick={()=>setIsAdmitted(false)}>Discharge</Btn>
+              </div>
+            </> : (role==='doctor'||role==='admin')&&<div style={{padding:'0 16px 16px'}}>
+              <Btn style={{width:'100%'}} onClick={()=>setIsAdmitted(true)}>+ Admit to ward (demo)</Btn>
+            </div>}
           </>}
         </>}
         {activeTab==='message'&&(role==='doctor'||role==='therapist'||role==='allied')&&<>
@@ -990,7 +995,7 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
 function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord }) {
-  const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup'
+  const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup' | 'prepnotes'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
   const [msgSaving,setMsgSaving]=useState(false)
@@ -1001,9 +1006,18 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
   const [error,setError]=useState(null)
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
+  const [conditions,setConditions]=useState([])
+  const [allergies,setAllergies]=useState([])
+  const [medications,setMedications]=useState([])
+  const [prepNotesDraft,setPrepNotesDraft]=useState('')
+  const [prepNotesSaving,setPrepNotesSaving]=useState(false)
+  const [prepNotesSaved,setPrepNotesSaved]=useState(false)
 
   // Show real patient info here, the same way it appears when their
   // Medsa ID is scanned at check-in - not just the bare appointment row.
+  // Full medical history is shown here too, within the 48-hour consent
+  // window, so a doctor can review and prep ahead of a visit - separate
+  // from "Log diagnosis," which still requires actual check-in.
   const [patientFetchError,setPatientFetchError]=useState(null)
   useEffect(() => {
     async function loadPatient() {
@@ -1014,6 +1028,16 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
       else if (!data) setPatientFetchError(`No patient record found for Medsa ID ${patient.medsaId}.`)
       else setPatientFetchError(null)
       setFullPatient(data || null)
+      if (data) {
+        const [condRes, allergyRes, medRes] = await Promise.all([
+          supabase.from('conditions').select('*').eq('patient_id', data.id).eq('active', true),
+          supabase.from('allergies').select('*').eq('patient_id', data.id),
+          supabase.from('medications').select('*').eq('patient_id', data.id),
+        ])
+        setConditions(condRes.data||[])
+        setAllergies(allergyRes.data||[])
+        setMedications(medRes.data||[])
+      }
       setLoadingPatient(false)
     }
     loadPatient()
@@ -1070,12 +1094,51 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           </div>
         </div>}
 
+        {!loadingPatient&&fullPatient&&<div style={{marginBottom:'14px'}}>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'8px'}}>Medical history</div>
+          {allergies.length>0&&<div style={{background:C.redLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.red,marginBottom:'4px'}}>⚠ Allergies</div>
+            {allergies.map((a,i)=><div key={i} style={{fontSize:'12px',color:C.text}}>{a.allergen} ({a.severity})</div>)}
+          </div>}
+          {conditions.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'4px'}}>Active conditions</div>
+            {conditions.map((c,i)=><div key={i} style={{fontSize:'12px',color:C.textSub}}>{c.condition_name}{c.severity?` (${c.severity})`:''}</div>)}
+          </div>}
+          {medications.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'4px'}}>Current medications</div>
+            {medications.map((m,i)=><div key={i} style={{fontSize:'12px',color:C.textSub}}>{m.medication_name} {m.dosage||''} — {m.frequency||''}</div>)}
+          </div>}
+          {allergies.length===0&&conditions.length===0&&medications.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'12px'}}>No history on file yet.</div>}
+        </div>}
+
+        {mode==='prepnotes'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'6px'}}>Prep notes for {patient.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>For pre-visit review - not a diagnosis entry. Logging diagnosis still requires check-in.</div>
+          <textarea value={prepNotesDraft} onChange={e=>setPrepNotesDraft(e.target.value)} rows={4} placeholder="e.g. Reviewed history ahead of visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+          {prepNotesSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Saved</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
+              if (!prepNotesDraft.trim()||!fullPatient) return
+              setPrepNotesSaving(true)
+              await supabase.from('medical_records').insert({
+                patient_id: fullPatient.id, record_type: 'prep_note', title: 'Pre-visit prep note',
+                notes: prepNotesDraft, date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_todo',
+              })
+              setPrepNotesSaving(false)
+              setPrepNotesSaved(true)
+              setTimeout(()=>{setPrepNotesSaved(false);setMode(null)}, 1200)
+            }} disabled={prepNotesSaving||!prepNotesDraft.trim()}>{prepNotesSaving?'Saving…':'Save prep note'}</Btn>
+          </div>
+        </>}
+
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
           {onViewFullRecord&&<Btn style={{width:'100%'}} onClick={onViewFullRecord}>📄 View full record</Btn>}
+          <Btn style={{width:'100%'}} onClick={()=>{setPrepNotesDraft('');setMode('prepnotes')}}>📝 Prep notes</Btn>
           {isCheckedIn
             ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Log diagnosis</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Logging new diagnosis unlocks once this patient has checked in</div>}
@@ -1360,6 +1423,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
     // appointments just because they happen to share the same database.
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
       .eq('institution_source', 'practitioner')
+      .neq('status', 'cancelled')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
 
