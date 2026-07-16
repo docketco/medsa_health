@@ -1273,6 +1273,103 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   )
 }
 
+// ── WORKING HOURS — admin sets each doctor's weekly availability ───────────
+// This is the real source of truth for both the doctor's own schedule view
+// and what patients see as bookable slots in Find Care - replacing the
+// previous hardcoded/pseudo-random time slots on both sides.
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+
+function WorkingHoursScreen() {
+  const [selectedDoctor,setSelectedDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
+  const [hours,setHours]=useState({}) // day_of_week -> {start,end,is_off}
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const [slotDuration,setSlotDuration]=useState(30)
+
+  async function loadHours(doctorName) {
+    setLoading(true)
+    const { data } = await supabase.from('doctor_availability').select('*')
+      .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops')
+    const byDay = {}
+    for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 } // default: closed Sundays
+    ;(data||[]).forEach(row => {
+      byDay[row.day_of_week] = { start: row.start_time?.slice(0,5)||'09:00', end: row.end_time?.slice(0,5)||'17:00', is_off: row.is_off }
+      setSlotDuration(row.slot_duration_minutes || 30)
+    })
+    setHours(byDay)
+    setLoading(false)
+  }
+
+  useEffect(() => { loadHours(selectedDoctor) }, [selectedDoctor])
+
+  function updateDay(day, field, value) {
+    setHours(prev => ({ ...prev, [day]: { ...prev[day], [field]: value } }))
+    setSaved(false)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    const rows = Object.entries(hours).map(([day, h]) => ({
+      doctor_name: selectedDoctor, institution_source: 'clinic_ops', day_of_week: parseInt(day),
+      start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: slotDuration,
+      updated_at: new Date().toISOString(),
+    }))
+    await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
+    setSaving(false)
+    setSaved(true)
+    setTimeout(()=>setSaved(false), 2500)
+  }
+
+  return (
+    <PageWrap maxWidth={640}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Working Hours</h2>
+      <div style={{fontSize:'12px',color:C.textSub,textAlign:'center',marginBottom:'20px'}}>Sets each doctor's availability - syncs to their schedule and patient booking</div>
+
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+        {DOCTOR_DIRECTORY.map(d=>(
+          <div key={d.name} onClick={()=>setSelectedDoctor(d.name)} style={{padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDoctor===d.name?C.green:C.card,color:selectedDoctor===d.name?'#fff':C.textSub}}>{d.name}</div>
+        ))}
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+
+      {!loading&&<>
+        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Appointment slot length</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            {[15,20,30,45,60].map(m=>(
+              <div key={m} onClick={()=>{setSlotDuration(m);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:slotDuration===m?C.green:C.card,color:slotDuration===m?'#fff':C.text}}>{m}m</div>
+            ))}
+          </div>
+        </Card>
+
+        {DAY_NAMES.map((dayName,i)=>{
+          const h = hours[i] || {start:'09:00',end:'17:00',is_off:false}
+          return (
+            <Card key={i} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px'}}>
+              <div style={{width:80,fontSize:'13px',fontWeight:500,flexShrink:0}}>{dayName}</div>
+              {h.is_off ? (
+                <div style={{flex:1,fontSize:'12px',color:C.textMuted}}>Closed</div>
+              ) : (
+                <div style={{flex:1,display:'flex',gap:'8px',alignItems:'center'}}>
+                  <input type="time" value={h.start} onChange={e=>updateDay(i,'start',e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px'}}/>
+                  <span style={{color:C.textMuted,fontSize:'12px'}}>to</span>
+                  <input type="time" value={h.end} onChange={e=>updateDay(i,'end',e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px'}}/>
+                </div>
+              )}
+              <Toggle checked={!h.is_off} onChange={(on)=>updateDay(i,'is_off',!on)}/>
+            </Card>
+          )
+        })}
+
+        {saved&&<div style={{fontSize:'13px',color:C.green,textAlign:'center',marginBottom:'10px'}}>✓ Saved - synced to {selectedDoctor}'s schedule and patient booking</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving}>{saving?'Saving…':`Save hours for ${selectedDoctor}`}</Btn>
+      </>}
+    </PageWrap>
+  )
+}
+
 function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
@@ -2269,6 +2366,7 @@ export default function ClinicOpsApp() {
     {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','frontdesk']},
     {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','frontdesk']},
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','frontdesk']},
+    {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='frontdesk'?'checkin':'overview')}}/>
@@ -2304,6 +2402,7 @@ export default function ClinicOpsApp() {
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='claims'&&<ClaimsScreen/>}
+        {screen==='workinghours'&&<WorkingHoursScreen/>}
       </div>
     </div>
   )
