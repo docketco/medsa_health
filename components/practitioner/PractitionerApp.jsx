@@ -620,13 +620,17 @@ function CheckInScreen() {
   )
 }
 
-function PatientSearchScreen({ role, liveData={}, autoOpenLog=false }) {
+function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRecord=false }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
 
   useEffect(() => {
     if (autoOpenLog) { setView('patient'); setActiveTab('log') }
   }, [autoOpenLog])
+
+  useEffect(() => {
+    if (autoOpenRecord) { setView('patient'); setActiveTab('overview') }
+  }, [autoOpenRecord])
   const [logText,setLogText]=useState('')
   const [logSaved,setLogSaved]=useState(false)
   const [diagnosis,setDiagnosis]=useState('')
@@ -984,7 +988,7 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
-function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup }) {
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord }) {
   const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
@@ -999,11 +1003,15 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
 
   // Show real patient info here, the same way it appears when their
   // Medsa ID is scanned at check-in - not just the bare appointment row.
+  const [patientFetchError,setPatientFetchError]=useState(null)
   useEffect(() => {
     async function loadPatient() {
-      if (!patient?.medsaId) { setLoadingPatient(false); return }
+      if (!patient?.medsaId) { setLoadingPatient(false); setPatientFetchError('This appointment has no linked Medsa ID.'); return }
       setLoadingPatient(true)
-      const { data } = await supabase.from('patients').select('*').eq('medsa_id', patient.medsaId).maybeSingle()
+      const { data, error: fetchErr } = await supabase.from('patients').select('*').eq('medsa_id', patient.medsaId).maybeSingle()
+      if (fetchErr) setPatientFetchError(fetchErr.message)
+      else if (!data) setPatientFetchError(`No patient record found for Medsa ID ${patient.medsaId}.`)
+      else setPatientFetchError(null)
       setFullPatient(data || null)
       setLoadingPatient(false)
     }
@@ -1043,6 +1051,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
         <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>Close</div>
 
         {loadingPatient&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>Loading patient…</div>}
+        {!loadingPatient&&patientFetchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>⚠ {patientFetchError}</div>}
 
         {!loadingPatient&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
           <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCheckedIn?'✓ Checked in':'Scheduled'}</div>
@@ -1066,9 +1075,10 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
           {onCancelAppt&&<Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>}
+          {onViewFullRecord&&<Btn style={{width:'100%'}} onClick={onViewFullRecord}>📄 View full record</Btn>}
           {isCheckedIn
-            ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Full diagnosis / log</Btn>
-            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in</div>}
+            ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Log diagnosis</Btn>
+            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Logging new diagnosis unlocks once this patient has checked in</div>}
         </div>}
 
         {mode==='message'&&<>
@@ -1290,7 +1300,7 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
   )
 }
 
-function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
+function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onViewFullRecord }) {
   const [view,setView]=useState('mine')
   const isLead=role==='admin'||role==='dept_head'
   const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
@@ -1506,6 +1516,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
         doctorLabel={myName}
         onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
+        onViewFullRecord={()=>{setActiveTodoPatient(null);onViewFullRecord&&onViewFullRecord()}}
         onSwitchDoctor={(newDoctorName)=>{
           setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,doctor:newDoctorName}:a))
         }}
@@ -1814,6 +1825,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [doctorName,setDoctorName]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
+  const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
   const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
@@ -1828,15 +1840,15 @@ export default function PractitionerApp({ liveData={} }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
         {screen==='checkin'&&<CheckInScreen/>}
-        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog}/>}
-        {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}}/>}
+        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog} autoOpenRecord={jumpToRecord}/>}
+        {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
         {navItems.map(item=>(
-          <div key={item.key} onClick={()=>{setScreen(item.key);setJumpToLog(false)}} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
+          <div key={item.key} onClick={()=>{setScreen(item.key);setJumpToLog(false);setJumpToRecord(false)}} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
             <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
             <span>{item.label}</span>
           </div>
