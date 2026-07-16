@@ -176,14 +176,14 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
   const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
 
-  async function handleCheckInClick() {
+  async function handleCheckInClick(force=false) {
     if (checkingIn) return // guard against rapid repeat clicks
     setCheckingIn(true)
-    const success = await onCheckedIn(patient)
+    const result = await onCheckedIn(patient, force)
     setCheckingIn(false)
-    if (success) setJustCheckedIn(patient.full_name)
-    // if it failed, checkInError (passed down from root) explains why -
-    // the screen stays as-is so the person can see the error and retry
+    if (result === true) setJustCheckedIn(patient.full_name)
+    // 'already_active' leaves the screen as-is with checkInError shown,
+    // plus a "Check in anyway" option below for testing/demo purposes
   }
 
   const [scanChoices,setScanChoices]=useState([])
@@ -275,9 +275,12 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               </div>
             </div>
           </div>
-          {!justCheckedIn ? <div style={{display:'flex',gap:'10px'}}>
-            <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
-            <Btn variant="primary" onClick={handleCheckInClick} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
+          {!justCheckedIn ? <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            <div style={{display:'flex',gap:'10px'}}>
+              <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
+            </div>
+            {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
             <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully</div>
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
@@ -299,9 +302,10 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           <div style={{fontSize:'17px',fontWeight:700}}>{searchResult.full_name}</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{searchResult.medsa_id} - DOB {new Date(searchResult.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
-            <Btn variant="primary" style={{flex:1}} onClick={async()=>{setCheckingIn(true);const ok=await onCheckedIn(searchResult);setCheckingIn(false);if(ok)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,false);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
+          {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           {!requestSent&&<Btn style={{width:'100%'}} onClick={()=>setRequestSent(true)}>Request record access ahead of visit</Btn>}
           {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
         </Card>}
@@ -993,18 +997,28 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
 function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation }) {
-  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
   const [notesDraft,setNotesDraft]=useState('')
+  const [prepNotesDraft,setPrepNotesDraft]=useState('')
+  const [prepNotesSaving,setPrepNotesSaving]=useState(false)
+  const [prepNotesSaved,setPrepNotesSaved]=useState(false)
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
   const [patientFetchError,setPatientFetchError]=useState(null)
+  const [conditions,setConditions]=useState([])
+  const [allergies,setAllergies]=useState([])
+  const [medications,setMedications]=useState([])
+  const [records,setRecords]=useState([])
 
   // Show real patient info here - the same view as when their Medsa ID is
-  // scanned at check-in - not just a bare scheduling row.
+  // scanned at check-in - not just a bare scheduling row. Full medical
+  // history is available here (within the consent window) so a doctor
+  // can review and prep ahead of a follow-up or first visit - this is
+  // separate from "Log diagnosis," which still requires actual check-in.
   useEffect(() => {
     async function loadPatient() {
       if (!appt?.medsaId) { setLoadingPatient(false); setPatientFetchError('This appointment has no linked Medsa ID.'); return }
@@ -1014,6 +1028,18 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
       else if (!data) setPatientFetchError(`No patient record found for Medsa ID ${appt.medsaId}.`)
       else setPatientFetchError(null)
       setFullPatient(data || null)
+      if (data) {
+        const [condRes, allergyRes, medRes, recRes] = await Promise.all([
+          supabase.from('conditions').select('*').eq('patient_id', data.id).eq('active', true),
+          supabase.from('allergies').select('*').eq('patient_id', data.id),
+          supabase.from('medications').select('*').eq('patient_id', data.id),
+          supabase.from('medical_records').select('*, institutions(name)').eq('patient_id', data.id).order('date_of_record',{ascending:false}).limit(5),
+        ])
+        setConditions(condRes.data||[])
+        setAllergies(allergyRes.data||[])
+        setMedications(medRes.data||[])
+        setRecords(recRes.data||[])
+      }
       setLoadingPatient(false)
     }
     loadPatient()
@@ -1056,6 +1082,27 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           </div>
         </div>}
 
+        {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{marginBottom:'14px'}}>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'8px'}}>Medical history</div>
+          {allergies.length>0&&<div style={{background:C.redLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.red,marginBottom:'4px'}}>⚠ Allergies</div>
+            {allergies.map((a,i)=><div key={i} style={{fontSize:'12px',color:C.text}}>{a.allergen} ({a.severity})</div>)}
+          </div>}
+          {conditions.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'4px'}}>Active conditions</div>
+            {conditions.map((c,i)=><div key={i} style={{fontSize:'12px',color:C.textSub}}>{c.condition_name}{c.severity?` (${c.severity})`:''}</div>)}
+          </div>}
+          {medications.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'4px'}}>Current medications</div>
+            {medications.map((m,i)=><div key={i} style={{fontSize:'12px',color:C.textSub}}>{m.medication_name} {m.dosage||''} — {m.frequency||''}</div>)}
+          </div>}
+          {records.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'4px'}}>Recent records</div>
+            {records.map((r,i)=><div key={i} style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} — {r.title}{r.institutions?.name?`, ${r.institutions.name}`:''}</div>)}
+          </div>}
+          {allergies.length===0&&conditions.length===0&&medications.length===0&&records.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'12px'}}>No history on file yet.</div>}
+        </div>}
+
         {!loadingPatient&&!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
           ◇ {appt.patient} · {appt.time} · {appt.type} — outside this patient's 48-hour consent window, so clinical details aren't shown here. Scheduling changes still work below.
         </div>}
@@ -1077,11 +1124,33 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
-          <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
+          {withinDataWindow&&<Btn style={{width:'100%'}} onClick={()=>{setPrepNotesDraft('');setMode('prepnotes')}}>📝 Prep notes</Btn>}
           {canLogDiagnosis
             ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in{!withinDataWindow?' and is within their consent window':''}</div>}
+          <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
         </div>}
+
+        {mode==='prepnotes'&&<>
+          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'6px'}}>Prep notes for {appt.patient}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>For pre-visit review - not a diagnosis entry. Full diagnosis logging still requires check-in.</div>
+          <textarea value={prepNotesDraft} onChange={e=>setPrepNotesDraft(e.target.value)} rows={4} placeholder="e.g. Reviewed history ahead of visit - watch for interaction between current meds and planned prescription…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'12px',boxSizing:'border-box'}}/>
+          {prepNotesSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>✓ Saved</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
+              if (!prepNotesDraft.trim()||!fullPatient) return
+              setPrepNotesSaving(true)
+              await supabase.from('medical_records').insert({
+                patient_id: fullPatient.id, record_type: 'prep_note', title: 'Pre-visit prep note',
+                notes: prepNotesDraft, date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_schedule',
+              })
+              setPrepNotesSaving(false)
+              setPrepNotesSaved(true)
+              setTimeout(()=>{setPrepNotesSaved(false);setMode(null)}, 1200)
+            }} disabled={prepNotesSaving||!prepNotesDraft.trim()}>{prepNotesSaving?'Saving…':'Save prep note'}</Btn>
+          </div>
+        </>}
 
         {mode==='reschedule'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New time for {appt.patient}</div>
@@ -1210,6 +1279,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
     // appointments just because they happen to share the same database.
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
       .eq('institution_source', 'clinic_ops')
+      .neq('status', 'cancelled')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
 
@@ -1969,13 +2039,13 @@ export default function ClinicOpsApp() {
     load()
   }, [staffMember])
 
-  async function handleCheckedIn(patient) {
+  async function handleCheckedIn(patient, force=false) {
     const alreadyActive = checkedInQueue.some(q =>
       q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
     )
-    if (alreadyActive) {
-      setCheckInError(`${patient.full_name} is already checked in and still active - check My Patients or Overview to find them, or wait for their access window to expire.`)
-      return false
+    if (alreadyActive && !force) {
+      setCheckInError(`${patient.full_name} is already checked in and still active.`)
+      return 'already_active'
     }
     const ticket = 'A'+nextTicket
     const { data, error } = await supabase.from('clinic_queue').insert({
