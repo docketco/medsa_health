@@ -992,8 +992,30 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
   )
 }
 
-function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment }) {
   const inRoom = queue.length
+  const [todaysQueue,setTodaysQueue]=useState([]) // scheduled but not yet checked in
+  const [loadingQueue,setLoadingQueue]=useState(true)
+  const [activeAction,setActiveAction]=useState(null) // {type:'checkedin'|'scheduled', entry}
+
+  async function loadTodaysQueue() {
+    setLoadingQueue(true)
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .eq('institution_source', 'clinic_ops')
+      .neq('status', 'cancelled')
+      .neq('status', 'checked_in')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      .order('scheduled_at', {ascending:true})
+    setTodaysQueue((data||[]).map(a=>({
+      id:a.id, time:new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      patientName:a.patients?.full_name||'Unknown', medsaId:a.patients?.medsa_id||null, doctor:a.doctor_name||'Unassigned',
+    })))
+    setLoadingQueue(false)
+  }
+
+  useEffect(() => { loadTodaysQueue() }, [])
 
   return (
     <PageWrap maxWidth={720}>
@@ -1004,30 +1026,60 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue }) {
         <StatCard label="Today's revenue" value="HK$4,820" sub="12 consultations" color={C.green} bg={C.greenLight}/>
       </div>
       <SecLabel>Checked-in patients</SecLabel>
-      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+        {queue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No one checked in yet.</div>}
         {queue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
           return (
-            <Card key={i} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
+            <Card key={i} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:i})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
               <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
               </div>
               <Badge text={hrsLeft>0?`${Math.floor(hrsLeft)}h left`:'Expired'} type={hrsLeft>0?'ok':'full'}/>
-              {onRemoveFromQueue&&<span onClick={()=>onRemoveFromQueue(i)} style={{fontSize:'11px',color:C.red,cursor:'pointer',marginLeft:'4px'}}>Remove</span>}
+              <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
             </Card>
           )
         })}
       </div>
+
+      <SecLabel>Today's queue - not yet checked in</SecLabel>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {loadingQueue&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>Loading…</div>}
+        {!loadingQueue&&todaysQueue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>Nothing else scheduled for today.</div>}
+        {todaysQueue.map((a,i)=>(
+          <Card key={a.id} onClick={()=>setActiveAction({type:'scheduled', entry:a})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+            <div style={{width:32,textAlign:'center',fontSize:'12px',fontWeight:700,color:C.textSub,flexShrink:0}}>{a.time}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{a.patientName}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{a.doctor}</div>
+            </div>
+            <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+          </Card>
+        ))}
+      </div>
+
+      {activeAction&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setActiveAction(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAction.entry.patientName}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{activeAction.type==='checkedin'?`${activeAction.entry.ticket} · checked in`:`${activeAction.entry.time} · scheduled`}</div>
+          {activeAction.type==='checkedin'
+            ? <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onRemoveFromQueue(activeAction.index);setActiveAction(null)}}>↩ Cancel check-in</Btn>
+            : <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onCancelAppointment(activeAction.entry.id);setActiveAction(null);loadTodaysQueue()}}>✕ Cancel appointment</Btn>}
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAction(null)}>Close</Btn>
+        </div>
+      </div>}
     </PageWrap>
   )
 }
 
+
+
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation, onCancelCheckIn }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation, onCancelCheckIn, role }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
@@ -1079,7 +1131,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   // consent window AND having actually checked in - being scheduled for
   // today alone isn't enough to log a new diagnosis.
   const isCheckedIn = appt.status==='checked_in'
-  const canLogDiagnosis = withinDataWindow && isCheckedIn
+  const canLogDiagnosis = withinDataWindow && isCheckedIn && role==='doctor'
 
   // Only offer doctors in the same department/specialty as this
   // appointment - switching to an unrelated specialty wouldn't make sense.
@@ -1110,7 +1162,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           </div>
         </div>}
 
-        {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{marginBottom:'14px'}}>
+        {!loadingPatient&&withinDataWindow&&fullPatient&&role==='doctor'&&<div style={{marginBottom:'14px'}}>
           <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'8px'}}>Medical history</div>
           {allergies.length>0&&<div style={{background:C.redLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px'}}>
             <div style={{fontSize:'11px',fontWeight:600,color:C.red,marginBottom:'4px'}}>⚠ Allergies</div>
@@ -1129,6 +1181,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
             {records.map((r,i)=><div key={i} style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} — {r.title}{r.institutions?.name?`, ${r.institutions.name}`:''}</div>)}
           </div>}
           {allergies.length===0&&conditions.length===0&&medications.length===0&&records.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'12px'}}>No history on file yet.</div>}
+        </div>}
+
+        {!loadingPatient&&withinDataWindow&&fullPatient&&role!=='doctor'&&<div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.textMuted,lineHeight:1.5}}>
+          ◇ Medical history is only visible to doctors. Scheduling changes still work below.
         </div>}
 
         {!loadingPatient&&!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
@@ -1154,7 +1210,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
           {canLogDiagnosis
             ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
-            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Full diagnosis/log unlocks once this patient has checked in{!withinDataWindow?' and is within their consent window':''}</div>}
+            : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ {role!=='doctor'?'Full diagnosis/log is only available to doctors':`Full diagnosis/log unlocks once this patient has checked in${!withinDataWindow?' and is within their consent window':''}`}</div>}
           {isCheckedIn&&onCancelCheckIn&&<Btn style={{width:'100%'}} onClick={()=>setMode('cancelcheckin')}>↩ Cancel check-in</Btn>}
           <Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('cancel')}>✕ Cancel appointment</Btn>
         </div>}
@@ -1163,7 +1219,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px'}}>Undo {appt.patient}'s check-in? This puts the appointment back to "scheduled" and removes them from today's active queue - use this to fix a mistaken check-in or to check them out for testing.</div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Keep checked in</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onCancelCheckIn(appt);setMode(null);onClose()}}>Confirm undo</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onCancelCheckIn(appt);setMode(null);onClose()}}>Confirm undo</Btn>
           </div>
         </>}
 
@@ -1404,7 +1460,14 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation} onCancelCheckIn={onCancelCheckIn}/>
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCancelCheckIn={async(appt)=>{
+        await onCancelCheckIn(appt)
+        // The backend update alone doesn't refresh what's on screen - this
+        // was the actual bug: the row would revert in Supabase but the
+        // local list kept showing the stale "checked in" state until a
+        // manual reload.
+        loadRealAppointments(selectedDay)
+      }}/>
       {showNewApptForm&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowNewApptForm(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
@@ -2178,12 +2241,27 @@ export default function ClinicOpsApp() {
     if (entry?.id) {
       await supabase.from('clinic_queue').delete().eq('id', entry.id)
     }
+    // Also revert their real appointment back to "confirmed" - undoing a
+    // check-in from here should undo both places, same as the Schedule
+    // screen's own "Cancel check-in" action.
+    if (entry?.patientName) {
+      const { data: pRow } = await supabase.from('patients').select('id').eq('full_name', entry.patientName).maybeSingle()
+      if (pRow) {
+        const dayStart=new Date(); dayStart.setHours(0,0,0,0)
+        const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
+        await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+      }
+    }
+  }
+
+  async function handleCancelAppointment(appointmentId) {
+    await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appointmentId)
   }
 
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
 
   const allNavItems = [
-    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin']},
+    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','frontdesk']},
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
     {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','frontdesk']},
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','frontdesk','doctor']},
@@ -2201,7 +2279,7 @@ export default function ClinicOpsApp() {
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
