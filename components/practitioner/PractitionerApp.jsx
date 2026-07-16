@@ -1356,11 +1356,17 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis }) {
       notes: a.reason_for_visit || '',
       doctor: a.doctor_name || 'Unassigned',
       department: a.department || 'Internal Medicine',
+      status: a.status || 'confirmed',
     }))
 
     const isToday = dayStart.toDateString() === new Date().toDateString()
     const weekdayShort = DAY_LABELS_SHORT[dateObj.getDay()]
-    const demoRows = isToday ? (demoScheduleByWeekday[weekdayShort] || []) : []
+    const demoRowsRaw = isToday ? (demoScheduleByWeekday[weekdayShort] || []) : []
+    // If a patient already has a real booked appointment today, don't
+    // also show their static demo row - that created confusing duplicate
+    // entries where clicking the demo one never reflected a real check-in.
+    const realMedsaIds = new Set(realRows.map(r=>r.medsaId).filter(Boolean))
+    const demoRows = demoRowsRaw.filter(d=>!realMedsaIds.has(d.medsaId))
 
     setAppts(filterForRole([...realRows, ...demoRows]))
     setLoadingAppts(false)
