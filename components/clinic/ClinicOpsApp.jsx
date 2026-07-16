@@ -1001,14 +1001,18 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   const [notesDraft,setNotesDraft]=useState('')
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
+  const [patientFetchError,setPatientFetchError]=useState(null)
 
   // Show real patient info here - the same view as when their Medsa ID is
   // scanned at check-in - not just a bare scheduling row.
   useEffect(() => {
     async function loadPatient() {
-      if (!appt?.medsaId) { setLoadingPatient(false); return }
+      if (!appt?.medsaId) { setLoadingPatient(false); setPatientFetchError('This appointment has no linked Medsa ID.'); return }
       setLoadingPatient(true)
-      const { data } = await supabase.from('patients').select('*').eq('medsa_id', appt.medsaId).maybeSingle()
+      const { data, error: fetchErr } = await supabase.from('patients').select('*').eq('medsa_id', appt.medsaId).maybeSingle()
+      if (fetchErr) setPatientFetchError(fetchErr.message)
+      else if (!data) setPatientFetchError(`No patient record found for Medsa ID ${appt.medsaId}.`)
+      else setPatientFetchError(null)
       setFullPatient(data || null)
       setLoadingPatient(false)
     }
@@ -1034,6 +1038,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
         <div onClick={onClose} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>Close</div>
 
         {loadingPatient&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>Loading patient…</div>}
+        {!loadingPatient&&patientFetchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>⚠ {patientFetchError}</div>}
 
         {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
           <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCheckedIn?'✓ Checked in':'Scheduled'}</div>
@@ -1219,7 +1224,12 @@ function ScheduleScreen({ staffMember, onGoToConsultation }) {
     // aren't drowned out by illustrative data that was never meant to
     // represent those specific dates.
     const isToday = dayStart.toDateString() === new Date().toDateString()
-    const merged = isToday ? [...realRows, ...demoAppointments] : realRows
+    // If a patient already has a real booked appointment today, don't
+    // also show their static demo row - that created confusing duplicate
+    // entries where clicking the demo one never reflected a real check-in.
+    const realMedsaIds = new Set(realRows.map(r=>r.medsaId).filter(Boolean))
+    const demoRowsFiltered = demoAppointments.filter(d=>!realMedsaIds.has(d.medsaId))
+    const merged = isToday ? [...realRows, ...demoRowsFiltered] : realRows
 
     setAppointments(isDoctorView ? merged.filter(a=>a.doctor===staffMember.name) : merged)
     setLoadingAppts(false)
