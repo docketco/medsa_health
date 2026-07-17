@@ -606,6 +606,7 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
   const [postEnd,setPostEnd]=useState('17:00')
   const [postReason,setPostReason]=useState('sick')
   const [postOnBehalfOf,setPostOnBehalfOf]=useState('')
+  const [showNameSuggestions,setShowNameSuggestions]=useState(false)
   const [posting,setPosting]=useState(false)
 
   async function loadShifts() {
@@ -675,7 +676,21 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
       {showPostModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowPostModal(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>{postReason==='sick'?'Report sick today':'Post shift for bidding'}</div>
-          {role==='dept_head'&&<input value={postOnBehalfOf} onChange={e=>setPostOnBehalfOf(e.target.value)} placeholder="Staff member's name" style={{width:'100%',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          {role==='dept_head'&&<div style={{position:'relative',marginBottom:'10px'}}>
+            <input
+              value={postOnBehalfOf}
+              onChange={e=>{setPostOnBehalfOf(e.target.value);setShowNameSuggestions(true)}}
+              onFocus={()=>setShowNameSuggestions(true)}
+              onBlur={()=>setTimeout(()=>setShowNameSuggestions(false),150)}
+              placeholder="Staff member's name"
+              style={{width:'100%',boxSizing:'border-box'}}
+            />
+            {showNameSuggestions&&postOnBehalfOf.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,maxHeight:150,overflowY:'auto'}}>
+              {DOCTOR_DIRECTORY.filter(d=>d.name.toLowerCase().includes(postOnBehalfOf.toLowerCase())).slice(0,6).map(d=>(
+                <div key={d.name} onMouseDown={()=>{setPostOnBehalfOf(d.name);setShowNameSuggestions(false)}} style={{padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>{d.name}</div>
+              ))}
+            </div>}
+          </div>}
           <input type="date" value={postDate} onChange={e=>setPostDate(e.target.value)} style={{width:'100%',marginBottom:'10px',boxSizing:'border-box'}}/>
           <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
             <input type="time" value={postStart} onChange={e=>setPostStart(e.target.value)} style={{flex:1}}/>
@@ -1670,7 +1685,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   const isLead=role==='admin'||role==='dept_head'
   const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
   const isReceptionist = role==='receptionist'
-  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},isLead&&{key:'requests',label:'Shift requests'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
+  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
   const [myHours,setMyHours]=useState({})
   const [myHoursLoading,setMyHoursLoading]=useState(true)
 
@@ -1801,6 +1816,30 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   const [activeTodoPatient,setActiveTodoPatient]=useState(null)
   const [callingPatientName,setCallingPatientName]=useState(null)
   const [activeReceptionAppt,setActiveReceptionAppt]=useState(null)
+  const [deptDoctors,setDeptDoctors]=useState([])
+  const [deptHours,setDeptHours]=useState({}) // doctorName -> {day: row}
+  const [deptScheduleLoading,setDeptScheduleLoading]=useState(true)
+  const [editingDoctor,setEditingDoctor]=useState(null)
+
+  useEffect(() => {
+    async function loadDeptSchedule() {
+      if (!isLead) { setDeptScheduleLoading(false); return }
+      setDeptScheduleLoading(true)
+      const inDept = department ? DOCTOR_DIRECTORY.filter(d=>d.department===department) : DOCTOR_DIRECTORY
+      setDeptDoctors(inDept)
+      const { data } = await supabase.from('doctor_availability').select('*')
+        .eq('institution_source','practitioner').in('doctor_name', inDept.map(d=>d.name))
+      const byDoctor = {}
+      ;(data||[]).forEach(row => {
+        if (!byDoctor[row.doctor_name]) byDoctor[row.doctor_name] = {}
+        byDoctor[row.doctor_name][row.day_of_week] = row
+      })
+      setDeptHours(byDoctor)
+      setDeptScheduleLoading(false)
+    }
+    loadDeptSchedule()
+  }, [isLead, department])
+
   const [showNewApptModal,setShowNewApptModal]=useState(false)
   const myName = ROLES[role]?.label || 'Doctor'
 
@@ -1843,30 +1882,47 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         <div style={{padding:'0 16px 16px'}}><Btn style={{width:'100%'}}>Request shift change</Btn></div>
       </>}
       {view==='dept'&&isLead&&<>
-        <SecLabel>Internal Medicine · Today</SecLabel>
-        {['Dr Yeung Chi-hong','Dr Ho Ka-fai','Nurse Yip Mei','Nurse Wong Chi','Receptionist Lam'].map((name,i)=>(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:600}}>{name.split(' ').pop()[0]}</div>
-            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{name}</div><div style={{fontSize:'11px',color:C.textSub}}>08:00 – 17:00</div></div>
-            <div style={{width:8,height:8,borderRadius:'50%',background:i===3?C.amber:C.green}}/>
-          </Card>
-        ))}
+        <SecLabel>{department||'Department'} · full week</SecLabel>
+        {deptScheduleLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+        {!deptScheduleLoading&&deptDoctors.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No doctors on file for this department yet.</div>}
+        {!deptScheduleLoading&&deptDoctors.length>0&&<>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',margin:'0 16px 8px'}}>Doctors</div>
+          {deptDoctors.map(doc=>(
+            <Card key={doc.name} onClick={()=>setEditingDoctor(doc.name)} style={{padding:'14px 16px',cursor:'pointer'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+                <span style={{fontSize:'13px',fontWeight:600}}>{doc.name}</span>
+                <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'3px'}}>
+                {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i)=>{
+                  const row = (deptHours[doc.name]||{})[i===6?0:i+1]
+                  const isOff = !row||row.is_off
+                  return (
+                    <div key={d} style={{textAlign:'center'}}>
+                      <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'2px'}}>{d}</div>
+                      <div style={{fontSize:'9px',padding:'3px 1px',borderRadius:'4px',background:isOff?C.card:C.greenLight,color:isOff?C.textMuted:C.green}}>{isOff?'off':`${row.start_time?.slice(0,5)}`}</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </Card>
+          ))}
+        </>}
+        <div style={{margin:'12px 16px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+          ◇ Nurses and reception don't yet have individually tracked hours - this view currently covers doctors, since that's what's connected to real scheduling data.
+        </div>
+        {editingDoctor&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditingDoctor(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px',textAlign:'center'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>Edit {editingDoctor}'s hours</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Full editing happens in Working Hours (Institution Admin) for permanent changes, or post a shift for bidding for a temporary one.</div>
+            <Btn style={{width:'100%'}} onClick={()=>setEditingDoctor(null)}>Close</Btn>
+          </div>
+        </div>}
         <SecLabel>Post announcement</SecLabel>
         <Card style={{padding:'16px'}}>
           <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={3} placeholder="Write announcement to your department…"/>
           <Btn variant="primary" style={{width:'100%'}}>Post to department</Btn>
         </Card>
-      </>}
-      {view==='requests'&&isLead&&<>
-        <SecLabel>Pending shift change requests</SecLabel>
-        {[{from:'Nurse Yip Mei',wants:'Wed 25 Jun 13:00–22:00',swap:'Thu 26 Jun 08:00–17:00'},{from:'Dr Ho Ka-fai',wants:'Fri 27 Jun 08:00–17:00',swap:'Sat 28 Jun 08:00–17:00'}].map((r,i)=>(
-          <Card key={i} style={{padding:'14px 16px'}}>
-            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>{r.from}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>Swap: <strong style={{color:C.text}}>{r.wants}</strong></div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>For: <strong style={{color:C.text}}>{r.swap}</strong></div>
-            <div style={{display:'flex',gap:'8px'}}><Btn variant="danger" style={{flex:1,fontSize:'12px'}}>Reject</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Approve</Btn></div>
-          </Card>
-        ))}
       </>}
       {view==='appts'&&<>
         {isReceptionist&&<div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',overflowX:'auto'}}>
@@ -2238,7 +2294,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(role==='doctor'||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},role!=='hr'&&{key:'schedule',icon:'▣',label:'Schedule'},(role==='doctor'||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
