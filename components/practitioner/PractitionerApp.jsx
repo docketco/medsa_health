@@ -651,6 +651,9 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
   }
 
   async function handleBid(shiftBidId) {
+    const shift = openShifts.find(s=>s.id===shiftBidId)
+    const shiftOwnerRole = STAFF_DIRECTORY.find(st=>st.name===shift?.staff_name)?.role
+    if (shiftOwnerRole !== role) return // same guard as the UI, kept here too in case this is ever called another way
     await supabase.from('shift_bid_entries').insert({ shift_bid_id: shiftBidId, bidder_name: doctorName, status:'pending' })
     await processShiftBids(shiftBidId)
     loadShifts()
@@ -676,17 +679,41 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
       {!loading&&openShifts.filter(s=>s.status==='open').length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No open shifts right now.</div>}
       {openShifts.filter(s=>s.status==='open').map(s=>{
         const alreadyBid = (s.shift_bid_entries||[]).some(e=>e.bidder_name===doctorName)
+        const shiftOwnerRole = STAFF_DIRECTORY.find(st=>st.name===s.staff_name)?.role
+        const roleMatches = shiftOwnerRole === role
         return (
           <Card key={s.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
               <span style={{fontSize:'13px',fontWeight:600}}>{new Date(s.shift_date).toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · {s.start_time.slice(0,5)}-{s.end_time.slice(0,5)}</span>
               <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:C.amberLight,color:C.amber}}>Open</span>
             </div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{s.department} · covering {s.staff_name} ({s.reason==='sick'?'sick day':'planned'}){s.opened_on_behalf?' · opened by Dept Head':''}</div>
-            {WORKING_ROLES.includes(role)&&s.staff_name!==doctorName&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleBid(s.id)} disabled={alreadyBid}>{alreadyBid?'Bid placed':'Bid for this shift'}</Btn>}
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{s.department} · covering {s.staff_name} ({ROLES[shiftOwnerRole]?.label||shiftOwnerRole}, {s.reason==='sick'?'sick day':'planned'}){s.opened_on_behalf?' · opened by Dept Head':''}</div>
+            {WORKING_ROLES.includes(role)&&s.staff_name!==doctorName&&roleMatches&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleBid(s.id)} disabled={alreadyBid}>{alreadyBid?'Bid placed':'Bid for this shift'}</Btn>}
+            {WORKING_ROLES.includes(role)&&s.staff_name!==doctorName&&!roleMatches&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center'}}>Only {ROLES[shiftOwnerRole]?.label||shiftOwnerRole} staff can bid on this shift</div>}
           </Card>
         )
       })}
+
+      {myBids.length>0&&<>
+        <SecLabel>Your bids</SecLabel>
+        {myBids.map(s=>{
+          const myEntry = (s.shift_bid_entries||[]).find(e=>e.bidder_name===doctorName)
+          const statusInfo = {
+            won: {label:'✓ Won - auto-confirmed', bg:C.greenLight, color:C.green},
+            lost: {label:'Lost to another bidder', bg:C.card, color:C.textMuted},
+            rejected_hours: {label:'⚠ Rejected - would exceed max hours', bg:C.redLight, color:C.red},
+            pending: {label:'Pending', bg:C.amberLight, color:C.amber},
+          }[myEntry?.status] || {label:myEntry?.status, bg:C.card, color:C.textMuted}
+          return (
+            <Card key={s.id} style={{padding:'12px 16px',marginBottom:'8px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:'12px',fontWeight:500}}>{new Date(s.shift_date).toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · {s.start_time.slice(0,5)}-{s.end_time.slice(0,5)}</span>
+                <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:statusInfo.bg,color:statusInfo.color,fontWeight:500}}>{statusInfo.label}</span>
+              </div>
+            </Card>
+          )
+        })}
+      </>}
 
       {showPostModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowPostModal(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
@@ -1695,12 +1722,86 @@ function WorkingHoursScreen() {
   )
 }
 
+// ── DEPT HOURS EDIT — inline within Dept Schedule, HR-editable ─────────────
+function DeptHoursEditModal({ staffName, viewerRole, onClose }) {
+  const [hours,setHours]=useState({})
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+  const canEdit = viewerRole==='hr'
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data } = await supabase.from('doctor_availability').select('*').eq('doctor_name', staffName).eq('institution_source','practitioner')
+      const byDay = {}
+      for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 }
+      ;(data||[]).forEach(row => { byDay[row.day_of_week] = { start: row.start_time?.slice(0,5)||'09:00', end: row.end_time?.slice(0,5)||'17:00', is_off: row.is_off } })
+      setHours(byDay)
+      setLoading(false)
+    }
+    load()
+  }, [staffName])
+
+  function updateDay(day, field, value) {
+    setHours(prev => ({ ...prev, [day]: { ...prev[day], [field]: value } }))
+    setSaved(false)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    const rows = Object.entries(hours).map(([day, h]) => ({
+      doctor_name: staffName, institution_source: 'practitioner', day_of_week: parseInt(day),
+      start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: 30,
+      updated_at: new Date().toISOString(),
+    }))
+    await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
+    setSaving(false)
+    setSaved(true)
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{staffName}'s hours</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>{canEdit?'Editable by HR':'View only - HR manages hour changes'}</div>
+        {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+        {!loading&&['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map((dayName,i)=>{
+          const h = hours[i] || {start:'09:00',end:'17:00',is_off:false}
+          return (
+            <div key={i} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+              <div style={{width:70,fontSize:'12px',fontWeight:500}}>{dayName.slice(0,3)}</div>
+              {h.is_off ? <div style={{flex:1,fontSize:'12px',color:C.textMuted}}>Off</div> : (
+                canEdit
+                  ? <div style={{flex:1,display:'flex',gap:'6px'}}>
+                      <input type="time" value={h.start} onChange={e=>updateDay(i,'start',e.target.value)} style={{flex:1,fontSize:'11px',padding:'5px'}}/>
+                      <input type="time" value={h.end} onChange={e=>updateDay(i,'end',e.target.value)} style={{flex:1,fontSize:'11px',padding:'5px'}}/>
+                    </div>
+                  : <div style={{flex:1,fontSize:'12px'}}>{h.start} – {h.end}</div>
+              )}
+              {canEdit&&<Toggle checked={!h.is_off} onChange={(on)=>updateDay(i,'is_off',!on)}/>}
+            </div>
+          )
+        })}
+        {saved&&<div style={{fontSize:'12px',color:C.green,marginTop:'10px'}}>✓ Saved</div>}
+        <div style={{display:'flex',gap:'8px',marginTop:'16px'}}>
+          <Btn style={{flex:1}} onClick={onClose}>Close</Btn>
+          {canEdit&&<Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving}>{saving?'Saving…':'Save'}</Btn>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onViewFullRecord }) {
-  const [view,setView]=useState('mine')
+  const [view,setView]=useState(role==='hr'?'dept':'mine')
   const isLead=role==='admin'||role==='dept_head'
+  const canViewDeptSchedule = isLead || role==='hr'
   const isClinicalTodoRole = role==='doctor'||role==='therapist'||role==='allied'
   const isReceptionist = role==='receptionist'
-  const TABS=[{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
+  const TABS=role==='hr'
+    ? [{key:'dept',label:'Dept schedule'}]
+    : [{key:'mine',label:'My schedule'},isLead&&{key:'dept',label:'Dept schedule'},{key:'appts',label:isClinicalTodoRole?"Today's patients":'Appointments'}].filter(Boolean)
   const [myHours,setMyHours]=useState({})
   const [myHoursLoading,setMyHoursLoading]=useState(true)
 
@@ -1838,7 +1939,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
 
   useEffect(() => {
     async function loadDeptSchedule() {
-      if (!isLead) { setDeptScheduleLoading(false); return }
+      if (!canViewDeptSchedule) { setDeptScheduleLoading(false); return }
       setDeptScheduleLoading(true)
       const inDept = department ? STAFF_DIRECTORY.filter(d=>d.department===department) : STAFF_DIRECTORY
       setDeptDoctors(inDept)
@@ -1853,7 +1954,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       setDeptScheduleLoading(false)
     }
     loadDeptSchedule()
-  }, [isLead, department])
+  }, [canViewDeptSchedule, department])
 
   const [showNewApptModal,setShowNewApptModal]=useState(false)
   const myName = ROLES[role]?.label || 'Doctor'
@@ -1895,7 +1996,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
           )
         })}
       </>}
-      {view==='dept'&&isLead&&<>
+      {view==='dept'&&canViewDeptSchedule&&<>
         <SecLabel>{department||'Department'} · full week</SecLabel>
         {deptScheduleLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
         {!deptScheduleLoading&&deptDoctors.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No staff on file for this department yet.</div>}
@@ -1928,18 +2029,14 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
             </div>
           )
         })}
-        {editingDoctor&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditingDoctor(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px',textAlign:'center'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>Edit {editingDoctor}'s hours</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Full editing happens in Working Hours (Institution Admin) for permanent changes, or post a shift for bidding for a temporary one.</div>
-            <Btn style={{width:'100%'}} onClick={()=>setEditingDoctor(null)}>Close</Btn>
-          </div>
-        </div>}
-        <SecLabel>Post announcement</SecLabel>
-        <Card style={{padding:'16px'}}>
-          <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={3} placeholder="Write announcement to your department…"/>
-          <Btn variant="primary" style={{width:'100%'}}>Post to department</Btn>
-        </Card>
+        {editingDoctor&&<DeptHoursEditModal staffName={editingDoctor} viewerRole={role} onClose={()=>setEditingDoctor(null)}/>}
+        {isLead&&<>
+          <SecLabel>Post announcement</SecLabel>
+          <Card style={{padding:'16px'}}>
+            <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={3} placeholder="Write announcement to your department…"/>
+            <Btn variant="primary" style={{width:'100%'}}>Post to department</Btn>
+          </Card>
+        </>}
       </>}
       {view==='appts'&&<>
         {isReceptionist&&<div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',overflowX:'auto'}}>
@@ -2311,7 +2408,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},role!=='hr'&&{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -2327,7 +2424,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
-        {screen==='workinghours'&&role==='admin'&&<WorkingHoursScreen/>}
+        {screen==='workinghours'&&role==='hr'&&<WorkingHoursScreen/>}
         {screen==='shifts'&&(WORKING_ROLES.includes(role)||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
