@@ -48,6 +48,7 @@ const ROLES = {
   therapist:    {label:'Therapist',           color:C.brown,  bg:C.brownLight,  icon:'◌'},
   ems:          {label:'EMS / Emergency',     color:C.red,    bg:C.redLight,    icon:'◈'},
   allied:       {label:'Allied Health',       color:C.textMuted,bg:C.card,      icon:'◫'},
+  hr:           {label:'Human Resources',     color:C.navy,   bg:C.navyLight,   icon:'⬢'},
 }
 
 const ACCESS = {
@@ -61,6 +62,7 @@ const ACCESS = {
   therapist:    {identity:true,vitals:true,musculoskeletal:true,allergies:true,prescribe:false,dispense:false,admission_reason:true},
   ems:          {identity:true,vitals:true,emergency:true,allergies:true,critical_conditions:true,medications:true,prescribe:false,dispense:false,admission_reason:false},
   allied:       {identity:true,specialty_notes:true,allergies:true,prescribe:false,dispense:false,admission_reason:true},
+  hr:           {identity:false,vitals:false,history:false,medications:false,allergies:false,mental:false,imaging:false,labs:false,prescribe:false,dispense:false,admission_reason:false}, // no clinical data grant at all - staffing/scheduling only
 }
 
 // ── CLOCK IN ─────────────────────────────────────────────────────────────────
@@ -515,6 +517,180 @@ function NewPatientRegistration({ onBack }) {
 }
 
 // ── CHECK-IN (receptionist) ─────────────────────────────────────────────────
+// ── SHIFT BIDDING — auto-confirms unless the winner would exceed max hours ──
+// Real max-hours check: legal maximum is fixed in code below (set by law,
+// never institution-configurable); institution_max_hours (set by
+// Institution Admin) must sit at or below that floor and is what's
+// actually enforced here.
+const LEGAL_MAX_HOURS = { doctor: 72, dept_head: 72, nurse: 60, clinic_nurse: 60, therapist: 60, allied: 60 }
+
+async function getStaffWeekHours(staffName, institutionSource, weekStart) {
+  // Regular scheduled hours from doctor_availability for the week, minus
+  // any day they have approved leave, plus hours from any other shifts
+  // they've already won via bidding that same week.
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate()+6)
+
+  const { data: availRows } = await supabase.from('doctor_availability').select('*')
+    .eq('doctor_name', staffName).eq('institution_source', institutionSource)
+  const { data: leaveRows } = await supabase.from('leave_requests').select('*')
+    .eq('staff_name', staffName).eq('institution_source', institutionSource).eq('status','approved')
+    .lte('start_date', weekEnd.toISOString().slice(0,10)).gte('end_date', weekStart.toISOString().slice(0,10))
+  const { data: wonBids } = await supabase.from('shift_bid_entries').select('*, shift_bids(*)')
+    .eq('bidder_name', staffName).eq('status','won')
+
+  let hours = 0
+  for (let i=0; i<7; i++) {
+    const d = new Date(weekStart); d.setDate(d.getDate()+i)
+    const onLeave = (leaveRows||[]).some(l => d >= new Date(l.start_date) && d <= new Date(l.end_date))
+    if (onLeave) continue
+    const row = (availRows||[]).find(r => r.day_of_week === d.getDay())
+    if (row && !row.is_off) {
+      const [sh,sm] = row.start_time.slice(0,5).split(':').map(Number)
+      const [eh,em] = row.end_time.slice(0,5).split(':').map(Number)
+      hours += ((eh*60+em) - (sh*60+sm)) / 60
+    }
+  }
+  ;(wonBids||[]).forEach(b => {
+    const bid = b.shift_bids
+    if (!bid) return
+    const bidDate = new Date(bid.shift_date)
+    if (bidDate >= weekStart && bidDate <= weekEnd) {
+      const [sh,sm] = bid.start_time.slice(0,5).split(':').map(Number)
+      const [eh,em] = bid.end_time.slice(0,5).split(':').map(Number)
+      hours += ((eh*60+em) - (sh*60+sm)) / 60
+    }
+  })
+  return hours
+}
+
+// Processes bids for one shift in the order they came in - first bidder
+// whose projected hours stay within the ceiling wins; anyone over the
+// ceiling is auto-rejected and the next bidder is checked automatically.
+async function processShiftBids(shiftBidId) {
+  const { data: bid } = await supabase.from('shift_bids').select('*').eq('id', shiftBidId).maybeSingle()
+  if (!bid || bid.status !== 'open') return
+
+  const { data: entries } = await supabase.from('shift_bid_entries').select('*')
+    .eq('shift_bid_id', shiftBidId).eq('status','pending').order('bid_at', {ascending:true})
+
+  const [sh,sm] = bid.start_time.slice(0,5).split(':').map(Number)
+  const [eh,em] = bid.end_time.slice(0,5).split(':').map(Number)
+  const shiftHours = ((eh*60+em) - (sh*60+sm)) / 60
+  const weekStart = new Date(bid.shift_date); weekStart.setDate(weekStart.getDate() - weekStart.getDay())
+
+  const { data: ceilingRow } = await supabase.from('role_max_hours').select('*')
+    .eq('institution_source', bid.institution_source).eq('role','doctor').maybeSingle()
+  const ceiling = ceilingRow?.max_hours_per_week || LEGAL_MAX_HOURS.doctor
+
+  for (const entry of (entries||[])) {
+    const currentHours = await getStaffWeekHours(entry.bidder_name, bid.institution_source, weekStart)
+    if (currentHours + shiftHours <= ceiling) {
+      await supabase.from('shift_bid_entries').update({status:'won'}).eq('id', entry.id)
+      await supabase.from('shift_bid_entries').update({status:'lost'}).eq('shift_bid_id', shiftBidId).neq('id', entry.id).eq('status','pending')
+      await supabase.from('shift_bids').update({status:'filled'}).eq('id', shiftBidId)
+      return { winner: entry.bidder_name, rejected: false }
+    } else {
+      await supabase.from('shift_bid_entries').update({status:'rejected_hours'}).eq('id', entry.id)
+    }
+  }
+  return { winner: null, rejected: true }
+}
+
+function ShiftBiddingScreen({ role, doctorName, department }) {
+  const [openShifts,setOpenShifts]=useState([])
+  const [myBids,setMyBids]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showPostModal,setShowPostModal]=useState(false)
+  const [postDate,setPostDate]=useState('')
+  const [postStart,setPostStart]=useState('09:00')
+  const [postEnd,setPostEnd]=useState('17:00')
+  const [postReason,setPostReason]=useState('sick')
+  const [postOnBehalfOf,setPostOnBehalfOf]=useState('')
+  const [posting,setPosting]=useState(false)
+
+  async function loadShifts() {
+    setLoading(true)
+    const { data } = await supabase.from('shift_bids').select('*, shift_bid_entries(*)')
+      .eq('institution_source','practitioner').order('shift_date',{ascending:true})
+    setOpenShifts(data||[])
+    if (doctorName) setMyBids((data||[]).filter(s=>(s.shift_bid_entries||[]).some(e=>e.bidder_name===doctorName)))
+    setLoading(false)
+  }
+
+  useEffect(() => { loadShifts() }, [])
+
+  async function handlePostShift() {
+    const staffName = role==='dept_head' ? postOnBehalfOf : doctorName
+    if (!postDate || !staffName) return
+    setPosting(true)
+    await supabase.from('shift_bids').insert({
+      institution_source:'practitioner', department: department||'General', staff_name: staffName,
+      shift_date: postDate, start_time: postStart, end_time: postEnd, reason: postReason,
+      opened_by: role==='dept_head' ? 'Department Head' : staffName, opened_on_behalf: role==='dept_head', status:'open',
+    })
+    setPosting(false)
+    setShowPostModal(false)
+    setPostOnBehalfOf('')
+    loadShifts()
+  }
+
+  async function handleBid(shiftBidId) {
+    await supabase.from('shift_bid_entries').insert({ shift_bid_id: shiftBidId, bidder_name: doctorName, status:'pending' })
+    await processShiftBids(shiftBidId)
+    loadShifts()
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      {role==='doctor'&&<>
+        <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+          <Btn variant="danger" style={{flex:1}} onClick={()=>{setPostDate(new Date().toISOString().slice(0,10));setPostReason('sick');setShowPostModal(true)}}>Report sick today</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={()=>{setPostDate('');setPostReason('planned');setShowPostModal(true)}}>Post shift for bidding</Btn>
+        </div>
+        <div style={{background:C.redLight,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.red,lineHeight:1.5}}>
+          ◇ Same-day sick? Call your Department Head directly - they can open bidding on your behalf while you rest.
+        </div>
+      </>}
+      {role==='dept_head'&&<div style={{marginBottom:'16px'}}>
+        <Btn variant="danger" style={{width:'100%'}} onClick={()=>{setPostDate(new Date().toISOString().slice(0,10));setPostReason('sick');setShowPostModal(true)}}>Open bidding on a staff member's behalf</Btn>
+      </div>}
+
+      <SecLabel>Open shifts</SecLabel>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&openShifts.filter(s=>s.status==='open').length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No open shifts right now.</div>}
+      {openShifts.filter(s=>s.status==='open').map(s=>{
+        const alreadyBid = (s.shift_bid_entries||[]).some(e=>e.bidder_name===doctorName)
+        return (
+          <Card key={s.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+              <span style={{fontSize:'13px',fontWeight:600}}>{new Date(s.shift_date).toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · {s.start_time.slice(0,5)}-{s.end_time.slice(0,5)}</span>
+              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:C.amberLight,color:C.amber}}>Open</span>
+            </div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{s.department} · covering {s.staff_name} ({s.reason==='sick'?'sick day':'planned'}){s.opened_on_behalf?' · opened by Dept Head':''}</div>
+            {role==='doctor'&&s.staff_name!==doctorName&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleBid(s.id)} disabled={alreadyBid}>{alreadyBid?'Bid placed':'Bid for this shift'}</Btn>}
+          </Card>
+        )
+      })}
+
+      {showPostModal&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowPostModal(false)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>{postReason==='sick'?'Report sick today':'Post shift for bidding'}</div>
+          {role==='dept_head'&&<input value={postOnBehalfOf} onChange={e=>setPostOnBehalfOf(e.target.value)} placeholder="Staff member's name" style={{width:'100%',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          <input type="date" value={postDate} onChange={e=>setPostDate(e.target.value)} style={{width:'100%',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+            <input type="time" value={postStart} onChange={e=>setPostStart(e.target.value)} style={{flex:1}}/>
+            <input type="time" value={postEnd} onChange={e=>setPostEnd(e.target.value)} style={{flex:1}}/>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setShowPostModal(false)}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handlePostShift} disabled={posting||!postDate}>{posting?'Posting…':'Confirm'}</Btn>
+          </div>
+        </div>
+      </div>}
+    </div>
+  )
+}
+
 function CheckInScreen() {
   const [mode,setMode]=useState('scan') // 'scan' | 'search'
   const [scanChoices,setScanChoices]=useState([])
@@ -2062,7 +2238,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(role==='doctor'||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -2079,6 +2255,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='admin'&&<WorkingHoursScreen/>}
+        {screen==='shifts'&&(role==='doctor'||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
