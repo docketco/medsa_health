@@ -37,6 +37,20 @@ const DOCTOR_DIRECTORY = [
 ]
 const DOCTOR_NAMES = DOCTOR_DIRECTORY.map(d=>d.name) // kept for the clock-in screen, which doesn't need department filtering
 
+// Full staff directory covering every working role, not just doctors -
+// this is what makes shift bidding, working hours, and the department
+// schedule view actually apply to everyone, not just doctors, since
+// every named entry here can have its own availability row.
+const STAFF_DIRECTORY = [
+  ...DOCTOR_DIRECTORY.map(d=>({...d, role:'doctor'})),
+  {name:'Nurse Yip Mei', department:'Internal Medicine', role:'nurse'},
+  {name:'Nurse Wong Chi', department:'Cardiology', role:'nurse'},
+  {name:'Receptionist Lam Siu-wan', department:'Internal Medicine', role:'receptionist'},
+  {name:'Therapist Chow Hoi-yan', department:'Internal Medicine', role:'therapist'},
+  {name:'Allied Health Ng Ka-po', department:'Cardiology', role:'allied'},
+]
+const WORKING_ROLES = ['doctor','nurse','clinic_nurse','receptionist','therapist','allied']
+
 const ROLES = {
   admin:        {label:'Institution Admin',   color:C.purple, bg:C.purpleLight, icon:'⬡'},
   dept_head:    {label:'Department Head',     color:C.green,  bg:C.greenLight,  icon:'◈'},
@@ -72,7 +86,7 @@ function ClockInScreen({ onLogin }) {
   const [sel,setSel]=useState(null)
   const [dept,setDept]=useState(null)
   const [doctorName,setDoctorName]=useState(null)
-  const needsDoctorName = sel==='doctor'
+  const needsDoctorName = WORKING_ROLES.includes(sel)
 
   function handleContinue() {
     onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null })
@@ -115,11 +129,12 @@ function ClockInScreen({ onLogin }) {
           </>}
 
           {needsDoctorName&&dept&&<>
-            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Which doctor are you?</div>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.8px',marginBottom:'10px'}}>Which {ROLES[sel].label.toLowerCase()} are you?</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
-              {DOCTOR_NAMES.map(name=>(
-                <div key={name} onClick={()=>setDoctorName(name)} style={{padding:'11px 16px',borderRadius:'10px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:doctorName===name?C.blueLight:C.cream,color:doctorName===name?C.blue:C.text,border:`0.5px solid ${doctorName===name?C.blue:C.border}`}}>{name}</div>
+              {STAFF_DIRECTORY.filter(s=>s.role===sel&&s.department===dept).map(s=>(
+                <div key={s.name} onClick={()=>setDoctorName(s.name)} style={{padding:'11px 16px',borderRadius:'10px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:doctorName===s.name?C.blueLight:C.cream,color:doctorName===s.name?C.blue:C.text,border:`0.5px solid ${doctorName===s.name?C.blue:C.border}`}}>{s.name}</div>
               ))}
+              {STAFF_DIRECTORY.filter(s=>s.role===sel&&s.department===dept).length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'8px 0'}}>No one on file for this role in this department yet.</div>}
             </div>
           </>}
 
@@ -578,11 +593,11 @@ async function processShiftBids(shiftBidId) {
   const shiftHours = ((eh*60+em) - (sh*60+sm)) / 60
   const weekStart = new Date(bid.shift_date); weekStart.setDate(weekStart.getDate() - weekStart.getDay())
 
-  const { data: ceilingRow } = await supabase.from('role_max_hours').select('*')
-    .eq('institution_source', bid.institution_source).eq('role','doctor').maybeSingle()
-  const ceiling = ceilingRow?.max_hours_per_week || LEGAL_MAX_HOURS.doctor
-
   for (const entry of (entries||[])) {
+    const bidderRole = STAFF_DIRECTORY.find(s=>s.name===entry.bidder_name)?.role || 'doctor'
+    const { data: ceilingRow } = await supabase.from('role_max_hours').select('*')
+      .eq('institution_source', bid.institution_source).eq('role', bidderRole).maybeSingle()
+    const ceiling = ceilingRow?.max_hours_per_week || LEGAL_MAX_HOURS[bidderRole] || 60
     const currentHours = await getStaffWeekHours(entry.bidder_name, bid.institution_source, weekStart)
     if (currentHours + shiftHours <= ceiling) {
       await supabase.from('shift_bid_entries').update({status:'won'}).eq('id', entry.id)
@@ -643,7 +658,7 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
 
   return (
     <div style={{background:C.beige,flex:1,padding:'16px'}}>
-      {role==='doctor'&&<>
+      {WORKING_ROLES.includes(role)&&<>
         <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
           <Btn variant="danger" style={{flex:1}} onClick={()=>{setPostDate(new Date().toISOString().slice(0,10));setPostReason('sick');setShowPostModal(true)}}>Report sick today</Btn>
           <Btn variant="primary" style={{flex:1}} onClick={()=>{setPostDate('');setPostReason('planned');setShowPostModal(true)}}>Post shift for bidding</Btn>
@@ -668,7 +683,7 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
               <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:C.amberLight,color:C.amber}}>Open</span>
             </div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{s.department} · covering {s.staff_name} ({s.reason==='sick'?'sick day':'planned'}){s.opened_on_behalf?' · opened by Dept Head':''}</div>
-            {role==='doctor'&&s.staff_name!==doctorName&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleBid(s.id)} disabled={alreadyBid}>{alreadyBid?'Bid placed':'Bid for this shift'}</Btn>}
+            {WORKING_ROLES.includes(role)&&s.staff_name!==doctorName&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleBid(s.id)} disabled={alreadyBid}>{alreadyBid?'Bid placed':'Bid for this shift'}</Btn>}
           </Card>
         )
       })}
@@ -1591,7 +1606,7 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
 
 function WorkingHoursScreen() {
-  const [selectedDoctor,setSelectedDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
+  const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
   const [loading,setLoading]=useState(true)
   const [saving,setSaving]=useState(false)
@@ -1637,7 +1652,7 @@ function WorkingHoursScreen() {
       <div style={{fontSize:'12px',color:C.textSub,textAlign:'center',marginBottom:'16px'}}>Sets each doctor's availability - syncs to their schedule and patient booking</div>
 
       <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
-        {DOCTOR_DIRECTORY.map(d=>(
+        {STAFF_DIRECTORY.map(d=>(
           <div key={d.name} onClick={()=>setSelectedDoctor(d.name)} style={{padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDoctor===d.name?C.green:C.card,color:selectedDoctor===d.name?'#fff':C.textSub}}>{d.name}</div>
         ))}
       </div>
@@ -1825,7 +1840,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
     async function loadDeptSchedule() {
       if (!isLead) { setDeptScheduleLoading(false); return }
       setDeptScheduleLoading(true)
-      const inDept = department ? DOCTOR_DIRECTORY.filter(d=>d.department===department) : DOCTOR_DIRECTORY
+      const inDept = department ? STAFF_DIRECTORY.filter(d=>d.department===department) : STAFF_DIRECTORY
       setDeptDoctors(inDept)
       const { data } = await supabase.from('doctor_availability').select('*')
         .eq('institution_source','practitioner').in('doctor_name', inDept.map(d=>d.name))
@@ -1879,38 +1894,40 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
             </Card>
           )
         })}
-        <div style={{padding:'0 16px 16px'}}><Btn style={{width:'100%'}}>Request shift change</Btn></div>
       </>}
       {view==='dept'&&isLead&&<>
         <SecLabel>{department||'Department'} · full week</SecLabel>
         {deptScheduleLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
-        {!deptScheduleLoading&&deptDoctors.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No doctors on file for this department yet.</div>}
-        {!deptScheduleLoading&&deptDoctors.length>0&&<>
-          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',margin:'0 16px 8px'}}>Doctors</div>
-          {deptDoctors.map(doc=>(
-            <Card key={doc.name} onClick={()=>setEditingDoctor(doc.name)} style={{padding:'14px 16px',cursor:'pointer'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
-                <span style={{fontSize:'13px',fontWeight:600}}>{doc.name}</span>
-                <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'3px'}}>
-                {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i)=>{
-                  const row = (deptHours[doc.name]||{})[i===6?0:i+1]
-                  const isOff = !row||row.is_off
-                  return (
-                    <div key={d} style={{textAlign:'center'}}>
-                      <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'2px'}}>{d}</div>
-                      <div style={{fontSize:'9px',padding:'3px 1px',borderRadius:'4px',background:isOff?C.card:C.greenLight,color:isOff?C.textMuted:C.green}}>{isOff?'off':`${row.start_time?.slice(0,5)}`}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </Card>
-          ))}
-        </>}
-        <div style={{margin:'12px 16px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
-          ◇ Nurses and reception don't yet have individually tracked hours - this view currently covers doctors, since that's what's connected to real scheduling data.
-        </div>
+        {!deptScheduleLoading&&deptDoctors.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No staff on file for this department yet.</div>}
+        {!deptScheduleLoading&&Object.entries(ROLES).map(([roleKey,roleInfo])=>{
+          const inRole = deptDoctors.filter(d=>d.role===roleKey)
+          if (inRole.length===0) return null
+          return (
+            <div key={roleKey}>
+              <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',margin:'12px 16px 8px'}}>{roleInfo.label}</div>
+              {inRole.map(doc=>(
+                <Card key={doc.name} onClick={()=>setEditingDoctor(doc.name)} style={{padding:'14px 16px',cursor:'pointer'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+                    <span style={{fontSize:'13px',fontWeight:600}}>{doc.name}</span>
+                    <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:'3px'}}>
+                    {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i)=>{
+                      const row = (deptHours[doc.name]||{})[i===6?0:i+1]
+                      const isOff = !row||row.is_off
+                      return (
+                        <div key={d} style={{textAlign:'center'}}>
+                          <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'2px'}}>{d}</div>
+                          <div style={{fontSize:'9px',padding:'3px 1px',borderRadius:'4px',background:isOff?C.card:C.greenLight,color:isOff?C.textMuted:C.green}}>{isOff?'off':`${row.start_time?.slice(0,5)}`}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
+        })}
         {editingDoctor&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditingDoctor(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px',textAlign:'center'}}>
             <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>Edit {editingDoctor}'s hours</div>
@@ -2294,7 +2311,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},role!=='hr'&&{key:'schedule',icon:'▣',label:'Schedule'},(role==='doctor'||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},role!=='hr'&&{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='admin'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -2311,7 +2328,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='admin'&&<WorkingHoursScreen/>}
-        {screen==='shifts'&&(role==='doctor'||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
+        {screen==='shifts'&&(WORKING_ROLES.includes(role)||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
