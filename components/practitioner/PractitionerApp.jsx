@@ -1632,6 +1632,171 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
 // institution_source so the two institutions' hours never mix.
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
 
+// ── TASK BOARD — HR/Admin hub, five distinct categories ─────────────────────
+function TaskBoardScreen({ role, staffMedsaId }) {
+  const [tab,setTab]=useState('onboarding')
+  const [loading,setLoading]=useState(true)
+  const [onboarding,setOnboarding]=useState([])
+  const [updates,setUpdates]=useState([])
+  const [expiring,setExpiring]=useState([])
+  const [leaves,setLeaves]=useState([])
+  const [permChanges,setPermChanges]=useState([])
+
+  async function loadAll() {
+    setLoading(true)
+    const inst = 'practitioner'
+    const [ob, exp, lv, pc] = await Promise.all([
+      supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','pending_onboarding'),
+      supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','active').not('registration_expiry','is',null).lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10)),
+      supabase.from('leave_requests').select('*').eq('institution_source',inst).eq('status','pending'),
+      supabase.from('permanent_change_requests').select('*').eq('institution_source',inst).in('status',['pending','hr_confirmed']),
+    ])
+    setOnboarding(ob.data||[])
+    setExpiring((exp.data||[]).map(r=>{
+      const days = Math.ceil((new Date(r.registration_expiry) - new Date())/(1000*60*60*24))
+      return {...r, monthsLeft: Math.max(1,Math.round(days/30))}
+    }))
+    setLeaves(lv.data||[])
+    setPermChanges(pc.data||[])
+    // Staff-submitted updates: verification_status flipped back to 'pending' on an
+    // otherwise-active record signals a self-submitted credential update awaiting review
+    const { data: upd } = await supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','active').eq('verification_status','pending')
+    setUpdates(upd||[])
+    setLoading(false)
+  }
+
+  useEffect(() => { loadAll() }, [])
+
+  async function handleConfirmOnboarding(row) {
+    if (role!=='admin') return // only Admin confirms new hires
+    await supabase.from('staff_credentials').update({ status:'active', verification_status:'verified', confirmed_by: staffMedsaId, last_verified_at:new Date().toISOString() }).eq('id', row.id)
+    loadAll()
+  }
+
+  async function handleConfirmUpdate(row) {
+    await supabase.from('staff_credentials').update({ verification_status:'verified', last_verified_at:new Date().toISOString() }).eq('id', row.id)
+    loadAll()
+  }
+
+  async function handleLeaveDecision(row, approve) {
+    // Short/annual leave: Department Head's call, not shown here at all -
+    // this board only ever sees leave that's already routed to HR (long/
+    // protected leave, dual-acknowledged with Admin).
+    const updates = approve
+      ? (role==='hr' ? {status:'awaiting_admin', hr_confirmed_by:staffMedsaId} : {status:'approved', admin_confirmed_by:staffMedsaId})
+      : {status:'denied'}
+    await supabase.from('leave_requests').update(updates).eq('id', row.id)
+    loadAll()
+  }
+
+  async function handlePermChangeDecision(row, approve) {
+    if (!approve) { await supabase.from('permanent_change_requests').update({status:'denied'}).eq('id', row.id); loadAll(); return }
+    if (role==='hr' && row.status==='pending') {
+      await supabase.from('permanent_change_requests').update({status:'hr_confirmed', hr_confirmed_by:staffMedsaId, hr_confirmed_at:new Date().toISOString()}).eq('id', row.id)
+    } else if (role==='admin' && row.status==='hr_confirmed') {
+      await supabase.from('permanent_change_requests').update({status:'fully_confirmed', admin_confirmed_by:staffMedsaId, admin_confirmed_at:new Date().toISOString()}).eq('id', row.id)
+      // Apply the actual change now that both parties have signed off
+      const staffUpdate = {}
+      if (row.requested_employment_type) staffUpdate.employment_type = row.requested_employment_type
+      if (row.requested_schedule_type) staffUpdate.schedule_type = row.requested_schedule_type
+      if (Object.keys(staffUpdate).length) await supabase.from('staff_credentials').update(staffUpdate).eq('medsa_id', row.medsa_id)
+    }
+    loadAll()
+  }
+
+  const TABS = [
+    {key:'onboarding', label:'Onboarding', count:onboarding.length},
+    {key:'updates', label:'Updates', count:updates.length},
+    {key:'expiring', label:'Expiring', count:expiring.length},
+    {key:'leaves', label:'Leave', count:leaves.length},
+    {key:'permchanges', label:'Permanent changes', count:permChanges.length},
+  ]
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{display:'flex',gap:'6px',overflowX:'auto',marginBottom:'16px'}}>
+        {TABS.map(t=>(
+          <div key={t.key} onClick={()=>setTab(t.key)} style={{flexShrink:0,padding:'8px 12px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:tab===t.key?C.green:C.card,color:tab===t.key?'#fff':C.textSub,display:'flex',alignItems:'center',gap:'6px'}}>
+            {t.label}
+            {t.count>0&&<span style={{fontSize:'10px',background:tab===t.key?'rgba(255,255,255,0.3)':C.redLight,color:tab===t.key?'#fff':C.red,padding:'1px 6px',borderRadius:'10px',fontWeight:700}}>{t.count}</span>}
+          </div>
+        ))}
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+
+      {!loading&&tab==='onboarding'&&<>
+        {onboarding.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No pending onboarding.</div>}
+        {onboarding.map(row=>(
+          <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{row.full_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{ROLES[row.role]?.label||row.role} · {row.department||'—'} · submitted by {row.onboarded_by||'HR'}</div>
+            {role==='admin'
+              ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleConfirmOnboarding(row)}>Confirm hire</Btn>
+              : <div style={{fontSize:'11px',color:C.textMuted}}>Awaiting Admin confirmation</div>}
+          </Card>
+        ))}
+      </>}
+
+      {!loading&&tab==='updates'&&<>
+        {updates.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No pending credential updates.</div>}
+        {updates.map(row=>(
+          <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{row.full_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Submitted updated credential information for review</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleConfirmUpdate(row)}>Confirm update</Btn>
+          </Card>
+        ))}
+      </>}
+
+      {!loading&&tab==='expiring'&&<>
+        {expiring.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Nothing expiring within 4 months.</div>}
+        {expiring.map(row=>(
+          <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{row.full_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{ROLES[row.role]?.label||row.role} · {row.registration_number||'—'}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:row.monthsLeft<=1?C.redLight:C.amberLight,color:row.monthsLeft<=1?C.red:C.amber,fontWeight:600}}>{row.monthsLeft}mo left</span>
+          </Card>
+        ))}
+      </>}
+
+      {!loading&&tab==='leaves'&&<>
+        {leaves.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No leave requests routed to HR/Admin.</div>}
+        {leaves.map(row=>(
+          <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{row.staff_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{row.leave_type} · {row.start_date} to {row.end_date}{!row.is_discretionary?' · protected leave — acknowledgment, not permission':''}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>handleLeaveDecision(row,false)}>Deny</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>handleLeaveDecision(row,true)}>{role==='hr'?'Acknowledge':'Confirm'}</Btn>
+            </div>
+          </Card>
+        ))}
+      </>}
+
+      {!loading&&tab==='permchanges'&&<>
+        {permChanges.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No permanent change requests.</div>}
+        {permChanges.map(row=>(
+          <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{row.medsa_id}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{row.category.replace(/_/g,' ')} · initiated by {row.initiated_by}</div>
+            {row.requested_employment_type&&<div style={{fontSize:'11px',color:C.textMuted}}>New employment type: {row.requested_employment_type}</div>}
+            {row.requested_schedule_type&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>New schedule type: {row.requested_schedule_type}</div>}
+            <div style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:C.card,color:C.textSub,display:'inline-block',marginBottom:'10px'}}>{row.status==='pending'?'Awaiting HR':'HR confirmed — awaiting Admin'}</div>
+            {((role==='hr'&&row.status==='pending')||(role==='admin'&&row.status==='hr_confirmed'))&&
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1}} onClick={()=>handlePermChangeDecision(row,false)}>Deny</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={()=>handlePermChangeDecision(row,true)}>Confirm</Btn>
+              </div>}
+          </Card>
+        ))}
+      </>}
+    </div>
+  )
+}
+
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
@@ -2406,9 +2571,9 @@ export default function PractitionerApp({ liveData={} }) {
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
   const [jumpToRecord,setJumpToRecord]=useState(false)
-  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':'id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -2425,6 +2590,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='hr'&&<WorkingHoursScreen/>}
+        {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName}/>}
         {screen==='shifts'&&(WORKING_ROLES.includes(role)||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
