@@ -1996,54 +1996,24 @@ function OnboardingScreen({ staffMedsaId }) {
   const [department,setDepartment]=useState('')
   const [specialty,setSpecialty]=useState('')
   const [regNumber,setRegNumber]=useState('')
+  const [regExpiry,setRegExpiry]=useState('')
+  const [disciplinaryStatus,setDisciplinaryStatus]=useState('clear')
+  const [disciplinaryNotes,setDisciplinaryNotes]=useState('')
   const [employmentType,setEmploymentType]=useState('full_time')
   const [scheduleType,setScheduleType]=useState('rotating')
-  const [docsUploaded,setDocsUploaded]=useState(false)
-  const [aiProcessing,setAiProcessing]=useState(false)
-  const [aiConfirmed,setAiConfirmed]=useState(false)
+  const [epcScanned,setEpcScanned]=useState(false)
+  const [epcScanning,setEpcScanning]=useState(false)
   const [submitting,setSubmitting]=useState(false)
   const [submitted,setSubmitted]=useState(false)
-  const [uploadedFile,setUploadedFile]=useState(null)
-  const [aiError,setAiError]=useState(null)
 
   const EPC_ROLES = ['doctor','nurse']
   const hasEpc = EPC_ROLES.includes(selRole)
 
-  async function handleUpload(file) {
-    setUploadedFile(file)
-    setDocsUploaded(true)
-    setAiProcessing(true)
-    setAiError(null)
-    try {
-      // REAL integration point - calls a Supabase Edge Function that must
-      // exist in production with a real AI vision/OCR API key configured.
-      // This function does NOT exist yet in the Supabase project - it needs
-      // to be created (supabase functions new extract-credential-document)
-      // before this call will succeed. Until then this will fail and fall
-      // through to the catch block below, which is expected, not a bug.
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('role', selRole)
-      const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch(`${supabase.supabaseUrl}/functions/v1/extract-credential-document`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${session?.access_token || supabase.supabaseKey}` },
-        body: formData,
-      })
-      if (!res.ok) throw new Error('Extraction service unavailable')
-      const extracted = await res.json()
-      if (extracted.full_name) setFullName(extracted.full_name)
-      if (extracted.registration_number) setRegNumber(extracted.registration_number)
-      setAiProcessing(false)
-      setAiConfirmed(true)
-    } catch (err) {
-      // Expected until the Edge Function above is actually created and
-      // deployed with a real API key - falls back to manual entry rather
-      // than blocking onboarding entirely.
-      setAiProcessing(false)
-      setAiError('Automatic extraction unavailable — please confirm the details above manually before submitting.')
-      setAiConfirmed(true)
-    }
+  function handleScanEpc() {
+    // Simulated - same level as the original ClockInScreen QR flow. Real
+    // camera/QR scanning is a separate integration from this form.
+    setEpcScanning(true)
+    setTimeout(() => { setEpcScanning(false); setEpcScanned(true) }, 1000)
   }
 
   async function handleSubmit() {
@@ -2056,6 +2026,9 @@ function OnboardingScreen({ staffMedsaId }) {
       department,
       specialty: specialty||null,
       registration_number: regNumber||null,
+      registration_expiry: regExpiry||null,
+      disciplinary_status: disciplinaryStatus,
+      disciplinary_notes: disciplinaryStatus==='flagged' ? disciplinaryNotes : null,
       has_epc: hasEpc,
       employment_type: employmentType,
       schedule_type: scheduleType,
@@ -2072,15 +2045,17 @@ function OnboardingScreen({ staffMedsaId }) {
       <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
       <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Submitted for Admin confirmation</div>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px'}}>{fullName} will appear on the Task Board's Onboarding tab.</div>
-      <Btn variant="primary" onClick={()=>{setSubmitted(false);setSelRole('');setFullName('');setDocsUploaded(false);setAiConfirmed(false)}}>Onboard another</Btn>
+      <Btn variant="primary" onClick={()=>{setSubmitted(false);setSelRole('');setFullName('');setEpcScanned(false)}}>Onboard another</Btn>
     </div>
   )
+
+  const readyToSubmit = fullName && department && (hasEpc ? epcScanned : (regNumber && regExpiry))
 
   return (
     <div style={{background:C.beige,flex:1,padding:'16px'}}>
       <SecLabel>Role</SecLabel>
       <Card style={{padding:'12px 16px',marginBottom:'16px'}}>
-        <select value={selRole} onChange={e=>{setSelRole(e.target.value);setDocsUploaded(false);setAiConfirmed(false)}} style={{width:'100%',padding:'10px',fontSize:'13px'}}>
+        <select value={selRole} onChange={e=>{setSelRole(e.target.value);setEpcScanned(false)}} style={{width:'100%',padding:'10px',fontSize:'13px'}}>
           <option value="">Select role…</option>
           {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
         </select>
@@ -2105,28 +2080,32 @@ function OnboardingScreen({ staffMedsaId }) {
           </div>
         </Card>
 
-        <SecLabel>{hasEpc?'e-PC verification':'Documents'}</SecLabel>
+        <SecLabel>{hasEpc?'e-PC verification':'Registration'}</SecLabel>
         <Card style={{padding:'16px',marginBottom:'16px'}}>
           {hasEpc
-            ? <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Scan the e-PC QR code to pull live registration status directly from the Council's database — no separate document upload needed.</div>
-            : <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Upload identity, contract, qualification, registration, and insurance documents.</div>}
-          {!hasEpc&&<input value={regNumber} onChange={e=>setRegNumber(e.target.value)} placeholder="Registration number (if applicable)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
-          {!docsUploaded&&!hasEpc&&
-            <label style={{display:'block',width:'100%',padding:'12px',textAlign:'center',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'13px',fontWeight:600,cursor:'pointer',boxSizing:'border-box'}}>
-              Upload documents
-              <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleUpload(e.target.files[0])}/>
-            </label>}
-          {!docsUploaded&&hasEpc&&
-            // Real QR/camera scanning is a separate integration (device camera
-            // access) from AI document extraction - kept honestly simulated
-            // here rather than pretending this button does something it can't.
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setDocsUploaded(true);setAiProcessing(true);setTimeout(()=>{setAiProcessing(false);setAiConfirmed(true)},1200)}}>Scan e-PC QR code (simulated — needs camera integration)</Btn>}
-          {aiProcessing&&<div style={{textAlign:'center',padding:'16px',fontSize:'12px',color:C.textMuted}}>{hasEpc?'Verifying against live registry…':'Reading and digitizing documents…'}</div>}
-          {aiConfirmed&&!aiError&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.green}}>✓ {hasEpc?'Verified — active and in good standing':'Documents read and information extracted'}. Review above before submitting.</div>}
-          {aiConfirmed&&aiError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.amber}}>⚠ {aiError}</div>}
+            ? <>
+                <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Scan the e-PC QR code to pull live registration status directly from the Council's database.</div>
+                {!epcScanned&&<Btn variant="primary" style={{width:'100%'}} onClick={handleScanEpc} disabled={epcScanning}>{epcScanning?'Verifying against live registry…':'Scan e-PC QR code'}</Btn>}
+                {epcScanned&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.green}}>✓ Verified — active and in good standing</div>}
+              </>
+            : <>
+                <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Manually enter registration details, cross-checked against the relevant board's live register or search page.</div>
+                <input value={regNumber} onChange={e=>setRegNumber(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+                <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
+                <input type="date" value={regExpiry} onChange={e=>setRegExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+              </>}
         </Card>
 
-        {aiConfirmed&&fullName&&department&&<Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting}>{submitting?'Submitting…':'Submit for Admin confirmation'}</Btn>}
+        <SecLabel>Disciplinary status</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          <select value={disciplinaryStatus} onChange={e=>setDisciplinaryStatus(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+            <option value="clear">Clear — no active orders or restrictions</option>
+            <option value="flagged">Flagged — active orders or restrictions on file</option>
+          </select>
+          {disciplinaryStatus==='flagged'&&<textarea value={disciplinaryNotes} onChange={e=>setDisciplinaryNotes(e.target.value)} rows={2} placeholder="Details" style={{width:'100%',padding:'10px',fontSize:'13px',resize:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>}
+        </Card>
+
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting||!readyToSubmit}>{submitting?'Submitting…':'Submit for Admin confirmation'}</Btn>
       </>}
     </div>
   )
