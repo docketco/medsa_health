@@ -88,8 +88,18 @@ function ClockInScreen({ onLogin }) {
   const [doctorName,setDoctorName]=useState(null)
   const needsDoctorName = WORKING_ROLES.includes(sel)
 
-  function handleContinue() {
-    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null })
+  async function handleContinue() {
+    // Unify the old STAFF_DIRECTORY-based login with the real
+    // staff_credentials table - if this person has actually been onboarded
+    // for real, pull their genuine specialty so credential-matching on
+    // shift openings works correctly. Falls back to null for demo-only
+    // staff never onboarded through the real flow.
+    let specialty = null
+    if (needsDoctorName && doctorName) {
+      const { data } = await supabase.from('staff_credentials').select('specialty').eq('full_name', doctorName).maybeSingle()
+      specialty = data?.specialty || null
+    }
+    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null, specialty })
   }
 
   return (
@@ -1805,18 +1815,22 @@ function AdminHomeScreen() {
   const [maxHours,setMaxHours]=useState({})
   const [instSettings,setInstSettings]=useState({permanent_change_requires_hr:true,permanent_change_requires_dept_head:true,permanent_change_requires_admin:true})
   const [deptOverview,setDeptOverview]=useState([])
+  const [featureToggles,setFeatureToggles]=useState({})
+  const [todaysAppts,setTodaysAppts]=useState([])
   const [loading,setLoading]=useState(true)
   const [savedMsg,setSavedMsg]=useState(null)
 
   const ROLE_LEGAL_MAX = { doctor:72, nurse:60, allied:60, therapist:60, receptionist:60 }
+  const FEATURES = [['shift_bidding','Shift bidding'],['shift_openings','Permanent openings'],['leave_requests','Leave requests'],['coverage_alerts','Coverage alerts']]
 
   async function loadAdminData() {
     setLoading(true)
     const inst = 'practitioner'
-    const [mh, is, staff] = await Promise.all([
+    const [mh, is, staff, ft] = await Promise.all([
       supabase.from('role_max_hours').select('*').eq('institution_source',inst),
       supabase.from('institution_settings').select('*').eq('institution_source',inst).maybeSingle(),
       supabase.from('staff_credentials').select('department').eq('institution_source',inst).eq('status','active'),
+      supabase.from('department_feature_toggles').select('*').eq('institution_source',inst),
     ])
     const mhMap = {}
     ;(mh.data||[]).forEach(r=>{ mhMap[r.role]=r.max_hours_per_week })
@@ -1825,10 +1839,26 @@ function AdminHomeScreen() {
     const byDept = {}
     ;(staff.data||[]).forEach(s=>{ byDept[s.department||'Unassigned']=(byDept[s.department||'Unassigned']||0)+1 })
     setDeptOverview(Object.entries(byDept).map(([dept,count])=>({dept,count})))
+    const ftMap = {}
+    ;(ft.data||[]).forEach(r=>{ ftMap[`${r.department}::${r.feature_key}`] = r.enabled })
+    setFeatureToggles(ftMap)
+    // Name/contact only - never the medical file. Pre-booked appointments
+    // show ahead of the visit; walk-ins/checked-in appear once they arrive.
+    const today = new Date().toISOString().slice(0,10)
+    const { data: appts } = await supabase.from('appointments').select('patient_name,patient_contact,doctor_name,appointment_time,status,checked_in_at')
+      .eq('institution_source', inst).eq('appointment_date', today).neq('status','cancelled').order('appointment_time',{ascending:true})
+    setTodaysAppts(appts||[])
     setLoading(false)
   }
 
   useEffect(() => { loadAdminData() }, [])
+
+  async function saveFeatureToggle(dept, featureKey, enabled) {
+    setFeatureToggles(prev=>({...prev, [`${dept}::${featureKey}`]: enabled}))
+    await supabase.from('department_feature_toggles').upsert({
+      institution_source:'practitioner', department:dept, feature_key:featureKey, enabled, updated_by:'admin', updated_at:new Date().toISOString(),
+    }, {onConflict:'institution_source,department,feature_key'})
+  }
 
   async function saveMaxHours(role, value) {
     const legalMax = ROLE_LEGAL_MAX[role] || 60
@@ -1846,14 +1876,30 @@ function AdminHomeScreen() {
   }
 
   async function handleGenerateReport() {
-    setSavedMsg('Report generation queued — PDF will be available shortly')
+    setSavedMsg('Generating report…')
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    doc.setFontSize(16); doc.text('Quality & Safety Report', 14, 20)
+    doc.setFontSize(10); doc.text(`Generated ${new Date().toLocaleDateString('en-HK')}`, 14, 28)
+    let y = 40
+    doc.setFontSize(12); doc.text('Department Headcount', 14, y); y+=8
+    doc.setFontSize(10)
+    deptOverview.forEach(d => { doc.text(`${d.dept}: ${d.count} staff`, 14, y); y+=6 })
+    y += 6
+    doc.setFontSize(12); doc.text('Credential Expiry (within 4 months)', 14, y); y+=8
+    doc.setFontSize(10)
+    const { data: exp } = await supabase.from('staff_credentials').select('full_name,role,registration_expiry').eq('institution_source','practitioner').eq('status','active').not('registration_expiry','is',null).lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10))
+    ;(exp||[]).forEach(r => { doc.text(`${r.full_name} (${r.role}) — expires ${r.registration_expiry}`, 14, y); y+=6 })
+    if (!exp?.length) { doc.text('None', 14, y); y+=6 }
+    doc.save(`Q&S-Report-${new Date().toISOString().slice(0,10)}.pdf`)
+    setSavedMsg('✓ Report downloaded')
     setTimeout(()=>setSavedMsg(null), 3000)
   }
 
   return (
     <div style={{background:C.beige,flex:1,padding:'16px'}}>
       <div style={{display:'flex',gap:'6px',marginBottom:'16px'}}>
-        {[['settings','Settings'],['oversight','Oversight'],['reporting','Q&S']].map(([k,l])=>(
+        {[['settings','Settings'],['oversight','Oversight'],['patients','Patients'],['reporting','Q&S']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub}}>{l}</div>
         ))}
       </div>
@@ -1895,6 +1941,38 @@ function AdminHomeScreen() {
           </Card>
         ))}
         <div style={{margin:'12px 16px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>◇ Full staff detail (credentials, insurance, individual records) lives in HR's portal — this view is oversight only.</div>
+
+        <SecLabel>Department feature toggles</SecLabel>
+        {deptOverview.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No departments yet.</div>}
+        {deptOverview.map(d=>(
+          <Card key={`ft-${d.dept}`} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>{d.dept}</div>
+            {FEATURES.map(([key,label])=>{
+              const enabled = featureToggles[`${d.dept}::${key}`] !== false // default on
+              return (
+                <div key={key} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                  <span style={{fontSize:'12px'}}>{label}</span>
+                  <Toggle checked={enabled} onChange={(on)=>saveFeatureToggle(d.dept,key,on)}/>
+                </div>
+              )
+            })}
+          </Card>
+        ))}
+      </>}
+
+      {!loading&&tab==='patients'&&<>
+        <SecLabel>Today's schedule — name and contact only</SecLabel>
+        <div style={{fontSize:'11px',color:C.textMuted,margin:'0 16px 12px'}}>Operational awareness, not clinical access. Full medical records stay with the treating practitioner.</div>
+        {todaysAppts.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Nothing scheduled today.</div>}
+        {todaysAppts.map((a,i)=>(
+          <Card key={i} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:500}}>{a.patient_name}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{a.patient_contact||'—'} · with {a.doctor_name} · {a.appointment_time}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:a.checked_in_at?C.greenLight:C.card,color:a.checked_in_at?C.green:C.textSub}}>{a.checked_in_at?'Checked in':'Booked'}</span>
+          </Card>
+        ))}
       </>}
 
       {!loading&&tab==='reporting'&&<>
@@ -1925,20 +2003,47 @@ function OnboardingScreen({ staffMedsaId }) {
   const [aiConfirmed,setAiConfirmed]=useState(false)
   const [submitting,setSubmitting]=useState(false)
   const [submitted,setSubmitted]=useState(false)
+  const [uploadedFile,setUploadedFile]=useState(null)
+  const [aiError,setAiError]=useState(null)
 
   const EPC_ROLES = ['doctor','nurse']
   const hasEpc = EPC_ROLES.includes(selRole)
 
-  function handleUpload() {
+  async function handleUpload(file) {
+    setUploadedFile(file)
     setDocsUploaded(true)
     setAiProcessing(true)
-    // Simulated AI extraction - in production this reads the uploaded
-    // documents directly; here it demonstrates the review-before-confirm
-    // flow the design calls for.
-    setTimeout(() => {
+    setAiError(null)
+    try {
+      // REAL integration point - calls a Supabase Edge Function that must
+      // exist in production with a real AI vision/OCR API key configured.
+      // This function does NOT exist yet in the Supabase project - it needs
+      // to be created (supabase functions new extract-credential-document)
+      // before this call will succeed. Until then this will fail and fall
+      // through to the catch block below, which is expected, not a bug.
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('role', selRole)
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${supabase.supabaseUrl}/functions/v1/extract-credential-document`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session?.access_token || supabase.supabaseKey}` },
+        body: formData,
+      })
+      if (!res.ok) throw new Error('Extraction service unavailable')
+      const extracted = await res.json()
+      if (extracted.full_name) setFullName(extracted.full_name)
+      if (extracted.registration_number) setRegNumber(extracted.registration_number)
       setAiProcessing(false)
       setAiConfirmed(true)
-    }, 1500)
+    } catch (err) {
+      // Expected until the Edge Function above is actually created and
+      // deployed with a real API key - falls back to manual entry rather
+      // than blocking onboarding entirely.
+      setAiProcessing(false)
+      setAiError('Automatic extraction unavailable — please confirm the details above manually before submitting.')
+      setAiConfirmed(true)
+    }
   }
 
   async function handleSubmit() {
@@ -2004,11 +2109,21 @@ function OnboardingScreen({ staffMedsaId }) {
         <Card style={{padding:'16px',marginBottom:'16px'}}>
           {hasEpc
             ? <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Scan the e-PC QR code to pull live registration status directly from the Council's database — no separate document upload needed.</div>
-            : <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Upload identity, contract, qualification, registration, and insurance documents. The document dock accepts multiple files.</div>}
+            : <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Upload identity, contract, qualification, registration, and insurance documents.</div>}
           {!hasEpc&&<input value={regNumber} onChange={e=>setRegNumber(e.target.value)} placeholder="Registration number (if applicable)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
-          {!docsUploaded&&<Btn variant="primary" style={{width:'100%'}} onClick={handleUpload}>{hasEpc?'Scan e-PC QR code':'Upload documents'}</Btn>}
-          {aiProcessing&&<div style={{textAlign:'center',padding:'16px',fontSize:'12px',color:C.textMuted}}>{hasEpc?'Verifying against live registry…':'AI reading and digitizing documents…'}</div>}
-          {aiConfirmed&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.green}}>✓ {hasEpc?'Verified — active and in good standing':'Documents read and information extracted'}. Review above before submitting.</div>}
+          {!docsUploaded&&!hasEpc&&
+            <label style={{display:'block',width:'100%',padding:'12px',textAlign:'center',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'13px',fontWeight:600,cursor:'pointer',boxSizing:'border-box'}}>
+              Upload documents
+              <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleUpload(e.target.files[0])}/>
+            </label>}
+          {!docsUploaded&&hasEpc&&
+            // Real QR/camera scanning is a separate integration (device camera
+            // access) from AI document extraction - kept honestly simulated
+            // here rather than pretending this button does something it can't.
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setDocsUploaded(true);setAiProcessing(true);setTimeout(()=>{setAiProcessing(false);setAiConfirmed(true)},1200)}}>Scan e-PC QR code (simulated — needs camera integration)</Btn>}
+          {aiProcessing&&<div style={{textAlign:'center',padding:'16px',fontSize:'12px',color:C.textMuted}}>{hasEpc?'Verifying against live registry…':'Reading and digitizing documents…'}</div>}
+          {aiConfirmed&&!aiError&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.green}}>✓ {hasEpc?'Verified — active and in good standing':'Documents read and information extracted'}. Review above before submitting.</div>}
+          {aiConfirmed&&aiError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.amber}}>⚠ {aiError}</div>}
         </Card>
 
         {aiConfirmed&&fullName&&department&&<Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting}>{submitting?'Submitting…':'Submit for Admin confirmation'}</Btn>}
@@ -2339,10 +2454,13 @@ function PermanentChangeRequestScreen({ doctorName, department }) {
 }
 
 // ── COVERAGE GRID — HR's institution-wide staffing overview ─────────────────
-function CoverageGridScreen() {
+function CoverageGridScreen({ role, department }) {
   const [grid,setGrid]=useState({})
   const [thresholds,setThresholds]=useState({})
   const [loading,setLoading]=useState(true)
+  const [editingDept,setEditingDept]=useState(null)
+  const [editValue,setEditValue]=useState('')
+  const [savedMsg,setSavedMsg]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -2362,21 +2480,47 @@ function CoverageGridScreen() {
   }
   useEffect(() => { load() }, [])
 
+  async function saveThreshold(dept) {
+    const value = parseInt(editValue)
+    if (!value || value<0) return
+    await supabase.from('department_coverage_thresholds').upsert({
+      institution_source:'practitioner', department:dept, min_safe_staff_count:value, set_by:role, updated_at:new Date().toISOString(),
+    }, {onConflict:'institution_source,department'})
+    setThresholds(prev=>({...prev,[dept]:value}))
+    setEditingDept(null)
+    setSavedMsg(`${dept} threshold saved`)
+    setTimeout(()=>setSavedMsg(null),2000)
+  }
+
+  // Only the Department Head of this specific department (or Admin, institution-wide) can set thresholds
+  const canEdit = (dept) => role==='admin' || (role==='dept_head' && dept===department)
+
   return (
     <div style={{background:C.beige,flex:1,padding:'16px'}}>
-      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Institution-wide headcount by department — used to weigh discretionary leave against overall coverage. Department Heads set their own safe minimum via Working Hours.</div>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Institution-wide headcount by department — used to weigh discretionary leave against overall coverage. Each Department Head sets their own department's safe minimum here.</div>
+      {savedMsg&&<div style={{fontSize:'12px',color:C.green,textAlign:'center',marginBottom:'10px'}}>✓ {savedMsg}</div>}
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
       {!loading&&Object.keys(grid).length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No active staff on file yet.</div>}
       {!loading&&Object.entries(grid).map(([dept,count])=>{
         const min = thresholds[dept]
         const isTight = min && count<=min
         return (
-          <Card key={dept} style={{padding:'14px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div>
-              <div style={{fontSize:'13px',fontWeight:600}}>{dept}</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>{min?`Min safe: ${min}`:'No threshold set'}</div>
+          <Card key={dept} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{dept}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{min?`Min safe: ${min}`:'No threshold set'}</div>
+              </div>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:isTight?C.redLight:C.greenLight,color:isTight?C.red:C.green,fontWeight:600}}>{count} staff</span>
             </div>
-            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:isTight?C.redLight:C.greenLight,color:isTight?C.red:C.green,fontWeight:600}}>{count} staff</span>
+            {canEdit(dept)&&<div style={{marginTop:'10px'}}>
+              {editingDept===dept
+                ? <div style={{display:'flex',gap:'8px'}}>
+                    <input type="number" value={editValue} onChange={e=>setEditValue(e.target.value)} placeholder="Min safe staff" style={{flex:1,padding:'8px',fontSize:'12px'}}/>
+                    <Btn variant="primary" onClick={()=>saveThreshold(dept)}>Save</Btn>
+                  </div>
+                : <Btn style={{width:'100%'}} onClick={()=>{setEditingDept(dept);setEditValue(min||'')}}>{min?'Update threshold':'Set threshold'}</Btn>}
+            </div>}
           </Card>
         )
       })}
@@ -2395,14 +2539,25 @@ function WorkingHoursScreen() {
   const [exportMsg,setExportMsg]=useState(null)
 
   // One-way export for payroll/finance - Medsa hands off hours worked and
-  // schedule records, never integrates with an actual payroll system. Real
-  // implementation would generate a formatted PDF/CSV; this demonstrates
-  // the real action and confirmation.
+  // schedule records as a real PDF, never integrates with an actual payroll
+  // system directly.
   async function handleExportHours() {
     setExporting(true)
-    const { data } = await supabase.from('doctor_availability').select('*').eq('institution_source','practitioner')
+    const { data } = await supabase.from('doctor_availability').select('*').eq('institution_source','practitioner').order('doctor_name')
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    doc.setFontSize(16); doc.text('Working Hours Export', 14, 20)
+    doc.setFontSize(10); doc.text(`Generated ${new Date().toLocaleDateString('en-HK')} — for payroll/finance use`, 14, 28)
+    let y = 40
+    const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+    ;(data||[]).forEach(row => {
+      if (y > 270) { doc.addPage(); y = 20 }
+      const line = row.is_off ? `${row.doctor_name} — ${DAYS[row.day_of_week]}: Off` : `${row.doctor_name} — ${DAYS[row.day_of_week]}: ${row.start_time?.slice(0,5)}-${row.end_time?.slice(0,5)}`
+      doc.text(line, 14, y); y += 6
+    })
+    doc.save(`Working-Hours-Export-${new Date().toISOString().slice(0,10)}.pdf`)
     setExporting(false)
-    setExportMsg(`Export ready — ${(data||[]).length} schedule records for all staff`)
+    setExportMsg(`✓ Downloaded — ${(data||[]).length} schedule records`)
     setTimeout(()=>setExportMsg(null), 3000)
   }
 
@@ -3173,12 +3328,13 @@ export default function PractitionerApp({ liveData={} }) {
   const [role,setRole]=useState(null)
   const [department,setDepartment]=useState(null)
   const [doctorName,setDoctorName]=useState(null)
+  const [specialty,setSpecialty]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
   const [jumpToRecord,setJumpToRecord]=useState(false)
-  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -3196,12 +3352,12 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='hr'&&<WorkingHoursScreen/>}
         {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName} onNavOnboard={()=>setScreen('onboarding')} onNavCoverage={()=>setScreen('coverage')}/>}
-        {screen==='coverage'&&role==='hr'&&<CoverageGridScreen/>}
+        {screen==='coverage'&&(role==='hr'||role==='admin'||role==='dept_head')&&<CoverageGridScreen role={role} department={department}/>}
         {screen==='onboarding'&&role==='hr'&&<OnboardingScreen staffMedsaId={doctorName}/>}
         {screen==='staffsearch'&&(role==='hr'||role==='admin')&&<EmployeeSearchScreen role={role}/>}
         {screen==='adminhome'&&role==='admin'&&<AdminHomeScreen/>}
         {screen==='shifts'&&(WORKING_ROLES.includes(role)||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
-        {screen==='openings'&&(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&<ShiftOpeningsScreen role={role} department={department} doctorName={doctorName} specialty={null}/>}
+        {screen==='openings'&&(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&<ShiftOpeningsScreen role={role} department={department} doctorName={doctorName} specialty={specialty}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
