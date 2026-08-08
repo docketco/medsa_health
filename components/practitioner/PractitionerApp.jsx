@@ -1877,21 +1877,26 @@ function AdminHomeScreen() {
 
   async function handleGenerateReport() {
     setSavedMsg('Generating report…')
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    doc.setFontSize(16); doc.text('Quality & Safety Report', 14, 20)
-    doc.setFontSize(10); doc.text(`Generated ${new Date().toLocaleDateString('en-HK')}`, 14, 28)
-    let y = 40
-    doc.setFontSize(12); doc.text('Department Headcount', 14, y); y+=8
-    doc.setFontSize(10)
-    deptOverview.forEach(d => { doc.text(`${d.dept}: ${d.count} staff`, 14, y); y+=6 })
-    y += 6
-    doc.setFontSize(12); doc.text('Credential Expiry (within 4 months)', 14, y); y+=8
-    doc.setFontSize(10)
+    // CSV via native Blob API - no npm dependency, nothing to install or
+    // deploy separately. Same data as before, just not visually formatted
+    // as a PDF - genuinely simpler and more import-friendly for most
+    // downstream tools anyway.
+    const rows = [['Section','Detail']]
+    rows.push(['Generated', new Date().toLocaleDateString('en-HK')])
+    rows.push(['',''])
+    rows.push(['Department Headcount',''])
+    deptOverview.forEach(d => rows.push([d.dept, `${d.count} staff`]))
+    rows.push(['',''])
+    rows.push(['Credential Expiry (within 4 months)',''])
     const { data: exp } = await supabase.from('staff_credentials').select('full_name,role,registration_expiry').eq('institution_source','practitioner').eq('status','active').not('registration_expiry','is',null).lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10))
-    ;(exp||[]).forEach(r => { doc.text(`${r.full_name} (${r.role}) — expires ${r.registration_expiry}`, 14, y); y+=6 })
-    if (!exp?.length) { doc.text('None', 14, y); y+=6 }
-    doc.save(`Q&S-Report-${new Date().toISOString().slice(0,10)}.pdf`)
+    if (exp?.length) exp.forEach(r => rows.push([`${r.full_name} (${r.role})`, `expires ${r.registration_expiry}`]))
+    else rows.push(['None',''])
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `QS-Report-${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
     setSavedMsg('✓ Report downloaded')
     setTimeout(()=>setSavedMsg(null), 3000)
   }
@@ -2523,18 +2528,22 @@ function WorkingHoursScreen() {
   async function handleExportHours() {
     setExporting(true)
     const { data } = await supabase.from('doctor_availability').select('*').eq('institution_source','practitioner').order('doctor_name')
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    doc.setFontSize(16); doc.text('Working Hours Export', 14, 20)
-    doc.setFontSize(10); doc.text(`Generated ${new Date().toLocaleDateString('en-HK')} — for payroll/finance use`, 14, 28)
-    let y = 40
     const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+    const rows = [['Staff','Day','Start','End','Status']]
     ;(data||[]).forEach(row => {
-      if (y > 270) { doc.addPage(); y = 20 }
-      const line = row.is_off ? `${row.doctor_name} — ${DAYS[row.day_of_week]}: Off` : `${row.doctor_name} — ${DAYS[row.day_of_week]}: ${row.start_time?.slice(0,5)}-${row.end_time?.slice(0,5)}`
-      doc.text(line, 14, y); y += 6
+      rows.push([
+        row.doctor_name, DAYS[row.day_of_week],
+        row.is_off ? '' : row.start_time?.slice(0,5)||'',
+        row.is_off ? '' : row.end_time?.slice(0,5)||'',
+        row.is_off ? 'Off' : 'Working',
+      ])
     })
-    doc.save(`Working-Hours-Export-${new Date().toISOString().slice(0,10)}.pdf`)
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Working-Hours-Export-${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
     setExporting(false)
     setExportMsg(`✓ Downloaded — ${(data||[]).length} schedule records`)
     setTimeout(()=>setExportMsg(null), 3000)
