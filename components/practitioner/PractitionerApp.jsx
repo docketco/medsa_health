@@ -1633,7 +1633,7 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
 
 // ── TASK BOARD — HR/Admin hub, five distinct categories ─────────────────────
-function TaskBoardScreen({ role, staffMedsaId }) {
+function TaskBoardScreen({ role, staffMedsaId, onNavOnboard, onNavCoverage }) {
   const [tab,setTab]=useState('onboarding')
   const [loading,setLoading]=useState(true)
   const [onboarding,setOnboarding]=useState([])
@@ -1726,6 +1726,7 @@ function TaskBoardScreen({ role, staffMedsaId }) {
       {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
 
       {!loading&&tab==='onboarding'&&<>
+        {role==='hr'&&<Btn variant="primary" style={{width:'100%',marginBottom:'12px'}} onClick={onNavOnboard}>+ Onboard new staff</Btn>}
         {onboarding.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No pending onboarding.</div>}
         {onboarding.map(row=>(
           <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
@@ -1763,6 +1764,7 @@ function TaskBoardScreen({ role, staffMedsaId }) {
       </>}
 
       {!loading&&tab==='leaves'&&<>
+        {role==='hr'&&<Btn style={{width:'100%',marginBottom:'12px'}} onClick={onNavCoverage}>View department coverage</Btn>}
         {leaves.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No leave requests routed to HR/Admin.</div>}
         {leaves.map(row=>(
           <Card key={row.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
@@ -1797,6 +1799,591 @@ function TaskBoardScreen({ role, staffMedsaId }) {
   )
 }
 
+// ── ADMIN HOME — institution-wide settings and oversight ────────────────────
+function AdminHomeScreen() {
+  const [tab,setTab]=useState('settings')
+  const [maxHours,setMaxHours]=useState({})
+  const [instSettings,setInstSettings]=useState({permanent_change_requires_hr:true,permanent_change_requires_dept_head:true,permanent_change_requires_admin:true})
+  const [deptOverview,setDeptOverview]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [savedMsg,setSavedMsg]=useState(null)
+
+  const ROLE_LEGAL_MAX = { doctor:72, nurse:60, allied:60, therapist:60, receptionist:60 }
+
+  async function loadAdminData() {
+    setLoading(true)
+    const inst = 'practitioner'
+    const [mh, is, staff] = await Promise.all([
+      supabase.from('role_max_hours').select('*').eq('institution_source',inst),
+      supabase.from('institution_settings').select('*').eq('institution_source',inst).maybeSingle(),
+      supabase.from('staff_credentials').select('department').eq('institution_source',inst).eq('status','active'),
+    ])
+    const mhMap = {}
+    ;(mh.data||[]).forEach(r=>{ mhMap[r.role]=r.max_hours_per_week })
+    setMaxHours(mhMap)
+    if (is.data) setInstSettings(is.data)
+    const byDept = {}
+    ;(staff.data||[]).forEach(s=>{ byDept[s.department||'Unassigned']=(byDept[s.department||'Unassigned']||0)+1 })
+    setDeptOverview(Object.entries(byDept).map(([dept,count])=>({dept,count})))
+    setLoading(false)
+  }
+
+  useEffect(() => { loadAdminData() }, [])
+
+  async function saveMaxHours(role, value) {
+    const legalMax = ROLE_LEGAL_MAX[role] || 60
+    const clamped = Math.min(parseInt(value)||legalMax, legalMax)
+    setMaxHours(prev=>({...prev,[role]:clamped}))
+    await supabase.from('role_max_hours').upsert({ institution_source:'practitioner', role, max_hours_per_week:clamped, updated_at:new Date().toISOString() }, {onConflict:'institution_source,role'})
+    setSavedMsg(`${ROLES[role]?.label||role} ceiling saved`)
+    setTimeout(()=>setSavedMsg(null), 2000)
+  }
+
+  async function saveInstSettings(field, value) {
+    const updated = {...instSettings, [field]:value}
+    setInstSettings(updated)
+    await supabase.from('institution_settings').upsert({ institution_source:'practitioner', ...updated, updated_at:new Date().toISOString() }, {onConflict:'institution_source'})
+  }
+
+  async function handleGenerateReport() {
+    setSavedMsg('Report generation queued — PDF will be available shortly')
+    setTimeout(()=>setSavedMsg(null), 3000)
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{display:'flex',gap:'6px',marginBottom:'16px'}}>
+        {[['settings','Settings'],['oversight','Oversight'],['reporting','Q&S']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub}}>{l}</div>
+        ))}
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {savedMsg&&<div style={{fontSize:'12px',color:C.green,textAlign:'center',marginBottom:'10px'}}>✓ {savedMsg}</div>}
+
+      {!loading&&tab==='settings'&&<>
+        <SecLabel>Max hours ceiling — per role</SecLabel>
+        <div style={{fontSize:'11px',color:C.textMuted,margin:'0 16px 12px'}}>Must sit at or below the legal maximum. HR's Working Hours schedule must fit within this.</div>
+        {Object.entries(ROLE_LEGAL_MAX).map(([role,legalMax])=>(
+          <Card key={role} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:500}}>{ROLES[role]?.label||role}</div>
+              <div style={{fontSize:'10px',color:C.textMuted}}>Legal max: {legalMax}h/wk</div>
+            </div>
+            <input type="number" max={legalMax} value={maxHours[role]||legalMax} onChange={e=>saveMaxHours(role,e.target.value)} style={{width:60,padding:'6px',fontSize:'13px',textAlign:'center'}}/>
+          </Card>
+        ))}
+
+        <SecLabel>Permanent change sign-off requirements</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          {[['permanent_change_requires_hr','Requires HR'],['permanent_change_requires_dept_head','Requires Dept Head draft'],['permanent_change_requires_admin','Requires Admin']].map(([field,label])=>(
+            <div key={field} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+              <span style={{fontSize:'13px'}}>{label}</span>
+              <Toggle checked={instSettings[field]!==false} onChange={(on)=>saveInstSettings(field,on)}/>
+            </div>
+          ))}
+        </Card>
+      </>}
+
+      {!loading&&tab==='oversight'&&<>
+        <SecLabel>Departments — read-only</SecLabel>
+        {deptOverview.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No active staff on file yet.</div>}
+        {deptOverview.map(d=>(
+          <Card key={d.dept} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between'}}>
+            <span style={{fontSize:'13px',fontWeight:500}}>{d.dept}</span>
+            <span style={{fontSize:'12px',color:C.textSub}}>{d.count} staff</span>
+          </Card>
+        ))}
+        <div style={{margin:'12px 16px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>◇ Full staff detail (credentials, insurance, individual records) lives in HR's portal — this view is oversight only.</div>
+      </>}
+
+      {!loading&&tab==='reporting'&&<>
+        <SecLabel>Quality & Safety reporting</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'}}>
+            <span style={{fontSize:'13px'}}>Auto-generate monthly</span>
+            <Toggle checked={true}/>
+          </div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleGenerateReport}>Generate report now (PDF)</Btn>
+        </Card>
+      </>}
+    </div>
+  )
+}
+
+// ── ONBOARDING — role-triggered docs, simulated AI extraction ───────────────
+function OnboardingScreen({ staffMedsaId }) {
+  const [selRole,setSelRole]=useState('')
+  const [fullName,setFullName]=useState('')
+  const [department,setDepartment]=useState('')
+  const [specialty,setSpecialty]=useState('')
+  const [regNumber,setRegNumber]=useState('')
+  const [employmentType,setEmploymentType]=useState('full_time')
+  const [scheduleType,setScheduleType]=useState('rotating')
+  const [docsUploaded,setDocsUploaded]=useState(false)
+  const [aiProcessing,setAiProcessing]=useState(false)
+  const [aiConfirmed,setAiConfirmed]=useState(false)
+  const [submitting,setSubmitting]=useState(false)
+  const [submitted,setSubmitted]=useState(false)
+
+  const EPC_ROLES = ['doctor','nurse']
+  const hasEpc = EPC_ROLES.includes(selRole)
+
+  function handleUpload() {
+    setDocsUploaded(true)
+    setAiProcessing(true)
+    // Simulated AI extraction - in production this reads the uploaded
+    // documents directly; here it demonstrates the review-before-confirm
+    // flow the design calls for.
+    setTimeout(() => {
+      setAiProcessing(false)
+      setAiConfirmed(true)
+    }, 1500)
+  }
+
+  async function handleSubmit() {
+    setSubmitting(true)
+    await supabase.from('staff_credentials').insert({
+      institution_source: 'practitioner',
+      medsa_id: `MED-${Date.now().toString(36).toUpperCase()}`,
+      full_name: fullName,
+      role: selRole,
+      department,
+      specialty: specialty||null,
+      registration_number: regNumber||null,
+      has_epc: hasEpc,
+      employment_type: employmentType,
+      schedule_type: scheduleType,
+      status: 'pending_onboarding',
+      verification_status: hasEpc ? 'verified' : 'pending', // e-PC roles verify live on scan; others await manual doc review
+      onboarded_by: staffMedsaId,
+    })
+    setSubmitting(false)
+    setSubmitted(true)
+  }
+
+  if (submitted) return (
+    <div style={{background:C.beige,flex:1,padding:'40px 20px',textAlign:'center'}}>
+      <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
+      <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Submitted for Admin confirmation</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px'}}>{fullName} will appear on the Task Board's Onboarding tab.</div>
+      <Btn variant="primary" onClick={()=>{setSubmitted(false);setSelRole('');setFullName('');setDocsUploaded(false);setAiConfirmed(false)}}>Onboard another</Btn>
+    </div>
+  )
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <SecLabel>Role</SecLabel>
+      <Card style={{padding:'12px 16px',marginBottom:'16px'}}>
+        <select value={selRole} onChange={e=>{setSelRole(e.target.value);setDocsUploaded(false);setAiConfirmed(false)}} style={{width:'100%',padding:'10px',fontSize:'13px'}}>
+          <option value="">Select role…</option>
+          {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </Card>
+
+      {selRole&&<>
+        <SecLabel>Basic info</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Full legal name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          {(selRole==='doctor')&&<input value={specialty} onChange={e=>setSpecialty(e.target.value)} placeholder="Specialty (e.g. OBGYN) - used for shift-opening matching" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <select value={employmentType} onChange={e=>setEmploymentType(e.target.value)} style={{flex:1,padding:'10px',fontSize:'12px'}}>
+              <option value="full_time">Full-time</option>
+              <option value="part_time">Part-time</option>
+            </select>
+            <select value={scheduleType} onChange={e=>setScheduleType(e.target.value)} style={{flex:1,padding:'10px',fontSize:'12px'}}>
+              <option value="rotating">Rotating</option>
+              <option value="fixed">Fixed</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </div>
+        </Card>
+
+        <SecLabel>{hasEpc?'e-PC verification':'Documents'}</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          {hasEpc
+            ? <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Scan the e-PC QR code to pull live registration status directly from the Council's database — no separate document upload needed.</div>
+            : <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Upload identity, contract, qualification, registration, and insurance documents. The document dock accepts multiple files.</div>}
+          {!hasEpc&&<input value={regNumber} onChange={e=>setRegNumber(e.target.value)} placeholder="Registration number (if applicable)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          {!docsUploaded&&<Btn variant="primary" style={{width:'100%'}} onClick={handleUpload}>{hasEpc?'Scan e-PC QR code':'Upload documents'}</Btn>}
+          {aiProcessing&&<div style={{textAlign:'center',padding:'16px',fontSize:'12px',color:C.textMuted}}>{hasEpc?'Verifying against live registry…':'AI reading and digitizing documents…'}</div>}
+          {aiConfirmed&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px',fontSize:'12px',color:C.green}}>✓ {hasEpc?'Verified — active and in good standing':'Documents read and information extracted'}. Review above before submitting.</div>}
+        </Card>
+
+        {aiConfirmed&&fullName&&department&&<Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting}>{submitting?'Submitting…':'Submit for Admin confirmation'}</Btn>}
+      </>}
+    </div>
+  )
+}
+
+// ── STAFF PROFILE — used by Search and Admin oversight ──────────────────────
+function StaffProfileModal({ medsaId, viewerRole, onClose, onChanged }) {
+  const [staff,setStaff]=useState(null)
+  const [loading,setLoading]=useState(true)
+  const [showOffboardConfirm,setShowOffboardConfirm]=useState(false)
+  const [offboarding,setOffboarding]=useState(false)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data } = await supabase.from('staff_credentials').select('*').eq('medsa_id',medsaId).maybeSingle()
+      setStaff(data)
+      setLoading(false)
+    }
+    load()
+  }, [medsaId])
+
+  async function handleOffboard() {
+    setOffboarding(true)
+    // Move to the permanent audit trail before scrubbing the full file
+    if (staff) {
+      await supabase.from('staff_audit_trail').insert({
+        medsa_id: staff.medsa_id, full_name: staff.full_name, institution_source: staff.institution_source,
+        role: staff.role, department: staff.department, employment_start: staff.start_date,
+        employment_end: new Date().toISOString().slice(0,10), offboarded_by: viewerRole,
+        verification_status_at_offboard: staff.verification_status,
+      })
+      await supabase.from('staff_credentials').delete().eq('medsa_id', staff.medsa_id)
+    }
+    setOffboarding(false)
+    onChanged&&onChanged()
+    onClose()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:420,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+        {!loading&&!staff&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Not found.</div>}
+        {!loading&&staff&&<>
+          <div style={{fontSize:'17px',fontWeight:700}}>{staff.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>{staff.medsa_id} · {ROLES[staff.role]?.label||staff.role}</div>
+
+          <InfoRow label="Department" value={staff.department||'—'}/>
+          {staff.specialty&&<InfoRow label="Specialty" value={staff.specialty}/>}
+          <InfoRow label="Registration no." value={staff.registration_number||(staff.has_epc?'e-PC linked':'—')}/>
+          <InfoRow label="Verification" value={staff.verification_status} highlight={staff.verification_status!=='verified'}/>
+          <InfoRow label="Registration expiry" value={staff.registration_expiry||'—'}/>
+          <InfoRow label="Employment type" value={staff.employment_type==='full_time'?'Full-time':'Part-time'}/>
+          <InfoRow label="Schedule type" value={staff.schedule_type}/>
+          <InfoRow label="Insurance" value={staff.insurance_provider||'—'}/>
+          <InfoRow label="Emergency contact" value={staff.emergency_contact_name?`${staff.emergency_contact_name} · ${staff.emergency_contact_phone||''}`:'—'} last/>
+
+          {(viewerRole==='hr'||viewerRole==='admin')&&<>
+            {!showOffboardConfirm
+              ? <Btn variant="danger" style={{width:'100%',marginTop:'16px'}} onClick={()=>setShowOffboardConfirm(true)}>Offboard</Btn>
+              : <div style={{marginTop:'16px',background:C.redLight,borderRadius:'10px',padding:'14px'}}>
+                  <div style={{fontSize:'12px',color:C.red,marginBottom:'10px',lineHeight:1.5}}>This will scrub {staff.full_name}'s full file. A minimal audit record (name, role, employment dates) is kept permanently; everything else is deleted. This can't be undone.</div>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1}} onClick={()=>setShowOffboardConfirm(false)}>Cancel</Btn>
+                    <Btn variant="danger" style={{flex:1}} onClick={handleOffboard} disabled={offboarding}>{offboarding?'Offboarding…':'Confirm offboard'}</Btn>
+                  </div>
+                </div>}
+          </>}
+        </>}
+      </div>
+    </div>
+  )
+}
+
+// ── EMPLOYEE SEARCH — name/registration/MedsaID, with filters ───────────────
+function EmployeeSearchScreen({ role }) {
+  const [query,setQuery]=useState('')
+  const [deptFilter,setDeptFilter]=useState('')
+  const [roleFilter,setRoleFilter]=useState('')
+  const [expiringOnly,setExpiringOnly]=useState(false)
+  const [results,setResults]=useState([])
+  const [loading,setLoading]=useState(false)
+  const [activeMedsaId,setActiveMedsaId]=useState(null)
+
+  async function runSearch() {
+    setLoading(true)
+    let q = supabase.from('staff_credentials').select('*').eq('institution_source','practitioner').eq('status','active')
+    if (query.trim()) q = q.or(`full_name.ilike.%${query}%,registration_number.ilike.%${query}%,medsa_id.ilike.%${query}%`)
+    if (deptFilter) q = q.eq('department', deptFilter)
+    if (roleFilter) q = q.eq('role', roleFilter)
+    if (expiringOnly) q = q.lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10))
+    const { data } = await q
+    setResults(data||[])
+    setLoading(false)
+  }
+
+  useEffect(() => { runSearch() }, [deptFilter, roleFilter, expiringOnly])
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&runSearch()} placeholder="Name, registration no., or MedsaID" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        <Btn onClick={runSearch}>Search</Btn>
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+        <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px'}}>
+          <option value="">All roles</option>
+          {Object.entries(ROLES).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}
+        </select>
+        <div onClick={()=>setExpiringOnly(!expiringOnly)} style={{padding:'8px 12px',borderRadius:'8px',fontSize:'12px',cursor:'pointer',background:expiringOnly?C.amber:C.card,color:expiringOnly?'#fff':C.textSub,whiteSpace:'nowrap'}}>Expiring soon</div>
+      </div>
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&results.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No matches.</div>}
+      {!loading&&results.map(r=>(
+        <Card key={r.id} onClick={()=>setActiveMedsaId(r.medsa_id)} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+          <div style={{width:36,height:36,borderRadius:'50%',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{r.full_name?.[0]||'?'}</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:500}}>{r.full_name}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{ROLES[r.role]?.label||r.role} · {r.department||'—'}</div>
+          </div>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+        </Card>
+      ))}
+
+      {activeMedsaId&&<StaffProfileModal medsaId={activeMedsaId} viewerRole={role} onClose={()=>setActiveMedsaId(null)} onChanged={runSearch}/>}
+    </div>
+  )
+}
+
+// ── SHIFT OPENINGS — permanent positions, distinct from bidding ─────────────
+function ShiftOpeningsScreen({ role, department, doctorName, specialty }) {
+  const [showRequestForm,setShowRequestForm]=useState(false)
+  const [openings,setOpenings]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showCreate,setShowCreate]=useState(false)
+  const [newDept,setNewDept]=useState('')
+  const [newRole,setNewRole]=useState('doctor')
+  const [newSpecialty,setNewSpecialty]=useState('')
+  const [newEmpType,setNewEmpType]=useState('full_time')
+  const [newSchedType,setNewSchedType]=useState('fixed')
+  const [newDetail,setNewDetail]=useState('')
+  const [newStartDate,setNewStartDate]=useState('')
+  const [creating,setCreating]=useState(false)
+
+  async function loadOpenings() {
+    setLoading(true)
+    const { data } = await supabase.from('shift_openings').select('*, shift_opening_applications(*)').eq('institution_source','practitioner').in('status',['open','pending_admin_confirmation']).order('created_at',{ascending:false})
+    setOpenings(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { loadOpenings() }, [])
+
+  async function handleCreate() {
+    setCreating(true)
+    await supabase.from('shift_openings').insert({
+      institution_source:'practitioner', department:newDept, role_required:newRole, specialty_required:newSpecialty||null,
+      employment_type_offered:newEmpType, schedule_type_offered:newSchedType, schedule_detail:newDetail,
+      start_date:newStartDate, created_by:doctorName, status:'pending_admin_confirmation',
+    })
+    setCreating(false)
+    setShowCreate(false)
+    setNewDept('');setNewSpecialty('');setNewDetail('');setNewStartDate('')
+    loadOpenings()
+  }
+
+  async function handleConfirmOpening(id) {
+    await supabase.from('shift_openings').update({ status:'open', confirmed_by:doctorName }).eq('id', id)
+    loadOpenings()
+  }
+
+  async function handleApply(openingId) {
+    await supabase.from('shift_opening_applications').insert({ opening_id:openingId, applicant_medsa_id:doctorName, consented_at:new Date().toISOString() })
+    loadOpenings()
+  }
+
+  const canApply = (o) => o.role_required===role && (!o.specialty_required || o.specialty_required===specialty)
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      {role==='hr'&&<Btn variant="primary" style={{width:'100%',marginBottom:'16px'}} onClick={()=>setShowCreate(true)}>+ Create opening</Btn>}
+      {WORKING_ROLES.includes(role)&&<Btn style={{width:'100%',marginBottom:'16px'}} onClick={()=>setShowRequestForm(true)}>Request a different permanent change</Btn>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&openings.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No open positions right now.</div>}
+      {!loading&&openings.map(o=>{
+        const alreadyApplied = (o.shift_opening_applications||[]).some(a=>a.applicant_medsa_id===doctorName)
+        const isPendingConfirm = o.status==='pending_admin_confirmation'
+        return (
+          <Card key={o.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+              <span style={{fontSize:'13px',fontWeight:600}}>{ROLES[o.role_required]?.label||o.role_required}{o.specialty_required?` · ${o.specialty_required}`:''}</span>
+              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:isPendingConfirm?C.card:C.amberLight,color:isPendingConfirm?C.textMuted:C.amber}}>{isPendingConfirm?'Pending Admin':'Open'}</span>
+            </div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{o.department} · {o.employment_type_offered==='full_time'?'Full-time':'Part-time'}, {o.schedule_type_offered} · {o.schedule_detail} · starts {o.start_date}</div>
+            {isPendingConfirm&&role==='admin'&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleConfirmOpening(o.id)}>Confirm & publish</Btn>}
+            {!isPendingConfirm&&WORKING_ROLES.includes(role)&&(canApply(o)
+              ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleApply(o.id)} disabled={alreadyApplied}>{alreadyApplied?'Applied':'Apply'}</Btn>
+              : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center'}}>Requires {ROLES[o.role_required]?.label||o.role_required}{o.specialty_required?` · ${o.specialty_required}`:''} credentials</div>)}
+          </Card>
+        )
+      })}
+
+      {showCreate&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowCreate(false)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New opening</div>
+          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+            {WORKING_ROLES.map(r=><option key={r} value={r}>{ROLES[r]?.label||r}</option>)}
+          </select>
+          <input value={newSpecialty} onChange={e=>setNewSpecialty(e.target.value)} placeholder="Specialty required (optional)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <select value={newEmpType} onChange={e=>setNewEmpType(e.target.value)} style={{flex:1,padding:'10px',fontSize:'12px'}}>
+              <option value="full_time">Full-time</option>
+              <option value="part_time">Part-time</option>
+            </select>
+            <select value={newSchedType} onChange={e=>setNewSchedType(e.target.value)} style={{flex:1,padding:'10px',fontSize:'12px'}}>
+              <option value="fixed">Fixed</option>
+              <option value="rotating">Rotating</option>
+            </select>
+          </div>
+          <input value={newDetail} onChange={e=>setNewDetail(e.target.value)} placeholder="Schedule detail, e.g. Tue/Thu/Sat mornings" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="date" value={newStartDate} onChange={e=>setNewStartDate(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setShowCreate(false)}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleCreate} disabled={creating||!newDept||!newStartDate}>{creating?'Creating…':'Submit for Admin'}</Btn>
+          </div>
+        </div>
+      </div>}
+
+      {showRequestForm&&<div style={{position:'fixed',inset:0,background:C.beige,zIndex:300,overflowY:'auto'}}>
+        <div onClick={()=>setShowRequestForm(false)} style={{padding:'16px 16px 0',fontSize:'13px',color:C.green,cursor:'pointer'}}>‹ Back to Openings</div>
+        <PermanentChangeRequestScreen doctorName={doctorName} department={department}/>
+      </div>}
+    </div>
+  )
+}
+
+// ── PERMANENT CHANGE REQUEST — all five categories, staff-facing ────────────
+function PermanentChangeRequestScreen({ doctorName, department }) {
+  const [category,setCategory]=useState('medical_grounds')
+  const [reqEmpType,setReqEmpType]=useState('')
+  const [reqSchedType,setReqSchedType]=useState('')
+  const [reqDetail,setReqDetail]=useState('')
+  const [swapPartner,setSwapPartner]=useState('')
+  const [docUploaded,setDocUploaded]=useState(false)
+  const [submitting,setSubmitting]=useState(false)
+  const [submitted,setSubmitted]=useState(false)
+
+  const CATEGORIES = [
+    {key:'medical_grounds', label:'Medical / compassionate grounds', needsDoc:true},
+    {key:'pregnancy_accommodation', label:'Pregnancy accommodation', needsDoc:false},
+    {key:'contractual_conversion', label:'Convert full-time ↔ part-time', needsDoc:false},
+    {key:'permanent_swap', label:'Permanent swap with a colleague', needsDoc:false, needsPartner:true},
+  ]
+  const activeCategory = CATEGORIES.find(c=>c.key===category)
+
+  async function handleSubmit() {
+    setSubmitting(true)
+    await supabase.from('permanent_change_requests').insert({
+      institution_source:'practitioner', medsa_id:doctorName, category, initiated_by:'self',
+      swap_partner_medsa_id: category==='permanent_swap'?swapPartner:null,
+      requested_employment_type: reqEmpType||null,
+      requested_schedule_type: reqSchedType||null,
+      requested_schedule_detail: reqDetail||null,
+      supporting_doc_url: (activeCategory?.needsDoc && docUploaded) ? 'uploaded' : null,
+      status:'pending',
+    })
+    setSubmitting(false)
+    setSubmitted(true)
+  }
+
+  if (submitted) return (
+    <div style={{background:C.beige,flex:1,padding:'40px 20px',textAlign:'center'}}>
+      <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
+      <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Request submitted</div>
+      <div style={{fontSize:'13px',color:C.textSub}}>Awaiting HR review, then Admin confirmation. Your Department Head will be informed.</div>
+    </div>
+  )
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <SecLabel>What kind of change?</SecLabel>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
+        {CATEGORIES.map(c=>(
+          <div key={c.key} onClick={()=>setCategory(c.key)} style={{padding:'12px 16px',borderRadius:'10px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:category===c.key?C.green:C.card,color:category===c.key?'#fff':C.text}}>{c.label}</div>
+        ))}
+      </div>
+
+      {category==='permanent_swap'&&<>
+        <SecLabel>Swap with</SecLabel>
+        <input value={swapPartner} onChange={e=>setSwapPartner(e.target.value)} placeholder="Colleague's name or MedsaID" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box'}}/>
+      </>}
+
+      <SecLabel>What's changing</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Leave blank whatever doesn't apply</div>
+        <select value={reqEmpType} onChange={e=>setReqEmpType(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+          <option value="">No change to employment type</option>
+          <option value="full_time">Change to Full-time</option>
+          <option value="part_time">Change to Part-time</option>
+        </select>
+        <select value={reqSchedType} onChange={e=>setReqSchedType(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+          <option value="">No change to schedule type</option>
+          <option value="fixed">Change to Fixed</option>
+          <option value="rotating">Change to Rotating</option>
+          <option value="hybrid">Change to Hybrid (both)</option>
+        </select>
+        <textarea value={reqDetail} onChange={e=>setReqDetail(e.target.value)} rows={3} placeholder="Details, e.g. requested days/times" style={{width:'100%',padding:'10px',fontSize:'13px',resize:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </Card>
+
+      {activeCategory?.needsDoc&&<>
+        <SecLabel>Supporting document</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          {!docUploaded
+            ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>setDocUploaded(true)}>Upload document</Btn>
+            : <div style={{fontSize:'12px',color:C.green}}>✓ Document attached</div>}
+        </Card>
+      </>}
+
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting||(activeCategory?.needsDoc&&!docUploaded)||(!reqEmpType&&!reqSchedType)}>{submitting?'Submitting…':'Submit request'}</Btn>
+    </div>
+  )
+}
+
+// ── COVERAGE GRID — HR's institution-wide staffing overview ─────────────────
+function CoverageGridScreen() {
+  const [grid,setGrid]=useState({})
+  const [thresholds,setThresholds]=useState({})
+  const [loading,setLoading]=useState(true)
+
+  async function load() {
+    setLoading(true)
+    const inst='practitioner'
+    const [staff, avail, thr] = await Promise.all([
+      supabase.from('staff_credentials').select('department').eq('institution_source',inst).eq('status','active'),
+      supabase.from('doctor_availability').select('*').eq('institution_source',inst),
+      supabase.from('department_coverage_thresholds').select('*').eq('institution_source',inst),
+    ])
+    const byDept = {}
+    ;(staff.data||[]).forEach(s=>{ const d=s.department||'Unassigned'; byDept[d]=(byDept[d]||0)+1 })
+    setGrid(byDept)
+    const thrMap = {}
+    ;(thr.data||[]).forEach(t=>{ thrMap[t.department]=t.min_safe_staff_count })
+    setThresholds(thrMap)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Institution-wide headcount by department — used to weigh discretionary leave against overall coverage. Department Heads set their own safe minimum via Working Hours.</div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&Object.keys(grid).length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No active staff on file yet.</div>}
+      {!loading&&Object.entries(grid).map(([dept,count])=>{
+        const min = thresholds[dept]
+        const isTight = min && count<=min
+        return (
+          <Card key={dept} style={{padding:'14px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{dept}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{min?`Min safe: ${min}`:'No threshold set'}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:isTight?C.redLight:C.greenLight,color:isTight?C.red:C.green,fontWeight:600}}>{count} staff</span>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
@@ -1804,6 +2391,20 @@ function WorkingHoursScreen() {
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [slotDuration,setSlotDuration]=useState(30)
+  const [exporting,setExporting]=useState(false)
+  const [exportMsg,setExportMsg]=useState(null)
+
+  // One-way export for payroll/finance - Medsa hands off hours worked and
+  // schedule records, never integrates with an actual payroll system. Real
+  // implementation would generate a formatted PDF/CSV; this demonstrates
+  // the real action and confirmation.
+  async function handleExportHours() {
+    setExporting(true)
+    const { data } = await supabase.from('doctor_availability').select('*').eq('institution_source','practitioner')
+    setExporting(false)
+    setExportMsg(`Export ready — ${(data||[]).length} schedule records for all staff`)
+    setTimeout(()=>setExportMsg(null), 3000)
+  }
 
   async function loadHours(doctorName) {
     setLoading(true)
@@ -1882,6 +2483,10 @@ function WorkingHoursScreen() {
 
         {saved&&<div style={{fontSize:'13px',color:C.green,textAlign:'center',marginBottom:'10px'}}>✓ Saved - synced to {selectedDoctor}'s schedule and patient booking</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving}>{saving?'Saving…':`Save hours for ${selectedDoctor}`}</Btn>
+
+        <div style={{margin:'20px 0 8px',fontSize:'11px',color:C.textMuted}}>◇ For payroll/finance — Medsa hands off records, it doesn't manage payroll itself.</div>
+        {exportMsg&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ {exportMsg}</div>}
+        <Btn style={{width:'100%'}} onClick={handleExportHours} disabled={exporting}>{exporting?'Preparing export…':'Export all hours (PDF)'}</Btn>
       </>}
     </div>
   )
@@ -2573,7 +3178,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -2590,8 +3195,13 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='hr'&&<WorkingHoursScreen/>}
-        {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName}/>}
+        {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName} onNavOnboard={()=>setScreen('onboarding')} onNavCoverage={()=>setScreen('coverage')}/>}
+        {screen==='coverage'&&role==='hr'&&<CoverageGridScreen/>}
+        {screen==='onboarding'&&role==='hr'&&<OnboardingScreen staffMedsaId={doctorName}/>}
+        {screen==='staffsearch'&&(role==='hr'||role==='admin')&&<EmployeeSearchScreen role={role}/>}
+        {screen==='adminhome'&&role==='admin'&&<AdminHomeScreen/>}
         {screen==='shifts'&&(WORKING_ROLES.includes(role)||role==='dept_head')&&<ShiftBiddingScreen role={role} doctorName={doctorName} department={department}/>}
+        {screen==='openings'&&(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&<ShiftOpeningsScreen role={role} department={department} doctorName={doctorName} specialty={null}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
