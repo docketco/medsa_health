@@ -1863,7 +1863,7 @@ function TaskBoardScreen({ role, staffMedsaId, onNavOnboard, onNavCoverage }) {
 function AdminHomeScreen() {
   const [tab,setTab]=useState('settings')
   const [maxHours,setMaxHours]=useState({})
-  const [instSettings,setInstSettings]=useState({permanent_change_requires_hr:true,permanent_change_requires_dept_head:true,permanent_change_requires_admin:true})
+  const [instSettings,setInstSettings]=useState({permanent_change_requires_hr:true,permanent_change_requires_dept_head:true,permanent_change_requires_admin:true,allow_manual_procedural_assignment:false})
   const [deptOverview,setDeptOverview]=useState([])
   const [featureToggles,setFeatureToggles]=useState({})
   const [todaysAppts,setTodaysAppts]=useState([])
@@ -1983,6 +1983,17 @@ function AdminHomeScreen() {
               <Toggle checked={instSettings[field]!==false} onChange={(on)=>saveInstSettings(field,on)}/>
             </div>
           ))}
+        </Card>
+
+        <SecLabel>Surgery scheduling</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{flex:1,paddingRight:'12px'}}>
+              <div style={{fontSize:'13px'}}>Allow manual procedural doctor selection</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Off (default) matches public-hospital norm — always auto-assigned. On lets a surgeon choose a specific anaesthesiologist/procedural doctor instead, matching common private-sector practice.</div>
+            </div>
+            <Toggle checked={instSettings.allow_manual_procedural_assignment===true} onChange={(on)=>saveInstSettings('allow_manual_procedural_assignment',on)}/>
+          </div>
         </Card>
       </>}
 
@@ -2801,6 +2812,99 @@ function PostCallReviewScreen({ department, institutionSource, staffMedsaId }) {
   )
 }
 
+// ── SURGERY BOOKING — auto-paired procedural doctor, private-only override ──
+function BookSurgeryScreen({ department, doctorMedsaId, institutionSource }) {
+  const [patientQuery,setPatientQuery]=useState('')
+  const [foundPatient,setFoundPatient]=useState(null)
+  const [procedureType,setProcedureType]=useState('')
+  const [scheduledAt,setScheduledAt]=useState('')
+  const [allowManual,setAllowManual]=useState(false)
+  const [availableProcedural,setAvailableProcedural]=useState([])
+  const [manualSelection,setManualSelection]=useState('')
+  const [loading,setLoading]=useState(true)
+  const [booking,setBooking]=useState(false)
+  const [booked,setBooked]=useState(null)
+
+  useEffect(() => {
+    async function loadSettings() {
+      setLoading(true)
+      const { data: settings } = await supabase.from('institution_settings').select('allow_manual_procedural_assignment').eq('institution_source',institutionSource).maybeSingle()
+      setAllowManual(settings?.allow_manual_procedural_assignment===true)
+      const { data: proceduralStaff } = await supabase.from('staff_credentials').select('full_name,medsa_id').eq('institution_source',institutionSource).eq('status','active').eq('specialty_type','procedural')
+      setAvailableProcedural(proceduralStaff||[])
+      setLoading(false)
+    }
+    loadSettings()
+  }, [institutionSource])
+
+  async function handleFindPatient() {
+    const { data } = await supabase.from('patients').select('id,full_name,medsa_id').or(`full_name.ilike.%${patientQuery}%,medsa_id.ilike.%${patientQuery}%`).limit(1).maybeSingle()
+    setFoundPatient(data||null)
+  }
+
+  async function handleBook() {
+    if (!foundPatient || !procedureType || !scheduledAt) return
+    setBooking(true)
+    // Auto-pairing: pick the first available procedural doctor unless the
+    // institution allows manual override and one was actually selected.
+    const assignedDoctor = (allowManual && manualSelection) ? manualSelection : (availableProcedural[0]?.medsa_id || null)
+    const method = (allowManual && manualSelection) ? 'manual_selection' : 'auto'
+    await supabase.from('surgery_bookings').insert({
+      institution_source: institutionSource, patient_id: foundPatient.id,
+      surgeon_medsa_id: doctorMedsaId, procedure_type: procedureType,
+      scheduled_at: new Date(scheduledAt).toISOString(),
+      procedural_doctor_medsa_id: assignedDoctor, assignment_method: method,
+    })
+    setBooking(false)
+    setBooked({ doctor: assignedDoctor, method })
+  }
+
+  if (booked) return (
+    <div style={{background:C.beige,flex:1,padding:'40px 20px',textAlign:'center'}}>
+      <div style={{fontSize:'36px',marginBottom:'12px'}}>✓</div>
+      <div style={{fontSize:'16px',fontWeight:700,marginBottom:'8px'}}>Surgery booked</div>
+      <div style={{fontSize:'13px',color:C.textSub}}>{booked.doctor ? `${booked.doctor} paired (${booked.method==='auto'?'auto-assigned':'your selection'})` : 'No procedural doctor available to pair yet — flagged for follow-up.'}</div>
+      <Btn variant="primary" style={{marginTop:'20px'}} onClick={()=>{setBooked(null);setFoundPatient(null);setPatientQuery('');setProcedureType('');setScheduledAt('');setManualSelection('')}}>Book another</Btn>
+    </div>
+  )
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&<>
+        <SecLabel>Patient</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          <div style={{display:'flex',gap:'8px',marginBottom:foundPatient?'10px':0}}>
+            <input value={patientQuery} onChange={e=>setPatientQuery(e.target.value)} placeholder="Patient name or MedsaID" style={{flex:1,padding:'10px',fontSize:'13px'}}/>
+            <Btn onClick={handleFindPatient}>Find</Btn>
+          </div>
+          {foundPatient&&<div style={{fontSize:'12px',color:C.green}}>✓ {foundPatient.full_name}</div>}
+        </Card>
+
+        <SecLabel>Procedure</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          <input value={procedureType} onChange={e=>setProcedureType(e.target.value)} placeholder="Procedure type" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="datetime-local" value={scheduledAt} onChange={e=>setScheduledAt(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </Card>
+
+        <SecLabel>Procedural doctor (e.g. anaesthesiologist)</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'16px'}}>
+          {!allowManual&&<div style={{fontSize:'12px',color:C.textSub}}>Auto-assigned from availability — {availableProcedural[0]?.full_name || 'none currently available'}. This institution has manual selection turned off.</div>}
+          {allowManual&&<>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>This institution allows manual selection. Leave unset to auto-assign, or choose a specific doctor.</div>
+            <select value={manualSelection} onChange={e=>setManualSelection(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px'}}>
+              <option value="">Auto-assign</option>
+              {availableProcedural.map(p=><option key={p.medsa_id} value={p.medsa_id}>{p.full_name}</option>)}
+            </select>
+          </>}
+        </Card>
+
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleBook} disabled={booking||!foundPatient||!procedureType||!scheduledAt}>{booking?'Booking…':'Book surgery'}</Btn>
+      </>}
+    </div>
+  )
+}
+
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
@@ -3615,7 +3719,7 @@ export default function PractitionerApp({ liveData={} }) {
   const [jumpToRecord,setJumpToRecord]=useState(false)
   if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setTier(session.tier);setSpecialtyType(session.specialtyType);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='dept_head'||role==='admin')&&{key:'postcall',icon:'⚠',label:'Post-Call'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'&&specialtyType==='surgeon')&&{key:'booksurgery',icon:'✚',label:'Book Surgery'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='dept_head'||role==='admin')&&{key:'postcall',icon:'⚠',label:'Post-Call'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -3636,6 +3740,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='coverage'&&(role==='hr'||role==='admin'||role==='dept_head')&&<CoverageGridScreen role={role} department={department}/>}
         {screen==='escalations'&&(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&<EscalationReviewScreen role={role} tier={tier} staffMedsaId={doctorName} institutionSource="practitioner"/>}
         {screen==='postcall'&&(role==='dept_head'||role==='admin')&&<PostCallReviewScreen department={department} institutionSource="practitioner" staffMedsaId={doctorName}/>}
+        {screen==='booksurgery'&&role==='doctor'&&specialtyType==='surgeon'&&<BookSurgeryScreen department={department} doctorMedsaId={doctorName} institutionSource="practitioner"/>}
         {screen==='onboarding'&&role==='hr'&&<OnboardingScreen staffMedsaId={doctorName}/>}
         {screen==='staffsearch'&&(role==='hr'||role==='admin')&&<EmployeeSearchScreen role={role}/>}
         {screen==='adminhome'&&role==='admin'&&<AdminHomeScreen/>}
