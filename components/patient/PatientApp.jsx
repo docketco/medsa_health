@@ -1578,20 +1578,44 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
     window.open(data.signedUrl, '_blank')
   }
 
-  const plans=[
-    {name:'AIA Prime Care',company:'AIA',type:'Comprehensive',price:'HK$1,200/mo',limit:'HK$1.2M annual',sponsored:true,
-     criteria:['Covers diabetes management','Includes outpatient visits','Includes lab tests'],
-     covers:['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)']},
-    {name:'Blue Cross Hospital Plan',company:'Blue Cross',type:'Hospital focus',price:'HK$980/mo',limit:'HK$800K annual',sponsored:false,
-     criteria:['Hospitalisation-focused','Lower monthly cost','Limited outpatient coverage'],
-     covers:['Hospitalisation','Specialist','Surgery']},
-    {name:'Bupa Gold Cover',company:'Bupa',type:'Premium + travel',price:'HK$2,100/mo',limit:'HK$2M + travel',sponsored:false,
-     criteria:['Includes travel emergency cover','Includes mental health','Higher monthly cost'],
-     covers:['Hospitalisation','Outpatient','Travel emergency','Mental health']},
-    {name:'AIA Critical Rider',company:'AIA',type:'Critical illness',price:'HK$450/mo',limit:'HK$500K lump sum',sponsored:true,
-     criteria:['Lump sum on diagnosis','57 covered conditions','Add-on, not standalone'],
-     covers:['Critical illness lump sum','57 covered conditions']},
-  ]
+  const [plans,setPlans]=useState([])
+  const [plansLoading,setPlansLoading]=useState(true)
+  const [patientConditions,setPatientConditions]=useState([])
+
+  useEffect(() => {
+    async function loadPlansAndMatch() {
+      setPlansLoading(true)
+      const medsaId = patient?.medsa_id
+      let conditionNames = []
+      if (medsaId) {
+        const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+        if (patientRow) {
+          const { data: conds } = await supabase.from('conditions').select('condition_name').eq('patient_id', patientRow.id).eq('active', true)
+          conditionNames = (conds||[]).map(c => c.condition_name?.toLowerCase()).filter(Boolean)
+        }
+      }
+      setPatientConditions(conditionNames)
+      const { data: realPlans } = await supabase.from('insurance_plans').select('*').eq('status','active')
+      const mapped = (realPlans||[]).map(p => {
+        const coveredLower = (p.covered_conditions||[]).map(c=>c.toLowerCase())
+        // Real matching: does the patient have a condition this plan explicitly
+        // covers? This is deterministic overlap-checking, not AI - see chat.
+        const matchedConditions = conditionNames.filter(c => coveredLower.some(cov => cov.includes(c) || c.includes(cov)))
+        return {
+          name: p.plan_name, company: p.company_name, type: p.plan_type,
+          price: p.monthly_premium, limit: p.annual_limit, sponsored: p.sponsored,
+          criteria: p.covered_conditions||[], covers: p.covered_categories||[],
+          matchedConditions, isMatched: matchedConditions.length > 0,
+        }
+      })
+      // Matched plans surface first - genuine personalisation now, not just a claim
+      mapped.sort((a,b) => (b.isMatched?1:0) - (a.isMatched?1:0))
+      setPlans(mapped)
+      setPlansLoading(false)
+    }
+    loadPlansAndMatch()
+  }, [patient?.medsa_id])
+
   // These plan terms were never translated at all - shown in English
   // regardless of selected language. Rather than restructure the whole
   // plans array, this translates the known phrases at render time.
@@ -1665,8 +1689,8 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
           <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ {isEn?'How Medsa connects you to insurers':'Medsa如何連接您與保險公司'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
             {isEn
-              ? 'Medsa shows plans filtered against your verified health records — no questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, agent assignment, claims, and status updates will all sync back here automatically — one place for everything health.'
-              : 'Medsa根據您已核實的健康記錄篩選方案——無需填寫問卷,亦無需接聽推銷電話。這是中立的比較,並非個人建議;最終選擇由您決定。當您提出查詢後,您的資料將直接轉發予保險公司或持牌中介人。一旦保險公司與Medsa完成系統整合,代理人分配、索償及狀態更新將自動同步至此——所有健康相關事務,一站式處理。'}
+              ? 'Medsa is designed to filter plans against your verified health records once insurers have signed on — for now, this shows a general comparison across available plans, not a personalised match. No questionnaires, no cold calls. This is a neutral comparison, not personal advice; you decide what fits. When you inquire, your details are forwarded directly to the insurer or a licensed intermediary. Once insurers integrate with Medsa, personalised filtering, agent assignment, claims, and status updates will all work automatically — one place for everything health.'
+              : 'Medsa的設計目標是在保險公司完成系統整合後,根據您已核實的健康記錄篩選方案——目前顯示的是各方案的一般比較,並非個人化配對。無需填寫問卷,亦無需接聽推銷電話。這是中立的比較,並非個人建議;最終選擇由您決定。當您提出查詢後,您的資料將直接轉發予保險公司或持牌中介人。一旦保險公司與Medsa完成系統整合,個人化篩選、代理人分配、索償及狀態更新將自動運作——所有健康相關事務,一站式處理。'}
           </div>
         </div>
 
@@ -1676,11 +1700,14 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         </div>
 
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
-        {plans.map((plan,i)=>(
+        {plansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'Loading plans…':'載入計劃中…'}</div>}
+        {!plansLoading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No plans available yet.':'暫無可用計劃。'}</div>}
+        {!plansLoading&&plans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
+                  {plan.isMatched&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Matches your records':'符合您的記錄'}</span>}
                   {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Sponsored':'贊助'}</span>}
                   <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{pt(plan.type)}</span>
                 </div>
