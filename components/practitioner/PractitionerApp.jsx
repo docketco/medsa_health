@@ -65,6 +65,25 @@ const ROLES = {
   hr:           {label:'Human Resources',     color:C.navy,   bg:C.navyLight,   icon:'⬢'},
 }
 
+// ── CLINICAL ACCESS — on-duty vs off-duty ────────────────────────────────────
+// Doctors keep full clinical data access at all times, on or off duty - they
+// legitimately need to think through a case after their shift ends. Nurses
+// only get full access while actually on shift, matching real-time bedside
+// need rather than after-the-fact deliberation. Every other role never gets
+// clinical data regardless of duty status.
+async function hasClinicalAccess(role, doctorName) {
+  if (role === 'doctor') return true
+  if (role !== 'nurse' && role !== 'clinic_nurse') return false
+  if (!doctorName) return false
+  const now = new Date()
+  const dayOfWeek = now.getDay()
+  const { data } = await supabase.from('doctor_availability').select('*')
+    .eq('doctor_name', doctorName).eq('day_of_week', dayOfWeek).maybeSingle()
+  if (!data || data.is_off) return false
+  const currentTime = now.toTimeString().slice(0,5)
+  return currentTime >= (data.start_time?.slice(0,5)||'00:00') && currentTime <= (data.end_time?.slice(0,5)||'00:00')
+}
+
 const ACCESS = {
   admin:        {identity:true,vitals:false,history:true,medications:true,allergies:true,mental:true,imaging:true,labs:true,prescribe:false,dispense:false,admin_perms:true,admission_reason:true},
   dept_head:    {identity:true,vitals:true,history:true,medications:true,allergies:true,imaging:true,labs:true,prescribe:true,dispense:false,admission_reason:true},
@@ -95,11 +114,13 @@ function ClockInScreen({ onLogin }) {
     // shift openings works correctly. Falls back to null for demo-only
     // staff never onboarded through the real flow.
     let specialty = null
+    let tier = null
     if (needsDoctorName && doctorName) {
-      const { data } = await supabase.from('staff_credentials').select('specialty').eq('full_name', doctorName).maybeSingle()
+      const { data } = await supabase.from('staff_credentials').select('specialty,tier').eq('full_name', doctorName).maybeSingle()
       specialty = data?.specialty || null
+      tier = data?.tier || null
     }
-    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null, specialty })
+    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null, specialty, tier })
   }
 
   return (
@@ -864,10 +885,17 @@ function CheckInScreen() {
   )
 }
 
-function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRecord=false }) {
+function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRecord=false, doctorName }) {
   const [view,setView]=useState('search')
   const [activeTab,setActiveTab]=useState('overview')
   const [isAdmitted,setIsAdmitted]=useState(false) // demo toggle - Bed/Location only shows once actually admitted
+  const [clinicalAccessGranted,setClinicalAccessGranted]=useState(role==='doctor') // doctors always pass instantly, nurses check duty
+  const [accessChecked,setAccessChecked]=useState(role==='doctor')
+
+  useEffect(() => {
+    if (role==='doctor') return // already granted above, no check needed
+    hasClinicalAccess(role, doctorName).then(granted => { setClinicalAccessGranted(granted); setAccessChecked(true) })
+  }, [role, doctorName])
 
   useEffect(() => {
     if (autoOpenLog) { setView('patient'); setActiveTab('log') }
@@ -969,6 +997,15 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
 
   if(view==='ems') return <EMSCard onClose={()=>setView('search')}/>
   if(view==='newpatient') return <NewPatientRegistration onBack={()=>setView('search')}/>
+
+  if((role==='nurse'||role==='clinic_nurse')&&accessChecked&&!clinicalAccessGranted) return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'16px',textAlign:'center'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'6px'}}>Patient data access is off-duty restricted</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>You're currently outside your scheduled shift hours. Clinical record access for nurses is limited to on-duty time — check your schedule if this seems wrong.</div>
+      </div>
+    </div>
+  )
 
   if(view==='patient') {
     const tabs=[
@@ -1273,8 +1310,8 @@ function DoctorVideoCallModal({ patientName, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
-function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord, onCancelCheckIn }) {
-  const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup' | 'prepnotes'
+function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, onGoToFullDiagnosis, onSwitchDoctor, onCancelAppt, onBookFollowup, onViewFullRecord, onCancelCheckIn, role, doctorName }) {
+  const [mode,setMode]=useState(null) // null | 'message' | 'switch' | 'cancel' | 'followup' | 'prepnotes' | 'escalate'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
   const [msgSaving,setMsgSaving]=useState(false)
@@ -1393,6 +1430,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
           {onViewFullRecord&&<Btn style={{width:'100%'}} onClick={onViewFullRecord}>📄 View full record</Btn>}
+          {(role==='nurse'||role==='clinic_nurse')&&<Btn variant="danger" style={{width:'100%'}} onClick={()=>setMode('escalate')}>⚠ Flag a concern about an order</Btn>}
           {isCheckedIn
             ? <Btn style={{width:'100%'}} onClick={onGoToFullDiagnosis}>📋 Log diagnosis</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ Logging new diagnosis unlocks once this patient has checked in</div>}
@@ -1457,6 +1495,15 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           </div>
         </>}
       </div>
+      {mode==='escalate'&&<EscalationRaiseModal
+        patient={fullPatient||{id:null}}
+        orderText={medications?.[0] ? `${medications[0].medication_name||medications[0]}` : 'Current order (specify in concern below)'}
+        doctorMedsaId={doctorLabel}
+        nurseMedsaId={doctorName}
+        institutionSource="practitioner"
+        onClose={()=>setMode(null)}
+        onRaised={()=>{setMode(null);onClose()}}
+      />}
     </div>
   )
 }
@@ -2545,6 +2592,133 @@ function CoverageGridScreen({ role, department }) {
   )
 }
 
+// ── ORDER ESCALATION — nurse concern → doctor → APN/WM → DOM+COS ────────────
+function EscalationRaiseModal({ patient, orderText, doctorMedsaId, nurseMedsaId, institutionSource, onClose, onRaised }) {
+  const [concern,setConcern]=useState('')
+  const [submitting,setSubmitting]=useState(false)
+
+  async function handleSubmit() {
+    if (!concern.trim()) return
+    setSubmitting(true)
+    await supabase.from('order_escalations').insert({
+      institution_source: institutionSource, patient_id: patient?.id,
+      original_order_text: orderText, prescribing_doctor_medsa_id: doctorMedsaId,
+      raised_by_nurse_medsa_id: nurseMedsaId, concern, stage: 'clarification',
+    })
+    setSubmitting(false)
+    onRaised&&onRaised()
+    onClose()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Flag a concern</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Use ISBAR — what's the issue, what does the history show, what would you recommend instead?</div>
+        <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>Order: {orderText}</div>
+        <textarea value={concern} onChange={e=>setConcern(e.target.value)} rows={4} placeholder="e.g. Ordered NSAID, but patient's eGFR is dangerously low per their history…"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+          <Btn variant="danger" style={{flex:1}} onClick={handleSubmit} disabled={submitting||!concern.trim()}>{submitting?'Sending…':'Flag to doctor'}</Btn>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EscalationReviewScreen({ role, tier, staffMedsaId, institutionSource }) {
+  const [escalations,setEscalations]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [activeId,setActiveId]=useState(null)
+  const [responseText,setResponseText]=useState('')
+  const [submitting,setSubmitting]=useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('order_escalations').select('*').eq('institution_source',institutionSource).neq('stage','resolved').order('created_at',{ascending:false})
+    setEscalations(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  // Who can act at each stage - matches the real chain of command
+  function canAct(esc) {
+    if (esc.stage==='clarification') return role==='doctor' && esc.prescribing_doctor_medsa_id===staffMedsaId
+    if (esc.stage==='apn_wm_review') return role==='nurse' && (tier==='apn'||tier==='ward_manager')
+    if (esc.stage==='dom_cos_ruling') return (role==='nurse'&&tier==='dom') || (role==='doctor'&&tier==='consultant')
+    return false
+  }
+
+  async function handleDoctorResponse(esc, updated) {
+    setSubmitting(true)
+    if (updated) {
+      await supabase.from('order_escalations').update({ doctor_response: responseText, stage:'resolved', resolved_at: new Date().toISOString(), final_ruling: 'Order updated by prescribing doctor' }).eq('id', esc.id)
+    } else {
+      await supabase.from('order_escalations').update({ doctor_response: responseText, stage:'apn_wm_review' }).eq('id', esc.id)
+    }
+    setSubmitting(false)
+    setResponseText('')
+    setActiveId(null)
+    load()
+  }
+
+  async function handleApnWmReview(esc, resolved) {
+    setSubmitting(true)
+    if (resolved) {
+      await supabase.from('order_escalations').update({ apn_wm_medsa_id: staffMedsaId, apn_wm_notes: responseText, stage:'resolved', resolved_at: new Date().toISOString(), final_ruling: responseText }).eq('id', esc.id)
+    } else {
+      await supabase.from('order_escalations').update({ apn_wm_medsa_id: staffMedsaId, apn_wm_notes: responseText, stage:'dom_cos_ruling' }).eq('id', esc.id)
+    }
+    setSubmitting(false)
+    setResponseText('')
+    setActiveId(null)
+    load()
+  }
+
+  async function handleFinalRuling(esc) {
+    setSubmitting(true)
+    const field = role==='nurse' ? 'dom_medsa_id' : 'cos_medsa_id'
+    await supabase.from('order_escalations').update({ [field]: staffMedsaId, final_ruling: responseText, stage:'resolved', resolved_at: new Date().toISOString() }).eq('id', esc.id)
+    setSubmitting(false)
+    setResponseText('')
+    setActiveId(null)
+    load()
+  }
+
+  const STAGE_LABEL = { clarification:'Awaiting doctor response', apn_wm_review:'Escalated to APN/Ward Manager', dom_cos_ruling:'Escalated to DOM + Chief of Service' }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&escalations.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No open escalations.</div>}
+      {!loading&&escalations.map(esc=>(
+        <Card key={esc.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+          <div style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',background:C.redLight,color:C.red,display:'inline-block',fontWeight:600,marginBottom:'8px'}}>{STAGE_LABEL[esc.stage]}</div>
+          <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>Order: {esc.original_order_text}</div>
+          <div style={{fontSize:'13px',marginBottom:'10px'}}>{esc.concern}</div>
+          {esc.doctor_response&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Doctor: {esc.doctor_response}</div>}
+          {esc.apn_wm_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>APN/WM: {esc.apn_wm_notes}</div>}
+          {canAct(esc)&&activeId!==esc.id&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>setActiveId(esc.id)}>Respond</Btn>}
+          {activeId===esc.id&&<>
+            <textarea value={responseText} onChange={e=>setResponseText(e.target.value)} rows={3} placeholder="Your response…"
+              style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+            {esc.stage==='clarification'&&<div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>handleDoctorResponse(esc,false)} disabled={submitting||!responseText.trim()}>Order stands — escalate</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>handleDoctorResponse(esc,true)} disabled={submitting||!responseText.trim()}>Update order — resolved</Btn>
+            </div>}
+            {esc.stage==='apn_wm_review'&&<div style={{display:'flex',gap:'8px'}}>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>handleApnWmReview(esc,true)} disabled={submitting||!responseText.trim()}>Resolved</Btn>
+              <Btn style={{flex:1}} onClick={()=>handleApnWmReview(esc,false)} disabled={submitting||!responseText.trim()}>Escalate to DOM+COS</Btn>
+            </div>}
+            {esc.stage==='dom_cos_ruling'&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>handleFinalRuling(esc)} disabled={submitting||!responseText.trim()}>Issue final ruling</Btn>}
+          </>}
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
@@ -3020,6 +3194,8 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         patient={activeTodoPatient}
         onClose={()=>setActiveTodoPatient(null)}
         doctorLabel={myName}
+        role={role}
+        doctorName={doctorName}
         onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
         onViewFullRecord={()=>{setActiveTodoPatient(null);onViewFullRecord&&onViewFullRecord()}}
@@ -3350,12 +3526,13 @@ export default function PractitionerApp({ liveData={} }) {
   const [department,setDepartment]=useState(null)
   const [doctorName,setDoctorName]=useState(null)
   const [specialty,setSpecialty]=useState(null)
+  const [tier,setTier]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
   const [jumpToRecord,setJumpToRecord]=useState(false)
-  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setTier(session.tier);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -3367,13 +3544,14 @@ export default function PractitionerApp({ liveData={} }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role}/>}
         {screen==='checkin'&&<CheckInScreen/>}
-        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog} autoOpenRecord={jumpToRecord}/>}
+        {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog} autoOpenRecord={jumpToRecord} doctorName={doctorName}/>}
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}
         {screen==='permissions'&&role==='admin'&&<AdminPermissions/>}
         {screen==='workinghours'&&role==='hr'&&<WorkingHoursScreen/>}
         {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName} onNavOnboard={()=>setScreen('onboarding')} onNavCoverage={()=>setScreen('coverage')}/>}
         {screen==='coverage'&&(role==='hr'||role==='admin'||role==='dept_head')&&<CoverageGridScreen role={role} department={department}/>}
+        {screen==='escalations'&&(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&<EscalationReviewScreen role={role} tier={tier} staffMedsaId={doctorName} institutionSource="practitioner"/>}
         {screen==='onboarding'&&role==='hr'&&<OnboardingScreen staffMedsaId={doctorName}/>}
         {screen==='staffsearch'&&(role==='hr'||role==='admin')&&<EmployeeSearchScreen role={role}/>}
         {screen==='adminhome'&&role==='admin'&&<AdminHomeScreen/>}
