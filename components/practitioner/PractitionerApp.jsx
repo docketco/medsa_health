@@ -2000,6 +2000,9 @@ function OnboardingScreen({ staffMedsaId }) {
   const [fullName,setFullName]=useState('')
   const [department,setDepartment]=useState('')
   const [specialty,setSpecialty]=useState('')
+  const [tier,setTier]=useState('')
+  const [specialtyType,setSpecialtyType]=useState('physician')
+  const [headTrack,setHeadTrack]=useState('')
   const [regNumber,setRegNumber]=useState('')
   const [regExpiry,setRegExpiry]=useState('')
   const [disciplinaryStatus,setDisciplinaryStatus]=useState('clear')
@@ -2010,6 +2013,10 @@ function OnboardingScreen({ staffMedsaId }) {
   const [epcScanning,setEpcScanning]=useState(false)
   const [submitting,setSubmitting]=useState(false)
   const [submitted,setSubmitted]=useState(false)
+
+  const DOCTOR_TIERS = [['intern','Intern / House Officer'],['resident','Resident (MO/Registrar)'],['associate_consultant','Associate Consultant'],['consultant','Consultant / Chief of Service']]
+  const NURSE_TIERS = [['enrolled','Enrolled Nurse'],['registered','Registered Nurse'],['apn','Advanced Practice Nurse'],['ward_manager','Ward Manager'],['dom','Department Operations Manager']]
+  const relevantTiers = selRole==='doctor' ? DOCTOR_TIERS : selRole==='nurse' ? NURSE_TIERS : []
 
   const EPC_ROLES = ['doctor','nurse']
   const hasEpc = EPC_ROLES.includes(selRole)
@@ -2032,6 +2039,9 @@ function OnboardingScreen({ staffMedsaId }) {
       specialty: specialty||null,
       registration_number: regNumber||null,
       registration_expiry: regExpiry||null,
+      tier: tier||null,
+      specialty_type: selRole==='doctor' ? specialtyType : null,
+      head_track: headTrack||null,
       disciplinary_status: disciplinaryStatus,
       disciplinary_notes: disciplinaryStatus==='flagged' ? disciplinaryNotes : null,
       has_epc: hasEpc,
@@ -2072,6 +2082,29 @@ function OnboardingScreen({ staffMedsaId }) {
           <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Full legal name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           {(selRole==='doctor')&&<input value={specialty} onChange={e=>setSpecialty(e.target.value)} placeholder="Specialty (e.g. OBGYN) - used for shift-opening matching" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          {relevantTiers.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Tier - permanent, promotion-based, not tied to daily duty</div>
+            <select value={tier} onChange={e=>setTier(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+              <option value="">Select tier…</option>
+              {relevantTiers.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+            </select>
+          </>}
+          {selRole==='doctor'&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Specialty type - contractual, layered on tier</div>
+            <select value={specialtyType} onChange={e=>setSpecialtyType(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+              <option value="physician">Physician (non-surgical)</option>
+              <option value="surgeon">Surgeon</option>
+              <option value="procedural">Procedural (e.g. anaesthesiologist, endoscopist)</option>
+            </select>
+          </>}
+          {(tier==='consultant'||tier==='dom')&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Department Head track (only if this person holds that role)</div>
+            <select value={headTrack} onChange={e=>setHeadTrack(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+              <option value="">Not a Department Head</option>
+              <option value="doctor">Doctor-track Department Head</option>
+              <option value="nurse">Nurse-track Department Head</option>
+            </select>
+          </>}
           <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
             <select value={employmentType} onChange={e=>setEmploymentType(e.target.value)} style={{flex:1,padding:'10px',fontSize:'12px'}}>
               <option value="full_time">Full-time</option>
