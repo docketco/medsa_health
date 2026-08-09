@@ -115,12 +115,14 @@ function ClockInScreen({ onLogin }) {
     // staff never onboarded through the real flow.
     let specialty = null
     let tier = null
+    let specialtyType = null
     if (needsDoctorName && doctorName) {
-      const { data } = await supabase.from('staff_credentials').select('specialty,tier').eq('full_name', doctorName).maybeSingle()
+      const { data } = await supabase.from('staff_credentials').select('specialty,tier,specialty_type').eq('full_name', doctorName).maybeSingle()
       specialty = data?.specialty || null
       tier = data?.tier || null
+      specialtyType = data?.specialty_type || null
     }
-    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null, specialty, tier })
+    onLogin({ role: sel, department: dept, doctorName: needsDoctorName ? doctorName : null, specialty, tier, specialtyType })
   }
 
   return (
@@ -302,7 +304,7 @@ function EMSCard({ onClose }) {
 }
 
 // ── PRACTITIONER ID ───────────────────────────────────────────────────────────
-function PractitionerIDScreen({ role }) {
+function PractitionerIDScreen({ role, doctorName, specialtyType }) {
   const r=ROLES[role]
   const access=ACCESS[role]||{}
   const [idTab,setIdTab]=useState('credentials')
@@ -384,6 +386,7 @@ function PractitionerIDScreen({ role }) {
           </div>
         ))}
       </Card>
+      {specialtyType==='surgeon'&&<div style={{margin:'0 16px 16px'}}><LogEmergencySurgeryButton doctorMedsaId={doctorName} institutionSource="practitioner"/></div>}
       </>}
       <div style={{display:'flex',gap:'8px',padding:'0 16px 16px'}}>
         <button onClick={()=>alert('Add your Medsa Staff ID to Apple Wallet — coming in Phase 3. Use your physical card in the meantime.')} style={{flex:1,border:'none',borderRadius:'10px',padding:'11px',fontSize:'12px',fontWeight:600,cursor:'pointer',fontFamily:'inherit',background:'#000',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px'}}>
@@ -2719,6 +2722,85 @@ function EscalationReviewScreen({ role, tier, staffMedsaId, institutionSource })
   )
 }
 
+// ── POST-CALL ELECTIVE BLOCK — automatic flag, not manual tracking ──────────
+function LogEmergencySurgeryButton({ doctorMedsaId, institutionSource }) {
+  const [logging,setLogging]=useState(false)
+  const [logged,setLogged]=useState(false)
+
+  async function handleLog() {
+    setLogging(true)
+    const now = new Date()
+    const nextDay = new Date(now)
+    nextDay.setDate(nextDay.getDate()+1)
+    await supabase.from('post_call_flags').insert({
+      institution_source: institutionSource, doctor_medsa_id: doctorMedsaId,
+      emergency_surgery_completed_at: now.toISOString(),
+      blocked_date: nextDay.toISOString().slice(0,10), status: 'active',
+    })
+    setLogging(false)
+    setLogged(true)
+  }
+
+  if (logged) return <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,textAlign:'center'}}>✓ Logged — your elective slots tomorrow are flagged for reassignment</div>
+
+  return (
+    <Btn variant="danger" style={{width:'100%'}} onClick={handleLog} disabled={logging}>
+      {logging?'Logging…':'⚠ Log overnight emergency surgery — flags tomorrow\'s elective slots'}
+    </Btn>
+  )
+}
+
+function PostCallReviewScreen({ department, institutionSource, staffMedsaId }) {
+  const [flags,setFlags]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [reassignFor,setReassignFor]=useState(null)
+  const [reassignTo,setReassignTo]=useState('')
+
+  async function load() {
+    setLoading(true)
+    const today = new Date().toISOString().slice(0,10)
+    const { data } = await supabase.from('post_call_flags').select('*').eq('institution_source',institutionSource).eq('status','active').eq('blocked_date',today)
+    setFlags(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleClear(flag) {
+    await supabase.from('post_call_flags').update({ status:'cleared' }).eq('id', flag.id)
+    load()
+  }
+
+  async function handleReassign(flag) {
+    if (!reassignTo.trim()) return
+    await supabase.from('post_call_flags').update({ status:'reassigned', reassigned_to: reassignTo }).eq('id', flag.id)
+    setReassignFor(null); setReassignTo('')
+    load()
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Surgeons flagged here worked overnight emergency surgery and are legally blocked from their scheduled elective slots today — hand off to a rested colleague.</div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+      {!loading&&flags.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>No active post-call blocks today.</div>}
+      {!loading&&flags.map(f=>(
+        <Card key={f.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+          <div style={{fontSize:'13px',fontWeight:600}}>{f.doctor_medsa_id}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Emergency surgery completed {new Date(f.emergency_surgery_completed_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'})}</div>
+          {reassignFor===f.id
+            ? <div style={{display:'flex',gap:'8px'}}>
+                <input value={reassignTo} onChange={e=>setReassignTo(e.target.value)} placeholder="Reassign to (name)" style={{flex:1,padding:'8px',fontSize:'12px'}}/>
+                <Btn variant="primary" onClick={()=>handleReassign(f)}>Confirm</Btn>
+              </div>
+            : <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1}} onClick={()=>handleClear(f)}>Clear (no elective slots today)</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={()=>setReassignFor(f.id)}>Reassign elective slots</Btn>
+              </div>}
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(STAFF_DIRECTORY[0]?.name || '')
   const [hours,setHours]=useState({})
@@ -3527,12 +3609,13 @@ export default function PractitionerApp({ liveData={} }) {
   const [doctorName,setDoctorName]=useState(null)
   const [specialty,setSpecialty]=useState(null)
   const [tier,setTier]=useState(null)
+  const [specialtyType,setSpecialtyType]=useState(null)
   const [screen,setScreen]=useState('id')
   const [jumpToLog,setJumpToLog]=useState(false)
   const [jumpToRecord,setJumpToRecord]=useState(false)
-  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setTier(session.tier);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
+  if(!role) return <ClockInScreen onLogin={(session)=>{setRole(session.role);setDepartment(session.department);setDoctorName(session.doctorName);setSpecialty(session.specialty);setTier(session.tier);setSpecialtyType(session.specialtyType);setScreen(session.role==='receptionist'?'checkin':session.role==='hr'?'taskboard':'id')}}/>
   const r=ROLES[role]
-  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
+  const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='dept_head'||role==='admin')&&{key:'postcall',icon:'⚠',label:'Post-Call'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -3542,7 +3625,7 @@ export default function PractitionerApp({ liveData={} }) {
         <button onClick={()=>setRole(null)} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'11px',padding:'4px 10px',borderRadius:'20px',cursor:'pointer',fontFamily:'inherit'}}>Clock out</button>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='id'&&<PractitionerIDScreen role={role}/>}
+        {screen==='id'&&<PractitionerIDScreen role={role} doctorName={doctorName} specialtyType={specialtyType}/>}
         {screen==='checkin'&&<CheckInScreen/>}
         {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog} autoOpenRecord={jumpToRecord} doctorName={doctorName}/>}
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
@@ -3552,6 +3635,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='taskboard'&&(role==='hr'||role==='admin')&&<TaskBoardScreen role={role} staffMedsaId={doctorName} onNavOnboard={()=>setScreen('onboarding')} onNavCoverage={()=>setScreen('coverage')}/>}
         {screen==='coverage'&&(role==='hr'||role==='admin'||role==='dept_head')&&<CoverageGridScreen role={role} department={department}/>}
         {screen==='escalations'&&(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&<EscalationReviewScreen role={role} tier={tier} staffMedsaId={doctorName} institutionSource="practitioner"/>}
+        {screen==='postcall'&&(role==='dept_head'||role==='admin')&&<PostCallReviewScreen department={department} institutionSource="practitioner" staffMedsaId={doctorName}/>}
         {screen==='onboarding'&&role==='hr'&&<OnboardingScreen staffMedsaId={doctorName}/>}
         {screen==='staffsearch'&&(role==='hr'||role==='admin')&&<EmployeeSearchScreen role={role}/>}
         {screen==='adminhome'&&role==='admin'&&<AdminHomeScreen/>}
