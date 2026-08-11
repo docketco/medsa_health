@@ -55,23 +55,42 @@ function hoursRemaining(checkedInAt) {
 }
 
 function StaffLogin({ onLogin }) {
-  const staff = [
-    {id:1, name:'Dr Chan Siu-ming', role:'doctor', roleLabel:'Doctor', color:C.green, department:'Internal Medicine'},
-    {id:2, name:'Dr Lam Wai-yee', role:'doctor', roleLabel:'Doctor', color:C.green, department:'Cardiology'},
-    {id:3, name:'Yip Mei', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue, department:'Internal Medicine'},
-    {id:4, name:'Wong Siu-fan', role:'frontdesk', roleLabel:'Nurse / Front Desk', color:C.blue, department:'Cardiology'},
-    {id:5, name:'Chan Ka-yee (Owner)', role:'admin', roleLabel:'Clinic Manager', color:C.purple, department:'All departments'},
-  ]
-  // For a solo clinic every staff member effectively shares one department -
-  // this list only needs to grow when Medsa is deployed at a multi-department
-  // institution. Admin/clinic manager always sees every department.
-  const departments = ['Internal Medicine','Cardiology','Paediatrics','Dermatology']
+  const [staff,setStaff]=useState([])
+  const [departments,setDepartments]=useState([])
+  const [loading,setLoading]=useState(true)
   const [pin,setPin]=useState('')
+  const [pinError,setPinError]=useState(false)
   const [selected,setSelected]=useState(null)
   const [stage,setStage]=useState('pick') // pick | pin | department
   const [chosenDept,setChosenDept]=useState(null)
 
+  const ROLE_LABELS = { doctor:'Doctor', frontdesk:'Nurse / Front Desk', admin:'Practice Manager' }
+  const ROLE_COLORS = { doctor:C.green, frontdesk:C.blue, admin:C.purple }
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      // Real query against the same shared staff_credentials table
+      // PractitionerApp uses - clinic_staff was retired before ever going
+      // live, so a clinic doctor's identity is portable if they ever also
+      // work at a Medsa-partnered hospital later.
+      const { data } = await supabase.from('staff_credentials').select('*')
+        .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
+      const mapped = (data||[]).map(s => ({
+        id: s.medsa_id, name: s.full_name, role: s.role,
+        roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
+        department: s.department, pin: s.pin,
+      }))
+      setStaff(mapped)
+      setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
+      setLoading(false)
+    }
+    load()
+  }, [])
+
   function handlePinConfirm() {
+    if (pin !== selected.pin) { setPinError(true); return }
+    setPinError(false)
     if (selected.role==='admin') {
       onLogin({ ...selected, department: 'All departments' })
     } else {
@@ -90,8 +109,10 @@ function StaffLogin({ onLogin }) {
             {stage==='department'&&'Which department are you working in today?'}
           </div>
         </div>
-        {stage==='pick'&&(
+        {loading&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+        {!loading&&stage==='pick'&&(
           <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+            {staff.length===0&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px',padding:'20px'}}>No staff onboarded yet — ask your Practice Manager to add you.</div>}
             {staff.map(s=>(
               <div key={s.id} onClick={()=>{setSelected(s);setStage('pin')}} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
                 <div style={{width:38,height:38,borderRadius:'10px',background:s.color+'22',color:s.color,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'14px',flexShrink:0}}>{s.name[0]}</div>
@@ -111,10 +132,11 @@ function StaffLogin({ onLogin }) {
               <div style={{fontSize:'15px',fontWeight:600}}>{selected.name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{selected.roleLabel}</div>
             </div>
-            <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="PIN" maxLength={4}
-              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'18px',textAlign:'center',letterSpacing:'8px',marginBottom:'14px',boxSizing:'border-box'}}/>
+            <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="PIN" maxLength={4}
+              style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'18px',textAlign:'center',letterSpacing:'8px',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
+            {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect PIN</div>}
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('');setStage('pick')}}>Back</Btn>
+              <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('');setPinError(false);setStage('pick')}}>Back</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm}>Sign in</Btn>
             </div>
           </div>
@@ -932,9 +954,35 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
   const waiting = pending.filter(p=>p.status==='pending')
   const done = pending.filter(p=>p.status==='printed')
 
+  // Real dispensing history export - queries the actual dispensed_by/
+  // dispensed_at fields on medications, not just what's currently pending
+  // in this session's queue.
+  const [exporting,setExporting]=useState(false)
+  const [exportMsg,setExportMsg]=useState(null)
+  async function handleExportMedicationLog() {
+    setExporting(true)
+    const { data } = await supabase.from('medications').select('medication_name,dosage,dispensed_by,dispensed_at,patient_id,patients(full_name)')
+      .eq('institution_source','clinic_ops').not('dispensed_at','is',null).order('dispensed_at',{ascending:false})
+    const rows = [['Patient','Medication','Dosage','Dispensed By','Dispensed At']]
+    ;(data||[]).forEach(m => rows.push([m.patients?.full_name||'Unknown', m.medication_name||'', m.dosage||'', m.dispensed_by||'', m.dispensed_at?new Date(m.dispensed_at).toLocaleString('en-HK'):'']))
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medication-Log-${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
+    setExporting(false)
+    setExportMsg(`Downloaded ${(data||[]).length} records`)
+    setTimeout(()=>setExportMsg(null), 3000)
+  }
+
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Prescriptions</h2>
+      <div style={{textAlign:'center',marginBottom:'16px'}}>
+        {exportMsg&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{'\u2713'} {exportMsg}</div>}
+        <button onClick={handleExportMedicationLog} disabled={exporting} style={{padding:'8px 16px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{exporting?'Preparing…':'Export medication log (CSV)'}</button>
+      </div>
       {inventoryWarning&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.red}}>{'\u26a0'} {inventoryWarning}</div>}
       {waiting.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px',marginBottom:'20px'}}>No pending prescriptions right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
@@ -1278,6 +1326,135 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
 // and what patients see as bookable slots in Find Care - replacing the
 // previous hardcoded/pseudo-random time slots on both sides.
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+
+// ── PRACTICE MANAGER — STAFF ─────────────────────────────────────────────────
+// Deliberately consolidated into one screen with tabs, not five separate
+// screens like the Practitioner-side HR system - a small clinic doesn't need
+// that much structure, just needs the same real underlying jobs done.
+function PracticeManagerStaffScreen({ staffMember }) {
+  const [tab,setTab]=useState('roster')
+  const [staff,setStaff]=useState([])
+  const [leaves,setLeaves]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showOnboard,setShowOnboard]=useState(false)
+  const [newName,setNewName]=useState('')
+  const [newRole,setNewRole]=useState('doctor')
+  const [newDept,setNewDept]=useState('')
+  const [newReg,setNewReg]=useState('')
+  const [newExpiry,setNewExpiry]=useState('')
+  const [newDisciplinary,setNewDisciplinary]=useState('clear')
+  const [newPin,setNewPin]=useState('')
+  const [saving,setSaving]=useState(false)
+
+  async function load() {
+    setLoading(true)
+    const [{data:s},{data:l}] = await Promise.all([
+      supabase.from('staff_credentials').select('*').eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
+      supabase.from('clinic_leave_requests').select('*').eq('institution_source','clinic_ops').eq('status','pending'),
+    ])
+    setStaff(s||[])
+    setLeaves(l||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  const expiringSoon = staff.filter(s => s.registration_expiry && new Date(s.registration_expiry) <= new Date(Date.now()+120*24*60*60*1000))
+
+  async function handleOnboard() {
+    if (!newName || !newDept || !newPin) return
+    setSaving(true)
+    await supabase.from('staff_credentials').insert({
+      institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
+      full_name:newName, role:newRole, department:newDept, pin:newPin,
+      registration_number:newReg||null, registration_expiry:newExpiry||null,
+      disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
+      verification_status:'verified',
+    })
+    setSaving(false)
+    setShowOnboard(false)
+    setNewName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('')
+    load()
+  }
+
+  async function handleOffboard(person) {
+    await supabase.from('staff_credentials').update({ status:'offboarded', offboarded_by:staffMember?.name, offboarded_at:new Date().toISOString() }).eq('id', person.id)
+    load()
+  }
+
+  async function handleLeaveDecision(leave, approve) {
+    await supabase.from('clinic_leave_requests').update({ status: approve?'approved':'denied', decided_by:staffMember?.name }).eq('id', leave.id)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
+        {[['roster','Staff'],['expiring',`Expiring${expiringSoon.length?` (${expiringSoon.length})`:''}`],['leave',`Leave${leaves.length?` (${leaves.length})`:''}`]].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{padding:'8px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub}}>{l}</div>
+        ))}
+      </div>
+
+      {loading&&<div style={{padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+
+      {!loading&&tab==='roster'&&<>
+        {!showOnboard&&<button onClick={()=>setShowOnboard(true)} style={{padding:'10px 18px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'16px'}}>+ Onboard staff</button>}
+        {showOnboard&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',maxWidth:420}}>
+          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Full name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+            <option value="doctor">Doctor</option>
+            <option value="frontdesk">Nurse / Front Desk</option>
+            <option value="admin">Practice Manager</option>
+          </select>
+          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="date" value={newExpiry} onChange={e=>setNewExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="4-digit login PIN" maxLength={4} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <select value={newDisciplinary} onChange={e=>setNewDisciplinary(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px'}}>
+            <option value="clear">Disciplinary: Clear</option>
+            <option value="flagged">Disciplinary: Flagged</option>
+          </select>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
+            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+          </div>
+        </div>}
+        {staff.map(s=>(
+          <div key={s.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
+            </div>
+            <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
+          </div>
+        ))}
+      </>}
+
+      {!loading&&tab==='expiring'&&<>
+        {expiringSoon.length===0&&<div style={{color:C.textMuted,fontSize:'13px'}}>Nothing expiring within 4 months.</div>}
+        {expiringSoon.map(s=>(
+          <div key={s.id} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
+            <div style={{fontSize:'12px',color:C.amber}}>Registration expires {s.registration_expiry}</div>
+          </div>
+        ))}
+      </>}
+
+      {!loading&&tab==='leave'&&<>
+        {leaves.length===0&&<div style={{color:C.textMuted,fontSize:'13px'}}>No pending leave requests.</div>}
+        {leaves.map(l=>(
+          <div key={l.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{l.staff_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{l.leave_type} · {l.start_date} to {l.end_date}{l.reason?` · ${l.reason}`:''}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>handleLeaveDecision(l,false)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'6px',cursor:'pointer'}}>Deny</button>
+              <button onClick={()=>handleLeaveDecision(l,true)} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontWeight:600,cursor:'pointer'}}>Approve</button>
+            </div>
+          </div>
+        ))}
+      </>}
+    </div>
+  )
+}
 
 function WorkingHoursScreen() {
   const [selectedDoctor,setSelectedDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
@@ -2367,6 +2544,7 @@ export default function ClinicOpsApp() {
     {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','frontdesk']},
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','frontdesk']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
+    {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='frontdesk'?'checkin':'overview')}}/>
@@ -2403,6 +2581,7 @@ export default function ClinicOpsApp() {
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='claims'&&<ClaimsScreen/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
+        {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember}/>}
       </div>
     </div>
   )
