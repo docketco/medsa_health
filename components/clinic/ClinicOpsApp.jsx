@@ -1831,7 +1831,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
   )
 }
 
-function PaymentScreen({ staffMember, institutionId }) {
+function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect }) {
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
@@ -1845,6 +1845,7 @@ function PaymentScreen({ staffMember, institutionId }) {
   const [pendingPayments,setPendingPayments]=useState([])
   const [pendingLoading,setPendingLoading]=useState(true)
   const [selectedPayment,setSelectedPayment]=useState(null)
+  const [paymentSearch,setPaymentSearch]=useState('')
 
   async function loadPendingPayments() {
     setPendingLoading(true)
@@ -1931,6 +1932,20 @@ function PaymentScreen({ staffMember, institutionId }) {
     loadLedger()
     loadPendingPayments()
   }, [])
+
+  // Arrived here via a "Collect in Payment" link from Claims - jump
+  // straight to that specific claim instead of making reception search.
+  useEffect(() => {
+    if (!preselectClaimRef) return
+    async function findAndSelect() {
+      const { data } = await supabase.from('insurance_claims')
+        .select('*, patients(full_name), insurance_plans(company_name, plan_name)')
+        .eq('claim_ref', preselectClaimRef).maybeSingle()
+      if (data) { setSelectedPayment(data); setTab('collect') }
+      onConsumedPreselect?.()
+    }
+    findAndSelect()
+  }, [preselectClaimRef])
 
   if (tab==='ledger') return (
     <PageWrap maxWidth={720}>
@@ -2031,9 +2046,12 @@ function PaymentScreen({ staffMember, institutionId }) {
       </div>
       {!selectedPayment&&<>
         <SecLabel>Pending patient payments</SecLabel>
+        <input value={paymentSearch} onChange={e=>setPaymentSearch(e.target.value)} placeholder="Search by patient or insurer…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
         {pendingLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Loading…</div>}
         {!pendingLoading&&pendingPayments.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No outstanding patient payments right now.</div>}
-        {!pendingLoading&&pendingPayments.map(p=>{
+        {!pendingLoading&&pendingPayments
+          .filter(p => !paymentSearch.trim() || (p.patients?.full_name||'').toLowerCase().includes(paymentSearch.toLowerCase()) || (p.insurance_plans?.company_name||'').toLowerCase().includes(paymentSearch.toLowerCase()))
+          .map(p=>{
           const owed = (p.deductible_applied||0)+(p.patient_copay_amount||0)
           return (
             <Card key={p.claim_ref} onClick={()=>setSelectedPayment(p)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer'}}>
@@ -2065,13 +2083,16 @@ function PaymentScreen({ staffMember, institutionId }) {
         </div>
       </Card>
       <SecLabel>Payment method</SecLabel>
-      <div style={{display:'flex',gap:'8px',marginBottom:'18px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
         {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
           <div key={k} onClick={()=>setMethod(k)} style={{flex:1,padding:'14px 8px',borderRadius:'8px',textAlign:'center',cursor:'pointer',background:method===k?C.green:C.card,color:method===k?'#fff':C.text}}>
             <div style={{fontSize:'18px',marginBottom:'4px'}}>{icon}</div>
             <div style={{fontSize:'12px',fontWeight:500}}>{l}</div>
           </div>
         ))}
+      </div>
+      <div style={{padding:'10px 8px',borderRadius:'8px',textAlign:'center',background:C.card,opacity:0.5,marginBottom:'18px'}}>
+        <div style={{fontSize:'12px',fontWeight:500,color:C.textMuted}}>{'\u25c6'} Care Card - coming soon</div>
       </div>
       <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${(selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)}`}</Btn>
       </>}
@@ -2270,7 +2291,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
 // Medsa clearinghouse fee, and tracks status through the pipeline. Actual
 // transmission to an insurer is a manual/portal handoff until a real insurer
 // API or EDI contract exists - this is flagged honestly in the UI itself.
-function ClaimsScreen() {
+function ClaimsScreen({ onNavPayment }) {
   const [step,setStep]=useState('list')
   const [claimType,setClaimType]=useState('outpatient')
   const [selectedPatient,setSelectedPatient]=useState(null)
@@ -2282,7 +2303,6 @@ function ClaimsScreen() {
   const [loading,setLoading]=useState(true)
   const [adjudicating,setAdjudicating]=useState(false)
   const [reloadTrigger,setReloadTrigger]=useState(0)
-  const [copayCollectedNow,setCopayCollectedNow]=useState(null)
   const [adjudicationResult,setAdjudicationResult]=useState(null)
 
   useEffect(() => {
@@ -2323,11 +2343,8 @@ function ClaimsScreen() {
     settled: {label:'Settled', type:'ok', desc:'Payment collected and claim fully closed'},
   }
 
-  async function handleRecordCopay(claim, method) {
-    const adapter = getInsuranceAdapter(claim.insurer)
-    await adapter.recordCopayPayment(claim.ref, method)
-    setReloadTrigger(t => t+1)
-  }
+  // Payment method is chosen exclusively in Payment now, never here - this
+  // screen just navigates there and later displays whatever was recorded.
 
   // Manual settle removed - a claim auto-settles the instant it's resolved:
   // immediately on approval if nothing's owed, or the moment a copay is
@@ -2367,11 +2384,7 @@ function ClaimsScreen() {
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{meta?.desc}</div>
               <div style={{fontSize:'11px',color:C.blue,marginBottom:'10px'}}>Medsa platform claim fee: HK${c.fee} (paid by insurer)</div>
               {(c.status==='approved'||c.status==='partially_approved')&&(c.deductibleApplied+c.patientCopayAmount)>0&&!c.copayPaymentMethod&&
-                <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
-                  {['cash','card','octopus'].map(m=>(
-                    <Btn key={m} style={{flex:1,fontSize:'11px'}} onClick={()=>handleRecordCopay(c,m)}>Collect via {m}</Btn>
-                  ))}
-                </div>}
+                <Btn variant="primary" style={{width:'100%'}} onClick={()=>onNavPayment?.(c.ref)}>Collect HK${c.deductibleApplied+c.patientCopayAmount} in Payment</Btn>}
               {c.copayPaymentMethod&&<div style={{fontSize:'11px',color:C.textMuted}}>Copay collected via {c.copayPaymentMethod} - processing fee HK${c.paymentProcessingFee}</div>}
             </Card>
           )
@@ -2469,21 +2482,11 @@ function ClaimsScreen() {
           </div>
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'8px'}}>Authorization: {adjudicationResult.authorizationCode}</div>
         </div>}
-        {adjudicationResult&&adjudicationResult.fees.patientPayableTotal>0&&!copayCollectedNow&&<>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Patient owes HK${adjudicationResult.fees.patientPayableTotal} now - collect it here:</div>
-          <div style={{display:'flex',gap:'6px',marginBottom:'20px'}}>
-            {['cash','card','octopus'].map(m=>(
-              <Btn key={m} style={{flex:1,fontSize:'12px'}} onClick={async ()=>{
-                const adapter = getInsuranceAdapter(selectedPlan.company_name)
-                await adapter.recordCopayPayment(adjudicationResult.claimId, m)
-                setCopayCollectedNow(m)
-              }}>{m}</Btn>
-            ))}
-          </div>
+        {adjudicationResult&&adjudicationResult.fees.patientPayableTotal>0&&<>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'20px'}} onClick={()=>onNavPayment?.(adjudicationResult.claimId)}>Collect HK${adjudicationResult.fees.patientPayableTotal} in Payment</Btn>
         </>}
-        {copayCollectedNow&&<div style={{fontSize:'12px',color:C.green,marginBottom:'20px'}}>{'\u2713'} Collected via {copayCollectedNow}</div>}
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPlan?.company_name}'s existing claims portal (manual handoff until direct integration is in place)</div>
-        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('');setAdjudicationResult(null);setCopayCollectedNow(null)}}>Done</Btn>
+        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('');setAdjudicationResult(null)}}>Done</Btn>
       </div>
     </PageWrap>
   )
@@ -2493,6 +2496,7 @@ export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
   const [checkInError,setCheckInError]=useState(null)
   const [screen,setScreen]=useState('overview')
+  const [payPreselectClaimRef,setPayPreselectClaimRef]=useState(null)
   const [checkedInQueue,setCheckedInQueue]=useState([])
   const [queueLoading,setQueueLoading]=useState(true)
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
@@ -2741,8 +2745,8 @@ export default function ClinicOpsApp() {
         }}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
-        {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId}/>}
-        {screen==='claims'&&<ClaimsScreen/>}
+        {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)}/>}
+        {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember}/>}
       </div>
