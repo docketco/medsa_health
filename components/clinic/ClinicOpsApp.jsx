@@ -42,12 +42,14 @@ function PageWrap({ children, maxWidth=720 }) {
 
 // Shared doctor directory - single source of truth for name + department,
 // used both at staff login and when filtering/switching doctors elsewhere,
-// so a doctor only ever gets swapped with another doctor in the same
-// department/specialty, never an unrelated one.
-const DOCTOR_DIRECTORY = [
-  {name:'Dr Chan Siu-ming', department:'Internal Medicine'},
-  {name:'Dr Lam Wai-yee', department:'Cardiology'},
-]
+// Real doctors, queried fresh wherever needed - replaces the old hardcoded
+// DOCTOR_DIRECTORY array, which never reflected who was actually onboarded
+// and kept showing two stale demo names indefinitely.
+async function loadClinicDoctors() {
+  const { data } = await supabase.from('staff_credentials').select('full_name,department')
+    .eq('institution_source','clinic_ops').eq('role','doctor').eq('status','active').order('full_name')
+  return (data||[]).map(d => ({ name: d.full_name, department: d.department }))
+}
 
 function hoursRemaining(checkedInAt) {
   const elapsed = Date.now() - checkedInAt
@@ -347,12 +349,13 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   )
 }
 
-function NewPatientScreen({ onBack }) {
-  const [form,setForm]=useState({fullName:'',dob:'',phone:'',hkid:''})
+function NewPatientScreen({ onBack, onCreated, prefillName }) {
+  const [form,setForm]=useState({fullName:prefillName||'',dob:'',phone:'',hkid:''})
   const [saving,setSaving]=useState(false)
   const [submitted,setSubmitted]=useState(false)
   const [error,setError]=useState(null)
   const [claimCode,setClaimCode]=useState(null)
+  const [createdPatient,setCreatedPatient]=useState(null)
 
   function generateClaimCode() {
     return Math.random().toString(36).slice(2,8).toUpperCase()
@@ -367,7 +370,7 @@ function NewPatientScreen({ onBack }) {
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       const code = generateClaimCode()
       const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
-      const { error: insErr } = await supabase.from('patients').insert({
+      const { data: inserted, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId,
         full_name: form.fullName,
         date_of_birth: form.dob,
@@ -379,8 +382,9 @@ function NewPatientScreen({ onBack }) {
         claim_code: code,
         claim_code_expires_at: expiresAt,
         claim_code_sent_to: form.phone,
-      })
+      }).select().maybeSingle()
       if (insErr) throw insErr
+      setCreatedPatient(inserted)
       setClaimCode(code)
       setSubmitted(true)
     } catch (e) {
@@ -400,7 +404,7 @@ function NewPatientScreen({ onBack }) {
           <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (demo - normally sent by SMS, not shown here)</div>
           <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{claimCode}</div>
         </div>
-        <Btn variant="primary" onClick={onBack}>Back to check-in</Btn>
+        <Btn variant="primary" onClick={()=>onCreated?createdPatient&&onCreated(createdPatient):onBack()}>{onCreated?'Continue with this patient':'Back to check-in'}</Btn>
       </div>
     </PageWrap>
   )
@@ -1176,6 +1180,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   const [notesDraft,setNotesDraft]=useState('')
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
+  const [clinicDoctors,setClinicDoctors]=useState([])
   const [patientFetchError,setPatientFetchError]=useState(null)
   const [conditions,setConditions]=useState([])
   const [allergies,setAllergies]=useState([])
@@ -1187,6 +1192,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
   // history is available here (within the consent window) so a doctor
   // can review and prep ahead of a follow-up or first visit - this is
   // separate from "Log diagnosis," which still requires actual check-in.
+  useEffect(() => {
+    loadClinicDoctors().then(setClinicDoctors)
+  }, [])
+
   useEffect(() => {
     async function loadPatient() {
       if (!appt?.medsaId) { setLoadingPatient(false); setPatientFetchError('This appointment has no linked Medsa ID.'); return }
@@ -1223,7 +1232,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
 
   // Only offer doctors in the same department/specialty as this
   // appointment - switching to an unrelated specialty wouldn't make sense.
-  const DOCTORS = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  const DOCTORS = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
   const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00']
 
   return (
@@ -1523,12 +1532,17 @@ function PracticeManagerStaffScreen({ staffMember }) {
 }
 
 function WorkingHoursScreen() {
-  const [selectedDoctor,setSelectedDoctor]=useState(DOCTOR_DIRECTORY[0]?.name || '')
+  const [clinicDoctors,setClinicDoctors]=useState([])
+  const [selectedDoctor,setSelectedDoctor]=useState('')
   const [hours,setHours]=useState({}) // day_of_week -> {start,end,is_off}
   const [loading,setLoading]=useState(true)
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [slotDuration,setSlotDuration]=useState(30)
+
+  useEffect(() => {
+    loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
+  }, [])
 
   async function loadHours(doctorName) {
     setLoading(true)
@@ -1570,7 +1584,7 @@ function WorkingHoursScreen() {
       <div style={{fontSize:'12px',color:C.textSub,textAlign:'center',marginBottom:'20px'}}>Sets each doctor's availability - syncs to their schedule and patient booking</div>
 
       <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
-        {DOCTOR_DIRECTORY.map(d=>(
+        {clinicDoctors.map(d=>(
           <div key={d.name} onClick={()=>setSelectedDoctor(d.name)} style={{padding:'8px 14px',borderRadius:'20px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:selectedDoctor===d.name?C.green:C.card,color:selectedDoctor===d.name?'#fff':C.textSub}}>{d.name}</div>
         ))}
       </div>
@@ -1613,7 +1627,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -1627,10 +1641,24 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
   const [newApptSearch,setNewApptSearch]=useState('')
   const [newApptPatient,setNewApptPatient]=useState(null)
   const [newApptTime,setNewApptTime]=useState('')
-  const [newApptDoctor,setNewApptDoctor]=useState('Dr Chan Siu-ming')
+  const [clinicDoctors,setClinicDoctors]=useState([])
+  const [newApptDoctor,setNewApptDoctor]=useState('')
   const [newApptReason,setNewApptReason]=useState('')
   const [newApptSaving,setNewApptSaving]=useState(false)
   const [newApptError,setNewApptError]=useState(null)
+
+  useEffect(() => {
+    loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setNewApptDoctor(docs[0].name) })
+  }, [])
+
+  // Arrived here after registering a new walk-in patient - open the form
+  // with them already selected instead of making reception search again.
+  useEffect(() => {
+    if (!preselectPatient) return
+    setNewApptPatient(preselectPatient)
+    setShowNewApptForm(true)
+    onConsumedPreselect?.()
+  }, [preselectPatient])
 
   async function handleNewApptSearch() {
     if (!newApptSearch.trim()) return
@@ -1644,7 +1672,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
     if (!newApptPatient || !newApptTime) return
     setNewApptSaving(true)
     setNewApptError(null)
-    const doctorInfo = DOCTOR_DIRECTORY.find(d=>d.name===newApptDoctor)
+    const doctorInfo = clinicDoctors.find(d=>d.name===newApptDoctor)
     const scheduledAt = new Date(selectedDay)
     const [h,m] = newApptTime.split(':').map(Number)
     scheduledAt.setHours(h||9, m||0, 0, 0)
@@ -1664,14 +1692,6 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
     loadRealAppointments(selectedDay)
   }
 
-  const demoAppointments = [
-    {time:'09:00', patient:'Wong Mei-ling, Lisa', medsaId:'MDS-84921-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'confirmed', notes:'No new symptoms reported'},
-    {time:'09:30', patient:'Chan Tai-man', medsaId:'MDS-77213-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'New patient', status:'confirmed', notes:'Chest tightness on exertion, started yesterday'},
-    {time:'10:00', patient:'-', medsaId:null, doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Open slot', status:'open', notes:''},
-    {time:'10:30', patient:'Lee Siu-fong', medsaId:'MDS-90142-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Vaccination', status:'confirmed', notes:''},
-    {time:'11:00', patient:'Ho Ka-yee', medsaId:'MDS-65310-HK', doctor:'Dr Lam Wai-yee', department:'Cardiology', type:'Consultation', status:'confirmed', notes:'Wound healing well per patient'},
-    {time:'14:00', patient:'Yip Wing-sze', medsaId:'MDS-33017-HK', doctor:'Dr Chan Siu-ming', department:'Internal Medicine', type:'Follow-up', status:'pending', notes:'Requesting review of insulin dosage'},
-  ]
   const isDoctorView = staffMember?.role==='doctor'
   const [appointments,setAppointments]=useState([])
   const [loadingAppts,setLoadingAppts]=useState(true)
@@ -1706,18 +1726,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
       isReal: true,
     }))
 
-    // Demo rows only show on today's view, so real bookings on other days
-    // aren't drowned out by illustrative data that was never meant to
-    // represent those specific dates.
-    const isToday = dayStart.toDateString() === new Date().toDateString()
-    // If a patient already has a real booked appointment today, don't
-    // also show their static demo row - that created confusing duplicate
-    // entries where clicking the demo one never reflected a real check-in.
-    const realMedsaIds = new Set(realRows.map(r=>r.medsaId).filter(Boolean))
-    const demoRowsFiltered = demoAppointments.filter(d=>!realMedsaIds.has(d.medsaId))
-    const merged = isToday ? [...realRows, ...demoRowsFiltered] : realRows
-
-    setAppointments(isDoctorView ? merged.filter(a=>a.doctor===staffMember.name) : merged)
+    setAppointments(isDoctorView ? realRows.filter(a=>a.doctor===staffMember.name) : realRows)
     setLoadingAppts(false)
   }
 
@@ -1819,11 +1828,12 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn }) {
           <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
             <input value={newApptTime} onChange={e=>setNewApptTime(e.target.value)} type="time" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}}/>
             <select value={newApptDoctor} onChange={e=>setNewApptDoctor(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px'}}>
-              {DOCTOR_DIRECTORY.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
+              {clinicDoctors.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
             </select>
           </div>
           <input value={newApptReason} onChange={e=>setNewApptReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
-          {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{newApptError}</div>}
+          {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}>{newApptError}</div>}
+          {newApptError&&<div style={{marginBottom:'10px'}}><span onClick={()=>onNavNewPatient?.(newApptSearch)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span></div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmNewAppt} disabled={!newApptPatient||!newApptTime||newApptSaving}>{newApptSaving?'Booking…':'Confirm booking'}</Btn>
         </div>
       </div>}
@@ -2579,6 +2589,9 @@ export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
   const [checkInError,setCheckInError]=useState(null)
   const [screen,setScreen]=useState('overview')
+  const [newPatientOrigin,setNewPatientOrigin]=useState('checkin') // 'checkin' | 'schedule'
+  const [newPatientPrefillName,setNewPatientPrefillName]=useState('')
+  const [schedulePreselectPatient,setSchedulePreselectPatient]=useState(null)
   const [payPreselectClaimRef,setPayPreselectClaimRef]=useState(null)
   const [checkedInQueue,setCheckedInQueue]=useState([])
   const [queueLoading,setQueueLoading]=useState(true)
@@ -2809,8 +2822,12 @@ export default function ClinicOpsApp() {
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>setScreen('newpatient')} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
-        {screen==='newpatient'&&<NewPatientScreen onBack={()=>setScreen('checkin')}/>}
-        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
+        {screen==='newpatient'&&<NewPatientScreen
+          onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
+          prefillName={newPatientPrefillName}
+          onCreated={newPatientOrigin==='schedule' ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')} : undefined}
+        />}
+        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} preselectPatient={schedulePreselectPatient} onConsumedPreselect={()=>setSchedulePreselectPatient(null)} onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
           if (!appt?.medsaId) return
           const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
           if (!pRow) return
