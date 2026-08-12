@@ -1846,6 +1846,15 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [pendingLoading,setPendingLoading]=useState(true)
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentSearch,setPaymentSearch]=useState('')
+  const [showCreatePlan,setShowCreatePlan]=useState(false)
+  const [planStep,setPlanStep]=useState('form') // form | payment | done
+  const [planPatientQuery,setPlanPatientQuery]=useState('')
+  const [planFoundPatient,setPlanFoundPatient]=useState(null)
+  const [planName,setPlanName]=useState('')
+  const [planSessions,setPlanSessions]=useState('')
+  const [planPrice,setPlanPrice]=useState('')
+  const [planMethod,setPlanMethod]=useState('card')
+  const [planSaving,setPlanSaving]=useState(false)
 
   async function loadPendingPayments() {
     setPendingLoading(true)
@@ -1914,21 +1923,22 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     URL.revokeObjectURL(url)
   }
 
+  async function loadTreatmentPlans() {
+    setPlansLoading(true)
+    const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)')
+    setTreatmentPlans((data||[]).map(p => ({
+      patient: p.patients?.full_name || 'Unknown',
+      plan: p.plan_name,
+      paid: p.sessions_paid,
+      used: p.sessions_used,
+      remaining: p.sessions_paid - p.sessions_used,
+      status: p.status,
+    })))
+    setPlansLoading(false)
+  }
+
   useEffect(() => {
-    async function load() {
-      setPlansLoading(true)
-      const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)')
-      setTreatmentPlans((data||[]).map(p => ({
-        patient: p.patients?.full_name || 'Unknown',
-        plan: p.plan_name,
-        paid: p.sessions_paid,
-        used: p.sessions_used,
-        remaining: p.sessions_paid - p.sessions_used,
-        status: p.status,
-      })))
-      setPlansLoading(false)
-    }
-    load()
+    loadTreatmentPlans()
     loadLedger()
     loadPendingPayments()
   }, [])
@@ -1984,6 +1994,37 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     </PageWrap>
   )
 
+  async function handleFindPlanPatient() {
+    const { data } = await supabase.from('patients').select('id,full_name,medsa_id')
+      .or(`full_name.ilike.%${planPatientQuery}%,medsa_id.ilike.%${planPatientQuery}%`).limit(1).maybeSingle()
+    setPlanFoundPatient(data||null)
+  }
+
+  async function handleChargePlan() {
+    setPlanSaving(true)
+    const { data: newPlan } = await supabase.from('treatment_plans').insert({
+      patient_id: planFoundPatient.id, institution_id: institutionId,
+      plan_name: planName, sessions_paid: parseInt(planSessions)||0, sessions_used: 0,
+      status: 'active', price_total: parseFloat(planPrice)||0, created_by: staffMember?.name,
+    }).select().maybeSingle()
+    const fee = calculatePaymentProcessingFee(planMethod, parseFloat(planPrice)||0)
+    await supabase.from('transactions').insert({
+      institution_id: institutionId, patient_name: planFoundPatient.full_name,
+      consultation_fee: parseFloat(planPrice)||0, insurer_covers: 0, patient_pays: parseFloat(planPrice)||0,
+      payment_method: planMethod, card_processing_fee: fee, treatment_plan_id: newPlan?.id,
+      staff_name: staffMember?.name || 'Unknown',
+    })
+    setPlanSaving(false)
+    setPlanStep('done')
+    loadTreatmentPlans()
+    loadLedger()
+  }
+
+  function resetPlanCreation() {
+    setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null)
+    setPlanName(''); setPlanSessions(''); setPlanPrice(''); setPlanMethod('card')
+  }
+
   if (tab==='plans') return (
     <PageWrap maxWidth={640}>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
@@ -1991,6 +2032,48 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
         ))}
       </div>
+      {!showCreatePlan&&<Btn variant="primary" style={{width:'100%',marginBottom:'20px'}} onClick={()=>setShowCreatePlan(true)}>+ Create treatment plan</Btn>}
+
+      {showCreatePlan&&planStep==='form'&&<Card style={{padding:'18px',marginBottom:'20px'}}>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>New treatment plan</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:planFoundPatient?'10px':'12px'}}>
+          <input value={planPatientQuery} onChange={e=>setPlanPatientQuery(e.target.value)} placeholder="Patient name or MedsaID" style={{flex:1,padding:'10px',fontSize:'13px'}}/>
+          <Btn onClick={handleFindPlanPatient}>Find</Btn>
+        </div>
+        {planFoundPatient&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>{'\u2713'} {planFoundPatient.full_name}</div>}
+        <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name (e.g. Physio - 10 sessions)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+          <input type="number" value={planSessions} onChange={e=>setPlanSessions(e.target.value)} placeholder="Total sessions" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input type="number" value={planPrice} onChange={e=>setPlanPrice(e.target.value)} placeholder="Total price (HK$)" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={resetPlanCreation}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={()=>setPlanStep('payment')} disabled={!planFoundPatient||!planName||!planSessions||!planPrice}>Next: collect payment</Btn>
+        </div>
+      </Card>}
+
+      {showCreatePlan&&planStep==='payment'&&<Card style={{padding:'18px',marginBottom:'20px'}}>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{planFoundPatient.full_name}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>{planName} - {planSessions} sessions - HK${planPrice}</div>
+        <SecLabel>Payment method</SecLabel>
+        <div style={{display:'flex',gap:'8px',marginBottom:'18px'}}>
+          {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
+            <div key={k} onClick={()=>setPlanMethod(k)} style={{flex:1,padding:'14px 8px',borderRadius:'8px',textAlign:'center',cursor:'pointer',background:planMethod===k?C.green:C.card,color:planMethod===k?'#fff':C.text}}>
+              <div style={{fontSize:'18px',marginBottom:'4px'}}>{icon}</div>
+              <div style={{fontSize:'12px',fontWeight:500}}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleChargePlan} disabled={planSaving}>{planSaving?'Processing…':`Charge HK$${planPrice}`}</Btn>
+      </Card>}
+
+      {showCreatePlan&&planStep==='done'&&<Card style={{padding:'18px',marginBottom:'20px',textAlign:'center'}}>
+        <div style={{fontSize:'28px',marginBottom:'8px'}}>{'\u2713'}</div>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>Plan created and paid</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Logged in Financial Records - {planSessions} sessions ready to use</div>
+        <Btn variant="primary" onClick={resetPlanCreation}>Done</Btn>
+      </Card>}
+
       <SecLabel>Ongoing treatment plans - paid, used, remaining</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
         {treatmentPlans.map((p,i)=>(
