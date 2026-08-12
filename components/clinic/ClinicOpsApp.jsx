@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { getInsuranceAdapter } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
@@ -776,7 +777,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
                 </div>
               ))}
               {!icd10Loading&&icd10Results.length===0&&
-                <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the current reference set - free-text diagnosis above still saves normally. Import the full CMS dataset from Inventory {'\u2192'} Import ICD-10 CSV for complete coverage.</div>}
+                <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the reference set - free-text diagnosis above still saves normally.</div>}
             </div>}
           </div>}
 
@@ -2110,25 +2111,10 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     setImportResult({ type:'reference', imported, skipped, total: rows.length })
   }
 
-  // Real path to full ICD-10 completeness - CMS/NCHS publish the complete
-  // official dataset for free. Convert their file to CSV (code,label,
-  // chapter columns) and import here. This is how the ~37-code seed set
-  // grows into full coverage, without hand-writing thousands of rows.
-  async function handleIcd10File(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    const text = await file.text()
-    const rows = parseCSV(text)
-    let imported=0, skipped=0
-    for (const row of rows) {
-      if (!row.code || !row.label) { skipped++; continue }
-      await supabase.from('icd10_reference').upsert({
-        code: row.code, label: row.label, chapter: row.chapter||null, added_by: staffMember?.name||'CSV import',
-      }, { onConflict: 'code' })
-      imported++
-    }
-    setImportResult({ type:'icd10', imported, skipped, total: rows.length })
-  }
+  // ICD-10 updates are Medsa-managed centrally (direct SQL import against
+  // the shared, non-institution-scoped icd10_reference table), not exposed
+  // to individual clinics - removed to avoid a Practice Manager accidentally
+  // overwriting the shared national dataset with the wrong file.
 
   useEffect(() => {
     async function load() {
@@ -2182,13 +2168,9 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           {'\u2191'} Import drug info CSV
           <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
         </label>
-        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
-          {'\u2191'} Import ICD-10 CSV
-          <input type="file" accept=".csv" onChange={handleIcd10File} style={{display:'none'}}/>
-        </label>
       </div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
-        {{stock:'Stock', reference:'Drug info', icd10:'ICD-10'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {{stock:'Stock', reference:'Drug info'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
@@ -2255,6 +2237,8 @@ function ClaimsScreen() {
   const [plans,setPlans]=useState([])
   const [existingClaims,setExistingClaims]=useState([])
   const [loading,setLoading]=useState(true)
+  const [adjudicating,setAdjudicating]=useState(false)
+  const [adjudicationResult,setAdjudicationResult]=useState(null)
 
   useEffect(() => {
     async function load() {
@@ -2389,16 +2373,18 @@ function ClaimsScreen() {
 
         <div style={{textAlign:'center'}}>
           <Btn variant="primary" onClick={async ()=>{
-            const claimRef = 'CLM-'+Math.floor(10000+Math.random()*89999)
-            await supabase.from('insurance_claims').insert({
-              claim_ref: claimRef, patient_id: selectedPatient.id, plan_id: selectedPlan.id,
-              claim_type: claimType, amount: parseFloat(amount), plan_covers: parseFloat(amount),
-              patient_pays: 0, status: 'pending', validated: true,
-              clearinghouse_fee: calcFee(amount),
+            setAdjudicating(true)
+            const adapter = getInsuranceAdapter(selectedPlan.company_name)
+            const result = await adapter.adjudicateClaim({
+              patientId: selectedPatient.id, policyNumber: selectedPlan.id,
+              clinicId: 'clinic_ops', totalGrossAmount: parseFloat(amount),
+              items: [{ code: claimType, description: claimType, amount: parseFloat(amount) }],
             })
+            setAdjudicationResult(result)
+            setAdjudicating(false)
             setStep('submitted')
-          }} disabled={!selectedPatient.consented||!selectedPlan||!amount}>
-            Validate & prepare for {selectedPlan?.company_name||'insurer'}
+          }} disabled={!selectedPatient.consented||!selectedPlan||!amount||adjudicating}>
+            {adjudicating ? 'Checking eligibility & adjudicating…' : `Validate & prepare for ${selectedPlan?.company_name||'insurer'}`}
           </Btn>
         </div>
       </>}
@@ -2408,11 +2394,18 @@ function ClaimsScreen() {
   return (
     <PageWrap maxWidth={480}>
       <div style={{textAlign:'center',padding:'60px 20px'}}>
-        <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
-        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Claim validated</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'8px'}}>Ready to send to {selectedPlan?.company_name}. Clearinghouse fee HK${calcFee(amount)} applies once submitted.</div>
+        <div style={{fontSize:'36px',marginBottom:'12px'}}>{adjudicationResult?.status==='REJECTED'?'\u26a0':'\u2713'}</div>
+        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{{APPROVED:'Claim approved',PARTIALLY_APPROVED:'Claim partially approved',REJECTED:'Claim rejected',PENDING_REVIEW:'Pending review'}[adjudicationResult?.status]||'Claim validated'}</div>
+        {adjudicationResult&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px',textAlign:'left',fontSize:'12px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.grossAmount}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Deductible applied</span><strong>HK${adjudicationResult.deductibleApplied}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Insurer covers</span><strong style={{color:C.green}}>HK${adjudicationResult.insurerCoveredAmount}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Patient copay</span><strong>HK${adjudicationResult.patientCopayAmount}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`}}><span>Patient pays total</span><strong>HK${adjudicationResult.patientPayableTotal}</strong></div>
+          <div style={{fontSize:'10px',color:C.textMuted,marginTop:'8px'}}>Authorization: {adjudicationResult.authorizationCode}</div>
+        </div>}
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPlan?.company_name}'s existing claims portal (manual handoff until direct integration is in place)</div>
-        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('')}}>Done</Btn>
+        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('');setAdjudicationResult(null)}}>Done</Btn>
       </div>
     </PageWrap>
   )
