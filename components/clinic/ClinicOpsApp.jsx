@@ -1171,7 +1171,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, onGoToConsultation, onCancelCheckIn, role }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
@@ -1285,8 +1285,11 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, on
         </div>}
 
         {!loadingPatient&&!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
-          ◇ {appt.patient} · {appt.time} · {appt.type} — outside this patient's 48-hour consent window, so clinical details aren't shown here. Scheduling changes still work below.
+          ◇ {appt.patient} · {appt.time} · {appt.type} — {consentReason==='outside_window'
+            ? "outside this patient's consent window (12 hours either side of their appointment), so clinical details aren't shown here."
+            : 'no consent is on file for this patient yet, so clinical details aren\'t shown here.'} Scheduling changes still work below.
         </div>}
+        {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&role!=='doctor'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
 
         {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
           <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
@@ -1716,6 +1719,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
 
     const realRows = (data||[]).map(a => ({
       time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      scheduledAt: a.scheduled_at,
       patient: a.patients?.full_name || 'Unknown patient',
       medsaId: a.patients?.medsa_id || null,
       doctor: a.doctor_name || 'Unassigned',
@@ -1737,23 +1741,46 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   // Real per-patient check against the consent window set at booking time
   // (schema_intake_consent.sql) - this is what actually gates data access
   // on the schedule now, not just whether they're physically checked in.
-  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked}
+  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked, reason}
 
   async function checkDataWindow(medsaId) {
     if (!medsaId || dataWindows[medsaId]?.checked) return
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
     const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
-    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true}})); return }
+    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
     const now = new Date()
     const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
-    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true}}))
+    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,reason:allowed?null:'outside_window',patientId:patientRow.id}}))
   }
 
   useEffect(() => { appointments.forEach(a=>checkDataWindow(a.medsaId)) }, [appointments])
 
   function withinDataWindow(medsaId) {
     return dataWindows[medsaId]?.allowed || false
+  }
+
+  // Clinic-side consent confirmation - for when a patient consents
+  // verbally or on paper at check-in rather than through PatientApp
+  // themselves. Without this, a patient who never used PatientApp had no
+  // way to ever pass the consent check at all.
+  async function handleConfirmConsent(appt) {
+    if (!appt?.medsaId) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
+    if (!patientRow) return
+    const apptTime = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
+    const windowStart = new Date(apptTime.getTime() - 12*60*60*1000)
+    const windowEnd = new Date(apptTime.getTime() + 12*60*60*1000)
+    await supabase.from('appointment_intake').insert({
+      patient_id: patientRow.id, appointment_time: apptTime.toISOString(),
+      doctor_name: appt.doctor, reason_for_visit: appt.notes||null,
+      consent_given: true, consent_given_at: new Date().toISOString(),
+      access_window_start: windowStart.toISOString(), access_window_end: windowEnd.toISOString(),
+    })
+    // Force a fresh check - the cached "checked:true" result was based on
+    // there being no consent at all, which is no longer true.
+    setDataWindows(prev=>{ const next={...prev}; delete next[appt.medsaId]; return next })
+    checkDataWindow(appt.medsaId)
   }
 
   async function handleSaveAppt(updated) {
@@ -1809,7 +1836,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCancelCheckIn={async(appt)=>{
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null} onConfirmConsent={handleConfirmConsent} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCancelCheckIn={async(appt)=>{
         await onCancelCheckIn(appt)
         // The backend update alone doesn't refresh what's on screen - this
         // was the actual bug: the row would revert in Supabase but the
