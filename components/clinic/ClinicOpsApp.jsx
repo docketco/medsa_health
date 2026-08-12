@@ -545,6 +545,25 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [loading,setLoading]=useState(true)
   const [notes,setNotes]=useState('')
   const [diagnosis,setDiagnosis]=useState('')
+  const [icd10Code,setIcd10Code]=useState(null)
+  const [icd10Search,setIcd10Search]=useState('')
+  const [icd10Open,setIcd10Open]=useState(false)
+  const [icd10Results,setIcd10Results]=useState([])
+  const [icd10Loading,setIcd10Loading]=useState(false)
+
+  // Real query against the icd10_reference table - debounced so it doesn't
+  // fire on every keystroke.
+  useEffect(() => {
+    if (!icd10Search.trim()) { setIcd10Results([]); return }
+    setIcd10Loading(true)
+    const timeout = setTimeout(async () => {
+      const { data } = await supabase.from('icd10_reference').select('*')
+        .or(`code.ilike.%${icd10Search}%,label.ilike.%${icd10Search}%`).limit(8)
+      setIcd10Results(data||[])
+      setIcd10Loading(false)
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [icd10Search])
   const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}])
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
@@ -624,7 +643,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     try {
       const { error: recErr } = await supabase.from('medical_records').insert({
         patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Draft consultation note',
-        notes: notes || null, diagnosis: diagnosis || null,
+        notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
         date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'draft',
       })
       if (recErr) throw recErr
@@ -659,7 +678,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       if ((diagnosis.trim()||notes.trim()) && patient) {
         const { error: recErr } = await supabase.from('medical_records').insert({
           patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Clinic consultation',
-          notes: notes || null, diagnosis: diagnosis || null,
+          notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
           date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
         })
         if (recErr) throw recErr
@@ -739,7 +758,27 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       </> : <div style={{background:C.card,borderRadius:'10px',padding:'14px',fontSize:'12px',color:C.textMuted,textAlign:'center',marginBottom:'20px'}}>24-hour record access has expired for this visit. Request renewed access from Check-in / Search.</div>}
 
       <SecLabel>Diagnosis</SecLabel>
-      <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px'}}/>
+      <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 code - structured coding, required for direct-billing claims</div>
+      {icd10Code
+        ? <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 14px',marginBottom:'18px'}}>
+            <div><span style={{fontWeight:700,color:C.green}}>{icd10Code.code}</span> <span style={{fontSize:'13px',color:C.textSub}}>{icd10Code.label}</span></div>
+            <span onClick={()=>{setIcd10Code(null);setIcd10Search('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+          </div>
+        : <div style={{position:'relative',marginBottom:'18px'}}>
+            <input value={icd10Search} onChange={e=>{setIcd10Search(e.target.value);setIcd10Open(true)}} onFocus={()=>setIcd10Open(true)} placeholder="Search ICD-10 code or condition…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+            {icd10Open&&icd10Search.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:220,overflowY:'auto',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
+              {icd10Loading&&<div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>Searching…</div>}
+              {!icd10Loading&&icd10Results.map(c=>(
+                <div key={c.code} onClick={()=>{setIcd10Code(c);setIcd10Open(false)}} style={{padding:'10px 14px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px'}}>
+                  <span style={{fontWeight:700,color:C.green}}>{c.code}</span> {c.label}
+                </div>
+              ))}
+              {!icd10Loading&&icd10Results.length===0&&
+                <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the current reference set - free-text diagnosis above still saves normally. Import the full CMS dataset from Inventory {'\u2192'} Import ICD-10 CSV for complete coverage.</div>}
+            </div>}
+          </div>}
 
       <SecLabel>Consultation notes</SecLabel>
       <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical'}}/>
@@ -1344,6 +1383,24 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [newExpiry,setNewExpiry]=useState('')
   const [newDisciplinary,setNewDisciplinary]=useState('clear')
   const [newPin,setNewPin]=useState('')
+  const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
+  const [uploadedDocName,setUploadedDocName]=useState(null)
+  const [uploading,setUploading]=useState(false)
+
+  async function handleDocUpload(file) {
+    setUploading(true)
+    setUploadedDocName(file.name)
+    // Requires a Supabase Storage bucket named 'staff-documents' to exist -
+    // this is new infrastructure, not previously used anywhere in the app.
+    // Create it once in Supabase Dashboard -> Storage -> New bucket.
+    const path = `clinic_ops/${Date.now()}-${file.name}`
+    const { data, error } = await supabase.storage.from('staff-documents').upload(path, file)
+    if (!error) {
+      const { data: urlData } = supabase.storage.from('staff-documents').getPublicUrl(path)
+      setUploadedDocUrl(urlData?.publicUrl || null)
+    }
+    setUploading(false)
+  }
   const [saving,setSaving]=useState(false)
 
   async function load() {
@@ -1367,12 +1424,13 @@ function PracticeManagerStaffScreen({ staffMember }) {
       institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
       full_name:newName, role:newRole, department:newDept, pin:newPin,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
+      registration_doc_url:uploadedDocUrl||null,
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
     })
     setSaving(false)
     setShowOnboard(false)
-    setNewName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('')
+    setNewName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
     load()
   }
 
@@ -1407,7 +1465,14 @@ function PracticeManagerStaffScreen({ staffMember }) {
           </select>
           <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
           <input type="date" value={newExpiry} onChange={e=>setNewExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>License / registration document, or other relevant copy</div>
+          <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',marginBottom:'10px',boxSizing:'border-box'}}>
+            {uploadedDocName || 'Tap to upload (PDF or image)'}
+            <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleDocUpload(e.target.files[0])}/>
+          </label>
+          {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
           <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="4-digit login PIN" maxLength={4} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newDisciplinary} onChange={e=>setNewDisciplinary(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px'}}>
             <option value="clear">Disciplinary: Clear</option>
@@ -1875,8 +1940,8 @@ function PaymentScreen({ staffMember, institutionId }) {
             </div>
             <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted}}>
               <span>Method: {t.payment_method}</span>
-              {t.card_processing_fee>0&&<span>Processing fee: HK${t.card_processing_fee}</span>}
-              {t.clearinghouse_fee>0&&<span>Clearinghouse fee: HK${t.clearinghouse_fee}</span>}
+              {t.card_processing_fee>0&&<span>Processing fee (Medsa): HK${t.card_processing_fee}</span>}
+              {t.clearinghouse_fee>0&&<span>Clearinghouse fee (Medsa): HK${t.clearinghouse_fee}</span>}
             </div>
           </Card>
         ))}
@@ -2045,6 +2110,26 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     setImportResult({ type:'reference', imported, skipped, total: rows.length })
   }
 
+  // Real path to full ICD-10 completeness - CMS/NCHS publish the complete
+  // official dataset for free. Convert their file to CSV (code,label,
+  // chapter columns) and import here. This is how the ~37-code seed set
+  // grows into full coverage, without hand-writing thousands of rows.
+  async function handleIcd10File(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported=0, skipped=0
+    for (const row of rows) {
+      if (!row.code || !row.label) { skipped++; continue }
+      await supabase.from('icd10_reference').upsert({
+        code: row.code, label: row.label, chapter: row.chapter||null, added_by: staffMember?.name||'CSV import',
+      }, { onConflict: 'code' })
+      imported++
+    }
+    setImportResult({ type:'icd10', imported, skipped, total: rows.length })
+  }
+
   useEffect(() => {
     async function load() {
       if (!institutionId) return
@@ -2088,18 +2173,22 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Inventory</h2>
-      <div style={{display:'flex',gap:'8px',marginBottom:'16px',justifyContent:'center'}}>
-        <label style={{fontSize:'12px',padding:'8px 14px',borderRadius:'8px',cursor:'pointer',background:C.card,color:C.textSub,fontWeight:500,border:`0.5px solid ${C.border}`}}>
-          Import stock CSV
+      <div style={{display:'flex',gap:'10px',marginBottom:'16px',justifyContent:'center'}}>
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'\u2191'} Import stock CSV
           <input type="file" accept=".csv" onChange={handleStockFile} style={{display:'none'}}/>
         </label>
-        <label style={{fontSize:'12px',padding:'8px 14px',borderRadius:'8px',cursor:'pointer',background:C.card,color:C.textSub,fontWeight:500,border:`0.5px solid ${C.border}`}}>
-          Import drug info CSV
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'\u2191'} Import drug info CSV
           <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
+        </label>
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'\u2191'} Import ICD-10 CSV
+          <input type="file" accept=".csv" onChange={handleIcd10File} style={{display:'none'}}/>
         </label>
       </div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
-        {importResult.type==='stock'?'Stock':'Drug info'} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {{stock:'Stock', reference:'Drug info', icd10:'ICD-10'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
@@ -2207,11 +2296,14 @@ function ClaimsScreen() {
 
   if (step==='list') return (
     <PageWrap maxWidth={680}>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Insurance Claims</h2>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Direct Billing Claims</h2>
 
       <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'16px',marginBottom:'12px'}}>
         <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'4px'}}>How this works</div>
         <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Medsa validates each claim - checking patient consent, policy on file, and required documents - before it's sent to the insurer. A small clearinghouse fee is paid by the insurer per validated claim, not by your clinic.</div>
+      </div>
+      <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'12px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+        {'\u25c7'} This only applies to patients on a direct-billing plan with an in-network insurer. If a patient pays out of pocket and claims reimbursement themselves, that happens entirely through their own insurer's app - there's nothing for this clinic to track, and no claim should be created here for that visit.
       </div>
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
         {'\u25c7'} Until Medsa has a direct connection with a given insurer, "Sent to insurer" means the validated package is ready for you to submit through that insurer's existing portal or email - this step automates fully once an insurer partnership is in place.
