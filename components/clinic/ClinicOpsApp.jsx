@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { getInsuranceAdapter } from '../../lib/insuranceAdapter'
+import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
@@ -1844,13 +1844,9 @@ function PaymentScreen({ staffMember, institutionId }) {
   const [saving,setSaving]=useState(false)
   const bill = {patient:'Wong Mei-ling, Lisa', consultFee:380, insurerCovers:300, patientPays:80}
 
-  // Card/Octopus carry a small processing fee Medsa earns on, matching the
-  // Stripe/Jane Payments model - cash has none.
-  function processingFee(method, amount) {
-    if (method==='card') return Math.round(amount*0.0275*100)/100
-    if (method==='octopus') return Math.round(amount*0.015*100)/100
-    return 0
-  }
+  // Fee calculation now lives centrally in insuranceAdapter.js
+  // (calculatePaymentProcessingFee) - single source of truth, matching
+  // ClaimsScreen's identical refactor.
 
   async function loadLedger() {
     setLedgerLoading(true)
@@ -1861,7 +1857,7 @@ function PaymentScreen({ staffMember, institutionId }) {
 
   async function handleCharge() {
     setSaving(true)
-    const fee = processingFee(method, bill.patientPays)
+    const fee = calculatePaymentProcessingFee(method, bill.patientPays)
     await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: bill.patient,
@@ -2265,12 +2261,9 @@ function ClaimsScreen() {
     load()
   }, [])
 
-  // Medsa's clearinghouse fee - flat + small percentage, paid by the insurer
-  // for automated validation, routing, and reconciliation of this claim.
-  function calcFee(amt) {
-    const n = parseFloat(amt) || 0
-    return Math.round(n * 0.02 + 10) // 2% + HK$10 flat, illustrative rate
-  }
+  // Fee calculation now lives centrally in insuranceAdapter.js
+  // (calculatePlatformClaimFee) - single source of truth, matching
+  // PaymentScreen's identical refactor below.
 
   const statusMeta = {
     validated: {label:'Validated', type:'waiting', desc:'Checked for completeness and coverage - not yet sent to insurer'},
@@ -2368,7 +2361,7 @@ function ClaimsScreen() {
         </Card>
 
         {amount&&selectedPlan&&<div style={{background:C.blueLight,borderRadius:'8px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.blue}}>
-          Medsa clearinghouse fee for this claim: <strong>HK${calcFee(amount)}</strong> (paid by {selectedPlan.company_name}, not deducted from your claim)
+          Medsa clearinghouse fee for this claim: <strong>HK${calculatePlatformClaimFee(amount)}</strong> (paid by {selectedPlan.company_name}, not deducted from your claim)
         </div>}
 
         <div style={{textAlign:'center'}}>
@@ -2397,11 +2390,14 @@ function ClaimsScreen() {
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{adjudicationResult?.status==='REJECTED'?'\u26a0':'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{{APPROVED:'Claim approved',PARTIALLY_APPROVED:'Claim partially approved',REJECTED:'Claim rejected',PENDING_REVIEW:'Pending review'}[adjudicationResult?.status]||'Claim validated'}</div>
         {adjudicationResult&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px',textAlign:'left',fontSize:'12px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.grossAmount}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.fees.grossAmount}</strong></div>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Deductible applied</span><strong>HK${adjudicationResult.deductibleApplied}</strong></div>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Insurer covers</span><strong style={{color:C.green}}>HK${adjudicationResult.insurerCoveredAmount}</strong></div>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Patient copay</span><strong>HK${adjudicationResult.patientCopayAmount}</strong></div>
-          <div style={{display:'flex',justifyContent:'space-between',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`}}><span>Patient pays total</span><strong>HK${adjudicationResult.patientPayableTotal}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Insurer covers</span><strong style={{color:C.green}}>HK${adjudicationResult.fees.insurerCoveredAmount}</strong></div>
+          <div style={{display:'flex',justifyContent:'space-between',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,marginBottom:'10px'}}><span>Patient pays total</span><strong>HK${adjudicationResult.fees.patientPayableTotal}</strong></div>
+          <div style={{fontSize:'11px',color:C.textMuted,paddingTop:'8px',borderTop:`0.5px solid ${C.border}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'2px'}}><span>Platform claim fee (paid by insurer)</span><span>HK${adjudicationResult.fees.platformClaimFee}</span></div>
+            <div style={{display:'flex',justifyContent:'space-between'}}><span>Clinic net payout</span><span>HK${adjudicationResult.fees.clinicNetPayout}</span></div>
+          </div>
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'8px'}}>Authorization: {adjudicationResult.authorizationCode}</div>
         </div>}
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPlan?.company_name}'s existing claims portal (manual handoff until direct integration is in place)</div>
