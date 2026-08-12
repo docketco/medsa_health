@@ -1842,7 +1842,24 @@ function PaymentScreen({ staffMember, institutionId }) {
   const [ledger,setLedger]=useState([])
   const [ledgerLoading,setLedgerLoading]=useState(true)
   const [saving,setSaving]=useState(false)
-  const bill = {patient:'Wong Mei-ling, Lisa', consultFee:380, insurerCovers:300, patientPays:80}
+  const [pendingPayments,setPendingPayments]=useState([])
+  const [pendingLoading,setPendingLoading]=useState(true)
+  const [selectedPayment,setSelectedPayment]=useState(null)
+
+  async function loadPendingPayments() {
+    setPendingLoading(true)
+    // Real, itemized list - claims with a real amount still owed by the
+    // patient that haven't been collected yet. Replaces the single
+    // hardcoded demo bill this screen used to show.
+    const { data } = await supabase.from('insurance_claims')
+      .select('*, patients(full_name), insurance_plans(company_name, plan_name)')
+      .in('status', ['approved','partially_approved'])
+      .is('copay_payment_method', null)
+      .order('submitted_at', {ascending:false})
+    const withAmountOwed = (data||[]).filter(c => ((c.deductible_applied||0) + (c.patient_copay_amount||0)) > 0)
+    setPendingPayments(withAmountOwed)
+    setPendingLoading(false)
+  }
 
   // Fee calculation now lives centrally in insuranceAdapter.js
   // (calculatePaymentProcessingFee) - single source of truth, matching
@@ -1856,21 +1873,26 @@ function PaymentScreen({ staffMember, institutionId }) {
   }
 
   async function handleCharge() {
+    if (!selectedPayment) return
     setSaving(true)
-    const fee = calculatePaymentProcessingFee(method, bill.patientPays)
+    const amountOwed = (selectedPayment.deductible_applied||0) + (selectedPayment.patient_copay_amount||0)
+    const adapter = getInsuranceAdapter(selectedPayment.insurance_plans?.company_name)
+    const fees = await adapter.recordCopayPayment(selectedPayment.claim_ref, method)
     await supabase.from('transactions').insert({
       institution_id: institutionId,
-      patient_name: bill.patient,
-      consultation_fee: bill.consultFee,
-      insurer_covers: bill.insurerCovers,
-      patient_pays: bill.patientPays,
+      patient_name: selectedPayment.patients?.full_name || 'Unknown',
+      consultation_fee: selectedPayment.amount,
+      insurer_covers: selectedPayment.insurer_covered_amount,
+      patient_pays: amountOwed,
       payment_method: method,
-      card_processing_fee: fee,
+      card_processing_fee: fees.paymentProcessingFee,
+      claim_ref: selectedPayment.claim_ref,
       staff_name: staffMember?.name || 'Unknown',
     })
     setSaving(false)
     setPaid(true)
     loadLedger()
+    loadPendingPayments()
   }
 
   function exportCSV() {
@@ -1907,6 +1929,7 @@ function PaymentScreen({ staffMember, institutionId }) {
     }
     load()
     loadLedger()
+    loadPendingPayments()
   }, [])
 
   if (tab==='ledger') return (
@@ -1988,13 +2011,13 @@ function PaymentScreen({ staffMember, institutionId }) {
       <div style={{textAlign:'center',padding:'50px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Payment received</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px'}}>HK${bill.patientPays} - {bill.patient}</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px'}}>HK${selectedPayment?((selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)):0} - {selectedPayment?.patients?.full_name||'Unknown'}</div>
         <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
           <Btn variant={receiptSent?'secondary':'primary'} onClick={()=>setReceiptSent(true)} disabled={receiptSent}>{receiptSent?"Sent to patient's Medsa app":'Send receipt to Medsa app'}</Btn>
           <Btn onClick={()=>setPrinted(true)} disabled={printed}>{printed?'Printed':'Print receipt'}</Btn>
         </div>
         {receiptSent&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{'\u25c7'} Receipt, consultation notes, and prescription are now synced to the patient's Medsa cloud record.</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false)}}>New payment</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null)}}>New payment</Btn>
       </div>
     </PageWrap>
   )
@@ -2006,16 +2029,39 @@ function PaymentScreen({ staffMember, institutionId }) {
           <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
         ))}
       </div>
+      {!selectedPayment&&<>
+        <SecLabel>Pending patient payments</SecLabel>
+        {pendingLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Loading…</div>}
+        {!pendingLoading&&pendingPayments.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No outstanding patient payments right now.</div>}
+        {!pendingLoading&&pendingPayments.map(p=>{
+          const owed = (p.deductible_applied||0)+(p.patient_copay_amount||0)
+          return (
+            <Card key={p.claim_ref} onClick={()=>setSelectedPayment(p)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{p.patients?.full_name||'Unknown'}</div>
+                  <div style={{fontSize:'11px',color:C.textSub}}>{p.claim_ref} - {p.insurance_plans?.company_name||'-'} - {p.submitted_at?new Date(p.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}</div>
+                </div>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${owed}</div>
+              </div>
+            </Card>
+          )
+        })}
+      </>}
+
+      {selectedPayment&&<>
+      <div onClick={()=>setSelectedPayment(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'12px'}}>{'\u2039'} Back to pending payments</div>
       <Card style={{padding:'18px',marginBottom:'16px'}}>
-        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'12px'}}>{bill.patient}</div>
-        {[['Consultation fee',`HK$${bill.consultFee}`],['Insurance covers',`-HK$${bill.insurerCovers}`],['Patient pays',`HK$${bill.patientPays}`]].map(([l,v],i)=>(
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{selectedPayment.patients?.full_name||'Unknown'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'12px'}}>{selectedPayment.claim_ref} - {selectedPayment.insurance_plans?.company_name}</div>
+        {[['Consultation fee',`HK$${selectedPayment.amount}`],['Insurance covers',`-HK$${selectedPayment.insurer_covered_amount}`],['Patient pays',`HK$${(selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)}`]].map(([l,v],i)=>(
           <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:i<2?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}>
             <span style={{color:C.textSub}}>{l}</span>
             <span style={{fontWeight:i===2?700:500,fontSize:i===2?'17px':'13px',color:i===2?C.green:C.text}}>{v}</span>
           </div>
         ))}
         <div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
-          {'\u25c7'} Direct billing: the insurer-covered portion above is automatically prepared as a claim in Claims once you charge the patient.
+          {'\u25c7'} Itemized against claim {selectedPayment.claim_ref}, ready for reconciliation once collected.
         </div>
       </Card>
       <SecLabel>Payment method</SecLabel>
@@ -2027,7 +2073,8 @@ function PaymentScreen({ staffMember, institutionId }) {
           </div>
         ))}
       </div>
-      <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${bill.patientPays}`}</Btn>
+      <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${(selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)}`}</Btn>
+      </>}
     </PageWrap>
   )
 }
@@ -2235,6 +2282,7 @@ function ClaimsScreen() {
   const [loading,setLoading]=useState(true)
   const [adjudicating,setAdjudicating]=useState(false)
   const [reloadTrigger,setReloadTrigger]=useState(0)
+  const [copayCollectedNow,setCopayCollectedNow]=useState(null)
   const [adjudicationResult,setAdjudicationResult]=useState(null)
 
   useEffect(() => {
@@ -2281,11 +2329,9 @@ function ClaimsScreen() {
     setReloadTrigger(t => t+1)
   }
 
-  async function handleSettle(claim) {
-    const adapter = getInsuranceAdapter(claim.insurer)
-    await adapter.settleClaim(claim.ref)
-    setReloadTrigger(t => t+1)
-  }
+  // Manual settle removed - a claim auto-settles the instant it's resolved:
+  // immediately on approval if nothing's owed, or the moment a copay is
+  // actually collected (see recordCopayPayment / adjudicateClaim).
 
   if (step==='list') return (
     <PageWrap maxWidth={680}>
@@ -2326,9 +2372,7 @@ function ClaimsScreen() {
                     <Btn key={m} style={{flex:1,fontSize:'11px'}} onClick={()=>handleRecordCopay(c,m)}>Collect via {m}</Btn>
                   ))}
                 </div>}
-              {c.copayPaymentMethod&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Copay collected via {c.copayPaymentMethod} - processing fee HK${c.paymentProcessingFee}</div>}
-              {(c.status==='approved'||c.status==='partially_approved')&&((c.deductibleApplied+c.patientCopayAmount)===0||c.copayPaymentMethod)&&
-                <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleSettle(c)}>Mark settled</Btn>}
+              {c.copayPaymentMethod&&<div style={{fontSize:'11px',color:C.textMuted}}>Copay collected via {c.copayPaymentMethod} - processing fee HK${c.paymentProcessingFee}</div>}
             </Card>
           )
         })}
@@ -2413,7 +2457,7 @@ function ClaimsScreen() {
     <PageWrap maxWidth={480}>
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{adjudicationResult?.status==='REJECTED'?'\u26a0':'\u2713'}</div>
-        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{{APPROVED:'Claim approved',PARTIALLY_APPROVED:'Claim partially approved',REJECTED:'Claim rejected',PENDING_REVIEW:'Pending review'}[adjudicationResult?.status]||'Claim validated'}</div>
+        <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{{APPROVED:'Claim approved',PARTIALLY_APPROVED:'Claim partially approved',REJECTED:'Claim rejected',PENDING_REVIEW:'Pending review',SETTLED:'Approved & settled - fully covered'}[adjudicationResult?.status]||'Claim validated'}</div>
         {adjudicationResult&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px',textAlign:'left',fontSize:'12px'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.fees.grossAmount}</strong></div>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Deductible applied</span><strong>HK${adjudicationResult.deductibleApplied}</strong></div>
@@ -2425,8 +2469,21 @@ function ClaimsScreen() {
           </div>
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'8px'}}>Authorization: {adjudicationResult.authorizationCode}</div>
         </div>}
+        {adjudicationResult&&adjudicationResult.fees.patientPayableTotal>0&&!copayCollectedNow&&<>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Patient owes HK${adjudicationResult.fees.patientPayableTotal} now - collect it here:</div>
+          <div style={{display:'flex',gap:'6px',marginBottom:'20px'}}>
+            {['cash','card','octopus'].map(m=>(
+              <Btn key={m} style={{flex:1,fontSize:'12px'}} onClick={async ()=>{
+                const adapter = getInsuranceAdapter(selectedPlan.company_name)
+                await adapter.recordCopayPayment(adjudicationResult.claimId, m)
+                setCopayCollectedNow(m)
+              }}>{m}</Btn>
+            ))}
+          </div>
+        </>}
+        {copayCollectedNow&&<div style={{fontSize:'12px',color:C.green,marginBottom:'20px'}}>{'\u2713'} Collected via {copayCollectedNow}</div>}
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'20px'}}>Submission channel: {selectedPlan?.company_name}'s existing claims portal (manual handoff until direct integration is in place)</div>
-        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('');setAdjudicationResult(null)}}>Done</Btn>
+        <Btn variant="primary" onClick={()=>{setStep('list');setSelectedPatient(null);setSelectedPlan(null);setAmount('');setAdjudicationResult(null);setCopayCollectedNow(null)}}>Done</Btn>
       </div>
     </PageWrap>
   )
