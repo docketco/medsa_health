@@ -1,16 +1,19 @@
 {
   "name": "medsa",
   "version": "1.0.0",
-  "scripts": {"test": "vitest run"
-}
+  "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "vitest run"
   },
   "dependencies": {
     "next": "14.2.3",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "@supabase/supabase-js": "^2.39.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
   }
-
+}
