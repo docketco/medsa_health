@@ -1,7 +1,8 @@
 {
   "name": "medsa",
   "version": "1.0.0",
-  "scripts": {
+  "scripts": {"test": "vitest run"
+}
     "dev": "next dev",
     "build": "next build",
     "start": "next start"
