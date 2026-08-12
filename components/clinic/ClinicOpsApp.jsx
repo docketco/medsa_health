@@ -2234,6 +2234,7 @@ function ClaimsScreen() {
   const [existingClaims,setExistingClaims]=useState([])
   const [loading,setLoading]=useState(true)
   const [adjudicating,setAdjudicating]=useState(false)
+  const [reloadTrigger,setReloadTrigger]=useState(0)
   const [adjudicationResult,setAdjudicationResult]=useState(null)
 
   useEffect(() => {
@@ -2252,23 +2253,38 @@ function ClaimsScreen() {
       setPlans(planRows||[])
       setExistingClaims((claimRows||[]).map(c => ({
         ref: c.claim_ref, patient: c.patients?.full_name||'Unknown', insurer: c.insurance_plans?.company_name||'-',
-        amount: c.amount, fee: c.clearinghouse_fee||0,
-        status: c.validated ? (c.status==='approved'||c.status==='rejected' ? 'adjudicated' : 'submitted') : 'validated',
+        amount: c.amount, fee: c.platform_claim_fee||0, status: c.status,
+        deductibleApplied: c.deductible_applied||0, patientCopayAmount: c.patient_copay_amount||0,
+        paymentProcessingFee: c.payment_processing_fee||0, copayPaymentMethod: c.copay_payment_method,
         date: c.submitted_at ? new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}) : '-',
       })))
       setLoading(false)
     }
     load()
-  }, [])
+  }, [reloadTrigger])
 
   // Fee calculation now lives centrally in insuranceAdapter.js
   // (calculatePlatformClaimFee) - single source of truth, matching
   // PaymentScreen's identical refactor below.
 
   const statusMeta = {
-    validated: {label:'Validated', type:'waiting', desc:'Checked for completeness and coverage - not yet sent to insurer'},
-    submitted: {label:'Sent to insurer', type:'due', desc:'Awaiting adjudication'},
-    adjudicated: {label:'Adjudicated', type:'ok', desc:'Insurer has responded'},
+    approved: {label:'Approved', type:'ok', desc:'Insurer has approved this claim in full'},
+    partially_approved: {label:'Partially approved', type:'due', desc:'Insurer covered part of the claim - patient owes the remainder'},
+    rejected: {label:'Rejected', type:'off', desc:'Not covered - patient pays the full amount'},
+    pending_review: {label:'Pending review', type:'waiting', desc:'High-value claim - held for manual review before settlement'},
+    settled: {label:'Settled', type:'ok', desc:'Payment collected and claim fully closed'},
+  }
+
+  async function handleRecordCopay(claim, method) {
+    const adapter = getInsuranceAdapter(claim.insurer)
+    await adapter.recordCopayPayment(claim.ref, method)
+    setReloadTrigger(t => t+1)
+  }
+
+  async function handleSettle(claim) {
+    const adapter = getInsuranceAdapter(claim.insurer)
+    await adapter.settleClaim(claim.ref)
+    setReloadTrigger(t => t+1)
   }
 
   if (step==='list') return (
@@ -2299,11 +2315,20 @@ function ClaimsScreen() {
                 </div>
                 <div style={{textAlign:'right'}}>
                   <div style={{fontSize:'15px',fontWeight:600,color:C.green}}>HK${c.amount}</div>
-                  <Badge text={meta.label} type={meta.type}/>
+                  <Badge text={meta?.label||c.status} type={meta?.type||'waiting'}/>
                 </div>
               </div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{meta.desc}</div>
-              <div style={{fontSize:'11px',color:C.blue}}>Medsa clearinghouse fee: HK${c.fee} (paid by insurer)</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{meta?.desc}</div>
+              <div style={{fontSize:'11px',color:C.blue,marginBottom:'10px'}}>Medsa platform claim fee: HK${c.fee} (paid by insurer)</div>
+              {(c.status==='approved'||c.status==='partially_approved')&&(c.deductibleApplied+c.patientCopayAmount)>0&&!c.copayPaymentMethod&&
+                <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+                  {['cash','card','octopus'].map(m=>(
+                    <Btn key={m} style={{flex:1,fontSize:'11px'}} onClick={()=>handleRecordCopay(c,m)}>Collect via {m}</Btn>
+                  ))}
+                </div>}
+              {c.copayPaymentMethod&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Copay collected via {c.copayPaymentMethod} - processing fee HK${c.paymentProcessingFee}</div>}
+              {(c.status==='approved'||c.status==='partially_approved')&&((c.deductibleApplied+c.patientCopayAmount)===0||c.copayPaymentMethod)&&
+                <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleSettle(c)}>Mark settled</Btn>}
             </Card>
           )
         })}
