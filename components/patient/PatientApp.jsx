@@ -460,16 +460,16 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       )}
 
       {/* ── QR Health Passport — hero element ── */}
-      <div style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px'}}>
+      <div onClick={()=>onNav('editprofile')} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px',cursor:'pointer'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
           <div>
             <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name || patient?.full_name?.split(',')[1]?.trim() || patient?.full_name?.split(' ')[0] || 'there'}`:`早晨，${patient?.preferred_name || patient?.full_name || ''}`}</div>
             <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
-            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
-            {onOpenSignUp&&<div onClick={onOpenSignUp} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{isEn?'Not you? Claim or register a profile':'不是您？認領或註冊個人檔案'}</div>}
+            <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>{patient?.medsa_id||'—'} · Verified ✓</div>
+            {onOpenSignUp&&<div onClick={(e)=>{e.stopPropagation();onOpenSignUp()}} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{isEn?'Not you? Claim or register a profile':'不是您？認領或註冊個人檔案'}</div>}
           </div>
           {/* Emergency card status badge */}
-          <div onClick={onOpenEmergencySetup} style={{cursor:'pointer'}}>
+          <div onClick={(e)=>{e.stopPropagation();onOpenEmergencySetup()}} style={{cursor:'pointer'}}>
             {emergencyConsented
               ?<span style={{fontSize:'10px',background:'rgba(255,255,255,0.2)',color:'#fff',padding:'4px 10px',borderRadius:'20px',fontWeight:600,display:'flex',alignItems:'center',gap:'4px'}}><span style={{width:6,height:6,borderRadius:'50%',background:'#7fff7f',display:'inline-block'}}/>Emergency card ✓</span>
               :<span style={{fontSize:'10px',background:'rgba(255,180,0,0.3)',color:'#ffe066',padding:'4px 10px',borderRadius:'20px',fontWeight:600}}>Emergency card — set up ›</span>
@@ -2078,6 +2078,37 @@ function StorageScreen({ isEn, patient={}, onSignOut }) {
 // CLINIC already had on file proves the real patient is claiming it.
 // Path B: no institution record exists yet. Since there's no prior anchor,
 // this requires document + liveness verification instead.
+function LoginFlow({ onBack, onComplete }) {
+  const [hkid,setHkid]=useState('')
+  const [phone,setPhone]=useState('')
+  const [error,setError]=useState(null)
+  const [checking,setChecking]=useState(false)
+
+  async function handleLogin() {
+    setChecking(true)
+    setError(null)
+    const { data, error: qErr } = await supabase.from('patients').select('*')
+      .eq('hkid', hkid).eq('phone', phone).not('claimed_at', 'is', null).maybeSingle()
+    setChecking(false)
+    if (qErr || !data) { setError('No claimed profile matches that HKID and phone number.'); return }
+    onComplete(data)
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>{'\u2190'} Back</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Log back in</div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px',lineHeight:1.5}}>{'\u25c7'} This checks your HKID and phone against your claimed record - a real production version would use a proper password or SMS one-time code instead of this alone.</div>
+        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone number on file" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'16px',boxSizing:'border-box'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleLogin} disabled={checking||!hkid||!phone}>{checking?'Checking…':'Log in'}</Btn>
+      </div>
+    </div>
+  )
+}
+
 function SignUpGate({ onComplete, onSkipDemo }) {
   const [mode,setMode]=useState(null) // null | 'claim' | 'register'
 
@@ -2087,6 +2118,10 @@ function SignUpGate({ onComplete, onSkipDemo }) {
         <MedsaLogo height={28}/>
         <div style={{fontSize:'14px',color:C.textSub,margin:'16px 0 28px'}}>Get started with your health passport</div>
         <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          <Card onClick={()=>setMode('login')} style={{padding:'18px',textAlign:'left'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I've already claimed my profile</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Log back in with your HKID and phone number</div>
+          </Card>
           <Card onClick={()=>setMode('claim')} style={{padding:'18px',textAlign:'left'}}>
             <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>A clinic already has my record</div>
             <div style={{fontSize:'12px',color:C.textSub}}>Claim your existing profile using the code sent to your phone</div>
@@ -2101,6 +2136,7 @@ function SignUpGate({ onComplete, onSkipDemo }) {
     </div>
   )
 
+  if (mode==='login') return <LoginFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
   if (mode==='claim') return <ClaimProfileFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
   return <SelfRegisterFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
 }
