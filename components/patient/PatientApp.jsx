@@ -166,8 +166,8 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
               </div>
               <div style={{flex:2,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'10px'}}>
                 <div style={{fontSize:'10px',color:C.red,marginBottom:'4px'}}>Emergency contact</div>
-                <div style={{fontSize:'13px',fontWeight:600}}>Wong Tai (Mother)</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>+852 9xxx xxxx</div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{p.emergency_contact_name ? `${p.emergency_contact_name} (${p.emergency_contact_rel||'Contact'})` : 'Not set yet'}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{p.emergency_contact_phone || 'Add one in your profile'}</div>
               </div>
             </div>
             {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
@@ -454,7 +454,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       <div style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
           <div>
-            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name||patient?.full_name?.split(',')[1]?.trim()||'Lisa'}`:'早晨，Lisa'}</div>
+            <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name || patient?.full_name?.split(',')[1]?.trim() || patient?.full_name?.split(' ')[0] || 'there'}`:`早晨，${patient?.preferred_name || patient?.full_name || ''}`}</div>
             <div style={{fontSize:'13px',color:'rgba(255,255,255,0.8)',marginTop:'2px'}}>{isEn?'Your health passport':'您的健康護照'}</div>
             <div style={{fontSize:'10px',color:'rgba(255,255,255,0.6)',marginTop:'6px',letterSpacing:'1px'}}>MDS-84921-HK · Verified ✓</div>
             {onOpenSignUp&&<div onClick={onOpenSignUp} style={{fontSize:'10px',color:'rgba(255,255,255,0.7)',marginTop:'6px',textDecoration:'underline',cursor:'pointer'}}>{isEn?'Not you? Claim or register a profile':'不是您？認領或註冊個人檔案'}</div>}
