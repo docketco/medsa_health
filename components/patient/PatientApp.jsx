@@ -658,7 +658,8 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       </div>
       {tab==='all'&&<>
         <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
-        {(hasLiveData ? records.map(r=>({
+        {!hasLiveData&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No records yet - these appear once a clinic logs a visit.':'暫無記錄 - 診所記錄就診後將顯示於此。'}</div>}
+        {hasLiveData&&records.map(r=>({
           id: r.id,
           icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
           bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:C.greenLight,
@@ -667,12 +668,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
           src: r.source==='synced'?'Synced':'Manual',
           details: [['Diagnosis',r.diagnosis||'—'],['Notes',r.notes||'—'],['Department',r.department||'—']],
-        })) : [
-          {id:1,icon:'◎',bg:C.blueLight,title:'Blood panel — full CBC',sub:'Queen Elizabeth Hospital · Lab',date:'12 Jun 2025',src:'Synced',details:[['Haemoglobin','13.8 g/dL ✓'],['WBC','6.2 × 10⁹/L ✓'],['Glucose','5.9 mmol/L ↑'],['Ordered by','Dr Chan Siu-ming']]},
-          {id:2,icon:'◈',bg:C.greenLight,title:'General check-up',sub:'Matilda International · Visit',date:'3 May 2025',src:'Synced',details:[['Blood pressure','118/76 mmHg ✓'],['BMI','22.4'],['Heart rate','72 bpm ✓'],['Notes','Mild iron deficiency']]},
-          {id:3,icon:'▣',bg:C.amberLight,title:'Chest X-ray',sub:'Ruttonjee Hospital · Imaging',date:'18 Feb 2025',src:'Synced',details:[['Findings','No active TB. Lungs clear.'],['Radiologist','Dr Lam Wai-yee']]},
-          {id:4,icon:'◇',bg:C.brownLight,title:'Allergy test results',sub:'Uploaded manually · PDF',date:'9 Jan 2025',src:'Manual',details:[['Penicillin','⚠ Severe allergy'],['Verified by','Pending review']]},
-        ]).map(r=>(
+        })).map(r=>(
           <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
@@ -1721,8 +1717,8 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
-                <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{plan.price}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{plan.limit}</div>
+                <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>HK${String(plan.price||'').replace(/^HK\$/i,'').trim()}{isEn?'/mo':'/月'}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Annual limit':'年度限額'}: HK${String(plan.limit||'').replace(/^HK\$/i,'').trim()}</div>
               </div>
             </div>
             {/* Objective criteria met - no ranking, no score */}
