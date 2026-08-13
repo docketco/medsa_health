@@ -380,7 +380,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 }
 
 function NewPatientScreen({ onBack, onCreated, prefillName }) {
-  const [form,setForm]=useState({fullName:prefillName||'',dob:'',phone:'',hkid:'',email:'',remindersViaPhone:true,remindersViaEmail:false})
+  const [form,setForm]=useState({firstName:prefillName||'',lastName:'',dob:'',phone:'',hkid:'',email:'',remindersViaPhone:true,remindersViaEmail:false})
   const [saving,setSaving]=useState(false)
   const [submitted,setSubmitted]=useState(false)
   const [error,setError]=useState(null)
@@ -405,8 +405,10 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
     setSaving(true)
     setError(null)
     try {
+      if (!form.firstName) throw new Error('First name is required.')
       if (!form.hkid) throw new Error('HKID is required so the patient can later claim this profile.')
       if (!form.phone && !form.email) throw new Error('At least one contact method (phone or email) is required to send the claim code.')
+      const fullName = `${form.firstName}${form.lastName ? ' '+form.lastName : ''}`
 
       // Check for an existing record under this HKID first - the database
       // itself enforces uniqueness, so blindly inserting would just fail.
@@ -424,7 +426,8 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
         const code = generateClaimCode()
         const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
         const { data: refreshed, error: updErr } = await supabase.from('patients').update({
-          full_name: form.fullName || existing.full_name,
+          full_name: fullName || existing.full_name,
+          preferred_name: form.firstName || existing.preferred_name,
           date_of_birth: form.dob || existing.date_of_birth,
           phone: form.phone || existing.phone,
           email: form.email || existing.email,
@@ -446,7 +449,8 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
       const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
       const { data: inserted, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId,
-        full_name: form.fullName,
+        full_name: fullName,
+        preferred_name: form.firstName,
         date_of_birth: form.dob,
         hkid: form.hkid,
         phone: form.phone||null,
@@ -476,18 +480,18 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Patient registered</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName || 'this patient'}. A claim code has been sent to {[form.phone, form.email].filter(Boolean).join(' and ')} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.firstName || 'this patient'}. A claim code has been sent to {[form.phone, form.email].filter(Boolean).join(' and ')} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
         <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'14px'}}>
           <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (for reference)</div>
           <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{claimCode}</div>
         </div>
         {form.phone&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'10px',textAlign:'left'}}>
           <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>SMS text (not yet actually sent - no live provider connected)</div>
-          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{smsText(form.fullName, claimCode)}</div>
+          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{smsText(form.firstName, claimCode)}</div>
         </div>}
         {form.email&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'20px',textAlign:'left'}}>
           <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Email text (not yet actually sent - no live provider connected)</div>
-          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{emailText(form.fullName, claimCode)}</div>
+          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{emailText(form.firstName, claimCode)}</div>
         </div>}
         <Btn variant="primary" onClick={()=>onCreated?createdPatient&&onCreated(createdPatient):onBack()}>{onCreated?'Continue with this patient':'Back to check-in'}</Btn>
       </div>
@@ -499,7 +503,8 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
       <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>{'\u2190'} Back</div>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Register New Patient</h2>
       <div style={{display:'flex',flexDirection:'column',gap:'12px',marginBottom:'16px'}}>
-        <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={form.firstName} onChange={e=>setForm({...form,firstName:e.target.value})} placeholder="First name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={form.lastName} onChange={e=>setForm({...form,lastName:e.target.value})} placeholder="Last name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (required)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
@@ -518,7 +523,7 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
         {'\u25c7'} A claim code will be sent to this phone number, valid 48 hours. The patient enters their HKID plus this code in the Medsa app to securely link this record - only someone who actually received the code can claim it.
       </div>
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Saving...':'Create Medsa profile'}</Btn>
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.firstName||!form.dob}>{saving?'Saving...':'Create Medsa profile'}</Btn>
     </PageWrap>
   )
 }
@@ -2519,6 +2524,22 @@ function ClaimsScreen({ onNavPayment }) {
   const [adjudicating,setAdjudicating]=useState(false)
   const [reloadTrigger,setReloadTrigger]=useState(0)
   const [adjudicationResult,setAdjudicationResult]=useState(null)
+  const [affiliatedPolicies,setAffiliatedPolicies]=useState(null) // null = not checked yet, [] = checked, none found
+
+  // Once a patient is selected, find which plans they're actually
+  // affiliated with - the claim form should only ever offer plans they
+  // genuinely have, not every plan in the system.
+  useEffect(() => {
+    if (!selectedPatient?.id) { setAffiliatedPolicies(null); return }
+    async function loadAffiliations() {
+      const { data } = await supabase.from('agent_policies').select('*')
+        .eq('patient_id', selectedPatient.id).eq('status', 'active')
+      setAffiliatedPolicies(data||[])
+    }
+    loadAffiliations()
+  }, [selectedPatient?.id])
+
+  const affiliatedPlans = affiliatedPolicies ? plans.filter(pl => affiliatedPolicies.some(ap => ap.plan_id === pl.id)) : plans
 
   useEffect(() => {
     async function load() {
@@ -2624,12 +2645,20 @@ function ClaimsScreen({ onNavPayment }) {
       </div>
       {selectedPatient&&<>
         <SecLabel>Insurance plan</SecLabel>
+        {affiliatedPolicies&&affiliatedPolicies.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>No affiliated insurance plan on file for this patient - this claim can't proceed as direct billing.</div>}
         <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
-          {plans.map(pl=>(
-            <Card key={pl.id} onClick={()=>setSelectedPlan(pl)} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',border:selectedPlan?.id===pl.id?`1.5px solid ${C.green}`:undefined}}>
-              <div><div style={{fontSize:'13px',fontWeight:500}}>{pl.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{pl.company_name}</div></div>
-            </Card>
-          ))}
+          {affiliatedPlans.map(pl=>{
+            const realPolicy = affiliatedPolicies?.find(ap=>ap.plan_id===pl.id)
+            return (
+              <Card key={pl.id} onClick={()=>setSelectedPlan(pl)} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',border:selectedPlan?.id===pl.id?`1.5px solid ${C.green}`:undefined}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:500}}>{pl.plan_name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{pl.company_name}</div>
+                  {realPolicy?.policy_number&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>Policy: {realPolicy.policy_number}</div>}
+                </div>
+              </Card>
+            )
+          })}
         </div>
 
         <SecLabel>Claim type</SecLabel>
