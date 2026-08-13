@@ -1997,15 +1997,42 @@ function ClaimProfileFlow({ onBack, onComplete }) {
   const [code,setCode]=useState('')
   const [error,setError]=useState(null)
   const [checking,setChecking]=useState(false)
+  const [mergedCount,setMergedCount]=useState(0)
+  const [claimedData,setClaimedData]=useState(null)
+
+  // Every real table that references patient_id - if a new one gets added
+  // later, it needs adding here too, or its rows would be silently orphaned
+  // (left pointing at a deleted duplicate) rather than merged.
+  const PATIENT_LINKED_TABLES = [
+    'medical_records','conditions','allergies','medications','appointments',
+    'agent_policies','appointment_intake','clinic_queue','insurance_claims',
+    'order_escalations','patient_messages','patient_share_links',
+    'surgery_bookings','transactions','treatment_plans','verbal_orders',
+  ]
+
+  async function mergeOtherRecords(claimedId, hkidValue) {
+    // Any other row sharing this HKID is the same real person, registered
+    // separately at a different institution before ever claiming.
+    const { data: duplicates } = await supabase.from('patients').select('id')
+      .eq('hkid', hkidValue).neq('id', claimedId).is('claimed_at', null)
+    if (!duplicates || duplicates.length === 0) return 0
+
+    for (const dup of duplicates) {
+      for (const table of PATIENT_LINKED_TABLES) {
+        await supabase.from(table).update({ patient_id: claimedId }).eq('patient_id', dup.id)
+      }
+      await supabase.from('patients').delete().eq('id', dup.id)
+    }
+    return duplicates.length
+  }
 
   async function handleClaim() {
     setChecking(true)
     setError(null)
     const { data, error: qErr } = await supabase.from('patients').select('*').eq('hkid', hkid).eq('claim_code', code.toUpperCase()).maybeSingle()
-    setChecking(false)
-    if (qErr || !data) { setError('HKID and code do not match any record. Check with the clinic that registered you.'); return }
-    if (data.claimed_at) { setError('This profile has already been claimed.'); return }
-    if (new Date(data.claim_code_expires_at) < new Date()) { setError('This claim code has expired. Ask the clinic to issue a new one.'); return }
+    if (qErr || !data) { setChecking(false); setError('HKID and code do not match any record. Check with the clinic that registered you.'); return }
+    if (data.claimed_at) { setChecking(false); setError('This profile has already been claimed.'); return }
+    if (new Date(data.claim_code_expires_at) < new Date()) { setChecking(false); setError('This claim code has expired. Ask the clinic to issue a new one.'); return }
 
     await supabase.from('patients').update({
       registration_path: 'claimed',
@@ -2013,8 +2040,24 @@ function ClaimProfileFlow({ onBack, onComplete }) {
       claim_code: null, // burn the code so it can't be reused
     }).eq('id', data.id)
 
-    onComplete(data)
+    const merged = await mergeOtherRecords(data.id, hkid)
+    setChecking(false)
+    setMergedCount(merged)
+    setClaimedData(data)
   }
+
+  if (claimedData) return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380,textAlign:'center'}}>
+        <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>Profile claimed</div>
+        {mergedCount>0
+          ? <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>We also found {mergedCount} other record{mergedCount>1?'s':''} under your HKID from other visits before you claimed - everything's been gathered into this one profile.</div>
+          : <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Your health record is now yours - portable across any Medsa-connected clinic.</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>onComplete(claimedData)}>Continue</Btn>
+      </div>
+    </div>
+  )
 
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
