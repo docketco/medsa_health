@@ -1928,7 +1928,7 @@ function FamilyScreen({ isEn }) {
   )
 }
 
-function StorageScreen({ isEn, patient={} }) {
+function StorageScreen({ isEn, patient={}, onSignOut }) {
   const tiers=[
     {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
     {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
@@ -1955,6 +1955,9 @@ function StorageScreen({ isEn, patient={} }) {
           {!tier.current&&<button style={{width:'100%',border:'none',background:tier.color,borderRadius:'10px',padding:'11px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'inherit',color:'#fff'}}>{isEn?`Upgrade to ${tier.name}`:`升級至${tier.name}`}</button>}
         </div>
       ))}
+      {onSignOut&&<div style={{margin:'20px 16px 0',textAlign:'center'}}>
+        <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
+      </div>}
     </div>
   )
 }
@@ -2267,8 +2270,23 @@ export default function PatientApp({ liveData={} }) {
   // in the same order every render - otherwise React throws a hard crash the
   // moment the gate's shown/hidden state changes and the hook count differs
   // between renders. This was the actual cause of the sign-up gate crash.
-  const [signedInPatient,setSignedInPatient]=useState(liveData.patient || null)
-  const [showGate,setShowGate]=useState(!liveData.patient)
+  const [signedInPatient,setSignedInPatient]=useState(null)
+  const [showGate,setShowGate]=useState(true)
+  const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
+
+  // Don't trust liveData.patient as proof someone's really signed in - it
+  // can be populated with static demo data by the page wrapper regardless
+  // of actual auth state. Real sign-in is tracked here, persisted across
+  // reloads, and re-fetched fresh from Supabase rather than reused stale.
+  useEffect(() => {
+    const persistedId = typeof window!=='undefined' ? window.localStorage.getItem('medsa_signed_in_patient_id') : null
+    if (!persistedId) { setCheckingPersistedSignIn(false); return }
+    supabase.from('patients').select('*').eq('id', persistedId).maybeSingle().then(({data}) => {
+      if (data) { setSignedInPatient(data); setShowGate(false) }
+      setCheckingPersistedSignIn(false)
+    })
+  }, [])
+
   const [screen,setScreen]=useState('home')
   const [lang,setLang]=useState('en') // 'en' | 'zh-TW' | 'zh-CN'
   const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
@@ -2276,8 +2294,13 @@ export default function PatientApp({ liveData={} }) {
   const [shareOpen,setShareOpen]=useState(false)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
+  if (checkingPersistedSignIn) return null
+
   if (showGate && !signedInPatient) {
-    return <SignUpGate onComplete={(p)=>{setSignedInPatient(p);setShowGate(false)}} onSkipDemo={()=>setShowGate(false)}/>
+    return <SignUpGate onComplete={(p)=>{
+      setSignedInPatient(p); setShowGate(false)
+      if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+    }} onSkipDemo={()=>setShowGate(false)}/>
   }
 
   const patient = signedInPatient || liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
@@ -2311,7 +2334,10 @@ export default function PatientApp({ liveData={} }) {
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
-        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient}/>}
+        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient} onSignOut={()=>{
+          setSignedInPatient(null); setShowGate(true)
+          if (typeof window!=='undefined') window.localStorage.removeItem('medsa_signed_in_patient_id')
+        }}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
