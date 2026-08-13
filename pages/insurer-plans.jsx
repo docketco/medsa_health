@@ -23,12 +23,23 @@ export default function InsurerPlansPage() {
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ insurer_name:'', plan_name:'', plan_type:'', monthly_premium:'', annual_limit:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+  const [form, setForm] = useState({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+  const [tiers, setTiers] = useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [saving, setSaving] = useState(false)
+
+  function updateTier(i, field, value) {
+    setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
+  }
+  function addTier() {
+    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  }
+  function removeTier(i) {
+    setTiers(t => t.filter((_,idx)=>idx!==i))
+  }
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('insurance_plans').select('*').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').order('created_at',{ascending:false})
     setPlans(data||[])
     setLoading(false)
   }
@@ -40,13 +51,13 @@ export default function InsurerPlansPage() {
 
   async function handleSubmit() {
     if (!form.plan_name || !form.insurer_name) return
+    const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
+    if (validTiers.length===0) return
     setSaving(true)
-    await supabase.from('insurance_plans').insert({
+    const { data: newPlan } = await supabase.from('insurance_plans').insert({
       company_name: form.insurer_name,
       plan_name: form.plan_name,
       plan_type: form.plan_type || null,
-      monthly_premium: form.monthly_premium || null,
-      annual_limit: form.annual_limit || null,
       // Comma-separated entry, split into the real array field the
       // matching logic in InsuranceScreen actually reads.
       covered_conditions: form.covered_conditions.split(',').map(s=>s.trim()).filter(Boolean),
@@ -54,10 +65,22 @@ export default function InsurerPlansPage() {
       key_benefits: form.key_benefits || null,
       sponsored: form.sponsored,
       status: 'active',
-    })
+    }).select().maybeSingle()
+
+    if (newPlan) {
+      await supabase.from('insurance_plan_pricing_tiers').insert(
+        validTiers.map(t => ({
+          plan_id: newPlan.id,
+          age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
+          monthly_premium: parseFloat(t.monthly_premium),
+          annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
+        }))
+      )
+    }
     setSaving(false)
     setCreating(false)
-    setForm({ insurer_name:'', plan_name:'', plan_type:'', monthly_premium:'', annual_limit:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+    setForm({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
 
@@ -80,12 +103,29 @@ export default function InsurerPlansPage() {
           ['insurer_name','Insurer name (e.g. AIA)'],
           ['plan_name','Plan name'],
           ['plan_type','Plan type (e.g. Comprehensive)'],
-          ['monthly_premium','Monthly premium (e.g. HK$1,200/mo)'],
-          ['annual_limit','Annual limit (e.g. HK$1.2M annual)'],
         ].map(([field,ph]) => (
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real insurance pricing varies by age, so at least one age-banded tier is required</div>
+        {tiers.map((tier,i) => (
+          <div key={i} style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+            <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+              <input type="number" value={tier.age_min} onChange={e=>updateTier(i,'age_min',e.target.value)} placeholder="Age from"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.age_max} onChange={e=>updateTier(i,'age_max',e.target.value)} placeholder="Age to (use 120 for +)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            </div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="Monthly premium (HK$)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.annual_limit} onChange={e=>updateTier(i,'annual_limit',e.target.value)} placeholder="Annual limit (HK$, optional)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              {tiers.length>1&&<button onClick={()=>removeTier(i)} style={{padding:'0 10px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>×</button>}
+            </div>
+          </div>
+        ))}
+        <button onClick={addTier} style={{width:'100%',padding:'8px',background:C.card,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'10px'}}>+ Add another age tier</button>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered conditions (comma-separated) - this drives real patient matching</div>
         <input value={form.covered_conditions} onChange={e=>setForm(f=>({...f,covered_conditions:e.target.value}))} placeholder="e.g. diabetes, hypertension, asthma"
           style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
@@ -103,7 +143,7 @@ export default function InsurerPlansPage() {
         </label>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
-          <button onClick={handleSubmit} disabled={saving||!form.plan_name||!form.insurer_name} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Submit plan'}</button>
+          <button onClick={handleSubmit} disabled={saving||!form.plan_name||!form.insurer_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Submit plan'}</button>
         </div>
       </div>}
 
@@ -117,7 +157,14 @@ export default function InsurerPlansPage() {
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:p.status==='active'?C.greenLight:C.card,color:p.status==='active'?C.green:C.textMuted,fontWeight:600}}>{p.status}</span>
           </div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Covers: {(p.covered_conditions||[]).join(', ')||'none listed'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Covers: {(p.covered_conditions||[]).join(', ')||'none listed'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
+            {(p.insurance_plan_pricing_tiers||[]).length===0
+              ? <span style={{color:C.red}}>No pricing tiers entered</span>
+              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>
+                  `Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`
+                ).join(' · ')}
+          </div>
           <button onClick={()=>toggleStatus(p)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.status==='active'?'Deactivate':'Reactivate'}</button>
         </div>
       ))}
