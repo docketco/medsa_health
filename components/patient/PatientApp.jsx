@@ -170,9 +170,11 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
                 <div style={{fontSize:'12px',color:C.textSub}}>{p.emergency_contact_phone || 'Add one in your profile'}</div>
               </div>
             </div>
-            {['Type 2 Diabetes','Iron deficiency anaemia','Coronary artery disease'].map((c,i)=>(
-              <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c}</div>
-            ))}
+            {liveConditions.length>0
+              ? liveConditions.map((c,i)=>(
+                  <div key={i} style={{fontSize:'13px',fontWeight:500,padding:'4px 0',borderTop:i===0?`0.5px solid rgba(192,57,43,0.2)`:undefined}}>◎ {c.condition_name}{c.severity?` (${c.severity})`:''}</div>
+                ))
+              : <div style={{fontSize:'12px',color:C.textSub,padding:'4px 0'}}>No active conditions on file</div>}
             <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
               {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
                 <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
@@ -2294,6 +2296,32 @@ export default function PatientApp({ liveData={} }) {
   const [shareOpen,setShareOpen]=useState(false)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
+  const [realPatientData,setRealPatientData]=useState(null) // null = not fetched yet, object = real fetched data
+
+  // Once we know who's really signed in, fetch everything fresh from
+  // Supabase - conditions, allergies, medications, records, appointments,
+  // claims all previously came only from the static liveData prop, which
+  // never reflected the actual signed-in patient (same root cause as the
+  // identity bug, just for every other data category too).
+  useEffect(() => {
+    if (!signedInPatient?.id) { setRealPatientData(null); return }
+    async function loadRealData() {
+      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes] = await Promise.all([
+        supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
+        supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
+        supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
+        supabase.from('medical_records').select('*').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
+        supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
+        supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
+      ])
+      setRealPatientData({
+        conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
+        records: recRes.data||[], appointments: apptRes.data||[], claims: claimRes.data||[],
+      })
+    }
+    loadRealData()
+  }, [signedInPatient?.id])
+
   if (checkingPersistedSignIn) return null
 
   if (showGate && !signedInPatient) {
@@ -2304,13 +2332,13 @@ export default function PatientApp({ liveData={} }) {
   }
 
   const patient = signedInPatient || liveData.patient || { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' }
-  const liveRecords = liveData.records || []
-  const liveConditions = liveData.conditions || []
-  const liveAllergies = liveData.allergies || []
-  const liveMedications = liveData.medications || []
+  const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
+  const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
+  const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
+  const liveMedications = signedInPatient ? (realPatientData?.medications||[]) : (liveData.medications || [])
   const liveVaccinations = liveData.vaccinations || []
-  const liveAppointments = liveData.appointments || []
-  const liveClaims = liveData.claims || []
+  const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
+  const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
   const rootContent = (
