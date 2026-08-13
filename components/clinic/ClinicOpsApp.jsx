@@ -380,7 +380,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 }
 
 function NewPatientScreen({ onBack, onCreated, prefillName }) {
-  const [form,setForm]=useState({fullName:prefillName||'',dob:'',phone:'',hkid:''})
+  const [form,setForm]=useState({fullName:prefillName||'',dob:'',phone:'',hkid:'',email:'',remindersViaPhone:true,remindersViaEmail:false})
   const [saving,setSaving]=useState(false)
   const [submitted,setSubmitted]=useState(false)
   const [error,setError]=useState(null)
@@ -391,12 +391,22 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
     return Math.random().toString(36).slice(2,8).toUpperCase()
   }
 
+  // Real message copy - what would actually be sent once a real SMS/email
+  // provider is connected. Shown on-screen now so this can be reviewed and
+  // approved before any real integration is wired up.
+  function smsText(name, code) {
+    return `Medsa: Hi ${name}, your clinic has created a health record for you. To claim it and access your records anytime, open the Medsa app, enter your HKID and this code: ${code} (valid 48 hours). Reply STOP to opt out.`
+  }
+  function emailText(name, code) {
+    return `Subject: Claim your Medsa health record\n\nHi ${name},\n\nYour clinic has created a Medsa health record for you. To claim it - and access your records from any Medsa-connected clinic going forward - open the Medsa app and enter your HKID along with this code:\n\n${code}\n\nThis code is valid for 48 hours. If you didn't expect this message, you can safely ignore it.\n\n- Medsa`
+  }
+
   async function handleSubmit() {
     setSaving(true)
     setError(null)
     try {
       if (!form.hkid) throw new Error('HKID is required so the patient can later claim this profile.')
-      if (!form.phone) throw new Error('Phone number is required to send the claim code.')
+      if (!form.phone && !form.email) throw new Error('At least one contact method (phone or email) is required to send the claim code.')
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       const code = generateClaimCode()
       const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
@@ -405,13 +415,16 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
         full_name: form.fullName,
         date_of_birth: form.dob,
         hkid: form.hkid,
-        phone: form.phone,
+        phone: form.phone||null,
+        email: form.email||null,
+        reminders_via_phone: form.remindersViaPhone && !!form.phone,
+        reminders_via_email: form.remindersViaEmail && !!form.email,
         emergency_card_consent: false,
         emergency_card_active: false,
         registration_path: 'unclaimed',
         claim_code: code,
         claim_code_expires_at: expiresAt,
-        claim_code_sent_to: form.phone,
+        claim_code_sent_to: [form.phone, form.email].filter(Boolean).join(', '),
       }).select().maybeSingle()
       if (insErr) throw insErr
       setCreatedPatient(inserted)
@@ -429,11 +442,19 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Patient registered</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName || 'this patient'}. A claim code has been sent to {form.phone} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
-        <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'20px'}}>
-          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (demo - normally sent by SMS, not shown here)</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.6}}>A Medsa profile has been created for {form.fullName || 'this patient'}. A claim code has been sent to {[form.phone, form.email].filter(Boolean).join(' and ')} - valid for 48 hours - which they will enter alongside their HKID in the Medsa app to link this record to their own account.</div>
+        <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'14px'}}>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Claim code (for reference)</div>
           <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{claimCode}</div>
         </div>
+        {form.phone&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'10px',textAlign:'left'}}>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>SMS text (not yet actually sent - no live provider connected)</div>
+          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{smsText(form.fullName, claimCode)}</div>
+        </div>}
+        {form.email&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'20px',textAlign:'left'}}>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Email text (not yet actually sent - no live provider connected)</div>
+          <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{emailText(form.fullName, claimCode)}</div>
+        </div>}
         <Btn variant="primary" onClick={()=>onCreated?createdPatient&&onCreated(createdPatient):onBack()}>{onCreated?'Continue with this patient':'Back to check-in'}</Btn>
       </div>
     </PageWrap>
@@ -447,7 +468,17 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
         <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID (required)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-        <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number (required - claim code sent here)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        {form.phone&&<label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,cursor:'pointer'}}>
+          <input type="checkbox" checked={form.remindersViaPhone} onChange={e=>setForm({...form,remindersViaPhone:e.target.checked})}/>
+          Opt in for appointment reminders by SMS
+        </label>}
+        <input value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="Email (optional)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        {form.email&&<label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,cursor:'pointer'}}>
+          <input type="checkbox" checked={form.remindersViaEmail} onChange={e=>setForm({...form,remindersViaEmail:e.target.checked})}/>
+          Opt in for appointment reminders by email
+        </label>}
+        <div style={{fontSize:'11px',color:C.textMuted}}>At least one of phone or email is required, to send the claim code.</div>
       </div>
       <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
         {'\u25c7'} A claim code will be sent to this phone number, valid 48 hours. The patient enters their HKID plus this code in the Medsa app to securely link this record - only someone who actually received the code can claim it.
