@@ -178,7 +178,10 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
             <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
               {liveAllergies.length>0
                 ? liveAllergies.map((a,i)=>(
-                    <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a.allergen}{a.severity?` — ${a.severity}`:''}</div>
+                    <div key={i} style={{padding:'3px 0',display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}}>
+                      <span style={{fontSize:'13px',fontWeight:700,color:C.red}}>⚠ {a.allergen}{a.severity?` — ${a.severity}`:''}</span>
+                      {a.reported_by==='patient_reported'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600}}>Self-reported</span>}
+                    </div>
                   ))
                 : <div style={{fontSize:'12px',color:C.textSub,padding:'3px 0'}}>No known allergies on file</div>}
             </div>
@@ -519,6 +522,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         {[
           {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
           {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
+          {key:'editprofile',icon:'◐',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
           {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
@@ -1904,19 +1908,19 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
 }
 
 function FamilyScreen({ isEn }) {
-  const members=[
-    {name:'Wong Tai (Mum)',relation:'Mother',age:64,type:'Senior',status:'Active',alerts:2},
-    {name:'Wong Siu-lok',relation:'Son',age:14,type:'Minor',status:'Active',alerts:0},
-    {name:'Uncle Cheung Ho',relation:'Uncle',age:72,type:'Senior',status:'Pending',alerts:1},
-  ]
+  const members=[] // No real family-monitoring data model exists yet -
+  // showing an honest empty state rather than the same fake family for
+  // every patient. Building real add/invite/monitor functionality is a
+  // separate, larger feature.
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>Active · HK$38/mo</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Monitoring 2 of 3 members · Renews 1 Jul':'監護3名成員中的2名 · 7月1日續期'}</div>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>HK$38/mo</div>
+        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Add a family member to start monitoring':'新增家庭成員以開始監護'}</div>
       </div>
       <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
+      {members.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No family members added yet.':'尚未新增家庭成員。'}</div>}
       {members.map((m,i)=>(
         <Card key={i} style={{padding:'14px 16px'}}>
           <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
@@ -1942,6 +1946,94 @@ function FamilyScreen({ isEn }) {
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
         ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
       </div>
+    </div>
+  )
+}
+
+function EditProfileScreen({ isEn, patient={}, onSaved }) {
+  const [contact,setContact]=useState({
+    name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
+  })
+  const [savingContact,setSavingContact]=useState(false)
+  const [contactSaved,setContactSaved]=useState(false)
+
+  const [myAllergies,setMyAllergies]=useState([])
+  const [loadingAllergies,setLoadingAllergies]=useState(true)
+  const [newAllergen,setNewAllergen]=useState('')
+  const [newSeverity,setNewSeverity]=useState('')
+  const [savingAllergy,setSavingAllergy]=useState(false)
+
+  async function loadMyAllergies() {
+    if (!patient.id) return
+    setLoadingAllergies(true)
+    const { data } = await supabase.from('allergies').select('*').eq('patient_id', patient.id)
+    setMyAllergies(data||[])
+    setLoadingAllergies(false)
+  }
+  useEffect(() => { loadMyAllergies() }, [patient.id])
+
+  async function handleSaveContact() {
+    setSavingContact(true)
+    await supabase.from('patients').update({
+      emergency_contact_name: contact.name||null,
+      emergency_contact_rel: contact.rel||null,
+      emergency_contact_phone: contact.phone||null,
+    }).eq('id', patient.id)
+    setSavingContact(false)
+    setContactSaved(true)
+    onSaved?.()
+  }
+
+  async function handleAddAllergy() {
+    if (!newAllergen.trim()) return
+    setSavingAllergy(true)
+    await supabase.from('allergies').insert({
+      patient_id: patient.id, allergen: newAllergen, severity: newSeverity||null,
+      reported_by: 'patient_reported',
+    })
+    setNewAllergen(''); setNewSeverity('')
+    setSavingAllergy(false)
+    loadMyAllergies()
+    onSaved?.()
+  }
+
+  async function handleRemoveAllergy(id) {
+    await supabase.from('allergies').delete().eq('id', id)
+    loadMyAllergies()
+    onSaved?.()
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'0 16px 24px'}}>
+      <SecLabel>{isEn?'Emergency contact':'緊急聯絡人'}</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <input value={contact.name} onChange={e=>{setContact({...contact,name:e.target.value});setContactSaved(false)}} placeholder={isEn?'Name':'姓名'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={contact.rel} onChange={e=>{setContact({...contact,rel:e.target.value});setContactSaved(false)}} placeholder={isEn?'Relationship (e.g. Mother)':'關係（例如：母親）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={contact.phone} onChange={e=>{setContact({...contact,phone:e.target.value});setContactSaved(false)}} placeholder={isEn?'Phone number':'電話號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSaveContact} disabled={savingContact}>{savingContact?'Saving…':contactSaved?'✓ Saved':(isEn?'Save':'儲存')}</Btn>
+      </Card>
+
+      <SecLabel>{isEn?'My allergies':'我的過敏'}</SecLabel>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+        {isEn?"Allergies you add here are self-reported by you, not confirmed by a clinician - they're clearly labelled as such wherever shown, including on your emergency card.":'您在此新增的過敏為自行申報，並非由醫護人員確認 - 於所有顯示位置（包括緊急卡）均會清楚標示。'}
+      </div>
+      {loadingAllergies&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'10px'}}>{isEn?'Loading…':'載入中…'}</div>}
+      {!loadingAllergies&&myAllergies.map(a=>(
+        <Card key={a.id} style={{padding:'10px 14px',marginBottom:'6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{a.allergen}{a.severity?` — ${a.severity}`:''}</div>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',background:a.reported_by==='patient_reported'?C.amberLight:C.greenLight,color:a.reported_by==='patient_reported'?C.amber:C.green,fontWeight:600}}>
+              {a.reported_by==='patient_reported'?(isEn?'Self-reported':'自行申報'):(isEn?'Clinically confirmed':'臨床確認')}
+            </span>
+          </div>
+          {a.reported_by==='patient_reported'&&<span onClick={()=>handleRemoveAllergy(a.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>}
+        </Card>
+      ))}
+      <Card style={{padding:'14px',marginTop:'10px'}}>
+        <input value={newAllergen} onChange={e=>setNewAllergen(e.target.value)} placeholder={isEn?'Allergen (e.g. Penicillin)':'過敏原（例如：青黴素）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={newSeverity} onChange={e=>setNewSeverity(e.target.value)} placeholder={isEn?'Severity (optional, e.g. Severe)':'嚴重程度（選填，例如：嚴重）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleAddAllergy} disabled={savingAllergy||!newAllergen.trim()}>{savingAllergy?'Adding…':(isEn?'+ Add allergy':'+ 新增過敏')}</Btn>
+      </Card>
     </div>
   )
 }
@@ -2378,6 +2470,11 @@ export default function PatientApp({ liveData={} }) {
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
+        {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
+          if (!signedInPatient?.id) return
+          const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
+          if (data) setSignedInPatient(data)
+        }}/>}
         {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient} onSignOut={()=>{
           setSignedInPatient(null); setShowGate(true)
           if (typeof window!=='undefined') window.localStorage.removeItem('medsa_signed_in_patient_id')
