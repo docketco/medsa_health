@@ -1597,15 +1597,27 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         }
       }
       setPatientConditions(conditionNames)
-      const { data: realPlans } = await supabase.from('insurance_plans').select('*').eq('status','active')
+      const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active')
+
+      // Real age from the patient's actual date of birth - this is what
+      // determines which tier's price actually applies to them.
+      const patientAge = patient?.date_of_birth
+        ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25*24*60*60*1000))
+        : null
+
       const mapped = (realPlans||[]).map(p => {
         const coveredLower = (p.covered_conditions||[]).map(c=>c.toLowerCase())
         // Real matching: does the patient have a condition this plan explicitly
         // covers? This is deterministic overlap-checking, not AI - see chat.
         const matchedConditions = conditionNames.filter(c => coveredLower.some(cov => cov.includes(c) || c.includes(cov)))
+        const tiers = p.insurance_plan_pricing_tiers || []
+        const myTier = patientAge!=null ? tiers.find(t => patientAge>=t.age_min && patientAge<=t.age_max) : null
         return {
           name: p.plan_name, company: p.company_name, type: p.plan_type,
-          price: p.monthly_premium, limit: p.annual_limit, sponsored: p.sponsored,
+          price: myTier ? myTier.monthly_premium : null,
+          limit: myTier ? myTier.annual_limit : null,
+          priceUnavailable: !myTier,
+          sponsored: p.sponsored,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0,
         }
@@ -1717,8 +1729,12 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
-                <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>HK${String(plan.price||'').replace(/^HK\$/i,'').trim()}{isEn?'/mo':'/月'}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Annual limit':'年度限額'}: HK${String(plan.limit||'').replace(/^HK\$/i,'').trim()}</div>
+                {plan.priceUnavailable
+                  ? <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No pricing for your age':'無您年齡的價格'}</div>
+                  : <>
+                      <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>HK${plan.price}{isEn?'/mo':'/月'}</div>
+                      <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Annual limit':'年度限額'}: HK${plan.limit}</div>
+                    </>}
               </div>
             </div>
             {/* Objective criteria met - no ranking, no score */}
