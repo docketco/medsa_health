@@ -677,7 +677,55 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [showReferral,setShowReferral]=useState(false)
   const [referralNote,setReferralNote]=useState('')
   const [referralSearch,setReferralSearch]=useState('')
+  const [referralMatches,setReferralMatches]=useState([])
+  const [referralMatched,setReferralMatched]=useState(null) // the selected real match, if any
+  const [referralClinicName,setReferralClinicName]=useState('')
+  const [referralClinicPhone,setReferralClinicPhone]=useState('')
+  const [referralClinicEmail,setReferralClinicEmail]=useState('')
+  const [referralSending,setReferralSending]=useState(false)
   const [referralSent,setReferralSent]=useState(false)
+
+  // Real auto-match search - both real Medsa doctors and the directory
+  // (non-Medsa doctors Medsa knows about for referral purposes). Debounced
+  // so it doesn't fire on every keystroke.
+  useEffect(() => {
+    if (!referralSearch.trim()) { setReferralMatches([]); return }
+    const timeout = setTimeout(async () => {
+      const [medsaRes, dirRes] = await Promise.all([
+        supabase.from('staff_credentials').select('id,full_name,department')
+          .eq('role','doctor').eq('status','active').ilike('full_name', `%${referralSearch}%`).limit(5),
+        supabase.from('directory_doctors').select('*, directory_clinics(*)')
+          .ilike('full_name', `%${referralSearch}%`).limit(5),
+      ])
+      const medsaMatches = (medsaRes.data||[]).map(d => ({ source:'medsa', id:d.id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' }))
+      const dirMatches = (dirRes.data||[]).map(d => ({ source:'directory', id:d.id, name:d.full_name, clinicLabel:d.directory_clinics?.name, phone:d.directory_clinics?.contact_phone, email:d.directory_clinics?.contact_email }))
+      setReferralMatches([...medsaMatches, ...dirMatches])
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [referralSearch])
+
+  function handleSelectReferralMatch(m) {
+    setReferralMatched(m)
+    setReferralSearch(m.name)
+    setReferralMatches([])
+    setReferralClinicName(m.clinicLabel||'')
+    setReferralClinicPhone(m.phone||'')
+    setReferralClinicEmail(m.email||'')
+  }
+
+  async function handleSendReferral() {
+    if (!referralSearch.trim() || !patient?.id) return
+    setReferralSending(true)
+    await supabase.from('referrals').insert({
+      patient_id: patient.id, referring_staff: staffMember?.name, note: referralNote||null,
+      to_doctor_name: referralSearch,
+      to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
+      matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
+      matched_directory_doctor_id: referralMatched?.source==='directory' ? referralMatched.id : null,
+    })
+    setReferralSending(false)
+    setReferralSent(true)
+  }
   const [drugInfoOpen,setDrugInfoOpen]=useState(null)
   const [expandedRecord,setExpandedRecord]=useState(null)
   const [reportRequests,setReportRequests]=useState({})
@@ -977,23 +1025,32 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       <SecLabel>Refer to another doctor</SecLabel>
       {!showReferral&&<Btn style={{marginBottom:'20px'}} onClick={()=>setShowReferral(true)}>+ Refer this patient</Btn>}
       {showReferral&&!referralSent&&<Card style={{padding:'16px',marginBottom:'20px'}}>
-        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Attach a case note and search your affiliated network or Medsa's directory for a specialist to refer to.</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Attach a case note. Search for the receiving doctor - matches from Medsa or the directory auto-fill clinic info; if nothing matches, fill in manually.</div>
         <textarea value={referralNote} onChange={e=>setReferralNote(e.target.value)} rows={3} placeholder="Case summary for the receiving doctor..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
-        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-          <input value={referralSearch} onChange={e=>setReferralSearch(e.target.value)} placeholder="Search by name, specialty, or clinic..." style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-          <Btn style={{flexShrink:0,fontSize:'12px'}}>Import affiliated doctors (CSV)</Btn>
+        <div style={{position:'relative',marginBottom:'10px'}}>
+          <input value={referralSearch} onChange={e=>{setReferralSearch(e.target.value);setReferralMatched(null)}} placeholder="Doctor name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          {referralMatches.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
+            {referralMatches.map(m=>(
+              <div key={m.source+m.id} onClick={()=>handleSelectReferralMatch(m)} style={{padding:'10px 12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px'}}>
+                <div style={{fontWeight:600}}>{m.name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{m.clinicLabel||'—'} {m.source==='medsa'?'· Medsa':'· Directory'}</div>
+              </div>
+            ))}
+          </div>}
         </div>
-        {referralSearch.trim()&&<div style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'10px'}}>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Nearby on Medsa</div>
-          <div style={{fontSize:'13px',padding:'4px 0'}}>Dr Lam Wai-yee - Cardiologist - HK Sanatorium</div>
-        </div>}
+        {referralMatched&&<div style={{fontSize:'11px',color:C.green,marginBottom:'10px'}}>{'\u2713'} Matched - clinic info auto-filled below</div>}
+        <input value={referralClinicName} onChange={e=>setReferralClinicName(e.target.value)} placeholder="Clinic name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={referralClinicPhone} onChange={e=>setReferralClinicPhone(e.target.value)} placeholder="Clinic phone" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={referralClinicEmail} onChange={e=>setReferralClinicEmail(e.target.value)} placeholder="Clinic email" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
         <div style={{display:'flex',gap:'8px'}}>
-          <Btn onClick={()=>{setShowReferral(false);setReferralNote('');setReferralSearch('')}}>Cancel</Btn>
-          <Btn variant="primary" onClick={()=>setReferralSent(true)}>Send referral</Btn>
+          <Btn onClick={()=>{setShowReferral(false);setReferralNote('');setReferralSearch('');setReferralMatched(null);setReferralClinicName('');setReferralClinicPhone('');setReferralClinicEmail('')}}>Cancel</Btn>
+          <Btn variant="primary" onClick={handleSendReferral} disabled={referralSending||!referralSearch.trim()}>{referralSending?'Sending…':'Send referral'}</Btn>
         </div>
       </Card>}
       {referralSent&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px 14px',fontSize:'12px',color:C.green,marginBottom:'20px'}}>
-        {'\u2713'} Referral sent with case note attached. The receiving doctor will see this patient's consented records once they accept.
+        {'\u2713'} Referral logged for {referralSearch}{referralClinicName?` at ${referralClinicName}`:''}. {referralMatched?.source==='medsa'?"The receiving doctor will see this patient's consented records once they accept.":'Contact the clinic directly using the details provided, since this referral is outside Medsa.'}
       </div>}
 
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
@@ -1496,6 +1553,10 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [newReg,setNewReg]=useState('')
   const [newExpiry,setNewExpiry]=useState('')
   const [newDisciplinary,setNewDisciplinary]=useState('clear')
+  const [newSex,setNewSex]=useState('')
+  const [newDob,setNewDob]=useState('')
+  const [newHasEpc,setNewHasEpc]=useState(false)
+  const [newEpcLink,setNewEpcLink]=useState('')
   const [newPin,setNewPin]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
@@ -1533,18 +1594,22 @@ function PracticeManagerStaffScreen({ staffMember }) {
 
   async function handleOnboard() {
     if (!newName || !newDept || !newPin) return
+    if (newRole==='doctor' && !newDob) return
     setSaving(true)
     await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
       full_name:newName, role:newRole, department:newDept, pin:newPin,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
+      sex:newSex||null, date_of_birth:newDob||null,
+      has_epc:newHasEpc, epc_link:newHasEpc?(newEpcLink||null):null,
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
     })
     setSaving(false)
     setShowOnboard(false)
     setNewName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
+    setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('')
     load()
   }
 
@@ -1578,7 +1643,23 @@ function PracticeManagerStaffScreen({ staffMember }) {
             <option value="admin">Practice Manager</option>
           </select>
           <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <select value={newSex} onChange={e=>setNewSex(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+            <option value="">Sex…</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+          {newRole==='doctor'&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Date of birth (required for doctors)</div>
+            <input type="date" value={newDob} onChange={e=>setNewDob(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          </>}
           <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          {(newRole==='doctor')&&<>
+            <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'10px',cursor:'pointer'}}>
+              <input type="checkbox" checked={newHasEpc} onChange={e=>setNewHasEpc(e.target.checked)}/>
+              Has an e-PC (electronic Practising Certificate)
+            </label>
+            {newHasEpc&&<input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          </>}
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
           <input type="date" value={newExpiry} onChange={e=>setNewExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>License / registration document, or other relevant copy</div>
@@ -1594,7 +1675,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
           </select>
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin||(newRole==='doctor'&&!newDob)} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
