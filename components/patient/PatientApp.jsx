@@ -860,16 +860,27 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [intakeConsent,setIntakeConsent]=useState(true) // opt-out: consented by default, patient can uncheck
   const [intakeSaving,setIntakeSaving]=useState(false)
   const [intakeError,setIntakeError]=useState(null)
-  const doctors=[
-    {init:'陳',name:'Dr Chan Siu-ming',spec:'General Practice',clinic:'Pacific Medical Group · Wan Chai',institution:'clinic_ops',rating:'4.9',avail:'Today',type:'ok',distanceKm:0.8,videoAvail:true},
-    {init:'林',name:'Dr Lam Wai-yee',spec:'Cardiologist',clinic:'Pacific Medical Group · Wan Chai',institution:'clinic_ops',rating:'4.8',avail:'Tomorrow',type:'due',distanceKm:0.8,videoAvail:false},
-    {init:'楊',name:'Dr Yeung Chi-hong',spec:'Internal Medicine',clinic:'QE Hospital · Yau Ma Tei',institution:'practitioner',rating:'4.8',avail:'Today',type:'ok',distanceKm:2.4,videoAvail:true},
-    {init:'何',name:'Dr Ho Ka-fai',spec:'Cardiologist',clinic:'QE Hospital · Yau Ma Tei',institution:'practitioner',rating:'4.7',avail:'Tomorrow',type:'due',distanceKm:2.4,videoAvail:false},
-    {init:'曾',name:'Dr Tsang Wing-lam',spec:'Cardiologist',clinic:'QE Hospital · Yau Ma Tei',institution:'practitioner',rating:'4.9',avail:'Today',type:'ok',distanceKm:2.4,videoAvail:true},
-    {init:'黃',name:'Dr Wong Mei-ling',spec:'TCM Practitioner',clinic:'Tong Wah TCM · Sham Shui Po',institution:null,rating:'4.6',avail:'Today',type:'ok',distanceKm:5.1,videoAvail:true},
-    {init:'鄭',name:'Dr Cheng Ka-wai',spec:'Psychiatrist',clinic:'Mind Health HK · Central',institution:null,rating:'4.9',avail:'Thu',type:'due',distanceKm:1.5,videoAvail:true},
-    {init:'李',name:'Dr Lee Tak-shing',spec:'Dentist',clinic:'Smile Dental · Causeway Bay',institution:null,rating:'4.5',avail:'Fully booked',type:'full',distanceKm:2.1,videoAvail:false},
-  ]
+  const [searchQuery,setSearchQuery]=useState('')
+  const [doctors,setDoctors]=useState([])
+  const [doctorsLoading,setDoctorsLoading]=useState(true)
+
+  // Real doctors from staff_credentials, replacing a hardcoded list of 8
+  // fake demo doctors this search bar was never actually querying.
+  useEffect(() => {
+    async function loadDoctors() {
+      setDoctorsLoading(true)
+      const { data } = await supabase.from('staff_credentials').select('*')
+        .eq('role','doctor').eq('status','active')
+      setDoctors((data||[]).map(d => ({
+        init: d.full_name?.[0]||'?', name: d.full_name, spec: d.department||'General Practice',
+        clinic: d.institution_source==='clinic_ops' ? 'Clinic Ops' : 'Practitioner',
+        institution: d.institution_source, avail: null, type: 'ok',
+      })))
+      setDoctorsLoading(false)
+    }
+    loadDoctors()
+  }, [])
+
   // Doctor specialty and clinic/location terms were never translated -
   // shown in English regardless of selected language. Translated here at
   // render time rather than restructuring the whole doctors array.
@@ -884,11 +895,12 @@ function DoctorsScreen({ isEn, patient={} }) {
     if (isEn || !term) return term
     return term.split(' · ').map(part => DR_TERM_ZH[part] || part).join(' · ')
   }
-  const sortedDoctors = [...doctors].sort((a,b)=>{
-    if (sortBy==='distance') return a.distanceKm - b.distanceKm
-    if (sortBy==='rating') return parseFloat(b.rating) - parseFloat(a.rating)
-    return 0
+  const searchedDoctors = doctors.filter(d => {
+    const q = searchQuery.toLowerCase().trim()
+    if (!q) return true
+    return d.name?.toLowerCase().includes(q) || d.spec?.toLowerCase().includes(q) || d.clinic?.toLowerCase().includes(q)
   })
+  const sortedDoctors = [...searchedDoctors].sort((a,b) => (a.name||'').localeCompare(b.name||''))
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -1052,7 +1064,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       <div style={{background:C.green,padding:'0 16px 14px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
+          <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
         </div>
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
@@ -1077,13 +1089,11 @@ function DoctorsScreen({ isEn, patient={} }) {
                 <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}</div>
                 <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
-                  <span style={{fontSize:'11px',color:C.textMuted}}>◇ {doc.distanceKm}km</span>
-                  {doc.videoAvail&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>◈ {isEn?'Video available':'視像問診'}</span>}
                   {doc.institution==='clinic_ops'&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Clinic':'Medsa診所'}</span>}
                   {doc.institution==='practitioner'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Hospital':'Medsa醫院'}</span>}
                 </div>
               </div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'12px',color:'#d4a017'}}>★★★★★</div><div style={{fontSize:'10px',color:C.textMuted}}>{doc.rating}</div><Badge text={doc.avail} type={doc.type}/></div>
+              <div style={{textAlign:'right',flexShrink:0}}><Badge text={doc.avail||(isEn?'Contact clinic':'聯絡診所')} type={doc.type}/></div>
             </div>
             <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
