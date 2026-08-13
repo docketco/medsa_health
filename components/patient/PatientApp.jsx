@@ -176,14 +176,18 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
                 ))
               : <div style={{fontSize:'12px',color:C.textSub,padding:'4px 0'}}>No active conditions on file</div>}
             <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-              {['Penicillin — SEVERE ANAPHYLAXIS','Dust mites — moderate'].map((a,i)=>(
-                <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a}</div>
-              ))}
+              {liveAllergies.length>0
+                ? liveAllergies.map((a,i)=>(
+                    <div key={i} style={{fontSize:'13px',fontWeight:700,color:C.red,padding:'3px 0'}}>⚠ {a.allergen}{a.severity?` — ${a.severity}`:''}</div>
+                  ))
+                : <div style={{fontSize:'12px',color:C.textSub,padding:'3px 0'}}>No known allergies on file</div>}
             </div>
             <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-              {['Metformin 500mg — twice daily','Aspirin 100mg — daily','Atorvastatin 20mg — nightly'].map((m,i)=>(
-                <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m}</div>
-              ))}
+              {liveMedications.length>0
+                ? liveMedications.map((m,i)=>(
+                    <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m.medication_name}{m.dosage?` ${m.dosage}`:''}{m.frequency?` — ${m.frequency}`:''}</div>
+                  ))
+                : <div style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>No current medications on file</div>}
             </div>
           </div>
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
