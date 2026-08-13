@@ -407,6 +407,40 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
     try {
       if (!form.hkid) throw new Error('HKID is required so the patient can later claim this profile.')
       if (!form.phone && !form.email) throw new Error('At least one contact method (phone or email) is required to send the claim code.')
+
+      // Check for an existing record under this HKID first - the database
+      // itself enforces uniqueness, so blindly inserting would just fail.
+      // This is also the real, correct fix for the cross-institution
+      // scenario: rather than creating a duplicate to merge later, reuse
+      // the existing unclaimed record directly.
+      const { data: existing } = await supabase.from('patients').select('*').eq('hkid', form.hkid).maybeSingle()
+      if (existing?.claimed_at) {
+        throw new Error(`${existing.full_name} already has a claimed Medsa profile (${existing.medsa_id}). Search for them instead of registering as new.`)
+      }
+      if (existing && !existing.claimed_at) {
+        // Already has an unclaimed record from another visit/institution -
+        // refresh their claim code and contact info for this visit rather
+        // than creating a second row the database would reject anyway.
+        const code = generateClaimCode()
+        const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
+        const { data: refreshed, error: updErr } = await supabase.from('patients').update({
+          full_name: form.fullName || existing.full_name,
+          date_of_birth: form.dob || existing.date_of_birth,
+          phone: form.phone || existing.phone,
+          email: form.email || existing.email,
+          reminders_via_phone: form.remindersViaPhone && !!form.phone,
+          reminders_via_email: form.remindersViaEmail && !!form.email,
+          claim_code: code, claim_code_expires_at: expiresAt,
+          claim_code_sent_to: [form.phone, form.email].filter(Boolean).join(', '),
+        }).eq('id', existing.id).select().maybeSingle()
+        if (updErr) throw updErr
+        setCreatedPatient(refreshed)
+        setClaimCode(code)
+        setSubmitted(true)
+        setSaving(false)
+        return
+      }
+
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       const code = generateClaimCode()
       const expiresAt = new Date(Date.now() + 48*60*60*1000).toISOString()
@@ -2750,14 +2784,27 @@ export default function ClinicOpsApp() {
       setCheckInError(`${patient.full_name} is already checked in and still active.`)
       return 'already_active'
     }
+
+    // Look up today's real scheduled appointment BEFORE inserting the queue
+    // entry - previously this defaulted to 'Unassigned'/the checking-in
+    // staff member's own department, which is almost never the actual
+    // treating doctor. This is the real reason a patient checked in by
+    // reception never appeared under a doctor's own patients.
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    const { data: matchingAppt } = await supabase.from('appointments').select('*')
+      .eq('patient_id', patient.id).eq('institution_source', 'clinic_ops')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      .maybeSingle()
+
     const ticket = 'A'+nextTicket
     const { data, error } = await supabase.from('clinic_queue').insert({
       ticket,
       patient_id: patient.id,
       patient_name: patient.full_name,
-      doctor_name: staffMember?.role==='doctor' ? staffMember.name : 'Unassigned',
+      doctor_name: matchingAppt?.doctor_name || (staffMember?.role==='doctor' ? staffMember.name : 'Unassigned'),
       room: '-',
-      department: staffMember?.department || 'All departments',
+      department: matchingAppt?.department || staffMember?.department || 'All departments',
       status: 'waiting',
     }).select().single()
 
@@ -2774,22 +2821,13 @@ export default function ClinicOpsApp() {
     setNextTicket(nextTicket+1)
     setCheckInError(null)
 
-    // This check-in and the Schedule screen's status check were two
-    // disconnected systems - checking in here (clinic_queue) never
-    // updated the appointments table Schedule actually reads from. Now
-    // it also marks today's matching real appointment as checked_in.
-    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
-    await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
-      .eq('patient_id', patient.id)
-      .eq('institution_source', 'clinic_ops')
-      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+    if (matchingAppt) {
+      await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
+        .eq('id', matchingAppt.id)
+    } else {
+      setCheckInError(`${patient.full_name} was checked in, but has no appointment scheduled today - they won't appear on any doctor's patient list until one is booked.`)
+    }
 
-    // Navigation is now handled by the check-in screen itself, after it
-    // shows a real confirmation - previously this navigated away
-    // immediately, which for non-admin staff sent them right back to the
-    // same check-in screen and silently reset it, looking like nothing
-    // had happened at all.
     return true
   }
 
