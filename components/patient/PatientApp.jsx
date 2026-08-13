@@ -134,7 +134,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
         {step==='consent'&&<>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'16px'}}>One-time consent</div>
           <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',marginBottom:'16px',fontSize:'13px',color:C.text,lineHeight:1.8}}>
-            I, <strong>Wong Mei-ling, Lisa</strong>, consent to Medsa making my critical medical information accessible to verified emergency medical personnel (EMS, A&E staff, and Medsa-registered practitioners in an emergency context) via QR scan.<br/><br/>
+            I, <strong>{p.full_name}</strong>, consent to Medsa making my critical medical information accessible to verified emergency medical personnel (EMS, A&E staff, and Medsa-registered practitioners in an emergency context) via QR scan.<br/><br/>
             I understand that:<br/>
             · This information is sourced from my verified medical records<br/>
             · It updates automatically as my records are updated<br/>
