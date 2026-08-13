@@ -1557,6 +1557,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [newDob,setNewDob]=useState('')
   const [newHasEpc,setNewHasEpc]=useState(false)
   const [newEpcLink,setNewEpcLink]=useState('')
+  const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newPin,setNewPin]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
@@ -1603,6 +1604,8 @@ function PracticeManagerStaffScreen({ staffMember }) {
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
       has_epc:newHasEpc, epc_link:newHasEpc?(newEpcLink||null):null,
+      mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
+      mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
     })
@@ -1673,9 +1676,13 @@ function PracticeManagerStaffScreen({ staffMember }) {
             <option value="clear">Disciplinary: Clear</option>
             <option value="flagged">Disciplinary: Flagged</option>
           </select>
+          {newRole==='doctor'&&<label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'14px',cursor:'pointer',lineHeight:1.4}}>
+            <input type="checkbox" checked={newMchkDeclared} onChange={e=>setNewMchkDeclared(e.target.checked)} style={{marginTop:'2px'}}/>
+            I confirm that my published service details, fees, and qualifications are accurate, non-exaggerated, and comply with Section 5 and Appendix D of the MCHK Code of Professional Conduct.
+          </label>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin||(newRole==='doctor'&&!newDob)} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
