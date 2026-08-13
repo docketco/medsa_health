@@ -273,7 +273,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={} }) {
+function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[] }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -535,11 +535,34 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       <SecLabel>{isEn?'Message board':'訊息板'}</SecLabel>
       <Card>
         <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
-        {[
-          {dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'},
-          {dot:'#d4a017',title:isEn?'Reminder: Dr Chan — tomorrow 10am':'提醒：陳醫生 — 明天上午10時',body:isEn?'QE Hospital, Room 3B.':'伊利沙伯醫院，3B室。'},
-          {dot:C.green,title:isEn?'Insurance claim approved':'保險索賠已批准',body:isEn?'AIA claim #44821 — HK$3,200 approved.':'AIA索賠#44821 — 港幣3,200元已批准。'},
-        ].map((m,i)=>(
+        {(() => {
+          const realAlerts = []
+          // Real upcoming appointment reminder - within the next 48 hours,
+          // replacing a hardcoded "Dr Chan, Room 3B" that showed for every
+          // patient regardless of what was actually scheduled.
+          const soon = appointments.find(a => {
+            const t = new Date(a.scheduled_at).getTime()
+            return t > Date.now() && t < Date.now() + 48*60*60*1000 && a.status !== 'cancelled'
+          })
+          if (soon) realAlerts.push({
+            dot:'#d4a017',
+            title: isEn?`Reminder: Dr ${soon.doctor_name||'—'} — ${new Date(soon.scheduled_at).toLocaleString('en-HK',{weekday:'short',hour:'2-digit',minute:'2-digit'})}`:`提醒：${soon.doctor_name||'—'}醫生`,
+            body: isEn?`${soon.department||'Clinic'} appointment.`:`${soon.department||'診所'}預約。`,
+          })
+          // Real recently-approved/settled claim, replacing a hardcoded
+          // fake claim number and dollar amount.
+          const recentClaim = [...claims].filter(c=>['approved','settled'].includes(c.status))
+            .sort((a,b)=>new Date(b.adjudicated_at||b.submitted_at)-new Date(a.adjudicated_at||a.submitted_at))[0]
+          if (recentClaim) realAlerts.push({
+            dot:C.green,
+            title: isEn?'Insurance claim approved':'保險索賠已批准',
+            body: isEn?`Claim ${recentClaim.claim_ref} — HK$${recentClaim.insurer_covered_amount||recentClaim.amount} approved.`:`索賠 ${recentClaim.claim_ref} 已批准。`,
+          })
+          // Flu advisory kept as genuinely non-patient-specific public
+          // health content, not fake data about this specific patient.
+          realAlerts.push({dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'})
+          return realAlerts
+        })().map((m,i)=>(
           <div key={i} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:'10px',alignItems:'flex-start'}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:m.dot,marginTop:'5px',flexShrink:0}}/>
             <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
@@ -1539,6 +1562,18 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
+  const [inquiring,setInquiring]=useState(null)
+
+  // Real save - the button previously only changed local UI state and
+  // claimed the enquiry was "forwarded to the insurer," but nothing was
+  // ever actually written anywhere.
+  async function handleInquire(i, plan) {
+    if (!patient?.id || !plan.id) return
+    setInquiring(i)
+    await supabase.from('plan_inquiries').insert({ patient_id: patient.id, plan_id: plan.id })
+    setInquiring(null)
+    setInquired(i)
+  }
   const [anonRating,setAnonRating]=useState(null)
   const [feedbackText,setFeedbackText]=useState('')
   const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
@@ -1617,7 +1652,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
         const tiers = p.insurance_plan_pricing_tiers || []
         const myTier = patientAge!=null ? tiers.find(t => patientAge>=t.age_min && patientAge<=t.age_max) : null
         return {
-          name: p.plan_name, company: p.company_name, type: p.plan_type,
+          id: p.id, name: p.plan_name, company: p.company_name, type: p.plan_type,
           price: myTier ? myTier.monthly_premium : null,
           limit: myTier ? myTier.annual_limit : null,
           priceUnavailable: !myTier,
@@ -1752,7 +1787,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
               {inquired===i
                 ?<div style={{flex:1,background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:500}}>✓ Enquiry sent</div>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setInquired(i)}>Inquire about plan</Btn>}
+                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleInquire(i,plan)} disabled={inquiring===i}>{inquiring===i?'Sending…':'Inquire about plan'}</Btn>}
             </div>
             {/* Post-inquiry confirmation */}
             {inquired===i&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
@@ -2499,7 +2534,7 @@ export default function PatientApp({ liveData={} }) {
         </div>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
