@@ -645,7 +645,10 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     {name:'HPV (Gardasil 9)',status:'ok',label:'Complete',doses:[['Dose 1','5 Sep 2018'],['Dose 2','5 Nov 2018'],['Dose 3','5 Mar 2019']]},
     {name:'Tetanus / Td booster',status:'full',label:'Overdue',doses:[['Last booster','Mar 2013'],['Next due — every 10 yrs','Overdue 2023']]},
   ]
-  const providers=[{init:'QE',name:'Queen Elizabeth Hospital',sub:'Medsa partner',on:true},{init:'MIH',name:'Matilda International',sub:'Medsa partner',on:true},{init:'DR',name:'Dr Chan Siu-ming',sub:'Private practitioner',on:true},{init:'VF',name:'Valley Fitness Clinic',sub:'Non-Medsa · Link share',on:false}]
+  const providers=[] // No real data-sharing consent system exists yet
+  // to back this list (which institutions/doctors can see this patient's
+  // records) - was previously hardcoded identically for every patient,
+  // including toggles that didn't actually control anything real.
   // Medical record and vaccination titles/labels were never translated -
   // shown in English regardless of selected language. One dictionary
   // covers records, vaccines, and providers since they share phrasing.
@@ -733,6 +736,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       </>}
       {tab==='sharing'&&<>
         <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
+        {providers.length===0&&<div style={{margin:'0 16px 10px',padding:'20px',textAlign:'center',color:C.textMuted,fontSize:'13px'}}>{isEn?'No access controls set up yet.':'尚未設定存取控制。'}</div>}
         <Card>
           {providers.map((p,i)=>(
             <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
@@ -863,23 +867,58 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [searchQuery,setSearchQuery]=useState('')
   const [doctors,setDoctors]=useState([])
   const [doctorsLoading,setDoctorsLoading]=useState(true)
+  const [filterSpecialty,setFilterSpecialty]=useState('')
+  const [filterDistrict,setFilterDistrict]=useState('')
+  const [filterPartnerOnly,setFilterPartnerOnly]=useState(false)
+  const [userLocation,setUserLocation]=useState(null) // {lat,lng} once granted
+  const [locationError,setLocationError]=useState(null)
 
-  // Real doctors from staff_credentials, replacing a hardcoded list of 8
-  // fake demo doctors this search bar was never actually querying.
+  function requestLocation() {
+    if (!navigator.geolocation) { setLocationError('Location not supported on this device.'); return }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setLocationError(null) },
+      () => setLocationError('Location permission denied - showing all results without distance.'),
+    )
+  }
+
+  function distanceKm(lat1, lng1, lat2, lng2) {
+    if (lat1==null||lng1==null||lat2==null||lng2==null) return null
+    const R = 6371
+    const dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2
+    return R * 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+  }
+
+  // Real, unified search - both real Medsa doctors (staff_credentials, live
+  // availability via doctor_availability) and directory listings (real
+  // contact info, no live booking claimed since nothing's actually
+  // connected for those).
   useEffect(() => {
     async function loadDoctors() {
       setDoctorsLoading(true)
-      const { data } = await supabase.from('staff_credentials').select('*')
-        .eq('role','doctor').eq('status','active')
-      setDoctors((data||[]).map(d => ({
-        init: d.full_name?.[0]||'?', name: d.full_name, spec: d.department||'General Practice',
-        clinic: d.institution_source==='clinic_ops' ? 'Clinic Ops' : 'Practitioner',
-        institution: d.institution_source, avail: null, type: 'ok',
-      })))
+      const [medsaRes, dirRes] = await Promise.all([
+        supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active'),
+        supabase.from('directory_doctors').select('*, directory_clinics(*)'),
+      ])
+      const medsaDoctors = (medsaRes.data||[]).map(d => ({
+        source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
+        spec: d.department||'General Practice', clinic: d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital',
+        institution: d.institution_source, district: null, lat:null, lng:null,
+        phone:null, email:null, isPartnered:true,
+      }))
+      const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => ({
+        source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
+        spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—',
+        institution: d.directory_clinics?.partnership_status==='medsa_partnered' ? d.directory_clinics?.institution_source : null,
+        district: d.directory_clinics?.district||null, lat: d.directory_clinics?.latitude, lng: d.directory_clinics?.longitude,
+        phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
+        isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered',
+      }))
+      setDoctors([...medsaDoctors, ...directoryDoctors])
       setDoctorsLoading(false)
     }
     loadDoctors()
-  }, [])
+  }, [filterPartnerOnly])
 
   // Doctor specialty and clinic/location terms were never translated -
   // shown in English regardless of selected language. Translated here at
@@ -897,10 +936,20 @@ function DoctorsScreen({ isEn, patient={} }) {
   }
   const searchedDoctors = doctors.filter(d => {
     const q = searchQuery.toLowerCase().trim()
-    if (!q) return true
-    return d.name?.toLowerCase().includes(q) || d.spec?.toLowerCase().includes(q) || d.clinic?.toLowerCase().includes(q)
+    if (q && !(d.name?.toLowerCase().includes(q) || d.spec?.toLowerCase().includes(q) || d.clinic?.toLowerCase().includes(q))) return false
+    if (filterSpecialty && d.spec !== filterSpecialty) return false
+    if (filterDistrict && d.district !== filterDistrict) return false
+    if (filterPartnerOnly && !d.isPartnered) return false
+    return true
+  }).map(d => ({ ...d, distanceKm: userLocation ? distanceKm(userLocation.lat, userLocation.lng, d.lat, d.lng) : null }))
+  const sortedDoctors = [...searchedDoctors].sort((a,b) => {
+    if (userLocation && a.distanceKm!=null && b.distanceKm!=null) return a.distanceKm - b.distanceKm
+    if (userLocation && a.distanceKm!=null) return -1
+    if (userLocation && b.distanceKm!=null) return 1
+    return (a.name||'').localeCompare(b.name||'')
   })
-  const sortedDoctors = [...searchedDoctors].sort((a,b) => (a.name||'').localeCompare(b.name||''))
+  const availableSpecialties = [...new Set(doctors.map(d=>d.spec).filter(Boolean))].sort()
+  const availableDistricts = [...new Set(doctors.map(d=>d.district).filter(Boolean))].sort()
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -1066,6 +1115,23 @@ function DoctorsScreen({ isEn, patient={} }) {
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
           <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
         </div>
+        <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
+          <div onClick={requestLocation} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:userLocation?'#fff':'rgba(255,255,255,0.2)',color:userLocation?C.green:'#fff'}}>
+            {'\u25c9'} {userLocation?(isEn?'Sorted by distance':'按距離排序'):(isEn?'Use my location':'使用我的位置')}
+          </div>
+          <select value={filterSpecialty} onChange={e=>setFilterSpecialty(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterSpecialty?'#fff':'rgba(255,255,255,0.2)',color:filterSpecialty?C.text:'#fff'}}>
+            <option value="">{isEn?'Any specialty':'任何專科'}</option>
+            {availableSpecialties.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterDistrict} onChange={e=>setFilterDistrict(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterDistrict?'#fff':'rgba(255,255,255,0.2)',color:filterDistrict?C.text:'#fff'}}>
+            <option value="">{isEn?'Any district':'任何地區'}</option>
+            {availableDistricts.map(d=><option key={d} value={d}>{d}</option>)}
+          </select>
+          <div onClick={()=>setFilterPartnerOnly(!filterPartnerOnly)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:filterPartnerOnly?'#fff':'rgba(255,255,255,0.2)',color:filterPartnerOnly?C.green:'#fff'}}>
+            {isEn?'Medsa partners only':'只顯示Medsa合作夥伴'}
+          </div>
+        </div>
+        {locationError&&<div style={{fontSize:'10px',color:'#ffe066',marginTop:'6px'}}>{locationError}</div>}
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
         {[['search',isEn?'Find doctors':'尋找醫生'],['book',isEn?'Book':'預約'],['payments',isEn?'Payments':'付款']].map(([k,l])=>(
@@ -1087,19 +1153,23 @@ function DoctorsScreen({ isEn, patient={} }) {
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
                 <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
                 <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
-                  {doc.institution==='clinic_ops'&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Clinic':'Medsa診所'}</span>}
-                  {doc.institution==='practitioner'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Hospital':'Medsa醫院'}</span>}
+                  {doc.isPartnered
+                    ? <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Verified Partner':'Medsa認證合作夥伴'}</span>
+                    : doc.source==='directory'&&<span style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Listed via directory':'目錄列表'}</span>}
                 </div>
               </div>
-              <div style={{textAlign:'right',flexShrink:0}}><Badge text={doc.avail||(isEn?'Contact clinic':'聯絡診所')} type={doc.type}/></div>
+              <div style={{textAlign:'right',flexShrink:0}}><Badge text={doc.isPartnered?(doc.avail||(isEn?'Book instantly':'即時預約')):(isEn?'Contact clinic':'聯絡診所')} type={doc.isPartnered?'ok':'due'}/></div>
             </div>
             <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,fontSize:'12px'}}>Profile</Btn>
-              {doc.type==='full'
-                ?<Btn variant="primary" style={{flex:1,fontSize:'12px',opacity:0.5}} disabled>Full</Btn>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, doc.videoAvail?'video':'in-person')}>{isEn?'Book':'預約'}</Btn>}
+              {doc.isPartnered
+                ? <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, 'in-person')}>{isEn?'Book instantly':'即時預約'}</Btn>
+                : <>
+                    {doc.phone&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`tel:${doc.phone}`}>{'\u260e'} {isEn?'Call':'致電'}</Btn>}
+                    {doc.email&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`mailto:${doc.email}`}>{'\u2709'} {isEn?'Email':'電郵'}</Btn>}
+                    {!doc.phone&&!doc.email&&<Btn style={{flex:1,fontSize:'12px'}} disabled>{isEn?'No contact info':'無聯絡資料'}</Btn>}
+                  </>}
             </div>
           </Card>
         ))}
