@@ -896,29 +896,48 @@ function DoctorsScreen({ isEn, patient={} }) {
   useEffect(() => {
     async function loadDoctors() {
       setDoctorsLoading(true)
+      // MCHK Appendix D gate - a doctor cannot appear in Find Care at all
+      // unless they've agreed to the compliance declaration. Filtered in
+      // the query itself, not just hidden in the UI.
       const [medsaRes, dirRes] = await Promise.all([
-        supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active'),
-        supabase.from('directory_doctors').select('*, directory_clinics(*)'),
+        supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+        supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true),
       ])
-      const medsaDoctors = (medsaRes.data||[]).map(d => ({
-        source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
+      const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
+        source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
         spec: d.department||'General Practice', clinic: d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital',
         institution: d.institution_source, district: null, lat:null, lng:null,
-        phone:null, email:null, isPartnered:true,
+        phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
+        languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
       }))
-      const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => ({
+      const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
         spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—',
         institution: d.directory_clinics?.partnership_status==='medsa_partnered' ? d.directory_clinics?.institution_source : null,
         district: d.directory_clinics?.district||null, lat: d.directory_clinics?.latitude, lng: d.directory_clinics?.longitude,
         phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
-        isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered',
+        isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered', registrationNumber: d.registration_number,
+        languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
       }))
       setDoctors([...medsaDoctors, ...directoryDoctors])
       setDoctorsLoading(false)
     }
     loadDoctors()
   }, [filterPartnerOnly])
+
+  // Real sanitizer - restricts displayed doctor data to exactly what MCHK's
+  // Guidelines on Doctors Directories (Appendix D) permits, whitelist-style
+  // rather than trusting call sites to remember not to add anything else.
+  function sanitizeMCHKDisplayData(d) {
+    return {
+      source: d.source, id: d.id, init: d.init, name: d.name, sex: d.sex||null,
+      spec: d.spec, clinic: d.clinic, institution: d.institution,
+      district: d.district, lat: d.lat, lng: d.lng, phone: d.phone, email: d.email,
+      isPartnered: d.isPartnered, registrationNumber: d.registrationNumber||null,
+      languages: d.languages||null, feeMin: d.feeMin||null, feeMax: d.feeMax||null,
+      affiliatedHospitals: d.affiliatedHospitals||null,
+    }
+  }
 
   // Doctor specialty and clinic/location terms were never translated -
   // shown in English regardless of selected language. Translated here at
@@ -1154,6 +1173,11 @@ function DoctorsScreen({ isEn, patient={} }) {
                 <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
                 <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
+                {(doc.feeMin||doc.languages||doc.registrationNumber)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>
+                  {doc.feeMin&&`HK$${doc.feeMin}-${doc.feeMax||doc.feeMin}`}
+                  {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
+                  {doc.registrationNumber&&` · MCHK ${doc.registrationNumber}`}
+                </div>}
                 <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
                   {doc.isPartnered
                     ? <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Verified Partner':'Medsa認證合作夥伴'}</span>
