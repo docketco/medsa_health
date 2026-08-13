@@ -607,12 +607,13 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
   )
 }
 
-function MyPatientsScreen({ queue, onSelectPatient, staffMember }) {
+function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
   const [callingName,setCallingName]=useState(null)
   return (
     <PageWrap maxWidth={640}>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>My Patients</h2>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>My Patients</h2>
+      {onRefresh&&<div style={{textAlign:'center',marginBottom:'16px'}}><span onClick={onRefresh} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>{'\u21bb'} Refresh</span></div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {queue.length===0&&<div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>No patients checked in yet today.</div>}
         {queue.map((q,i)=>{
@@ -2765,10 +2766,11 @@ export default function ClinicOpsApp() {
     loadInstitution()
   }, [])
 
-  // Load today's queue and pending prescriptions from Supabase once signed in
-  useEffect(() => {
-    if (!staffMember) return
-    async function load() {
+  // Load today's queue and pending prescriptions from Supabase - now
+  // reusable (see effects below), since loading this only once at login
+  // meant a doctor already signed in before a check-in happened would
+  // never see it without manually logging out and back in.
+  async function loadQueueAndPrescriptions() {
       setQueueLoading(true)
       const { data: queueRows } = await supabase
         .from('clinic_queue')
@@ -2801,9 +2803,20 @@ export default function ClinicOpsApp() {
         status: r.dispense_status || 'pending',
       })))
       setQueueLoading(false)
-    }
-    load()
+  }
+
+  useEffect(() => {
+    if (!staffMember) return
+    loadQueueAndPrescriptions()
   }, [staffMember])
+
+  // Refresh every time the doctor actually navigates to see their
+  // patients - the real, direct fix for check-ins that happened while
+  // this session was already open and idle elsewhere.
+  useEffect(() => {
+    if (!staffMember) return
+    if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
+  }, [screen])
 
   async function handleCheckedIn(patient, force=false) {
     const alreadyActive = checkedInQueue.some(q =>
@@ -2974,7 +2987,7 @@ export default function ClinicOpsApp() {
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
         {screen==='newpatient'&&<NewPatientScreen
