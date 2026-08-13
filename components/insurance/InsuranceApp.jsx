@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
+import { supabase } from '../../lib/supabase'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -83,47 +84,108 @@ function InsuranceDashboard({ onNav }) {
 
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
 function PlanManager() {
+  const [plans,setPlans]=useState([])
+  const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'' })
+  const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name','AIA').order('created_at',{ascending:false})
+    setPlans(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  function updateTier(i, field, value) {
+    setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
+  }
+  function addTier() {
+    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  }
+  function removeTier(i) {
+    setTiers(t => t.filter((_,idx)=>idx!==i))
+  }
+
+  async function handleSubmit() {
+    const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
+    if (!form.plan_name || validTiers.length===0) return
+    setSaving(true)
+    const { data: newPlan } = await supabase.from('insurance_plans').insert({
+      company_name: 'AIA', plan_name: form.plan_name, plan_type: form.plan_type || null,
+      key_benefits: form.key_benefits || null, status: 'active',
+    }).select().maybeSingle()
+    if (newPlan) {
+      await supabase.from('insurance_plan_pricing_tiers').insert(
+        validTiers.map(t => ({
+          plan_id: newPlan.id, age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
+          monthly_premium: parseFloat(t.monthly_premium),
+          annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
+        }))
+      )
+    }
+    setSaving(false); setCreating(false)
+    setForm({ plan_name:'', plan_type:'', key_benefits:'' })
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    load()
+  }
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>Your listed plans</SecLabel>
-      {PLANS.map((p,i)=>(
-        <Card key={i} style={{padding:'14px 16px'}}>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans listed yet.</div>}
+      {!loading&&plans.map((p)=>(
+        <Card key={p.id} style={{padding:'14px 16px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
-              <div style={{fontSize:'14px',fontWeight:600}}>{p.name}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{p.type} · {p.limit}</div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
             </div>
-            <div style={{textAlign:'right'}}>
-              <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>{p.price}</div>
-              {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
-            </div>
+            {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
           </div>
-          <div style={{display:'flex',gap:'16px',fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>
-            <span>★ {p.rating}</span><span>{p.clients.toLocaleString()} clients</span>
-          </div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}}>Edit plan</Btn>
-            <Btn variant={p.sponsored?'amber':'secondary'} style={{flex:1,fontSize:'12px'}}>{p.sponsored?'Sponsored ✓':'Sponsor this'}</Btn>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'12px'}}>
+            {(p.insurance_plan_pricing_tiers||[]).length===0
+              ? <span style={{color:C.red}}>No pricing tiers entered</span>
+              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>`Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`).join(' · ')}
           </div>
         </Card>
       ))}
       {creating&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>New plan listing</div>
-          {[['Plan name','e.g. AIA Gold Health'],['Monthly premium','e.g. HK$1,200'],['Annual limit','e.g. HK$1,200,000'],['Plan type','e.g. Comprehensive, Critical illness']].map(([label,ph])=>(
-            <div key={label} style={{marginBottom:'12px'}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{label}</div>
-              <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit'}} placeholder={ph}/>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
+            <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. AIA Gold Health"/>
+          </div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan type</div>
+            <input value={form.plan_type} onChange={e=>setForm(f=>({...f,plan_type:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Comprehensive, Critical illness"/>
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real pricing varies by age, so at least one tier is required</div>
+          {tiers.map((tier,i)=>(
+            <div key={i} style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+              <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+                <input type="number" value={tier.age_min} onChange={e=>updateTier(i,'age_min',e.target.value)} placeholder="Age from" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                <input type="number" value={tier.age_max} onChange={e=>updateTier(i,'age_max',e.target.value)} placeholder="Age to (120 for +)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              </div>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="Monthly premium (HK$)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                <input type="number" value={tier.annual_limit} onChange={e=>updateTier(i,'annual_limit',e.target.value)} placeholder="Annual limit (optional)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                {tiers.length>1&&<button onClick={()=>removeTier(i)} style={{padding:'0 10px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>×</button>}
+              </div>
             </div>
           ))}
+          <button onClick={addTier} style={{width:'100%',padding:'8px',background:C.beige,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'12px'}}>+ Add another age tier</button>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>What's covered (key benefits)</div>
-            <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
+            <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
           </div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}}>Submit plan</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':'Submit plan'}</Btn>
           </div>
         </Card>
       )}
