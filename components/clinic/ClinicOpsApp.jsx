@@ -198,6 +198,8 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   const [searchResult,setSearchResult]=useState(null)
   const [requestSent,setRequestSent]=useState(false)
   const [checkingIn,setCheckingIn]=useState(false)
+  const [revealedClaimCode,setRevealedClaimCode]=useState(null)
+  const [regeneratingCode,setRegeneratingCode]=useState(false)
 
   const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
 
@@ -243,6 +245,23 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setSearchResult(data || null)
     setRequestSent(false)
     setSearched(true)
+    setRevealedClaimCode(null)
+  }
+
+  function isClaimCodeExpired(patient) {
+    if (!patient?.claim_code_expires_at) return true
+    return new Date(patient.claim_code_expires_at) < new Date()
+  }
+
+  async function handleRegenerateClaimCode(patient) {
+    setRegeneratingCode(true)
+    const newCode = Math.random().toString(36).slice(2,8).toUpperCase()
+    const newExpiry = new Date(Date.now() + 48*60*60*1000).toISOString()
+    await supabase.from('patients').update({
+      claim_code: newCode, claim_code_expires_at: newExpiry, claim_code_sent_to: patient.phone,
+    }).eq('id', patient.id)
+    setRegeneratingCode(false)
+    setRevealedClaimCode(newCode)
   }
 
   return (
@@ -333,6 +352,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           {!requestSent&&<Btn style={{width:'100%'}} onClick={()=>setRequestSent(true)}>Request record access ahead of visit</Btn>}
           {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
+          {searchResult.registration_path==='unclaimed'&&<div style={{marginTop:'14px',paddingTop:'14px',borderTop:`0.5px solid ${C.border}`}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>This patient hasn't claimed their profile yet - that's why clinical data isn't available. Lost or forgot the claim code?</div>
+            {revealedClaimCode
+              ? <div style={{background:C.card,borderRadius:'10px',padding:'14px',textAlign:'center'}}>
+                  <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>New claim code (valid 48 hours)</div>
+                  <div style={{fontSize:'22px',fontWeight:700,letterSpacing:'2px',color:C.green}}>{revealedClaimCode}</div>
+                </div>
+              : <Btn style={{width:'100%'}} onClick={()=>isClaimCodeExpired(searchResult)?handleRegenerateClaimCode(searchResult):setRevealedClaimCode(searchResult.claim_code)} disabled={regeneratingCode}>
+                  {regeneratingCode?'Generating…':isClaimCodeExpired(searchResult)?'Generate new claim code (old one expired)':'View claim code'}
+                </Btn>}
+          </div>}
         </Card>}
         {justCheckedIn&&<Card style={{padding:'20px'}}>
           <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
