@@ -1608,6 +1608,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [newHasEpc,setNewHasEpc]=useState(false)
   const [newEpcLink,setNewEpcLink]=useState('')
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
+  const [onboardError,setOnboardError]=useState(null)
   const [newPin,setNewPin]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
@@ -1647,7 +1648,8 @@ function PracticeManagerStaffScreen({ staffMember }) {
     if (!newFirstName || !newDept || !newPin) return
     if (newRole==='doctor' && !newDob) return
     setSaving(true)
-    await supabase.from('staff_credentials').insert({
+    setOnboardError(null)
+    const { error: onboardErr } = await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
       full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept, pin:newPin,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
@@ -1660,6 +1662,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
       verification_status:'verified',
     })
     setSaving(false)
+    if (onboardErr) { setOnboardError(onboardErr.message); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
     setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('')
@@ -1734,6 +1737,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
             <input type="checkbox" checked={newMchkDeclared} onChange={e=>setNewMchkDeclared(e.target.checked)} style={{marginTop:'2px'}}/>
             I confirm that my published service details, fees, and qualifications are accurate, non-exaggerated, and comply with Section 5 and Appendix D of the MCHK Code of Professional Conduct.
           </label>}
+          {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
             <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
