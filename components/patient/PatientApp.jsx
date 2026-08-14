@@ -870,6 +870,9 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [filterSpecialty,setFilterSpecialty]=useState('')
   const [filterDistrict,setFilterDistrict]=useState('')
   const [filterPartnerOnly,setFilterPartnerOnly]=useState(false)
+  const [filterOwnership,setFilterOwnership]=useState('')
+  const [filterFacilityType,setFilterFacilityType]=useState('')
+  const [filterScheme,setFilterScheme]=useState('')
   const [userLocation,setUserLocation]=useState(null) // {lat,lng} once granted
   const [locationError,setLocationError]=useState(null)
 
@@ -912,6 +915,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         institution: d.institution_source, district: null, lat:null, lng:null,
         phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
+        ownershipType: 'private', facilityType: d.institution_source==='clinic_ops'?'small_practice_clinic':'hospital', schemes: d.schemes||[],
       }))
       const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
@@ -921,6 +925,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
         isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered', registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
+        ownershipType: d.directory_clinics?.ownership_type||null, facilityType: d.directory_clinics?.facility_type||null, schemes: d.directory_clinics?.schemes||[],
       }))
       // Clinics with no named individual doctor listed - a real, common
       // case (public health programs, walk-in clinics) that was previously
@@ -932,6 +937,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, spec: 'Clinic',
           clinic: c.name, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
           phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
+          ownershipType: c.ownership_type||null, facilityType: c.facility_type||null, schemes: c.schemes||[],
         }))
       setDoctors([...medsaDoctors, ...directoryDoctors, ...clinicOnlyListings])
       setDoctorsLoading(false)
@@ -950,6 +956,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       isPartnered: d.isPartnered, registrationNumber: d.registrationNumber||null,
       languages: d.languages||null, feeMin: d.feeMin||null, feeMax: d.feeMax||null,
       affiliatedHospitals: d.affiliatedHospitals||null, noNamedDoctor: d.noNamedDoctor||false,
+      ownershipType: d.ownershipType||null, facilityType: d.facilityType||null, schemes: d.schemes||[],
     }
   }
 
@@ -973,6 +980,9 @@ function DoctorsScreen({ isEn, patient={} }) {
     if (filterSpecialty && d.spec !== filterSpecialty) return false
     if (filterDistrict && d.district !== filterDistrict) return false
     if (filterPartnerOnly && !d.isPartnered) return false
+    if (filterOwnership && d.ownershipType !== filterOwnership) return false
+    if (filterFacilityType && d.facilityType !== filterFacilityType) return false
+    if (filterScheme && !(d.schemes||[]).includes(filterScheme)) return false
     return true
   }).map(d => ({ ...d, distanceKm: userLocation ? distanceKm(userLocation.lat, userLocation.lng, d.lat, d.lng) : null }))
   const sortedDoctors = [...searchedDoctors].sort((a,b) => {
@@ -983,6 +993,8 @@ function DoctorsScreen({ isEn, patient={} }) {
   })
   const availableSpecialties = [...new Set(doctors.map(d=>d.spec).filter(Boolean))].sort()
   const availableDistricts = [...new Set(doctors.map(d=>d.district).filter(Boolean))].sort()
+  const availableFacilityTypes = [...new Set(doctors.map(d=>d.facilityType).filter(Boolean))].sort()
+  const availableSchemes = [...new Set(doctors.flatMap(d=>d.schemes||[]))].sort()
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -1160,6 +1172,20 @@ function DoctorsScreen({ isEn, patient={} }) {
             <option value="">{isEn?'Any district':'任何地區'}</option>
             {availableDistricts.map(d=><option key={d} value={d}>{d}</option>)}
           </select>
+          <select value={filterFacilityType} onChange={e=>setFilterFacilityType(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterFacilityType?'#fff':'rgba(255,255,255,0.2)',color:filterFacilityType?C.text:'#fff'}}>
+            <option value="">{isEn?'Any facility type':'任何機構類型'}</option>
+            {availableFacilityTypes.map(t=><option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+          </select>
+          <select value={filterScheme} onChange={e=>setFilterScheme(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterScheme?'#fff':'rgba(255,255,255,0.2)',color:filterScheme?C.text:'#fff'}}>
+            <option value="">{isEn?'Any scheme':'任何計劃'}</option>
+            {availableSchemes.map(s=><option key={s} value={s}>{s.replace(/_/g,' ').toUpperCase()}</option>)}
+          </select>
+          <select value={filterOwnership} onChange={e=>setFilterOwnership(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterOwnership?'#fff':'rgba(255,255,255,0.2)',color:filterOwnership?C.text:'#fff'}}>
+            <option value="">{isEn?'Public/Private/Subsidized':'公立/私立/資助'}</option>
+            <option value="public">{isEn?'Public':'公立'}</option>
+            <option value="private">{isEn?'Private':'私立'}</option>
+            <option value="subsidized">{isEn?'Subsidized':'資助'}</option>
+          </select>
           <div onClick={()=>setFilterPartnerOnly(!filterPartnerOnly)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:filterPartnerOnly?'#fff':'rgba(255,255,255,0.2)',color:filterPartnerOnly?C.green:'#fff'}}>
             {isEn?'Medsa partners only':'只顯示Medsa合作夥伴'}
           </div>
@@ -1196,6 +1222,9 @@ function DoctorsScreen({ isEn, patient={} }) {
                   {doc.isPartnered
                     ? <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Verified Partner':'Medsa認證合作夥伴'}</span>
                     : doc.source==='directory'&&<span style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Listed via directory':'目錄列表'}</span>}
+                  {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).map(s=>(
+                    <span key={s} style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{s.replace(/_/g,' ').toUpperCase()}</span>
+                  ))}
                 </div>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}><Badge text={doc.isPartnered?(doc.avail||(isEn?'Book instantly':'即時預約')):(isEn?'Contact clinic':'聯絡診所')} type={doc.isPartnered?'ok':'due'}/></div>
