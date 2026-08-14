@@ -743,7 +743,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data: p } = await supabase.from('patients').select('*').eq('medsa_id','MDS-84921-HK').single()
+      if (!queueEntry?.patientMedsaId) { setLoading(false); return }
+      const { data: p } = await supabase.from('patients').select('*').eq('medsa_id', queueEntry.patientMedsaId).maybeSingle()
       if (p) {
         setPatient(p)
         const [{data:r},{data:c},{data:a}] = await Promise.all([
@@ -1547,7 +1548,8 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [leaves,setLeaves]=useState([])
   const [loading,setLoading]=useState(true)
   const [showOnboard,setShowOnboard]=useState(false)
-  const [newName,setNewName]=useState('')
+  const [newFirstName,setNewFirstName]=useState('')
+  const [newLastName,setNewLastName]=useState('')
   const [newRole,setNewRole]=useState('doctor')
   const [newDept,setNewDept]=useState('')
   const [newReg,setNewReg]=useState('')
@@ -1594,12 +1596,12 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const expiringSoon = staff.filter(s => s.registration_expiry && new Date(s.registration_expiry) <= new Date(Date.now()+120*24*60*60*1000))
 
   async function handleOnboard() {
-    if (!newName || !newDept || !newPin) return
+    if (!newFirstName || !newDept || !newPin) return
     if (newRole==='doctor' && !newDob) return
     setSaving(true)
     await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
-      full_name:newName, role:newRole, department:newDept, pin:newPin,
+      full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept, pin:newPin,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
@@ -1611,7 +1613,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
     })
     setSaving(false)
     setShowOnboard(false)
-    setNewName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
+    setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
     setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('')
     load()
   }
@@ -1639,15 +1641,19 @@ function PracticeManagerStaffScreen({ staffMember }) {
       {!loading&&tab==='roster'&&<>
         {!showOnboard&&<button onClick={()=>setShowOnboard(true)} style={{padding:'10px 18px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'16px'}}>+ Onboard staff</button>}
         {showOnboard&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',maxWidth:420}}>
-          <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Full name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newFirstName} onChange={e=>setNewFirstName(e.target.value)} placeholder="First name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newLastName} onChange={e=>setNewLastName(e.target.value)} placeholder="Last name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
             <option value="doctor">Doctor</option>
             <option value="frontdesk">Nurse / Front Desk</option>
             <option value="admin">Practice Manager</option>
           </select>
-          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" list="dept-suggestions" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <datalist id="dept-suggestions">
+            {[...new Set(staff.map(s=>s.department).filter(Boolean))].map(d=><option key={d} value={d}/>)}
+          </datalist>
           <select value={newSex} onChange={e=>setNewSex(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
-            <option value="">Sex…</option>
+            <option value="">Sex</option>
             <option value="male">Male</option>
             <option value="female">Female</option>
           </select>
@@ -1682,7 +1688,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
           </label>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
