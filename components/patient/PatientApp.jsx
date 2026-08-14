@@ -899,10 +899,13 @@ function DoctorsScreen({ isEn, patient={} }) {
       // MCHK Appendix D gate - a doctor cannot appear in Find Care at all
       // unless they've agreed to the compliance declaration. Filtered in
       // the query itself, not just hidden in the UI.
-      const [medsaRes, dirRes] = await Promise.all([
+      const [medsaRes, dirRes, clinicsWithDoctorsRes, allClinicsRes] = await Promise.all([
         supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
         supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true),
+        supabase.from('directory_doctors').select('clinic_id'),
+        filterPartnerOnly ? Promise.resolve({data:[]}) : supabase.from('directory_clinics').select('*'),
       ])
+      const clinicIdsWithDoctors = new Set((clinicsWithDoctorsRes.data||[]).map(d=>d.clinic_id))
       const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
         spec: d.department||'General Practice', clinic: d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital',
@@ -919,7 +922,18 @@ function DoctorsScreen({ isEn, patient={} }) {
         isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered', registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
       }))
-      setDoctors([...medsaDoctors, ...directoryDoctors])
+      // Clinics with no named individual doctor listed - a real, common
+      // case (public health programs, walk-in clinics) that was previously
+      // completely invisible to search, since only directory_doctors was
+      // ever queried.
+      const clinicOnlyListings = (allClinicsRes.data||[])
+        .filter(c => !clinicIdsWithDoctors.has(c.id) && c.partnership_status!=='medsa_partnered')
+        .map(c => sanitizeMCHKDisplayData({
+          source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, spec: 'Clinic',
+          clinic: c.name, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
+          phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
+        }))
+      setDoctors([...medsaDoctors, ...directoryDoctors, ...clinicOnlyListings])
       setDoctorsLoading(false)
     }
     loadDoctors()
@@ -935,7 +949,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       district: d.district, lat: d.lat, lng: d.lng, phone: d.phone, email: d.email,
       isPartnered: d.isPartnered, registrationNumber: d.registrationNumber||null,
       languages: d.languages||null, feeMin: d.feeMin||null, feeMax: d.feeMax||null,
-      affiliatedHospitals: d.affiliatedHospitals||null,
+      affiliatedHospitals: d.affiliatedHospitals||null, noNamedDoctor: d.noNamedDoctor||false,
     }
   }
 
@@ -1198,7 +1212,8 @@ function DoctorsScreen({ isEn, patient={} }) {
           </Card>
         ))}
       </>}
-      {tab==='book'&&<>
+      {tab==='book'&&!activeDoctor&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Select a doctor first to book an appointment.':'請先選擇醫生以預約。'}</div>}
+      {tab==='book'&&activeDoctor&&<>
         <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
           <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
