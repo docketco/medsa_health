@@ -1542,6 +1542,54 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Deliberately consolidated into one screen with tabs, not five separate
 // screens like the Practitioner-side HR system - a small clinic doesn't need
 // that much structure, just needs the same real underlying jobs done.
+function HelpScreen({ staffMember }) {
+  const [expanded,setExpanded]=useState(null)
+  const [submitType,setSubmitType]=useState(null) // 'technical_issue' | 'complaint' | null
+  const [message,setMessage]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [sent,setSent]=useState(false)
+
+  async function handleSubmit() {
+    if (!message.trim()) return
+    setSaving(true)
+    await supabase.from('support_requests').insert({
+      type: submitType, staff_name: staffMember?.name, institution_source: 'clinic_ops', message,
+    })
+    setSaving(false)
+    setSent(true)
+  }
+
+  const ITEMS = [
+    { key:'technical', title:'Report a technical issue', sub:'Contact Medsa support team', isForm:true, formType:'technical_issue' },
+    { key:'complaint', title:'Submit a complaint', sub:'About a patient, colleague, or process', isForm:true, formType:'complaint' },
+    { key:'faq', title:'FAQ', sub:'Common questions about the portal', content:'Q: How do I reset a staff PIN?\nA: Practice Manager → Staff → select the staff member → Reset PIN.\n\nQ: What if a patient has no appointment when checking in?\nA: Book one via Scheduling first - check-in requires a real appointment to correctly notify the doctor.\n\nQ: How do I add a new insurance plan?\nA: Use the Insurance Plans admin page - real age-banded pricing tiers are required.' },
+    { key:'privacy', title:'Data & privacy', sub:'How patient data is protected', content:'Patient records are only visible within their consent window (12 hours either side of a scheduled appointment), or with explicit patient-granted access. Staff actions on patient records are logged. Patients own their claimed records - a clinic never retains ownership once a profile is claimed.' },
+  ]
+
+  return (
+    <div style={{background:C.beige,flex:1,minHeight:'100vh'}}>
+      <SecLabel>Help & support</SecLabel>
+      {ITEMS.map(item=>(
+        <div key={item.key}>
+          <Card onClick={()=>{setExpanded(expanded===item.key?null:item.key); if(item.isForm){setSubmitType(item.formType);setSent(false);setMessage('')}}} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+            <div><div style={{fontSize:'14px',fontWeight:500}}>{item.title}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
+            <span style={{color:C.textMuted,fontSize:'18px'}}>{expanded===item.key?'\u2039':'\u203a'}</span>
+          </Card>
+          {expanded===item.key&&item.content&&<Card style={{padding:'14px 16px',marginTop:'-6px',whiteSpace:'pre-wrap',fontSize:'13px',color:C.textSub,lineHeight:1.6}}>{item.content}</Card>}
+          {expanded===item.key&&item.isForm&&<Card style={{padding:'14px 16px',marginTop:'-6px'}}>
+            {sent
+              ? <div style={{fontSize:'13px',color:C.green}}>{'\u2713'} Sent - Medsa support will follow up.</div>
+              : <>
+                  <textarea value={message} onChange={e=>setMessage(e.target.value)} rows={4} placeholder="Describe the issue…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
+                  <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!message.trim()}>{saving?'Sending…':'Send'}</Btn>
+                </>}
+          </Card>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PracticeManagerStaffScreen({ staffMember }) {
   const [tab,setTab]=useState('roster')
   const [staff,setStaff]=useState([])
@@ -3070,6 +3118,7 @@ export default function ClinicOpsApp() {
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','frontdesk']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
     {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
+    {key:'help', icon:'\u25cc', label:'Help', roles:['admin','frontdesk','doctor']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='frontdesk'?'checkin':'overview')}}/>
@@ -3111,6 +3160,7 @@ export default function ClinicOpsApp() {
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember}/>}
+        {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
     </div>
   )
