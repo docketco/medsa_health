@@ -55,11 +55,21 @@ const DISTRICTS = ['Central','Sheung Wan','Sai Ying Pun','Wan Chai','Causeway Ba
   'Yau Ma Tei','Mong Kok','Sham Shui Po','Ho Man Tin','San Po Kong','Kwun Tong','Ngau Tau Kok',
   'Tsz Wan Shan','Hung Hom','Tsuen Wan','Cheung Chau','Sha Tin','Tai Wai','Sheung Shui','Tai Po',
   'Tuen Mun','Yuen Long','Shau Kei Wan','Kowloon City','Wong Tai Sin','Kwai Tsing','Tin Shui Wai',
-  'North Point','Quarry Bay','Tai Koo','Mid-Levels','Stanley','Repulse Bay']
+  'North Point','Quarry Bay','Tai Koo','Mid-Levels','Stanley','Repulse Bay',
+  // Official 18 HK districts - this is how government datasets (e.g. the
+  // SPC dataset) actually label addresses, distinct from neighborhood
+  // names above (e.g. "Yau Tsim Mong District" covers Yau Ma Tei + Tsim
+  // Sha Tsui + Mong Kok together, not any single neighborhood).
+  'Central & Western','Eastern','Southern','Yau Tsim Mong','Kowloon City','Kwun Tong',
+  'Sham Shui Po','Wong Tai Sin','Kwai Tsing','Tsuen Wan','Tuen Mun','Yuen Long','North',
+  'Tai Po','Sha Tin','Sai Kung','Islands']
 
 function guessDistrict(address) {
   if (!address) return null
-  for (const d of DISTRICTS) if (address.includes(d)) return d
+  const upper = address.toUpperCase()
+  for (const d of DISTRICTS) {
+    if (upper.includes(d.toUpperCase() + ' DISTRICT') || upper.includes(d.toUpperCase())) return d
+  }
   return null
 }
 
@@ -82,9 +92,9 @@ export default function DirectoryImportPage() {
     setImporting(true)
     let imported = 0, skipped = 0
     for (const row of rows) {
-      const name = row.name || row['clinic name'] || row['centre name']
+      const name = row.name || row['clinic name'] || row['centre name'] || row.phf_name
       if (!name) { skipped++; continue }
-      const address = row.address || null
+      const address = row.address || row.phf_address || null
       const { error } = await supabase.from('directory_clinics').upsert({
         partnership_status: 'directory',
         name,
