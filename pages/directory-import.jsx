@@ -10,7 +10,7 @@
 // blank - only "name" is required.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
 const C = {
@@ -62,6 +62,42 @@ export default function DirectoryImportPage() {
   const [rows, setRows] = useState([])
   const [importing, setImporting] = useState(false)
   const [result, setResult] = useState(null)
+  const [claims, setClaims] = useState([])
+  const [claimsLoading, setClaimsLoading] = useState(true)
+  const [processingClaim, setProcessingClaim] = useState(null)
+
+  async function loadClaims() {
+    setClaimsLoading(true)
+    const { data } = await supabase.from('clinic_claim_requests').select('*, directory_clinics(*)')
+      .eq('status', 'pending').order('created_at', {ascending:false})
+    setClaims(data||[])
+    setClaimsLoading(false)
+  }
+  useEffect(() => { loadClaims() }, [])
+
+  // Real approval - this is what actually flips partnership_status to
+  // medsa_partnered, not just marking the claim record itself as approved.
+  async function handleApproveClaim(claim) {
+    setProcessingClaim(claim.id)
+    await supabase.from('directory_clinics').update({
+      partnership_status: 'medsa_partnered',
+      institution_source: 'clinic_ops', // real institution linkage - adjust if this clinic maps elsewhere
+    }).eq('id', claim.clinic_id)
+    await supabase.from('clinic_claim_requests').update({
+      status: 'approved', reviewed_at: new Date().toISOString(),
+    }).eq('id', claim.id)
+    setProcessingClaim(null)
+    loadClaims()
+  }
+
+  async function handleRejectClaim(claim) {
+    setProcessingClaim(claim.id)
+    await supabase.from('clinic_claim_requests').update({
+      status: 'rejected', reviewed_at: new Date().toISOString(),
+    }).eq('id', claim.id)
+    setProcessingClaim(null)
+    loadClaims()
+  }
 
   async function handleFile(e) {
     const file = e.target.files[0]
@@ -126,6 +162,32 @@ export default function DirectoryImportPage() {
           <div style={{fontSize:'13px',fontWeight:600}}>{result.imported} of {result.total} imported{result.skipped>0?`, ${result.skipped} skipped`:''}</div>
         </div>
       )}
+
+      <div style={{fontSize:'16px',fontWeight:700,marginTop:'32px',marginBottom:'4px'}}>Pending Claims</div>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.6}}>
+        Approving a claim upgrades the clinic from a directory listing to a real Medsa partnership.
+        Note: currently every approved clinic is linked to institution_source 'clinic_ops' - a real
+        multi-clinic setup (separate tenants per approved clinic) would need that made dynamic,
+        which isn't built yet.
+      </div>
+      {claimsLoading && <div style={{fontSize:'13px',color:C.textMuted}}>Loading…</div>}
+      {!claimsLoading && claims.length===0 && <div style={{fontSize:'13px',color:C.textMuted}}>No pending claims.</div>}
+      {claims.map(claim => (
+        <div key={claim.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'16px',marginBottom:'10px'}}>
+          <div style={{fontSize:'14px',fontWeight:600}}>{claim.directory_clinics?.name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{claim.directory_clinics?.address}</div>
+          <div style={{fontSize:'12px',color:C.text,lineHeight:1.6,marginBottom:'12px'}}>
+            <strong>{claim.applicant_name}</strong>{claim.applicant_role?` · ${claim.applicant_role}`:''}<br/>
+            {claim.contact_email}{claim.contact_phone?` · ${claim.contact_phone}`:''}<br/>
+            {claim.mchk_registration_no&&`MCHK: ${claim.mchk_registration_no}`}
+            {claim.business_registration_no&&` · BR: ${claim.business_registration_no}`}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>handleRejectClaim(claim)} disabled={processingClaim===claim.id} style={{flex:1,padding:'10px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>Reject</button>
+            <button onClick={()=>handleApproveClaim(claim)} disabled={processingClaim===claim.id} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{processingClaim===claim.id?'…':'Approve'}</button>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
