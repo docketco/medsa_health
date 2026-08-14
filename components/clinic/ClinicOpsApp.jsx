@@ -1608,6 +1608,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
   const [newHasEpc,setNewHasEpc]=useState(false)
   const [newEpcLink,setNewEpcLink]=useState('')
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
+  const [newSchemes,setNewSchemes]=useState([])
   const [onboardError,setOnboardError]=useState(null)
   const [newPin,setNewPin]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
@@ -1658,6 +1659,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
       has_epc:newHasEpc, epc_link:newHasEpc?(newEpcLink||null):null,
       mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
       mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
+      schemes: newRole==='doctor' ? newSchemes : null,
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
     })
@@ -1665,7 +1667,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
     if (onboardErr) { setOnboardError(onboardErr.message); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
-    setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('')
+    setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('');setNewMchkDeclared(false);setNewSchemes([])
     load()
   }
 
@@ -1737,6 +1739,15 @@ function PracticeManagerStaffScreen({ staffMember }) {
             <input type="checkbox" checked={newMchkDeclared} onChange={e=>setNewMchkDeclared(e.target.checked)} style={{marginTop:'2px'}}/>
             I confirm that my published service details, fees, and qualifications are accurate, non-exaggerated, and comply with Section 5 and Appendix D of the MCHK Code of Professional Conduct.
           </label>}
+          {newRole==='doctor'&&<div style={{marginBottom:'14px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Government schemes participated in (self-declared)</div>
+            {[['cdcc','Chronic Disease Co-Care (CDCC)'],['dhc_network','District Health Centre Network'],['ehcv','Elderly Health Care Voucher (EHCV)'],['vaccination_subsidy','Vaccination Subsidy Scheme']].map(([key,label])=>(
+              <label key={key} style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'6px',cursor:'pointer'}}>
+                <input type="checkbox" checked={newSchemes.includes(key)} onChange={e=>setNewSchemes(s=>e.target.checked?[...s,key]:s.filter(x=>x!==key))}/>
+                {label}
+              </label>
+            ))}
+          </div>}
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
