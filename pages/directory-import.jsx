@@ -42,7 +42,7 @@ function parseCSV(text) {
     fields.push(cur)
     return fields.map(f => f.trim())
   }
-  const headers = parseLine(lines[0]).map(h => h.toLowerCase())
+  const headers = parseLine(lines[0]).map(h => h.toLowerCase().replace(/^\ufeff/, ''))
   return lines.slice(1).map(line => {
     const values = parseLine(line)
     const row = {}
@@ -95,6 +95,12 @@ export default function DirectoryImportPage() {
       const name = row.name || row['clinic name'] || row['centre name'] || row.phf_name
       if (!name) { skipped++; continue }
       const address = row.address || row.phf_address || null
+      // Real categorization derived from whatever the source CSV actually
+      // provides - phf_category/type_practice for datasets that have them
+      // (e.g. the SPC dataset), left null rather than guessed for ones
+      // that don't.
+      const facilityType = row.phf_category ? row.phf_category.toLowerCase().replace(/ /g, '_') : null
+      const practiceType = row.type_practice ? row.type_practice.toLowerCase().replace(/ & /g, '_').replace(/ /g, '_') : null
       const { error } = await supabase.from('directory_clinics').upsert({
         partnership_status: 'directory',
         name,
@@ -105,6 +111,10 @@ export default function DirectoryImportPage() {
         opening_hours_static: row.hours || row['service hours'] || null,
         latitude: row.latitude ? parseFloat(row.latitude) : null,
         longitude: row.longitude ? parseFloat(row.longitude) : null,
+        ownership_type: 'private',
+        facility_type: facilityType,
+        practice_type: practiceType,
+        schemes: ['cap633_licensed', 'general_private'],
       }, { onConflict: 'name,address' })
       if (error) skipped++
       else imported++
