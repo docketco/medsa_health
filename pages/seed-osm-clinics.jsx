@@ -98,6 +98,8 @@ export default function SeedOSMClinicsPage() {
         contact_phone: tags.phone || tags['contact:phone'] || null,
         contact_email: tags.email || tags['contact:email'] || null,
         opening_hours_static: tags.opening_hours || null,
+        ownership_type: 'private',
+        schemes: ['general_private'],
       }, { onConflict: 'name,address' })
 
       if (error) { skipped++; continue }
