@@ -85,7 +85,9 @@ export default function ImportDoctorsCSVPage() {
       const { data: clinic, error: clinicErr } = await supabase.from('directory_clinics').upsert({
         partnership_status: 'directory',
         name: clinicName,
+        name_tc: row.clinic_name_tc || null,
         address,
+        address_tc: row.clinic_address_tc || null,
         district: (row.district_en || '').replace(/ District$/, '') || null,
         contact_phone: row.telephone_en || null,
         ownership_type: 'private',
@@ -98,6 +100,7 @@ export default function ImportDoctorsCSVPage() {
         const { error: doctorErr } = await supabase.from('directory_doctors').upsert({
           clinic_id: clinic.id,
           full_name: doctorName,
+          full_name_tc: row.doctor_name_tc || null,
           specialties: ['General Practice'],
         }, { onConflict: 'clinic_id,full_name' })
         if (!doctorErr) doctorsImported++
