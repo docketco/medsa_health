@@ -104,7 +104,11 @@ export default function DirectoryImportPage() {
       const { error } = await supabase.from('directory_clinics').upsert({
         partnership_status: 'directory',
         name,
+        name_tc: row.phf_name_tc || row['clinic name_tc'] || null,
+        name_sc: row.phf_name_sc || row['clinic name_sc'] || null,
         address,
+        address_tc: row.phf_address_tc || null,
+        address_sc: row.phf_address_sc || null,
         district: row.district || guessDistrict(address),
         contact_phone: row.phone || row['telephone no.'] || row.telephone || null,
         contact_email: row.email || null,
