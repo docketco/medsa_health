@@ -918,8 +918,8 @@ function DoctorsScreen({ isEn, patient={} }) {
         ownershipType: 'private', facilityType: d.institution_source==='clinic_ops'?'small_practice_clinic':'hospital', schemes: d.schemes||[],
       }))
       const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => sanitizeMCHKDisplayData({
-        source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name,
-        spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—',
+        source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, nameTc: d.full_name_tc,
+        spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—', clinicTc: d.directory_clinics?.name_tc,
         institution: d.directory_clinics?.partnership_status==='medsa_partnered' ? d.directory_clinics?.institution_source : null,
         district: d.directory_clinics?.district||null, lat: d.directory_clinics?.latitude, lng: d.directory_clinics?.longitude,
         phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
@@ -934,8 +934,8 @@ function DoctorsScreen({ isEn, patient={} }) {
       const clinicOnlyListings = (allClinicsRes.data||[])
         .filter(c => !clinicIdsWithDoctors.has(c.id) && c.partnership_status!=='medsa_partnered')
         .map(c => sanitizeMCHKDisplayData({
-          source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, spec: 'Clinic',
-          clinic: c.name, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
+          source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, nameTc: c.name_tc, spec: 'Clinic',
+          clinic: c.name, clinicTc: c.name_tc, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
           phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
           ownershipType: c.ownership_type||null, facilityType: c.facility_type||null, schemes: c.schemes||[],
         }))
@@ -957,6 +957,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       languages: d.languages||null, feeMin: d.feeMin||null, feeMax: d.feeMax||null,
       affiliatedHospitals: d.affiliatedHospitals||null, noNamedDoctor: d.noNamedDoctor||false,
       ownershipType: d.ownershipType||null, facilityType: d.facilityType||null, schemes: d.schemes||[],
+      nameTc: d.nameTc||null, clinicTc: d.clinicTc||null,
     }
   }
 
@@ -1210,9 +1211,9 @@ function DoctorsScreen({ isEn, patient={} }) {
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
               <div style={{flex:1}}>
-                <div style={{fontSize:'14px',fontWeight:500}}>{doc.name}</div>
+                <div style={{fontSize:'14px',fontWeight:500}}>{!isEn && doc.nameTc ? doc.nameTc : doc.name}</div>
                 <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{!isEn && doc.clinicTc ? doc.clinicTc : dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
                 {(doc.feeMin||doc.languages||doc.registrationNumber)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>
                   {doc.feeMin&&`HK$${doc.feeMin}-${doc.feeMax||doc.feeMin}`}
                   {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
