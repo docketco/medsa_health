@@ -902,13 +902,32 @@ function DoctorsScreen({ isEn, patient={} }) {
       // MCHK Appendix D gate - a doctor cannot appear in Find Care at all
       // unless they've agreed to the compliance declaration. Filtered in
       // the query itself, not just hidden in the UI.
-      const [medsaRes, dirRes, clinicsWithDoctorsRes, allClinicsRes] = await Promise.all([
+      //
+      // directory_clinics now holds well over 1000 real rows after this
+      // session's imports - Supabase caps an unpaginated select() at 1000
+      // by default, so a plain .select('*') would silently drop most of
+      // tonight's data. fetchAllRows pages through in batches until done.
+      async function fetchAllRows(query) {
+        const PAGE = 1000
+        let all = [], from = 0
+        while (true) {
+          const { data, error } = await query.range(from, from + PAGE - 1)
+          if (error || !data || data.length === 0) break
+          all = all.concat(data)
+          if (data.length < PAGE) break
+          from += PAGE
+        }
+        return all
+      }
+      const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
         supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
-        supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true),
-        supabase.from('directory_doctors').select('clinic_id'),
-        filterPartnerOnly ? Promise.resolve({data:[]}) : supabase.from('directory_clinics').select('*'),
+        fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
+        fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
+        filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
       ])
-      const clinicIdsWithDoctors = new Set((clinicsWithDoctorsRes.data||[]).map(d=>d.clinic_id))
+      const dirRes = { data: dirResData }
+      const allClinicsRes = { data: allClinicsData }
+      const clinicIdsWithDoctors = new Set(clinicsWithDoctorsData.map(d=>d.clinic_id))
       const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
         spec: d.department||'General Practice', clinic: d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital',
