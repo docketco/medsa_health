@@ -684,6 +684,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [referralClinicEmail,setReferralClinicEmail]=useState('')
   const [referralSending,setReferralSending]=useState(false)
   const [referralSent,setReferralSent]=useState(false)
+  const [referralDiagnosis,setReferralDiagnosis]=useState('')
+  const [referralConsultationSummary,setReferralConsultationSummary]=useState('')
 
   // Real auto-match search - both real Medsa doctors and the directory
   // (non-Medsa doctors Medsa knows about for referral purposes). Debounced
@@ -718,6 +720,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     setReferralSending(true)
     await supabase.from('referrals').insert({
       patient_id: patient.id, referring_staff: staffMember?.name, note: referralNote||null,
+      diagnosis: referralDiagnosis||null, consultation_summary: referralConsultationSummary||null,
       to_doctor_name: referralSearch,
       to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
       matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
@@ -1027,7 +1030,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       {!showReferral&&<Btn style={{marginBottom:'20px'}} onClick={()=>setShowReferral(true)}>+ Refer this patient</Btn>}
       {showReferral&&!referralSent&&<Card style={{padding:'16px',marginBottom:'20px'}}>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Attach a case note. Search for the receiving doctor - matches from Medsa or the directory auto-fill clinic info; if nothing matches, fill in manually.</div>
-        <textarea value={referralNote} onChange={e=>setReferralNote(e.target.value)} rows={3} placeholder="Case summary for the receiving doctor..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
+        <input value={referralDiagnosis} onChange={e=>setReferralDiagnosis(e.target.value)} placeholder="Diagnosis" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+        <textarea value={referralConsultationSummary} onChange={e=>setReferralConsultationSummary(e.target.value)} rows={3} placeholder="Consultation summary - findings, tests done, treatment so far..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
+        <textarea value={referralNote} onChange={e=>setReferralNote(e.target.value)} rows={2} placeholder="Any additional note for the receiving doctor..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',fontFamily:'inherit',resize:'vertical'}}/>
         <div style={{position:'relative',marginBottom:'10px'}}>
           <input value={referralSearch} onChange={e=>{setReferralSearch(e.target.value);setReferralMatched(null)}} placeholder="Doctor name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
           {referralMatches.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
@@ -1046,7 +1051,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
           <input value={referralClinicEmail} onChange={e=>setReferralClinicEmail(e.target.value)} placeholder="Clinic email" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         </div>
         <div style={{display:'flex',gap:'8px'}}>
-          <Btn onClick={()=>{setShowReferral(false);setReferralNote('');setReferralSearch('');setReferralMatched(null);setReferralClinicName('');setReferralClinicPhone('');setReferralClinicEmail('')}}>Cancel</Btn>
+          <Btn onClick={()=>{setShowReferral(false);setReferralNote('');setReferralSearch('');setReferralMatched(null);setReferralClinicName('');setReferralClinicPhone('');setReferralClinicEmail('');setReferralDiagnosis('');setReferralConsultationSummary('')}}>Cancel</Btn>
           <Btn variant="primary" onClick={handleSendReferral} disabled={referralSending||!referralSearch.trim()}>{referralSending?'Sending…':'Send referral'}</Btn>
         </div>
       </Card>}
