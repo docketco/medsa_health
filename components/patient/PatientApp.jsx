@@ -941,6 +941,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—', clinicTc: d.directory_clinics?.name_tc,
         institution: d.directory_clinics?.partnership_status==='medsa_partnered' ? d.directory_clinics?.institution_source : null,
         district: d.directory_clinics?.district||null, lat: d.directory_clinics?.latitude, lng: d.directory_clinics?.longitude,
+        address: d.directory_clinics?.address||null, addressTc: d.directory_clinics?.address_tc||null,
         phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
         isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered', registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
@@ -955,6 +956,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         .map(c => sanitizeMCHKDisplayData({
           source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, nameTc: c.name_tc, spec: 'Clinic',
           clinic: c.name, clinicTc: c.name_tc, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
+          address: c.address||null, addressTc: c.address_tc||null,
           phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
           ownershipType: c.ownership_type||null, facilityType: c.facility_type||null, schemes: c.schemes||[],
         }))
@@ -977,6 +979,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       affiliatedHospitals: d.affiliatedHospitals||null, noNamedDoctor: d.noNamedDoctor||false,
       ownershipType: d.ownershipType||null, facilityType: d.facilityType||null, schemes: d.schemes||[],
       nameTc: d.nameTc||null, clinicTc: d.clinicTc||null,
+      address: d.address||null, addressTc: d.addressTc||null,
     }
   }
 
@@ -1233,6 +1236,7 @@ function DoctorsScreen({ isEn, patient={} }) {
                 <div style={{fontSize:'14px',fontWeight:500}}>{!isEn && doc.nameTc ? doc.nameTc : doc.name}</div>
                 <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{!isEn && doc.clinicTc ? doc.clinicTc : dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
+                {doc.address&&<div onClick={(e)=>{e.stopPropagation(); const q = (doc.lat&&doc.lng) ? `${doc.lat},${doc.lng}` : encodeURIComponent(doc.address); window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank')}} style={{fontSize:'11px',color:C.green,marginTop:'2px',cursor:'pointer',textDecoration:'underline'}}>{!isEn && doc.addressTc ? doc.addressTc : doc.address}</div>}
                 {(doc.feeMin||doc.languages||doc.registrationNumber)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>
                   {doc.feeMin&&`HK$${doc.feeMin}-${doc.feeMax||doc.feeMin}`}
                   {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
