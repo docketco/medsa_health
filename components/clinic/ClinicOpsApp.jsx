@@ -1191,11 +1191,36 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
   const [inventoryWarning,setInventoryWarning]=useState(null)
+  const [expandedRundownId,setExpandedRundownId]=useState(null)
+  const [addItemOpenId,setAddItemOpenId]=useState(null)
+  const [catalog,setCatalog]=useState([])
+
+  // Real service catalog - same source ConsultationScreen picks from, so
+  // front desk adding something (e.g. a sick-leave note the patient asks
+  // for at checkout) uses the identical list, not a separate one.
+  useEffect(() => {
+    async function loadCatalog() {
+      const { data } = await supabase.from('service_items').select('*').eq('active', true).order('category')
+      setCatalog(data || [])
+    }
+    loadCatalog()
+  }, [])
+
+  // Writes directly to the real, already-saved consultation record - this
+  // is front desk adding to something the doctor already submitted, not
+  // building a fresh local list the way ConsultationScreen does.
+  async function addItemToRecord(p, item) {
+    const newLineItems = [...(p.lineItems||[]), { service_item_id: item.id, description: item.name, category: item.category, fee: parseFloat(item.default_price)||0, qty: 1 }]
+    const newTotal = newLineItems.reduce((sum,i)=>sum+(i.fee*i.qty),0)
+    await supabase.from('medical_records').update({ line_items: newLineItems, total_fee: newTotal }).eq('id', p.recordId)
+    setAddItemOpenId(null)
+    await onReload()
+  }
 
   async function handleConfirm(p) {
     setPrintingId(p.id)
@@ -1258,6 +1283,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
         {waiting.map(p=>{
           const isOpen = openLabelId===p.id
+          const isRundownOpen = expandedRundownId===p.id
           return (
           <Card key={p.id} style={{padding:'16px 18px',border:`1.5px solid ${C.amber}`}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
@@ -1267,6 +1293,30 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
               </div>
               <Badge text="New" type="due"/>
             </div>
+
+            <div onClick={()=>setExpandedRundownId(isRundownOpen?null:p.id)} style={{fontSize:'11px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>
+              {isRundownOpen?'Hide consultation rundown':'View full consultation rundown'}
+            </div>
+            {isRundownOpen&&<div style={{background:C.card,borderRadius:'8px',padding:'12px',marginBottom:'12px'}}>
+              {p.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><span style={{color:C.textMuted}}>Diagnosis: </span>{p.diagnosis}{p.icd10Code&&<span style={{color:C.textMuted}}> ({p.icd10Code})</span>}</div>}
+              {p.notes&&<div style={{fontSize:'12px',marginBottom:'8px'}}><span style={{color:C.textMuted}}>Notes: </span>{p.notes}</div>}
+              <div style={{fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>Itemized charges</div>
+              {(p.lineItems||[]).map((item,i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}>
+                  <span>{item.description} {item.qty>1&&`x${item.qty}`}</span><span>HK${(item.fee*item.qty).toFixed(2)}</span>
+                </div>
+              ))}
+              {(!p.lineItems||p.lineItems.length===0)&&<div style={{fontSize:'12px',color:C.textMuted}}>No itemized charges yet.</div>}
+              <div style={{display:'flex',justifyContent:'space-between',fontWeight:700,fontSize:'13px',padding:'6px 0',borderTop:`0.5px solid ${C.border}`,marginTop:'4px'}}><span>Total</span><span>HK${(p.totalFee||0).toFixed(2)}</span></div>
+              <div onClick={()=>setAddItemOpenId(addItemOpenId===p.id?null:p.id)} style={{fontSize:'11px',color:C.green,cursor:'pointer',marginTop:'8px'}}>{'+'} Add item (e.g. sick leave note)</div>
+              {addItemOpenId===p.id&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',maxHeight:180,overflowY:'auto',marginTop:'6px'}}>
+                {catalog.map(item=>(
+                  <div key={item.id} onClick={()=>addItemToRecord(p,item)} style={{padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between'}}>
+                    <span>{item.name}</span><span style={{color:C.textSub}}>HK${item.default_price}</span>
+                  </div>
+                ))}
+              </div>}
+            </div>}
             <div onClick={()=>setOpenLabelId(isOpen?null:p.id)} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'12px',cursor:'pointer'}}>
               {p.drugs.map((d,i)=>(<div key={i} style={{fontSize:'13px',padding:'3px 0'}}>{d.drug} {d.dosage&&('- '+d.dosage)} {d.frequency&&('- '+d.frequency)}</div>))}
               <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{isOpen?'Hide label sticker preview':'Tap to review & edit label stickers'}</div>
@@ -1302,6 +1352,9 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType }) {
                 <Badge text="Printed" type="ok"/>
               </div>
               {p.dispensedBy&&<div style={{fontSize:'10px',color:C.textMuted}}>Confirmed by {p.dispensedBy} at {new Date(p.dispensedAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>}
+              <Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={()=>onProceedToBilling(p)}>
+                Proceed to billing (HK${(p.totalFee||0).toFixed(2)})
+              </Btn>
             </Card>
           ))}
         </div>
@@ -2991,6 +3044,7 @@ export default function ClinicOpsApp() {
   const [newPatientPrefillName,setNewPatientPrefillName]=useState('')
   const [schedulePreselectPatient,setSchedulePreselectPatient]=useState(null)
   const [payPreselectClaimRef,setPayPreselectClaimRef]=useState(null)
+  const [payPreselectRecordId,setPayPreselectRecordId]=useState(null)
   const [checkedInQueue,setCheckedInQueue]=useState([])
   const [queueLoading,setQueueLoading]=useState(true)
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
@@ -3301,9 +3355,9 @@ export default function ClinicOpsApp() {
             setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
           }
         }}/>}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
-        {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)}/>}
+        {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember}/>}
