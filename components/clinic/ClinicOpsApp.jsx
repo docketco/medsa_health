@@ -667,7 +667,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   useEffect(() => {
     async function loadCatalog() {
       const { data } = await supabase.from('service_items').select('*')
-        .eq('clinic_type', catalogClinicType).eq('active', true).order('category')
+        .in('clinic_type', [catalogClinicType, 'general']).eq('active', true).order('category')
       setCatalog(data || [])
     }
     loadCatalog()
@@ -862,6 +862,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
           notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
           date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
+          doctor_name: staffMember?.name || 'Unknown',
         }).select().maybeSingle()
         if (recErr) throw recErr
         savedRecordId = recData?.id || null
@@ -2993,6 +2994,37 @@ export default function ClinicOpsApp() {
   const [checkedInQueue,setCheckedInQueue]=useState([])
   const [queueLoading,setQueueLoading]=useState(true)
   const [pendingPrescriptions,setPendingPrescriptions]=useState([])
+
+  // Real, shared queue - was local browser state before, which meant a
+  // doctor's tablet and front desk's computer never saw the same thing.
+  // Queries medical_records directly instead, transformed into the exact
+  // shape the existing label/inventory logic already expects, so that
+  // logic didn't need to be rewritten. Polls rather than a single load,
+  // since this needs to reach a genuinely different device in real time.
+  async function loadTaskBoard() {
+    const { data: records } = await supabase.from('medical_records')
+      .select('*, patients(full_name, medsa_id)')
+      .eq('record_status', 'submitted').eq('source', 'clinic_ops')
+      .order('date_of_record', { ascending: false })
+    if (!records) return
+    const withDrugs = await Promise.all(records.map(async r => {
+      const { data: meds } = await supabase.from('medications').select('*').eq('medical_record_id', r.id)
+      return {
+        id: r.id, recordId: r.id, patientId: r.patient_id,
+        patientName: r.patients?.full_name || 'Unknown', patientMedsaId: r.patients?.medsa_id || null,
+        doctorName: r.doctor_name || 'Unknown', diagnosis: r.diagnosis, notes: r.notes, icd10Code: r.icd10_code,
+        lineItems: r.line_items || [], totalFee: r.total_fee,
+        drugs: (meds||[]).map(m => ({ drug: m.medication_name, dosage: m.dosage, frequency: m.frequency, quantity: m.quantity, durationDays: m.duration_days })),
+        timestamp: new Date(r.date_of_record).getTime(), status: r.meds_dispensed_at ? 'printed' : 'pending',
+      }
+    }))
+    setPendingPrescriptions(withDrugs)
+  }
+  useEffect(() => {
+    loadTaskBoard()
+    const interval = setInterval(loadTaskBoard, 15000)
+    return () => clearInterval(interval)
+  }, [])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [nextTicket,setNextTicket]=useState(13)
   const [institutionId,setInstitutionId]=useState(null)
@@ -3126,10 +3158,12 @@ export default function ClinicOpsApp() {
     : checkedInQueue.filter(q=>!q.department || q.department===staffMember.department)
 
   async function handlePrescribed(rx) {
-    // The actual medication rows are already written to Supabase inside
-    // ConsultationScreen's handleSave. Here we just reflect it locally so
-    // the Prescriptions queue updates immediately without a full reload.
-    setPendingPrescriptions([...pendingPrescriptions, {...rx, id: Date.now(), status:'pending'}])
+    // The real record is already written to Supabase inside
+    // ConsultationScreen's handleSave, and loadTaskBoard's poll would pick
+    // it up within 15 seconds regardless - this just reloads immediately
+    // so the submitting doctor doesn't have to wait for the next poll to
+    // see their own consultation appear.
+    await loadTaskBoard()
   }
 
   async function handleConfirmPrescription(prescription) {
@@ -3177,9 +3211,19 @@ export default function ClinicOpsApp() {
     // Record dispense attribution on the real medications row if this is a
     // real Supabase-loaded prescription (has a UUID id, not a local Date.now()).
     if (typeof id === 'string') {
+      // Bug fix: this previously matched medications.id against id (the
+      // parent record's id), which could never match any real medication
+      // row - medications.id is each drug's own key. Fixed to update every
+      // medication actually linked to this consultation.
       await supabase.from('medications').update({
         dispense_status: 'printed', dispensed_by: dispensedBy, dispensed_at: dispensedAt,
-      }).eq('id', id)
+      }).eq('medical_record_id', id)
+      // Real, persisted signal - separate from record_status, which must
+      // stay 'submitted' so this entry stays on the task board for
+      // billing. Previously this only ever lived in local browser state,
+      // meaning a different device would never see it was already handled.
+      await supabase.from('medical_records').update({ meds_dispensed_at: dispensedAt }).eq('id', id)
+      await loadTaskBoard()
     }
 
     return inventoryWarnings
