@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee } from '../../lib/insuranceAdapter'
+import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
@@ -2246,12 +2246,20 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   )
 }
 
-function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect }) {
+function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect, preselectRecordId, onConsumedRecordPreselect }) {
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
   const [receiptSent,setReceiptSent]=useState(false)
   const [printed,setPrinted]=useState(false)
+  const [billingRecord,setBillingRecord]=useState(null) // the consultation record being billed, when arriving via preselectRecordId
+  const [billingRecordLoading,setBillingRecordLoading]=useState(false)
+  const [billingChoice,setBillingChoice]=useState(null) // null | 'direct_payment' | 'insurance'
+  const [eligiblePlans,setEligiblePlans]=useState(null)
+  const [eligiblePlansLoading,setEligiblePlansLoading]=useState(false)
+  const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
+  const [submittingClaim,setSubmittingClaim]=useState(false)
+  const [billingResult,setBillingResult]=useState(null)
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
   const [ledger,setLedger]=useState([])
@@ -2371,6 +2379,138 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     }
     findAndSelect()
   }, [preselectClaimRef])
+
+  // Arrived here via "Proceed to billing" from the task board - load the
+  // real consultation record (diagnosis, itemized line_items, total_fee)
+  // and its patient, so the front desk sees the doctor's actual itemized
+  // bill rather than needing to rebuild it.
+  useEffect(() => {
+    if (!preselectRecordId) return
+    async function loadRecord() {
+      setBillingRecordLoading(true)
+      const { data } = await supabase.from('medical_records')
+        .select('*, patients(id, full_name, medsa_id)')
+        .eq('id', preselectRecordId).maybeSingle()
+      setBillingRecord(data || null)
+      setBillingRecordLoading(false)
+      onConsumedRecordPreselect?.()
+    }
+    loadRecord()
+  }, [preselectRecordId])
+
+  // Real matching engine - only fetched when the front desk actually
+  // chooses "insurance", not preemptively, since it requires a network
+  // round trip and most visits may just be paid directly.
+  useEffect(() => {
+    if (billingChoice !== 'insurance' || !billingRecord) return
+    async function loadEligible() {
+      setEligiblePlansLoading(true)
+      const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+      setEligiblePlans(matches)
+      setEligiblePlansLoading(false)
+    }
+    loadEligible()
+  }, [billingChoice, billingRecord])
+
+  async function handleDirectBillingSubmit() {
+    if (!selectedEligiblePlan || !billingRecord) return
+    setSubmittingClaim(true)
+    const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
+    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty }))
+    const result = await adapter.adjudicateClaim({
+      patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
+      clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
+      items, medicalRecordId: billingRecord.id,
+    })
+    // Real completion signal - marks this consultation as billed so it
+    // correctly disappears from the task board, rather than staying
+    // visible as if payment were still pending.
+    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    setBillingResult(result)
+    setSubmittingClaim(false)
+  }
+
+  async function handleDirectPaymentSubmit(paymentMethod) {
+    if (!billingRecord) return
+    setSubmittingClaim(true)
+    const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
+    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    setBillingResult({ status: 'PAID_DIRECT', fees })
+    setSubmittingClaim(false)
+  }
+
+  // Real billing flow from the task board - takes priority over the tab
+  // system below, since arriving here means a specific consultation needs
+  // billing regardless of which tab was last open.
+  if (preselectRecordId || billingRecord) {
+    if (billingRecordLoading) return <PageWrap maxWidth={520}><div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>Loading consultation...</div></PageWrap>
+    if (!billingRecord) return <PageWrap maxWidth={520}><div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>Consultation record not found.</div></PageWrap>
+
+    if (billingResult) return (
+      <PageWrap maxWidth={520}>
+        <Card style={{padding:'24px',textAlign:'center'}}>
+          <div style={{fontSize:'32px',marginBottom:'10px'}}>{'\u2713'}</div>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Billing complete</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
+          {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null)}}>Done</Btn>
+        </Card>
+      </PageWrap>
+    )
+
+    return (
+      <PageWrap maxWidth={520}>
+        <Card style={{padding:'18px',marginBottom:'16px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{billingRecord.patients?.full_name}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'12px'}}>{billingRecord.patients?.medsa_id} - {billingRecord.doctor_name}</div>
+          {(billingRecord.line_items||[]).map((item,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',fontSize:'13px'}}>
+              <span style={{color:C.textSub}}>{item.description}{item.qty>1&&` x${item.qty}`}</span><span>HK${(item.fee*item.qty).toFixed(2)}</span>
+            </div>
+          ))}
+          <div style={{display:'flex',justifyContent:'space-between',padding:'10px 0 0',marginTop:'6px',borderTop:`0.5px solid ${C.border}`,fontWeight:700,fontSize:'16px'}}>
+            <span>Total</span><span style={{color:C.green}}>HK${(billingRecord.total_fee||0).toFixed(2)}</span>
+          </div>
+        </Card>
+
+        {!billingChoice&&<>
+          <SecLabel>How is this being paid?</SecLabel>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+            <Btn variant="secondary" style={{width:'100%',justifyContent:'flex-start',padding:'14px 16px'}} onClick={()=>setBillingChoice('direct_payment')}>Cash / Card / Octopus</Btn>
+            <Btn variant="secondary" style={{width:'100%',justifyContent:'flex-start',padding:'14px 16px'}} onClick={()=>setBillingChoice('insurance')}>Insurance direct billing</Btn>
+          </div>
+        </>}
+
+        {billingChoice==='direct_payment'&&<>
+          <SecLabel>Payment method</SecLabel>
+          <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+            {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
+              <div key={k} onClick={()=>setMethod(k)} style={{flex:1,padding:'14px 8px',borderRadius:'8px',textAlign:'center',cursor:'pointer',background:method===k?C.green:C.card,color:method===k?'#fff':C.text}}>
+                <div style={{fontSize:'18px',marginBottom:'4px'}}>{icon}</div><div style={{fontSize:'12px',fontWeight:500}}>{l}</div>
+              </div>
+            ))}
+          </div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleDirectPaymentSubmit(method)} disabled={submittingClaim}>{submittingClaim?'Processing...':`Collect HK$${(billingRecord.total_fee||0).toFixed(2)}`}</Btn>
+        </>}
+
+        {billingChoice==='insurance'&&<>
+          <SecLabel>Eligible plans</SecLabel>
+          {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
+          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No held plan covers any item in this visit - try direct payment instead.</div>}
+          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.map(m=>(
+            <Card key={m.plan.id} onClick={()=>setSelectedEligiblePlan(m)} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
+                <Badge text={m.fullyCovered?'Fully covered':'Partial'} type={m.fullyCovered?'ok':'due'}/>
+              </div>
+              {m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
+            </Card>
+          ))}
+          {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
+        </>}
+      </PageWrap>
+    )
+  }
 
   if (tab==='ledger') return (
     <PageWrap maxWidth={720}>
