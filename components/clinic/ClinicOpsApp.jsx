@@ -656,6 +656,42 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [icd10Open,setIcd10Open]=useState(false)
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
+  const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
+  const [catalog,setCatalog]=useState([])
+  const [catalogClinicType,setCatalogClinicType]=useState('tcm') // TODO: should come from real institution setting once one exists
+  const [itemPickerOpen,setItemPickerOpen]=useState(false)
+
+  // Real service catalog, filtered by clinic type - what the doctor
+  // actually picks from to build the itemized list, rather than typing
+  // free text or manually searching a code database.
+  useEffect(() => {
+    async function loadCatalog() {
+      const { data } = await supabase.from('service_items').select('*')
+        .eq('clinic_type', catalogClinicType).eq('active', true).order('category')
+      setCatalog(data || [])
+    }
+    loadCatalog()
+  }, [catalogClinicType])
+
+  const invoiceTotal = lineItems.reduce((sum, i) => sum + (i.fee * i.qty), 0)
+
+  function addLineItem(item) {
+    setLineItems(prev => {
+      const existing = prev.find(i => i.service_item_id === item.id)
+      if (existing) return prev.map(i => i.service_item_id === item.id ? {...i, qty: i.qty + 1} : i)
+      return [...prev, { service_item_id: item.id, description: item.name, description_tc: item.name_tc, category: item.category, fee: parseFloat(item.default_price) || 0, qty: 1 }]
+    })
+    setItemPickerOpen(false)
+  }
+
+  function updateLineItemQty(id, qty) {
+    if (qty <= 0) { setLineItems(prev => prev.filter(i => i.service_item_id !== id)); return }
+    setLineItems(prev => prev.map(i => i.service_item_id === id ? {...i, qty} : i))
+  }
+
+  function updateLineItemFee(id, fee) {
+    setLineItems(prev => prev.map(i => i.service_item_id === id ? {...i, fee: parseFloat(fee) || 0} : i))
+  }
 
   // Real query against the icd10_reference table - debounced so it doesn't
   // fire on every keystroke.
@@ -820,11 +856,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
     try {
       const rxRows = prescriptions.filter(p=>p.drug.trim())
       let savedRecordId = null
-      if ((diagnosis.trim()||notes.trim()||rxRows.length>0) && patient) {
+      if ((diagnosis.trim()||notes.trim()||rxRows.length>0||lineItems.length>0) && patient) {
         const { data: recData, error: recErr } = await supabase.from('medical_records').insert({
           patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Clinic consultation',
           notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
           date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
+          line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
         }).select().maybeSingle()
         if (recErr) throw recErr
         savedRecordId = recData?.id || null
@@ -943,6 +980,28 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       <SecLabel>Consultation notes</SecLabel>
       <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical'}}/>
 
+      <SecLabel>Itemized Treatment & Charges</SecLabel>
+      <div style={{marginBottom:'10px'}}>
+        {lineItems.map(item=>(
+          <div key={item.service_item_id} style={{display:'flex',alignItems:'center',gap:'8px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+            <div style={{flex:1,fontSize:'13px'}}>{item.description}</div>
+            <input type="number" min="1" value={item.qty} onChange={e=>updateLineItemQty(item.service_item_id, parseInt(e.target.value)||0)} style={{width:'44px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px',fontSize:'12px',textAlign:'center'}}/>
+            <div style={{fontSize:'12px',color:C.textSub}}>x</div>
+            <input type="number" step="0.01" value={item.fee} onChange={e=>updateLineItemFee(item.service_item_id, e.target.value)} style={{width:'68px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px',fontSize:'12px'}}/>
+            <div onClick={()=>updateLineItemQty(item.service_item_id, 0)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'0 4px'}}>{'\u2715'}</div>
+          </div>
+        ))}
+        {lineItems.length>0&&<div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:700,fontSize:'14px'}}><span>Total</span><span>HK${invoiceTotal.toFixed(2)}</span></div>}
+        <div onClick={()=>setItemPickerOpen(!itemPickerOpen)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'6px 0'}}>{'+'} Add treatment or charge</div>
+        {itemPickerOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',maxHeight:220,overflowY:'auto'}}>
+          {catalog.map(item=>(
+            <div key={item.id} onClick={()=>addLineItem(item)} style={{padding:'10px 14px',fontSize:'13px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between'}}>
+              <span>{item.name}</span><span style={{color:C.textSub}}>HK${item.default_price}</span>
+            </div>
+          ))}
+          {catalog.length===0&&<div style={{padding:'12px 14px',fontSize:'12px',color:C.textMuted}}>No catalog items for this clinic type yet.</div>}
+        </div>}
+      </div>
       <SecLabel>Prescription</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px'}}>
         {prescriptions.map((rx,i)=>{
