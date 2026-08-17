@@ -2260,6 +2260,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
   const [submittingClaim,setSubmittingClaim]=useState(false)
   const [billingResult,setBillingResult]=useState(null)
+  const [claimAdjudication,setClaimAdjudication]=useState(null) // the raw adjudicateClaim result, kept separate from billingResult so we know whether a copay still needs collecting
+  const [copayMethod,setCopayMethod]=useState('card')
+  const [collectingCopay,setCollectingCopay]=useState(false)
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
   const [ledger,setLedger]=useState([])
@@ -2423,11 +2426,45 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       items, medicalRecordId: billingRecord.id,
     })
     // Real completion signal - marks this consultation as billed so it
-    // correctly disappears from the task board, rather than staying
-    // visible as if payment were still pending.
+    // correctly disappears from the task board. The claim itself is
+    // submitted at this point regardless of whether a copay remains -
+    // that's now a separate, immediate collection step below, not
+    // something the task board needs to keep tracking.
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    setBillingResult(result)
+    setClaimAdjudication(result)
+    // If nothing is owed (fully covered), we're actually done - skip
+    // straight to the completion screen rather than showing an empty
+    // "collect $0" step.
+    if (!result.fees || result.fees.patientPayableTotal <= 0) {
+      setBillingResult(result)
+    }
     setSubmittingClaim(false)
+  }
+
+  // The immediate copay-collection step - same claim, same screen, right
+  // after the insurance portion comes back. Matches the exact pattern the
+  // existing (older) collect-payment screen already uses: call the
+  // adapter to record the payment, then log a real transactions row so it
+  // shows up on Financial records - this was the real gap before, since
+  // neither of these two functions logged anything there at all.
+  async function handleCollectRemainingCopay() {
+    if (!claimAdjudication || !billingRecord) return
+    setCollectingCopay(true)
+    const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
+    const fees = await adapter.recordCopayPayment(claimAdjudication.claimId, copayMethod)
+    await supabase.from('transactions').insert({
+      institution_id: institutionId,
+      patient_name: billingRecord.patients?.full_name || 'Unknown',
+      consultation_fee: billingRecord.total_fee || 0,
+      insurer_covers: claimAdjudication.fees.insurerCoveredAmount,
+      patient_pays: claimAdjudication.fees.patientPayableTotal,
+      payment_method: copayMethod,
+      card_processing_fee: fees.paymentProcessingFee,
+      claim_ref: claimAdjudication.claimId,
+      staff_name: staffMember?.name || 'Unknown',
+    })
+    setBillingResult(claimAdjudication)
+    setCollectingCopay(false)
   }
 
   async function handleDirectPaymentSubmit(paymentMethod) {
@@ -2435,6 +2472,17 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    // Real gap fixed - this never logged to transactions before, meaning
+    // a direct cash/card/Octopus visit (no insurance involved) would
+    // never have appeared on Financial records at all.
+    await supabase.from('transactions').insert({
+      institution_id: institutionId,
+      patient_name: billingRecord.patients?.full_name || 'Unknown',
+      consultation_fee: billingRecord.total_fee || 0,
+      insurer_covers: 0, patient_pays: billingRecord.total_fee || 0,
+      payment_method: paymentMethod, card_processing_fee: fees.paymentProcessingFee,
+      staff_name: staffMember?.name || 'Unknown',
+    })
     setBillingResult({ status: 'PAID_DIRECT', fees })
     setSubmittingClaim(false)
   }
@@ -2453,7 +2501,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Billing complete</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null)}}>Done</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card')}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -2507,6 +2555,24 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </Card>
           ))}
           {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
+
+          {claimAdjudication&&!billingResult&&<div style={{marginTop:'16px'}}>
+            <div style={{background:C.greenLight,borderRadius:'10px',padding:'14px 16px',marginBottom:'16px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'2px'}}>
+                HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to {selectedEligiblePlan.plan.company_name}
+              </div>
+              <div style={{fontSize:'12px',color:C.textSub}}>Claim {claimAdjudication.claimId}</div>
+            </div>
+            <SecLabel>Collect the remaining HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient</SecLabel>
+            <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+              {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
+                <div key={k} onClick={()=>setCopayMethod(k)} style={{flex:1,padding:'14px 8px',borderRadius:'8px',textAlign:'center',cursor:'pointer',background:copayMethod===k?C.green:C.card,color:copayMethod===k?'#fff':C.text}}>
+                  <div style={{fontSize:'18px',marginBottom:'4px'}}>{icon}</div><div style={{fontSize:'12px',fontWeight:500}}>{l}</div>
+                </div>
+              ))}
+            </div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectRemainingCopay} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.patientPayableTotal.toFixed(2)}`}</Btn>
+          </div>}
         </>}
       </PageWrap>
     )
