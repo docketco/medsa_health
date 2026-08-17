@@ -190,7 +190,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
   )
 }
 
-function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError, onDoneCheckIn }) {
+function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError, onDoneCheckIn, staffMember }) {
   const [mode,setMode]=useState('scan')
   const [stage,setStage]=useState('idle')
   const [patient,setPatient]=useState(null)
@@ -350,7 +350,15 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
           {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
-          {!requestSent&&<Btn style={{width:'100%'}} onClick={()=>setRequestSent(true)}>Request record access ahead of visit</Btn>}
+          {!requestSent&&<Btn style={{width:'100%'}} onClick={async()=>{
+            const { error } = await supabase.from('record_access_requests').insert({
+              patient_id: searchResult.id, requesting_staff: staffMember?.name || 'Unknown',
+              requesting_clinic: staffMember?.institution_source || null,
+              reason: 'Ahead of upcoming visit',
+            })
+            if (error) { alert(`Could not send request: ${error.message}`); return }
+            setRequestSent(true)
+          }}>Request record access ahead of visit</Btn>}
           {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
           {searchResult.registration_path==='unclaimed'&&<div style={{marginTop:'14px',paddingTop:'14px',borderTop:`0.5px solid ${C.border}`}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>This patient hasn't claimed their profile yet - that's why clinical data isn't available. Lost or forgot the claim code?</div>
@@ -945,7 +953,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
                     {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
                     {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
                     {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
-                    {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>setReportRequests({...reportRequests,[i]:true})}>Request full/detailed report</Btn>
+                    {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={async()=>{
+                      const { error } = await supabase.from('record_access_requests').insert({
+                        patient_id: patient.id, requesting_staff: staffMember?.name || 'Unknown',
+                        requesting_clinic: r.institutions?.name || null,
+                        reason: `Full detail requested for record: ${r.title || r.diagnosis || 'record'}`,
+                      })
+                      if (error) { alert(`Could not send request: ${error.message}`); return }
+                      setReportRequests({...reportRequests,[i]:true})
+                    }}>Request full/detailed report</Btn>
                       :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>}
                   </div>}
                 </Card>
@@ -2250,6 +2266,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
+  const [paidRecord,setPaidRecord]=useState(null)
   const [receiptSent,setReceiptSent]=useState(false)
   const [printed,setPrinted]=useState(false)
   const [billingRecord,setBillingRecord]=useState(null) // the consultation record being billed, when arriving via preselectRecordId
@@ -2263,6 +2280,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [claimAdjudication,setClaimAdjudication]=useState(null) // the raw adjudicateClaim result, kept separate from billingResult so we know whether a copay still needs collecting
   const [copayMethod,setCopayMethod]=useState('card')
   const [collectingCopay,setCollectingCopay]=useState(false)
+  const [addPlanOpen,setAddPlanOpen]=useState(false)
+  const [allPlans,setAllPlans]=useState([])
+  const [addPlanSearch,setAddPlanSearch]=useState('')
+  const [addingPlan,setAddingPlan]=useState(false)
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
   const [ledger,setLedger]=useState([])
@@ -2325,6 +2346,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       claim_ref: selectedPayment.claim_ref,
       staff_name: staffMember?.name || 'Unknown',
     })
+    // Real fix - fetch the actual consultation record this claim was
+    // linked to, so the receipt screen can show real itemized charges
+    // instead of nothing, and "sent to Medsa app" can be an honest,
+    // persisted action rather than a local-only flag.
+    const { data: linkedRecord } = await supabase.from('medical_records')
+      .select('*').eq('insurance_claim_id', selectedPayment.id).maybeSingle()
+    setPaidRecord(linkedRecord || null)
     setSaving(false)
     setPaid(true)
     loadLedger()
@@ -2447,6 +2475,40 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   // adapter to record the payment, then log a real transactions row so it
   // shows up on Financial records - this was the real gap before, since
   // neither of these two functions logged anything there at all.
+  // Real fix for a genuine gap - there was previously no way anywhere in
+  // ClinicOps to record a patient's insurance at all. Lazy-loads the full
+  // plan list only when front desk actually opens this, not preemptively.
+  useEffect(() => {
+    if (!addPlanOpen || allPlans.length > 0) return
+    async function loadPlans() {
+      const { data } = await supabase.from('insurance_plans').select('*').eq('status', 'active').order('company_name')
+      setAllPlans(data || [])
+    }
+    loadPlans()
+  }, [addPlanOpen])
+
+  async function handleLinkNewPlan(plan) {
+    if (!billingRecord) return
+    setAddingPlan(true)
+    const { error } = await supabase.from('agent_policies').insert({
+      patient_id: billingRecord.patient_id, plan_id: plan.id, status: 'active',
+    })
+    if (error) {
+      alert(`Could not link this plan: ${error.message}`)
+      setAddingPlan(false)
+      return
+    }
+    setAddPlanOpen(false)
+    setAddPlanSearch('')
+    // Re-run the matching engine now that this patient genuinely holds
+    // this plan, so it shows up in the eligible list immediately.
+    setEligiblePlansLoading(true)
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+    setEligiblePlans(matches)
+    setEligiblePlansLoading(false)
+    setAddingPlan(false)
+  }
+
   async function handleCollectRemainingCopay() {
     if (!claimAdjudication || !billingRecord) return
     setCollectingCopay(true)
@@ -2501,7 +2563,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Billing complete</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card')}}>Done</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('')}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -2544,7 +2606,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         {billingChoice==='insurance'&&<>
           <SecLabel>Eligible plans</SecLabel>
           {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
-          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No held plan covers any item in this visit - try direct payment instead.</div>}
+          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No held plan covers any item in this visit yet.</div>}
+
+          {!addPlanOpen&&<div onClick={()=>setAddPlanOpen(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'10px 0',textAlign:'center'}}>{'+'} Patient has a plan not on file - add it</div>}
+          {addPlanOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px',marginBottom:'12px'}}>
+            <input value={addPlanSearch} onChange={e=>setAddPlanSearch(e.target.value)} placeholder="Search insurer or plan name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            <div style={{maxHeight:180,overflowY:'auto'}}>
+              {allPlans.filter(p=>!addPlanSearch||`${p.company_name} ${p.plan_name}`.toLowerCase().includes(addPlanSearch.toLowerCase())).map(p=>(
+                <div key={p.id} onClick={()=>!addingPlan&&handleLinkNewPlan(p)} style={{padding:'8px 10px',fontSize:'13px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>
+                  {p.plan_name} <span style={{color:C.textMuted}}>({p.company_name})</span>
+                </div>
+              ))}
+              {allPlans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'8px'}}>Loading plans...</div>}
+            </div>
+          </div>}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.map(m=>(
             <Card key={m.plan.id} onClick={()=>setSelectedEligiblePlan(m)} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -2727,13 +2802,26 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   if (paid) return (
     <PageWrap maxWidth={440}>
-      <div style={{textAlign:'center',padding:'50px 20px'}}>
+      <style>{'@media print { .no-print { display: none !important; } }'}</style>
+      <div style={{textAlign:'center',padding:'50px 20px'}} className="print-receipt">
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Payment received</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px'}}>HK${selectedPayment?((selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)):0} - {selectedPayment?.patients?.full_name||'Unknown'}</div>
-        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
-          <Btn variant={receiptSent?'secondary':'primary'} onClick={()=>setReceiptSent(true)} disabled={receiptSent}>{receiptSent?"Sent to patient's Medsa app":'Send receipt to Medsa app'}</Btn>
-          <Btn onClick={()=>setPrinted(true)} disabled={printed}>{printed?'Printed':'Print receipt'}</Btn>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>HK${selectedPayment?((selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)):0} - {selectedPayment?.patients?.full_name||'Unknown'}</div>
+        {paidRecord&&<Card style={{padding:'14px',marginBottom:'16px',textAlign:'left'}}>
+          {paidRecord.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {paidRecord.diagnosis}</div>}
+          {(paidRecord.line_items||[]).map((item,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}>
+              <span>{item.description}{item.qty>1&&` x${item.qty}`}</span><span>HK${(item.fee*item.qty).toFixed(2)}</span>
+            </div>
+          ))}
+        </Card>}
+        {!paidRecord&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No itemized consultation record linked to this claim.</div>}
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}} className="no-print">
+          <Btn variant={receiptSent?'secondary':'primary'} disabled={receiptSent||!paidRecord} onClick={async()=>{
+            await supabase.from('medical_records').update({receipt_sent_at:new Date().toISOString()}).eq('id',paidRecord.id)
+            setReceiptSent(true)
+          }}>{receiptSent?"Marked sent to patient's Medsa app":!paidRecord?'No record to send':'Send receipt to Medsa app'}</Btn>
+          <Btn onClick={()=>{window.print();setPrinted(true)}}>{printed?'Printed':'Print receipt'}</Btn>
         </div>
         {receiptSent&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{'\u25c7'} Receipt, consultation notes, and prescription are now synced to the patient's Medsa cloud record.</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null)}}>New payment</Btn>
@@ -3539,7 +3627,7 @@ export default function ClinicOpsApp() {
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
-        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')}/>}
+        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
           prefillName={newPatientPrefillName}
