@@ -1710,7 +1710,7 @@ function HelpScreen({ staffMember }) {
   )
 }
 
-function PracticeManagerStaffScreen({ staffMember }) {
+function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [tab,setTab]=useState('roster')
   const [staff,setStaff]=useState([])
   const [leaves,setLeaves]=useState([])
@@ -1771,7 +1771,7 @@ function PracticeManagerStaffScreen({ staffMember }) {
     setSaving(true)
     setOnboardError(null)
     const { error: onboardErr } = await supabase.from('staff_credentials').insert({
-      institution_source:'clinic_ops', medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
+      institution_source:'clinic_ops', institution_id:institutionId, medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
       full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept, pin:newPin,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
@@ -3566,7 +3566,7 @@ export default function ClinicOpsApp() {
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
-        {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember}/>}
+        {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
     </div>
