@@ -2899,6 +2899,14 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   const [pendingDelta,setPendingDelta]=useState({}) // itemId -> uncommitted delta
   const [confirming,setConfirming]=useState(null)
   const [importResult,setImportResult]=useState(null)
+  const [addItemOpen,setAddItemOpen]=useState(false)
+  const [newItemName,setNewItemName]=useState('')
+  const [newItemStock,setNewItemStock]=useState('')
+  const [newItemUnit,setNewItemUnit]=useState('units')
+  const [newItemReorder,setNewItemReorder]=useState('10')
+  const [newItemSupplier,setNewItemSupplier]=useState('')
+  const [addingItem,setAddingItem]=useState(false)
+  const [addItemError,setAddItemError]=useState(null)
 
   function parseCSV(text) {
     const lines = text.trim().split('\n')
@@ -2971,6 +2979,24 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   // the shared, non-institution-scoped icd10_reference table), not exposed
   // to individual clinics - removed to avoid a Practice Manager accidentally
   // overwriting the shared national dataset with the wrong file.
+
+  async function handleAddItem() {
+    if (!newItemName.trim()) { setAddItemError('Item name is required.'); return }
+    if (!institutionId) { setAddItemError('Institution not resolved yet - try again in a moment.'); return }
+    setAddingItem(true)
+    setAddItemError(null)
+    const { error } = await supabase.from('clinic_inventory').insert({
+      item_name: newItemName.trim(), institution_id: institutionId,
+      stock: parseInt(newItemStock)||0, unit: newItemUnit||'units',
+      reorder_at: parseInt(newItemReorder)||10, supplier: newItemSupplier||null,
+    })
+    if (error) { setAddItemError(error.message); setAddingItem(false); return }
+    const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name', { ascending: true })
+    setItems((data||[]).map(r => ({ id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier })))
+    setAddItemOpen(false)
+    setNewItemName(''); setNewItemStock(''); setNewItemUnit('units'); setNewItemReorder('10'); setNewItemSupplier('')
+    setAddingItem(false)
+  }
 
   useEffect(() => {
     async function load() {
@@ -3073,7 +3099,24 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           )
         })}
       </div>
-      <div style={{textAlign:'center',marginTop:'16px'}}><Btn variant="primary">+ Add item</Btn></div>
+      {!addItemOpen&&<div style={{textAlign:'center',marginTop:'16px'}}><Btn variant="primary" onClick={()=>setAddItemOpen(true)}>+ Add item</Btn></div>}
+      {addItemOpen&&<Card style={{padding:'16px',marginTop:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>Add stock item</div>
+        <input value={newItemName} onChange={e=>setNewItemName(e.target.value)} placeholder="Item name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={newItemStock} onChange={e=>setNewItemStock(e.target.value)} type="number" placeholder="Starting stock" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={newItemUnit} onChange={e=>setNewItemUnit(e.target.value)} placeholder="Unit (e.g. tablets)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={newItemReorder} onChange={e=>setNewItemReorder(e.target.value)} type="number" placeholder="Reorder at" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={newItemSupplier} onChange={e=>setNewItemSupplier(e.target.value)} placeholder="Supplier (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        {addItemError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{addItemError}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={()=>{setAddItemOpen(false);setAddItemError(null)}}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleAddItem} disabled={addingItem}>{addingItem?'Adding...':'Add item'}</Btn>
+        </div>
+      </Card>}
     </PageWrap>
   )
 }
