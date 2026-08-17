@@ -920,7 +920,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         return all
       }
       const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
-        supabase.from('staff_credentials').select('*').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+        supabase.from('staff_credentials').select('*, institutions(name)').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
         fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
         fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
         filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
@@ -930,7 +930,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       const clinicIdsWithDoctors = new Set(clinicsWithDoctorsData.map(d=>d.clinic_id))
       const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
-        spec: d.department||'General Practice', clinic: d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital',
+        spec: d.department||'General Practice', clinic: d.institutions?.name || (d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital'),
         institution: d.institution_source, district: null, lat:null, lng:null,
         phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
@@ -1018,6 +1018,17 @@ function DoctorsScreen({ isEn, patient={} }) {
   const availableDistricts = [...new Set(doctors.map(d=>d.district).filter(Boolean))].sort()
   const availableFacilityTypes = [...new Set(doctors.map(d=>d.facilityType).filter(Boolean))].sort()
   const availableSchemes = [...new Set(doctors.flatMap(d=>d.schemes||[]))].sort()
+  const SCHEME_LABELS = {
+    public_gopc: 'Public Outpatient Clinic (GOPC)',
+    public_dh: 'Department of Health Clinic',
+    cap633_licensed: 'Licensed Private Facility',
+    general_private: 'Private Practice',
+    cdcc: 'Chronic Disease Co-Care Scheme',
+    dhc_network: 'District Health Centre Network',
+    ehcv: 'Elderly Health Care Voucher',
+    vaccination_subsidy: 'Vaccination Subsidy Scheme',
+  }
+  const schemeLabel = (s) => SCHEME_LABELS[s] || s.replace(/_/g,' ')
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
@@ -1201,7 +1212,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           </select>
           <select value={filterScheme} onChange={e=>setFilterScheme(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterScheme?'#fff':'rgba(255,255,255,0.2)',color:filterScheme?C.text:'#fff'}}>
             <option value="">{isEn?'Any scheme':'任何計劃'}</option>
-            {availableSchemes.map(s=><option key={s} value={s}>{s.replace(/_/g,' ').toUpperCase()}</option>)}
+            {availableSchemes.map(s=><option key={s} value={s}>{schemeLabel(s)}</option>)}
           </select>
           <select value={filterOwnership} onChange={e=>setFilterOwnership(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterOwnership?'#fff':'rgba(255,255,255,0.2)',color:filterOwnership?C.text:'#fff'}}>
             <option value="">{isEn?'Public/Private/Subsidized':'公立/私立/資助'}</option>
@@ -1247,7 +1258,7 @@ function DoctorsScreen({ isEn, patient={} }) {
                     ? <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Verified Partner':'Medsa認證合作夥伴'}</span>
                     : doc.source==='directory'&&<span style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Listed via directory':'目錄列表'}</span>}
                   {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).map(s=>(
-                    <span key={s} style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{s.replace(/_/g,' ').toUpperCase()}</span>
+                    <span key={s} style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{schemeLabel(s)}</span>
                   ))}
                 </div>
               </div>
