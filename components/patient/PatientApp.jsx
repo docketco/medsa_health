@@ -656,9 +656,13 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     const path = `${patient.medsa_id || patient.id}/${Date.now()}-${file.name}`
     const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
     if (uploadErr) { setUploadError(uploadErr.message); setUploading(false); return }
-    const { data: urlData } = supabase.storage.from('patient-uploaded-records').getPublicUrl(path)
+    // Storing the path, not a public URL - this bucket should be private,
+    // with a signed, expiring URL generated only when actually viewed
+    // (same pattern already used for policy-contracts elsewhere in this
+    // app). A permanent public URL for medical documents would mean
+    // anyone with the link could view them without ever authenticating.
     const { error: insErr } = await supabase.from('medical_record_attachments').insert({
-      patient_id: patient.id, category: 'other', file_url: urlData.publicUrl, file_name: file.name,
+      patient_id: patient.id, category: 'other', file_url: path, file_name: file.name,
     })
     if (insErr) { setUploadError(insErr.message); setUploading(false); return }
     const { data } = await supabase.from('medical_record_attachments').select('*')
@@ -817,7 +821,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           <Card key={u.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',marginBottom:'8px'}}>
             <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.green,fontSize:'18px'}}>◈</div>
             <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{u.file_name}</div><div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Uploaded':'已上傳'} {new Date(u.uploaded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div></div>
-            <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>window.open(u.file_url,'_blank')}>{isEn?'View':'查看'}</Btn>
+            <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={async()=>{
+              const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(u.file_url, 300)
+              if (error) { alert(`Could not open file: ${error.message}`); return }
+              window.open(data.signedUrl,'_blank')
+            }}>{isEn?'View':'查看'}</Btn>
           </Card>
         ))}
       </>}
@@ -898,6 +906,21 @@ function VideoCallModal({ doc, isEn, onClose }) {
 }
 
 function DoctorsScreen({ isEn, patient={} }) {
+  const [outstandingClaims,setOutstandingClaims]=useState([])
+  const [claimsLoading,setClaimsLoading]=useState(true)
+
+  useEffect(() => {
+    if (!patient?.id) return
+    async function loadClaims() {
+      const { data } = await supabase.from('insurance_claims')
+        .select('*, insurance_plans(company_name)')
+        .eq('patient_id', patient.id).in('status', ['approved','partially_approved'])
+        .order('submitted_at', { ascending: false })
+      setOutstandingClaims(data || [])
+      setClaimsLoading(false)
+    }
+    loadClaims()
+  }, [patient?.id])
   const [tab,setTab]=useState('search')
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
@@ -1443,11 +1466,21 @@ function DoctorsScreen({ isEn, patient={} }) {
       </>}
       {tab==='payments'&&<>
         <SecLabel>{isEn?'Outstanding':'待付款'}</SecLabel>
-        <Card style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><div style={{fontSize:'14px',fontWeight:500}}>Dr Chan — Jun 12</div><Badge text="Due HK$80" type="due"/></div>
-          {[['Consultation fee','HK$380'],['AIA covered','−HK$300'],['Balance','HK$80']].map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
-          <div style={{display:'flex',gap:'8px',marginTop:'12px'}}><Btn style={{flex:1,fontSize:'12px'}}>Receipt</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Pay HK$80</Btn></div>
-        </Card>
+        {claimsLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
+        {!claimsLoading&&outstandingClaims.length===0&&<div style={{textAlign:'center',padding:'30px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No outstanding balance.':'沒有未付款項。'}</div>}
+        {outstandingClaims.map(c=>{
+          const owed = (c.deductible_applied||0) + (c.patient_copay_amount||0)
+          return (
+          <Card key={c.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><div style={{fontSize:'14px',fontWeight:500}}>{c.insurance_plans?.company_name||'Claim'} — {new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div><Badge text={`Due HK$${owed.toFixed(2)}`} type="due"/></div>
+            {[['Consultation fee',`HK$${(c.amount||0).toFixed(2)}`],[`${c.insurance_plans?.company_name||'Insurer'} covered`,`−HK$${(c.insurer_covered_amount||0).toFixed(2)}`],['Balance',`HK$${owed.toFixed(2)}`]].map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500}}>{v}</span></div>)}
+            <div style={{display:'flex',gap:'8px',marginTop:'12px'}}>
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>alert(`${c.claim_ref}\n${isEn?'Consultation fee':'診金'}: HK$${(c.amount||0).toFixed(2)}\n${isEn?'Insurer covered':'保險公司支付'}: HK$${(c.insurer_covered_amount||0).toFixed(2)}\n${isEn?'Balance due':'應付餘額'}: HK$${owed.toFixed(2)}`)}>Receipt</Btn>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>alert(isEn?'Online payment is not yet available - please pay at the clinic.':'網上付款暫未開通，請於診所付款。')}>{isEn?`Pay HK$${owed.toFixed(2)}`:`付款 HK$${owed.toFixed(2)}`}</Btn>
+            </div>
+          </Card>
+          )
+        })}
         <SecLabel>{isEn?'Recent payments':'最近付款'}</SecLabel>
         {[{title:'Ruttonjee Hospital — Feb 18',amount:'HK$1,200',status:'Paid',type:'ok'},{title:'Matilda International — May 3',amount:'HK$680',status:'Refund pending',type:'due'}].map((p,i)=>(
           <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -2146,11 +2179,34 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
 
 
 function PrescriptionsScreen({ isEn, medications=[] }) {
+  const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
+  const [refillRequested,setRefillRequested]=useState({})
+  const [drugSearch,setDrugSearch]=useState('')
+  const [drugSearchResults,setDrugSearchResults]=useState([])
+
+  async function searchDrugRef(term) {
+    if (!term.trim()) { setDrugSearchResults([]); return }
+    const { data } = await supabase.from('drug_reference').select('*').ilike('drug_name', `%${term}%`).limit(10)
+    setDrugSearchResults(data || [])
+  }
+
+  async function showDrugInfo(m) {
+    setDrugInfoFor('loading')
+    const { data } = await supabase.from('drug_reference').select('*')
+      .eq('drug_name', m.medication_name).eq('medicine_type', m.medicine_type||'western').maybeSingle()
+    setDrugInfoFor(data || 'none')
+  }
+
+  async function requestRefill(m) {
+    setRefillRequested({...refillRequested, [m.id]: true})
+    await supabase.from('medications').update({ refill_requested_at: new Date().toISOString() }).eq('id', m.id)
+  }
   const hasLiveMeds = medications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
       {(hasLiveMeds ? medications.map((m,idx)=>({
+        raw:m,
         name:`${m.medication_name} ${m.dosage||''}`.trim(),
         dose:m.frequency||'As prescribed',
         dr:m.prescribed_by||'—',
@@ -2169,9 +2225,8 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
             </div>
           </div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}}>Drug info</Btn>
-            <Btn style={{flex:1,fontSize:'12px'}}>Interactions</Btn>
-            <Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Refill</Btn>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>showDrugInfo(rx.raw)}>Drug info</Btn>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={refillRequested[rx.raw.id]||!!rx.raw.refill_requested_at} onClick={()=>requestRefill(rx.raw)}>{(refillRequested[rx.raw.id]||rx.raw.refill_requested_at)?(isEn?'Refill requested':'已申請補領'):'Refill'}</Btn>
           </div>
         </Card>
       ))}
@@ -2180,10 +2235,27 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
       <Card style={{padding:'14px 16px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
+          <input value={drugSearch} onChange={e=>{setDrugSearch(e.target.value);searchDrugRef(e.target.value)}} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
         </div>
-        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage, interactions, contraindications, and side effects.':'查看劑量、相互作用、禁忌症和副作用。'}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage guidance, intake instructions, and precautions on file.':'查看已記錄的劑量指引、服用方法及注意事項。'}</div>
+        {drugSearchResults.map(d=>(
+          <div key={d.id} onClick={()=>setDrugInfoFor(d)} style={{padding:'8px 0',borderTop:`0.5px solid ${C.border}`,fontSize:'13px',cursor:'pointer'}}>{d.drug_name}</div>
+        ))}
+        {drugSearch&&drugSearchResults.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'8px'}}>{isEn?'No reference on file for this drug yet.':'此藥物暫無記錄。'}</div>}
       </Card>
+      {drugInfoFor&&<div onClick={()=>setDrugInfoFor(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',width:'90%',maxWidth:360,padding:'20px'}}>
+          {drugInfoFor==='loading'&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{isEn?'Loading...':'載入中...'}</div>}
+          {drugInfoFor==='none'&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{isEn?'No reference on file for this drug yet.':'此藥物暫無記錄。'}</div>}
+          {drugInfoFor&&typeof drugInfoFor==='object'&&<>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'12px'}}>{drugInfoFor.drug_name}</div>
+            {drugInfoFor.effects&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase'}}>{isEn?'Effects':'作用'}</div><div style={{fontSize:'13px'}}>{drugInfoFor.effects}</div></div>}
+            {drugInfoFor.intake_info&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase'}}>{isEn?'How to take':'服用方法'}</div><div style={{fontSize:'13px'}}>{drugInfoFor.intake_info}</div></div>}
+            {drugInfoFor.precautions&&<div><div style={{fontSize:'11px',fontWeight:600,color:C.red,textTransform:'uppercase'}}>{isEn?'Precautions':'注意事項'}</div><div style={{fontSize:'13px'}}>{drugInfoFor.precautions}</div></div>}
+          </>}
+          <Btn style={{width:'100%',marginTop:'16px'}} onClick={()=>setDrugInfoFor(null)}>{isEn?'Close':'關閉'}</Btn>
+        </div>
+      </div>}
     </div>
   )
 }
