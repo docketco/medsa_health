@@ -1259,12 +1259,13 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
 // previous nurse/doctor already filled them in for this drug. If not, the
 // fields are empty and editable — saving here writes back to the shared
 // reference so it auto-populates next time this same drug is prescribed.
-function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineType }) {
+function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineType, institutionName }) {
   const [effects,setEffects]=useState('')
   const [intake,setIntake]=useState('')
   const [precautions,setPrecautions]=useState('')
   const [loading,setLoading]=useState(true)
   const [hasReference,setHasReference]=useState(false)
+  const [isDangerousDrug,setIsDangerousDrug]=useState(false)
 
   useEffect(() => {
     async function load() {
@@ -1273,6 +1274,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
       if (data) {
         setEffects(data.effects||''); setIntake(data.intake_info||''); setPrecautions(data.precautions||'')
         setHasReference(true)
+        setIsDangerousDrug(!!data.is_dangerous_drug)
       }
       setLoading(false)
     }
@@ -1287,12 +1289,14 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
     <div style={{background:'#fff',border:`1.5px dashed ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
         <div>
-          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px'}}>Medsa Clinic - Pacific Medical Group</div>
+          <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px'}}>{institutionName || 'Medsa Clinic'}</div>
           <div style={{fontSize:'14px',fontWeight:700}}>{drug.drug} {drug.dosage}</div>
           <div style={{fontSize:'12px',color:C.textSub}}>{patientName} - Prescribed by {doctorName}</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
         </div>
         {hasReference&&!loading&&<Badge text="From library" type="ok"/>}
       </div>
+      {isDangerousDrug&&<div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'6px',padding:'6px 10px',marginBottom:'10px',fontSize:'11px',fontWeight:600,color:C.red}}>{'\u26a0'} Dangerous Drugs Ordinance - statutory tracking required</div>}
       <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
         {drug.frequency||'-'} {drug.durationDays&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}
       </div>
@@ -1314,7 +1318,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, refillRequests=[], onRefillDecision }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, refillRequests=[], onRefillDecision, institutionName }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -1470,6 +1474,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
                   doctorName={p.doctorName}
                   drug={drug}
                   medicineType={medicineType}
+                  institutionName={institutionName}
                   onFieldsChange={(fields)=>setEditedFields(prev=>({...prev,[idx]:fields}))}
                 />
               ))}
@@ -3611,6 +3616,7 @@ export default function ClinicOpsApp() {
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [nextTicket,setNextTicket]=useState(13)
   const [institutionId,setInstitutionId]=useState(null)
+  const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
 
   // Resolve which institution this Medsa Clinic deployment belongs to, and
@@ -3620,8 +3626,8 @@ export default function ClinicOpsApp() {
   // reference pool never mixes between them.
   useEffect(() => {
     async function loadInstitution() {
-      const { data } = await supabase.from('institutions').select('id, medicine_type').eq('name', 'Pacific Medical Group').maybeSingle()
-      if (data) { setInstitutionId(data.id); setMedicineType(data.medicine_type || 'western') }
+      const { data } = await supabase.from('institutions').select('id, name, medicine_type').eq('name', 'Pacific Medical Group').maybeSingle()
+      if (data) { setInstitutionId(data.id); setInstitutionName(data.name || ''); setMedicineType(data.medicine_type || 'western') }
     }
     loadInstitution()
   }, [])
@@ -3884,7 +3890,7 @@ export default function ClinicOpsApp() {
             setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
           }
         }}/>}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} refillRequests={refillRequests} onRefillDecision={handleRefillDecision}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} refillRequests={refillRequests} onRefillDecision={handleRefillDecision} institutionName={institutionName}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
