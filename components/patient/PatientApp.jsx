@@ -2199,7 +2199,7 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
 
   async function requestRefill(m) {
     setRefillRequested({...refillRequested, [m.id]: true})
-    await supabase.from('medications').update({ refill_requested_at: new Date().toISOString() }).eq('id', m.id)
+    await supabase.from('medications').update({ refill_requested_at: new Date().toISOString(), refill_status: 'requested' }).eq('id', m.id)
   }
   const hasLiveMeds = medications.length > 0
   return (
@@ -2226,7 +2226,7 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
           </div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>showDrugInfo(rx.raw)}>Drug info</Btn>
-            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={refillRequested[rx.raw.id]||!!rx.raw.refill_requested_at} onClick={()=>requestRefill(rx.raw)}>{(refillRequested[rx.raw.id]||rx.raw.refill_requested_at)?(isEn?'Refill requested':'已申請補領'):'Refill'}</Btn>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={refillRequested[rx.raw.id]||rx.raw.refill_status==='requested'||rx.raw.refill_status==='approved'} onClick={()=>requestRefill(rx.raw)}>{rx.raw.refill_status==='approved'?(isEn?'Refill approved':'已批准補領'):(refillRequested[rx.raw.id]||rx.raw.refill_status==='requested')?(isEn?'Refill requested':'已申請補領'):rx.raw.refill_status==='denied'?(isEn?'Request again':'再次申請'):'Refill'}</Btn>
           </div>
         </Card>
       ))}
