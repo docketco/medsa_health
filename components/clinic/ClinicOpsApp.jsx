@@ -659,7 +659,7 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   )
 }
 
-function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
+function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId }) {
   const [patient,setPatient]=useState(null)
   const [records,setRecords]=useState([])
   const [conditions,setConditions]=useState([])
@@ -672,6 +672,43 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   const [icd10Open,setIcd10Open]=useState(false)
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
+  const [weightKg,setWeightKg]=useState('')
+  const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
+  const [overrideReasons,setOverrideReasons]=useState({}) // rxIndex -> reason text
+
+  async function checkDrugSafety(idx, drugName) {
+    if (!drugName.trim()) return
+    setSafetyChecks(prev => ({...prev, [idx]: {status:'checking'}}))
+    const { data: orderSet } = await supabase.from('order_sets').select('*')
+      .eq('institution_id', institutionId).ilike('drug_name', drugName.trim()).maybeSingle()
+
+    if (!orderSet) {
+      setSafetyChecks(prev => ({...prev, [idx]: {status:'no_data_on_file'}}))
+      return
+    }
+
+    const triggered = []
+    // Age check - the one dose-safety factor reliably computable without
+    // parsing free text, since date_of_birth is real structured data.
+    if (patient?.date_of_birth) {
+      const ageYears = (Date.now() - new Date(patient.date_of_birth).getTime()) / (1000*60*60*24*365.25)
+      if (orderSet.min_age_years!=null && ageYears < orderSet.min_age_years) triggered.push(`Below minimum age (${orderSet.min_age_years}+)`)
+      if (orderSet.max_age_years!=null && ageYears > orderSet.max_age_years) triggered.push(`Above maximum age (${orderSet.max_age_years})`)
+    }
+    // Structured condition/allergy matches - real data, reliable to check.
+    const patientConditionNames = conditions.map(c=>c.condition_name?.toLowerCase())
+    const patientAllergenNames = allergies.map(a=>a.allergen?.toLowerCase())
+    const hardMatches = orderSet.hard_stop_conditions.filter(hc =>
+      patientConditionNames.includes(hc.toLowerCase()) || patientAllergenNames.includes(hc.toLowerCase()))
+    const softMatches = orderSet.soft_stop_conditions.filter(sc =>
+      patientConditionNames.includes(sc.toLowerCase()) || patientAllergenNames.includes(sc.toLowerCase()))
+
+    let status = 'passed'
+    if (hardMatches.length > 0) { status = 'hard_stop_blocked'; triggered.push(...hardMatches) }
+    else if (softMatches.length > 0) { status = 'soft_stop'; triggered.push(...softMatches) }
+
+    setSafetyChecks(prev => ({...prev, [idx]: { status, orderSet, triggered }}))
+  }
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
   const [catalogClinicType,setCatalogClinicType]=useState('tcm') // TODO: should come from real institution setting once one exists
@@ -867,21 +904,60 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
   }
 
   async function handleSave() {
+    // Real enforcement - a hard stop blocks saving entirely, no override
+    // possible. A soft stop requires a logged reason before proceeding.
+    const hardBlocked = Object.entries(safetyChecks).filter(([,c])=>c.status==='hard_stop_blocked')
+    if (hardBlocked.length > 0) {
+      setError('One or more prescriptions are blocked by a safety check. Remove them or choose an alternative before saving.')
+      return
+    }
+    const unresolvedSoft = Object.entries(safetyChecks).filter(([idx,c])=>c.status==='soft_stop' && !overrideReasons[idx]?.trim())
+    if (unresolvedSoft.length > 0) {
+      setError('Enter a reason for each safety warning before saving.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
       const rxRows = prescriptions.filter(p=>p.drug.trim())
       let savedRecordId = null
       if ((diagnosis.trim()||notes.trim()||rxRows.length>0||lineItems.length>0) && patient) {
-        const { data: recData, error: recErr } = await supabase.from('medical_records').insert({
-          patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Clinic consultation',
+        const visitTitle = diagnosis || 'Clinic consultation'
+        const visitDate = new Date().toISOString().slice(0,10)
+        const { error: recErr } = await supabase.from('medical_records').insert({
+          patient_id: patient.id, record_type: 'visit', title: visitTitle,
           notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
-          date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
+          date_of_record: visitDate, source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
           doctor_name: staffMember?.name || 'Unknown',
-        }).select().maybeSingle()
+        })
         if (recErr) throw recErr
+        // Separate, standard select rather than chaining .select() off
+        // .insert() - same fix already applied elsewhere after that
+        // pattern broke the CI test suite's mock client. Matches on
+        // fields already confirmed set in this exact insert, rather than
+        // relying on a created_at column I haven't verified exists here.
+        const { data: recData } = await supabase.from('medical_records').select('id')
+          .eq('patient_id', patient.id).eq('record_type', 'visit').eq('title', visitTitle).eq('date_of_record', visitDate)
+          .order('date_of_record', { ascending: false }).limit(1).maybeSingle()
         savedRecordId = recData?.id || null
+      }
+      // Real audit logging - every safety check that ran gets a
+      // permanent record, regardless of outcome. Uses rx.drug directly
+      // rather than assuming safetyChecks keys line up with rxRows
+      // indices, since rxRows is filtered (drug.trim()) from the full
+      // prescriptions array and the two could otherwise drift apart.
+      for (const [idx, check] of Object.entries(safetyChecks)) {
+        const rx = prescriptions[idx]
+        if (!rx || !rx.drug.trim() || check.status === 'checking') continue
+        await supabase.from('prescription_safety_checks').insert({
+          medical_record_id: savedRecordId, patient_id: patient.id, drug_name: rx.drug,
+          order_set_id: check.orderSet?.id || null,
+          result: check.status === 'soft_stop' ? 'soft_stop_overridden' : check.status,
+          triggered_conditions: check.triggered || [],
+          override_reason: check.status === 'soft_stop' ? (overrideReasons[idx] || null) : null,
+          checked_by: staffMember?.name || 'Unknown',
+        })
       }
       if (rxRows.length>0 && patient) {
         const dbRows = rxRows.map(p=>({
@@ -982,6 +1058,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
       <SecLabel>Diagnosis</SecLabel>
       <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
 
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Weight (kg) - optional, used for dose-safety reference ranges below</div>
+      <input value={weightKg} onChange={e=>setWeightKg(e.target.value)} type="number" placeholder="e.g. 68" style={{width:'120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'14px'}}/>
+
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 code - structured coding, required for direct-billing claims</div>
       {icd10Code
         ? <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 14px',marginBottom:'18px'}}>
@@ -1039,7 +1118,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
                   value={rx.drug}
                   onChange={e=>{updateRx(i,'drug',e.target.value);setSuggestOpen(i)}}
                   onFocus={()=>setSuggestOpen(i)}
-                  onBlur={()=>setTimeout(()=>setSuggestOpen(null),150)}
+                  onBlur={()=>{setTimeout(()=>setSuggestOpen(null),150);checkDrugSafety(i,rx.drug)}}
                   placeholder="Drug name"
                   style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}
                 />
@@ -1053,6 +1132,26 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed }) {
               <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
               {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
             </div>
+
+            {safetyChecks[i]&&safetyChecks[i].status==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Checking safety data...</div>}
+            {safetyChecks[i]&&safetyChecks[i].status==='no_data_on_file'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{'\u26a0'} No safety data on file for this drug at this clinic - prescribing as usual, nothing blocked.</div>}
+            {safetyChecks[i]&&safetyChecks[i].status==='passed'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'\u2713'} Checked against {safetyChecks[i].orderSet.approved_by}'s order set - no concerns flagged.
+              {(safetyChecks[i].orderSet.min_dose_per_kg||safetyChecks[i].orderSet.max_dose_per_kg)&&<div style={{color:C.textMuted}}>
+                {weightKg&&!isNaN(parseFloat(weightKg))
+                  ? `Safe range for ${weightKg}kg: ${safetyChecks[i].orderSet.min_dose_per_kg?(safetyChecks[i].orderSet.min_dose_per_kg*parseFloat(weightKg)).toFixed(1):'?'}–${safetyChecks[i].orderSet.max_dose_per_kg?(safetyChecks[i].orderSet.max_dose_per_kg*parseFloat(weightKg)).toFixed(1):'?'} ${safetyChecks[i].orderSet.dose_unit} total - verify your prescribed dose against this.`
+                  : `Reference range: ${safetyChecks[i].orderSet.min_dose_per_kg||'?'}–${safetyChecks[i].orderSet.max_dose_per_kg||'?'} ${safetyChecks[i].orderSet.dose_unit}/kg - enter weight above to calculate this patient's exact safe range.`}
+              </div>}
+              {safetyChecks[i].orderSet.renal_adjustment_notes&&<div style={{color:C.textMuted}}>Renal: {safetyChecks[i].orderSet.renal_adjustment_notes}</div>}
+            </div>}
+            {safetyChecks[i]&&safetyChecks[i].status==='hard_stop_blocked'&&<div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginTop:'6px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,color:C.red}}>{'\u26d4'} Blocked - do not prescribe</div>
+              <div style={{fontSize:'11px',color:C.red}}>{safetyChecks[i].triggered.join(', ')} - flagged by {safetyChecks[i].orderSet.approved_by}'s order set. Remove this item or choose an alternative.</div>
+            </div>}
+            {safetyChecks[i]&&safetyChecks[i].status==='soft_stop'&&<div style={{background:C.amberLight,border:`1px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginTop:'6px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,color:C.amber}}>{'\u26a0'} Warning: {safetyChecks[i].triggered.join(', ')}</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Flagged by {safetyChecks[i].orderSet.approved_by}'s order set. Enter a reason to proceed anyway.</div>
+              <input value={overrideReasons[i]||''} onChange={e=>setOverrideReasons({...overrideReasons,[i]:e.target.value})} placeholder="Reason for prescribing despite warning" style={{width:'100%',border:`0.5px solid ${C.amber}`,borderRadius:'6px',padding:'7px 10px',fontSize:'12px',boxSizing:'border-box'}}/>
+            </div>}
 
             {/* Doctor-friendly dosing control - three common HK prescribing patterns */}
             <div style={{marginTop:'6px',background:C.card,borderRadius:'8px',padding:'8px 10px'}}>
@@ -3762,7 +3861,7 @@ export default function ClinicOpsApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
-        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed}/>}
+        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
