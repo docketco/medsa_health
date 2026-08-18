@@ -635,6 +635,73 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
 }
 
 function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={} }) {
+  const [bundleMode,setBundleMode]=useState(false)
+  const [selectedIds,setSelectedIds]=useState(new Set())
+  const [bundleFilter,setBundleFilter]=useState('')
+  const [generatingPdf,setGeneratingPdf]=useState(false)
+
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function selectAllMatching() {
+    const q = bundleFilter.toLowerCase().trim()
+    if (!q) return
+    const matching = records.filter(r =>
+      r.title?.toLowerCase().includes(q) || r.diagnosis?.toLowerCase().includes(q) || r.notes?.toLowerCase().includes(q))
+    setSelectedIds(new Set(matching.map(r=>r.id)))
+  }
+
+  async function downloadBundle() {
+    const selected = records.filter(r => selectedIds.has(r.id))
+    if (selected.length === 0) return
+    setGeneratingPdf(true)
+    // jsPDF - real, client-side PDF generation. Requires `npm install
+    // jspdf` if not already in the project.
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 20
+
+    doc.setFontSize(16)
+    doc.text('Medsa Health Record Bundle', 14, y)
+    y += 8
+    doc.setFontSize(10)
+    doc.text(`${patient.full_name || ''} - ${patient.medsa_id || ''} - Generated ${new Date().toLocaleDateString('en-HK')}`, 14, y)
+    y += 4
+    doc.line(14, y, pageWidth-14, y)
+    y += 10
+
+    for (const r of selected) {
+      if (y > 260) { doc.addPage(); y = 20 }
+      doc.setFontSize(12)
+      doc.setFont(undefined, 'bold')
+      doc.text(r.title || 'Consultation', 14, y)
+      y += 6
+      doc.setFont(undefined, 'normal')
+      doc.setFontSize(10)
+      doc.text(`${r.date_of_record || ''} - ${r.institutions?.name || 'Medsa'}`, 14, y)
+      y += 6
+      if (r.diagnosis) { doc.text(`Diagnosis: ${r.diagnosis}`, 14, y); y += 6 }
+      if (r.icd10_code) { doc.text(`ICD-10: ${r.icd10_code}`, 14, y); y += 6 }
+      if (r.notes) {
+        const lines = doc.splitTextToSize(`Notes: ${r.notes}`, pageWidth-28)
+        doc.text(lines, 14, y)
+        y += lines.length * 5
+      }
+      y += 8
+      doc.setDrawColor(220,220,220)
+      doc.line(14, y-4, pageWidth-14, y-4)
+    }
+
+    doc.save(`Medsa-Record-Bundle-${patient.medsa_id || 'export'}.pdf`)
+    setGeneratingPdf(false)
+  }
+
   const [myUploads,setMyUploads]=useState([])
   const [uploading,setUploading]=useState(false)
   const [uploadError,setUploadError]=useState(null)
@@ -725,6 +792,20 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       </div>
       {tab==='all'&&<>
         <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
+        {hasLiveData&&<div style={{padding:'0 16px 12px'}}>
+          {!bundleMode&&<div onClick={()=>setBundleMode(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'\u2295'} {isEn?'Bundle records to share or export':'合併記錄以分享或匯出'}</div>}
+          {bundleMode&&<Card style={{padding:'12px 14px'}}>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <input value={bundleFilter} onChange={e=>setBundleFilter(e.target.value)} placeholder={isEn?'e.g. cancer - filter and select matching records':'例如癌症 - 篩選並選取相關記錄'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <Btn style={{fontSize:'12px'}} onClick={selectAllMatching}>{isEn?'Select matching':'選取相關'}</Btn>
+            </div>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{selectedIds.size} {isEn?'selected':'項已選取'}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setBundleMode(false);setSelectedIds(new Set());setBundleFilter('')}}>{isEn?'Cancel':'取消'}</Btn>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={selectedIds.size===0||generatingPdf} onClick={downloadBundle}>{generatingPdf?(isEn?'Generating...':'生成中...'):(isEn?'Download PDF':'下載 PDF')}</Btn>
+            </div>
+          </Card>}
+        </div>}
         {!hasLiveData&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No records yet - these appear once a clinic logs a visit.':'暫無記錄 - 診所記錄就診後將顯示於此。'}</div>}
         {hasLiveData&&records.map(r=>({
           id: r.id,
@@ -736,8 +817,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           src: r.source==='synced'?'Synced':'Manual',
           details: [['Diagnosis',r.diagnosis||'—'],['Notes',r.notes||'—'],['Department',r.department||'—']],
         })).map(r=>(
-          <Card key={r.id} onClick={()=>setExpanded(expanded===r.id?null:r.id)}>
+          <Card key={r.id} onClick={()=>bundleMode?toggleSelect(r.id):setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+              {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(r.id)?C.green:C.border}`,background:selectedIds.has(r.id)?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(r.id)?'\u2713':''}</div>}
               <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
               <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{mt(r.title)}</div><div style={{fontSize:'12px',color:C.textSub}}>{mt(r.sub)}</div></div>
               <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(r.src)}</span></div>
@@ -2807,7 +2889,7 @@ export default function PatientApp({ liveData={} }) {
         supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
         supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
         supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
-        supabase.from('medical_records').select('*').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
+        supabase.from('medical_records').select('*,institutions(name)').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
         supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
         supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
       ])
