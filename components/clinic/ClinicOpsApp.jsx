@@ -1466,8 +1466,9 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
+  const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
@@ -1600,6 +1601,12 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         </>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {!isCheckedIn&&onCheckedIn&&<Btn variant="primary" style={{width:'100%'}} disabled={checkingIn} onClick={async()=>{
+            setCheckingIn(true)
+            const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient })
+            setCheckingIn(false)
+            if (result === true) onClose()
+          }}>{checkingIn?'Checking in...':'✓ Check in'}</Btn>}
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
@@ -1760,8 +1767,12 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     const path = `clinic_ops/${Date.now()}-${file.name}`
     const { data, error } = await supabase.storage.from('staff-documents').upload(path, file)
     if (!error) {
-      const { data: urlData } = supabase.storage.from('staff-documents').getPublicUrl(path)
-      setUploadedDocUrl(urlData?.publicUrl || null)
+      // Storing the path, not a public URL - professional registration
+      // documents shouldn't be openly accessible to anyone with a link.
+      // A signed URL should be generated on demand if/when a real "view
+      // document" feature is built - this field is currently write-only,
+      // nothing in the app displays it back yet.
+      setUploadedDocUrl(path)
     }
     setUploading(false)
   }
@@ -2024,7 +2035,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -2115,6 +2126,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
       scheduledAt: a.scheduled_at,
       patient: a.patients?.full_name || 'Unknown patient',
+      patientId: a.patient_id || null,
       medsaId: a.patients?.medsa_id || null,
       doctor: a.doctor_name || 'Unassigned',
       department: a.department || 'Internal Medicine',
@@ -2230,7 +2242,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null} onConfirmConsent={handleConfirmConsent} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCancelCheckIn={async(appt)=>{
+      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null} onConfirmConsent={handleConfirmConsent} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCheckedIn={onCheckedIn} onCancelCheckIn={async(appt)=>{
         await onCancelCheckIn(appt)
         // The backend update alone doesn't refresh what's on screen - this
         // was the actual bug: the row would revert in Supabase but the
@@ -3676,7 +3688,7 @@ export default function ClinicOpsApp() {
           prefillName={newPatientPrefillName}
           onCreated={newPatientOrigin==='schedule' ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')} : undefined}
         />}
-        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} preselectPatient={schedulePreselectPatient} onConsumedPreselect={()=>setSchedulePreselectPatient(null)} onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
+        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onCheckedIn={handleCheckedIn} preselectPatient={schedulePreselectPatient} onConsumedPreselect={()=>setSchedulePreselectPatient(null)} onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
           if (!appt?.medsaId) return
           const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
           if (!pRow) return
