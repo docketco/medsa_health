@@ -63,6 +63,7 @@ function StaffLogin({ onLogin }) {
   const [loading,setLoading]=useState(true)
   const [pin,setPin]=useState('')
   const [pinError,setPinError]=useState(false)
+  const [checkingPin,setCheckingPin]=useState(false)
   const [selected,setSelected]=useState(null)
   const [stage,setStage]=useState('pick') // pick | pin | department
   const [chosenDept,setChosenDept]=useState(null)
@@ -77,12 +78,12 @@ function StaffLogin({ onLogin }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('*')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department')
         .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
       const mapped = (data||[]).map(s => ({
         id: s.medsa_id, name: s.full_name, role: s.role,
         roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
-        department: s.department, pin: s.pin,
+        department: s.department,
       }))
       setStaff(mapped)
       setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
@@ -91,8 +92,15 @@ function StaffLogin({ onLogin }) {
     load()
   }, [])
 
-  function handlePinConfirm() {
-    if (pin !== selected.pin) { setPinError(true); return }
+  async function handlePinConfirm() {
+    setCheckingPin(true)
+    // Real verification against a hashed password, server-side inside
+    // Postgres - the actual password value is never stored in the
+    // database at all, only its one-way hash, and this function only
+    // ever returns true/false, never the hash itself.
+    const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: selected.id, p_password: pin })
+    setCheckingPin(false)
+    if (!ok) { setPinError(true); return }
     setPinError(false)
     if (selected.role==='admin') {
       onLogin({ ...selected, department: 'All departments' })
@@ -135,12 +143,12 @@ function StaffLogin({ onLogin }) {
               <div style={{fontSize:'15px',fontWeight:600}}>{selected.name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{selected.roleLabel}</div>
             </div>
-            <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="PIN" maxLength={4}
-              style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'18px',textAlign:'center',letterSpacing:'8px',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
-            {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect PIN</div>}
+            <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="Password"
+              style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
+            {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect password</div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('');setPinError(false);setStage('pick')}}>Back</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm}>Sign in</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm} disabled={checkingPin||!pin}>{checkingPin?'Checking...':'Sign in'}</Btn>
             </div>
           </div>
         )}
@@ -1207,7 +1215,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, refillRequests=[], onRefillDecision }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -1295,6 +1303,23 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
         <button onClick={handleExportMedicationLog} disabled={exporting} style={{padding:'8px 16px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{exporting?'Preparing…':'Export medication log (CSV)'}</button>
       </div>
       {inventoryWarning&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.red}}>{'\u26a0'} {inventoryWarning}</div>}
+
+      {refillRequests.length>0&&<>
+        <SecLabel>Refill requests</SecLabel>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'24px'}}>
+          {refillRequests.map(r=>(
+            <Card key={r.id} style={{padding:'14px 16px',border:`1.5px solid ${C.blue}`}}>
+              <div style={{fontSize:'14px',fontWeight:600}}>{r.patients?.full_name||'Unknown'}</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{r.medication_name} {r.dosage} - requested {new Date(r.refill_requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>onRefillDecision(r,false)}>Deny</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onRefillDecision(r,true)}>Approve - HK$150</Btn>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </>}
+
       {waiting.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px',marginBottom:'20px'}}>No pending prescriptions right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
         {waiting.map(p=>{
@@ -1794,12 +1819,14 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
 
   async function handleOnboard() {
     if (!newFirstName || !newDept || !newPin) return
+    if (newPin.length < 8) { setOnboardError('Password must be at least 8 characters.'); return }
     if (newRole==='doctor' && !newDob) return
     setSaving(true)
     setOnboardError(null)
+    const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
     const { error: onboardErr } = await supabase.from('staff_credentials').insert({
-      institution_source:'clinic_ops', institution_id:institutionId, medsa_id:`MED-${Date.now().toString(36).toUpperCase()}`,
-      full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept, pin:newPin,
+      institution_source:'clinic_ops', institution_id:institutionId, medsa_id:newMedsaId,
+      full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
@@ -1810,8 +1837,12 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
     })
+    if (onboardErr) { setSaving(false); setOnboardError(onboardErr.message); return }
+    // Real hashing happens here, server-side inside Postgres - the plain
+    // password entered above is never written to any column directly.
+    const { error: pwErr } = await supabase.rpc('set_staff_password', { p_medsa_id: newMedsaId, p_new_password: newPin })
     setSaving(false)
-    if (onboardErr) { setOnboardError(onboardErr.message); return }
+    if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
     setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('');setNewMchkDeclared(false);setNewSchemes([])
@@ -1877,7 +1908,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleDocUpload(e.target.files[0])}/>
           </label>
           {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
-          <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="4-digit login PIN" maxLength={4} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="Password (min 8 characters)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newDisciplinary} onChange={e=>setNewDisciplinary(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px'}}>
             <option value="clear">Disciplinary: Clear</option>
             <option value="flagged">Disciplinary: Flagged</option>
@@ -3423,9 +3454,56 @@ export default function ClinicOpsApp() {
     }))
     setPendingPrescriptions(withDrugs)
   }
+
+  // Refill requests - a genuinely separate workflow from new consultations
+  // (patient-initiated, not doctor-initiated), but shown alongside the
+  // same task board since front desk handles both.
+  const [refillRequests,setRefillRequests]=useState([])
+  async function loadRefillRequests() {
+    const { data } = await supabase.from('medications').select('*, patients(full_name, medsa_id)')
+      .eq('refill_status', 'requested').order('refill_requested_at', { ascending: false })
+    setRefillRequests(data || [])
+  }
+  async function handleRefillDecision(med, approved) {
+    if (!approved) {
+      await supabase.from('medications').update({ refill_status: 'denied' }).eq('id', med.id)
+      await loadRefillRequests()
+      return
+    }
+    // Real, itemized medication-only charge - no consultation fee, since a
+    // refill in HK practice doesn't require a full follow-up visit, per
+    // the earlier research. Creates a proper visit record so it can flow
+    // through the exact same real billing screen as everything else.
+    const { error: recErr } = await supabase.from('medical_records').insert({
+      patient_id: med.patient_id, record_type: 'refill', title: `Refill: ${med.medication_name}`,
+      date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
+      doctor_name: staffMember?.name || 'Unknown',
+      line_items: [{ description: `${med.medication_name} refill`, category: 'medication', fee: 150, qty: 1 }],
+      total_fee: 150,
+    })
+    let newRecord = null
+    if (!recErr) {
+      const { data } = await supabase.from('medical_records').select('id')
+        .eq('patient_id', med.patient_id).eq('record_type', 'refill').eq('title', `Refill: ${med.medication_name}`)
+        .order('date_of_record', { ascending: false }).limit(1).maybeSingle()
+      newRecord = data
+    }
+    await supabase.from('medications').update({ refill_status: 'approved' }).eq('id', med.id)
+    if (newRecord) {
+      await supabase.from('medications').insert({
+        patient_id: med.patient_id, medical_record_id: newRecord.id, medication_name: med.medication_name,
+        dosage: med.dosage, frequency: med.frequency, quantity: med.quantity, duration_days: med.duration_days,
+        active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
+        prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
+      })
+    }
+    await loadRefillRequests()
+    await loadTaskBoard()
+  }
   useEffect(() => {
     loadTaskBoard()
-    const interval = setInterval(loadTaskBoard, 15000)
+    loadRefillRequests()
+    const interval = setInterval(() => { loadTaskBoard(); loadRefillRequests() }, 15000)
     return () => clearInterval(interval)
   }, [])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
@@ -3704,7 +3782,7 @@ export default function ClinicOpsApp() {
             setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
           }
         }}/>}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} refillRequests={refillRequests} onRefillDecision={handleRefillDecision}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
