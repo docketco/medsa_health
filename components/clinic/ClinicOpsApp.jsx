@@ -1820,6 +1820,9 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   async function handleOnboard() {
     if (!newFirstName || !newDept || !newPin) return
     if (newPin.length < 8) { setOnboardError('Password must be at least 8 characters.'); return }
+    if (!/[0-9]/.test(newPin)) { setOnboardError('Password must contain at least one number.'); return }
+    if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
+    if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
     setSaving(true)
     setOnboardError(null)
@@ -1908,7 +1911,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleDocUpload(e.target.files[0])}/>
           </label>
           {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
-          <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="Password (min 8 characters)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="Password (8+ chars, 1 number, 1 capital, 1 special)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newDisciplinary} onChange={e=>setNewDisciplinary(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px'}}>
             <option value="clear">Disciplinary: Clear</option>
             <option value="flagged">Disciplinary: Flagged</option>
