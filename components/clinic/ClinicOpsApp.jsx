@@ -679,35 +679,66 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   async function checkDrugSafety(idx, drugName) {
     if (!drugName.trim()) return
     setSafetyChecks(prev => ({...prev, [idx]: {status:'checking'}}))
-    const { data: orderSet } = await supabase.from('order_sets').select('*')
-      .eq('institution_id', institutionId).ilike('drug_name', drugName.trim()).maybeSingle()
 
-    if (!orderSet) {
-      setSafetyChecks(prev => ({...prev, [idx]: {status:'no_data_on_file'}}))
-      return
+    const [{ data: orderSet }, { data: drugRef }] = await Promise.all([
+      supabase.from('order_sets').select('*')
+        .eq('institution_id', institutionId).ilike('drug_name', drugName.trim()).maybeSingle(),
+      supabase.from('drug_reference').select('atc_code, hk_registration_number')
+        .eq('drug_name', drugName.trim()).eq('medicine_type', medicineType||'western').maybeSingle(),
+    ])
+
+    // Local, institution-approved rules - same check as before.
+    let localStatus = orderSet ? 'passed' : 'no_data_on_file'
+    const localTriggered = []
+    if (orderSet) {
+      if (patient?.date_of_birth) {
+        const ageYears = (Date.now() - new Date(patient.date_of_birth).getTime()) / (1000*60*60*24*365.25)
+        if (orderSet.min_age_years!=null && ageYears < orderSet.min_age_years) localTriggered.push(`Below minimum age (${orderSet.min_age_years}+)`)
+        if (orderSet.max_age_years!=null && ageYears > orderSet.max_age_years) localTriggered.push(`Above maximum age (${orderSet.max_age_years})`)
+      }
+      const patientConditionNames = conditions.map(c=>c.condition_name?.toLowerCase())
+      const patientAllergenNames = allergies.map(a=>a.allergen?.toLowerCase())
+      const hardMatches = orderSet.hard_stop_conditions.filter(hc =>
+        patientConditionNames.includes(hc.toLowerCase()) || patientAllergenNames.includes(hc.toLowerCase()))
+      const softMatches = orderSet.soft_stop_conditions.filter(sc =>
+        patientConditionNames.includes(sc.toLowerCase()) || patientAllergenNames.includes(sc.toLowerCase()))
+      if (hardMatches.length > 0) { localStatus = 'hard_stop_blocked'; localTriggered.push(...hardMatches) }
+      else if (softMatches.length > 0) { localStatus = 'soft_stop'; localTriggered.push(...softMatches) }
     }
 
-    const triggered = []
-    // Age check - the one dose-safety factor reliably computable without
-    // parsing free text, since date_of_birth is real structured data.
-    if (patient?.date_of_birth) {
-      const ageYears = (Date.now() - new Date(patient.date_of_birth).getTime()) / (1000*60*60*24*365.25)
-      if (orderSet.min_age_years!=null && ageYears < orderSet.min_age_years) triggered.push(`Below minimum age (${orderSet.min_age_years}+)`)
-      if (orderSet.max_age_years!=null && ageYears > orderSet.max_age_years) triggered.push(`Above maximum age (${orderSet.max_age_years})`)
+    // Real, external CDS plugin check - only runs if this drug actually
+    // has a standardized code on file, since without one no real lookup
+    // is possible (same "no data" honesty as the local check).
+    let cdsResult = null
+    if (drugRef?.atc_code || drugRef?.hk_registration_number) {
+      const ageInMonths = patient?.date_of_birth
+        ? Math.round((Date.now() - new Date(patient.date_of_birth).getTime()) / (1000*60*60*24*30.44))
+        : null
+      try {
+        const res = await fetch('/api/cds/check-safety', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            patientId: patient.id, ageInMonths, weightKg: parseFloat(weightKg)||null,
+            drugName: drugName.trim(), atcCode: drugRef.atc_code, hkRegistrationNumber: drugRef.hk_registration_number,
+          }),
+        })
+        cdsResult = await res.json()
+      } catch (e) {
+        cdsResult = { safetyStatus: 'ERROR', message: 'Could not reach safety check service.' }
+      }
     }
-    // Structured condition/allergy matches - real data, reliable to check.
-    const patientConditionNames = conditions.map(c=>c.condition_name?.toLowerCase())
-    const patientAllergenNames = allergies.map(a=>a.allergen?.toLowerCase())
-    const hardMatches = orderSet.hard_stop_conditions.filter(hc =>
-      patientConditionNames.includes(hc.toLowerCase()) || patientAllergenNames.includes(hc.toLowerCase()))
-    const softMatches = orderSet.soft_stop_conditions.filter(sc =>
-      patientConditionNames.includes(sc.toLowerCase()) || patientAllergenNames.includes(sc.toLowerCase()))
 
-    let status = 'passed'
-    if (hardMatches.length > 0) { status = 'hard_stop_blocked'; triggered.push(...hardMatches) }
-    else if (softMatches.length > 0) { status = 'soft_stop'; triggered.push(...softMatches) }
+    // Merge - the more cautious of the two sources wins. A hard stop from
+    // either source blocks; a warning from either requires an override
+    // reason; only clear from both (or no data from both) passes through
+    // cleanly.
+    const severity = { hard_stop_blocked: 3, WARNING: 2, soft_stop: 2, ERROR: 2, passed: 1, CLEAR: 1, no_data_on_file: 0 }
+    const cdsStatus = cdsResult?.safetyStatus === 'WARNING' ? 'soft_stop' : cdsResult?.safetyStatus === 'ERROR' ? 'soft_stop' : cdsResult ? 'passed' : 'no_data_on_file'
+    const finalStatus = severity[cdsStatus] > severity[localStatus] ? cdsStatus : localStatus
+    const combinedTriggered = [...localTriggered]
+    if (cdsResult?.message) combinedTriggered.push(`CDS: ${cdsResult.message}`)
 
-    setSafetyChecks(prev => ({...prev, [idx]: { status, orderSet, triggered }}))
+    setSafetyChecks(prev => ({...prev, [idx]: { status: finalStatus, orderSet, triggered: combinedTriggered, cdsResult }}))
   }
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
@@ -1134,22 +1165,23 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
             </div>
 
             {safetyChecks[i]&&safetyChecks[i].status==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Checking safety data...</div>}
-            {safetyChecks[i]&&safetyChecks[i].status==='no_data_on_file'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{'\u26a0'} No safety data on file for this drug at this clinic - prescribing as usual, nothing blocked.</div>}
-            {safetyChecks[i]&&safetyChecks[i].status==='passed'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'\u2713'} Checked against {safetyChecks[i].orderSet.approved_by}'s order set - no concerns flagged.
-              {(safetyChecks[i].orderSet.min_dose_per_kg||safetyChecks[i].orderSet.max_dose_per_kg)&&<div style={{color:C.textMuted}}>
+            {safetyChecks[i]&&safetyChecks[i].status==='no_data_on_file'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{'\u26a0'} No safety data on file for this drug (no local order set, no standardized code for external lookup) - prescribing as usual, nothing blocked.</div>}
+            {safetyChecks[i]&&safetyChecks[i].status==='passed'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
+              {'\u2713'} {safetyChecks[i].orderSet ? `Checked against ${safetyChecks[i].orderSet.approved_by}'s order set` : 'Checked against external safety database'} - no concerns flagged.
+              {safetyChecks[i].orderSet&&(safetyChecks[i].orderSet.min_dose_per_kg||safetyChecks[i].orderSet.max_dose_per_kg)&&<div style={{color:C.textMuted}}>
                 {weightKg&&!isNaN(parseFloat(weightKg))
                   ? `Safe range for ${weightKg}kg: ${safetyChecks[i].orderSet.min_dose_per_kg?(safetyChecks[i].orderSet.min_dose_per_kg*parseFloat(weightKg)).toFixed(1):'?'}–${safetyChecks[i].orderSet.max_dose_per_kg?(safetyChecks[i].orderSet.max_dose_per_kg*parseFloat(weightKg)).toFixed(1):'?'} ${safetyChecks[i].orderSet.dose_unit} total - verify your prescribed dose against this.`
                   : `Reference range: ${safetyChecks[i].orderSet.min_dose_per_kg||'?'}–${safetyChecks[i].orderSet.max_dose_per_kg||'?'} ${safetyChecks[i].orderSet.dose_unit}/kg - enter weight above to calculate this patient's exact safe range.`}
               </div>}
-              {safetyChecks[i].orderSet.renal_adjustment_notes&&<div style={{color:C.textMuted}}>Renal: {safetyChecks[i].orderSet.renal_adjustment_notes}</div>}
+              {safetyChecks[i].orderSet?.renal_adjustment_notes&&<div style={{color:C.textMuted}}>Renal: {safetyChecks[i].orderSet.renal_adjustment_notes}</div>}
             </div>}
             {safetyChecks[i]&&safetyChecks[i].status==='hard_stop_blocked'&&<div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginTop:'6px'}}>
               <div style={{fontSize:'12px',fontWeight:600,color:C.red}}>{'\u26d4'} Blocked - do not prescribe</div>
-              <div style={{fontSize:'11px',color:C.red}}>{safetyChecks[i].triggered.join(', ')} - flagged by {safetyChecks[i].orderSet.approved_by}'s order set. Remove this item or choose an alternative.</div>
+              <div style={{fontSize:'11px',color:C.red}}>{safetyChecks[i].triggered.join(', ')} - flagged by {safetyChecks[i].orderSet?.approved_by ? `${safetyChecks[i].orderSet.approved_by}'s order set` : 'external safety check'}. Remove this item or choose an alternative.</div>
             </div>}
             {safetyChecks[i]&&safetyChecks[i].status==='soft_stop'&&<div style={{background:C.amberLight,border:`1px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginTop:'6px'}}>
               <div style={{fontSize:'12px',fontWeight:600,color:C.amber}}>{'\u26a0'} Warning: {safetyChecks[i].triggered.join(', ')}</div>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Flagged by {safetyChecks[i].orderSet.approved_by}'s order set. Enter a reason to proceed anyway.</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Flagged by {safetyChecks[i].orderSet?.approved_by ? `${safetyChecks[i].orderSet.approved_by}'s order set` : 'external safety check'}. Enter a reason to proceed anyway.</div>
               <input value={overrideReasons[i]||''} onChange={e=>setOverrideReasons({...overrideReasons,[i]:e.target.value})} placeholder="Reason for prescribing despite warning" style={{width:'100%',border:`0.5px solid ${C.amber}`,borderRadius:'6px',padding:'7px 10px',fontSize:'12px',boxSizing:'border-box'}}/>
             </div>}
 
@@ -3109,20 +3141,29 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     if (!file) return
     const text = await file.text()
     const rows = parseCSV(text)
-    let imported=0, skipped=0
+    let imported=0, skipped=0, skippedNoCode=0
     for (const row of rows) {
       if (!row.drug_name) { skipped++; continue }
-      // Each row can specify its own medicine_type (western/chinese) if the
-      // CSV covers both; otherwise it defaults to this clinic's own type.
+      // Mandatory ID-matching field - without a real standardized code,
+      // this drug can never be looked up against a real safety database,
+      // no matter how complete the rest of the row is. This CSV is
+      // strictly inventory/reference data, never actual safety logic -
+      // hard/soft stop rules only ever come from order_sets, which this
+      // import never touches.
+      const hkReg = row.hk_registration_number?.trim() || null
+      const atc = row.atc_code?.trim() || null
+      if (!hkReg && !atc) { skippedNoCode++; continue }
       const rowType = (row.medicine_type||medicineType||'western').toLowerCase()
       await supabase.from('drug_reference').upsert({
         drug_name: row.drug_name, medicine_type: rowType, effects: row.effects||null, intake_info: row.intake_info||null,
-        precautions: row.precautions||null, updated_by: staffMember?.name||'CSV import',
+        precautions: row.precautions||null, hk_registration_number: hkReg, atc_code: atc,
+        is_dangerous_drug: ['true','yes','1'].includes((row.is_dangerous_drug||'').toLowerCase()),
+        updated_by: staffMember?.name||'CSV import',
         updated_at: new Date().toISOString(),
       }, { onConflict: 'drug_name,medicine_type' })
       imported++
     }
-    setImportResult({ type:'reference', imported, skipped, total: rows.length })
+    setImportResult({ type:'reference', imported, skipped: skipped+skippedNoCode, skippedNoCode, total: rows.length })
   }
 
   // ICD-10 updates are Medsa-managed centrally (direct SQL import against
@@ -3201,8 +3242,10 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
         </label>
       </div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
         {{stock:'Stock', reference:'Drug info'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {importResult.skippedNoCode>0&&<div style={{marginTop:'4px'}}>{importResult.skippedNoCode} skipped for missing a required HK Registration Number or ATC Code - add one of these to import that row.</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
