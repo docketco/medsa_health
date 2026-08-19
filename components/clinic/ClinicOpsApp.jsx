@@ -673,6 +673,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
   const [weightKg,setWeightKg]=useState('')
+  const [consentWindow,setConsentWindow]=useState({checked:false,allowed:false})
+  const [consultationStartedAt]=useState(() => new Date().toISOString())
   const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
   const [overrideReasons,setOverrideReasons]=useState({}) // rxIndex -> reason text
 
@@ -870,12 +872,38 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       const { data: p } = await supabase.from('patients').select('*').eq('medsa_id', queueEntry.patientMedsaId).maybeSingle()
       if (p) {
         setPatient(p)
-        const [{data:r},{data:c},{data:a}] = await Promise.all([
-          supabase.from('medical_records').select('*,institutions(name)').eq('patient_id',p.id).order('date_of_record',{ascending:false}),
+        // Allergies and chronic conditions are never gated by consent -
+        // these are exactly what an emergency card shows, and a doctor
+        // needs to know about a dangerous allergy regardless of consent
+        // window status. Real, live search against the shared patient
+        // record every time - not a local copy stored in this clinic's
+        // own data, so it always reflects the patient's actual, current
+        // Medsa profile.
+        const [{data:c},{data:a}] = await Promise.all([
           supabase.from('conditions').select('*').eq('patient_id',p.id).eq('active',true),
           supabase.from('allergies').select('*').eq('patient_id',p.id),
         ])
-        setRecords(r||[]); setConditions(c||[]); setAllergies(a||[])
+        setConditions(c||[]); setAllergies(a||[])
+
+        // Full history (past visit records) is the part that's actually
+        // gated - checks that real consent exists and that the current
+        // time isn't before the window even starts (e.g. a doctor
+        // shouldn't be able to open a patient's history days ahead of a
+        // booking). The window's *end* only matters for how long access
+        // stays open after check-in when no active, unsubmitted
+        // consultation is happening - during an active one, access stays
+        // open until actually submitted, not by a ticking clock, since
+        // consultation length varies with patient volume.
+        const { data: intake } = await supabase.from('appointment_intake')
+          .select('access_window_start, access_window_end').eq('patient_id', p.id).eq('consent_given', true)
+          .order('created_at', { ascending: false }).limit(1).maybeSingle()
+        const now = new Date()
+        const pastStart = !!intake && now >= new Date(intake.access_window_start)
+        setConsentWindow({ checked: true, allowed: pastStart })
+        if (pastStart) {
+          const { data: r } = await supabase.from('medical_records').select('*,institutions(name)').eq('patient_id',p.id).order('date_of_record',{ascending:false})
+          setRecords(r||[])
+        }
       }
       setLoading(false)
     }
@@ -952,6 +980,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     try {
       const rxRows = prescriptions.filter(p=>p.drug.trim())
       let savedRecordId = null
+      const submittedAt = new Date().toISOString()
       if ((diagnosis.trim()||notes.trim()||rxRows.length>0||lineItems.length>0) && patient) {
         const visitTitle = diagnosis || 'Clinic consultation'
         const visitDate = new Date().toISOString().slice(0,10)
@@ -961,6 +990,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           date_of_record: visitDate, source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
           doctor_name: staffMember?.name || 'Unknown',
+          consultation_started_at: consultationStartedAt, submitted_at: submittedAt,
         })
         if (recErr) throw recErr
         // Separate, standard select rather than chaining .select() off
@@ -1000,6 +1030,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           interval_hours: parseInt(p.intervalHours)||null,
           active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
           prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
+          prescribed_submitted_at: submittedAt,
         }))
         const { error: insErr } = await supabase.from('medications').insert(dbRows)
         if (insErr) throw insErr
@@ -1021,8 +1052,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     }
   }
 
-  const hrsLeft = hoursRemaining(queueEntry.checkedInAt)
-  const recordsVisible = hrsLeft > 0
+  // Unified with the real, database-backed consent window (24h before +
+  // after for booked appointments, 24h after only for walk-ins) rather
+  // than the old, simpler local-only timer that only ever counted 24h
+  // from check-in and never distinguished booked from walk-in at all -
+  // having both active at once would let them silently disagree.
+  const recordsVisible = consentWindow.checked && consentWindow.allowed
 
   if (saved) return (
     <PageWrap maxWidth={480}>
@@ -1039,55 +1074,54 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px',textAlign:'center'}}>{queueEntry.patientName}</h2>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>{queueEntry.ticket} - checked in {new Date(queueEntry.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
 
-      {recordsVisible ? <>
-        <SecLabel>Medical records - available {Math.floor(hrsLeft)}h more</SecLabel>
-        {loading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
-        {!loading&&<div style={{display:'flex',gap:'16px',marginBottom:'20px'}}>
-          <div style={{flex:1}}>
-            {allergies.length>0&&<Card style={{padding:'12px 14px',marginBottom:'8px'}}>
-              {allergies.map((a,i)=>(<div key={i} style={{fontSize:'12px',fontWeight:600,color:a.severity==='severe'?C.red:C.text,padding:'3px 0'}}>{'\u26a0'} {a.allergen}</div>))}
-            </Card>}
-            {conditions.length>0&&<Card style={{padding:'12px 14px'}}>
-              {conditions.map((c,i)=>(<div key={i} style={{fontSize:'12px',padding:'3px 0'}}>{'\u25ce'} {c.condition_name}</div>))}
-            </Card>}
-          </div>
-          <div style={{flex:2}}>
-            {records.slice(0,5).map((r,i)=>{
-              const isOpen = expandedRecord===i
-              const requested = reportRequests[i]
-              return (
-                <Card key={i} style={{padding:'10px 14px',marginBottom:'6px'}}>
-                  <div onClick={()=>setExpandedRecord(isOpen?null:i)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
-                    <div>
-                      <div style={{fontSize:'12px',fontWeight:600}}>{r.title}</div>
-                      <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - {r.institutions?.name||'-'}</div>
-                    </div>
-                    <span style={{color:C.textMuted,fontSize:'12px'}}>{isOpen?'\u2212':'+'}</span>
+      <SecLabel>Medical records{recordsVisible?' - full history open, closes on submit':''}</SecLabel>
+      {loading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
+      {!loading&&<div style={{display:'flex',gap:'16px',marginBottom:'20px'}}>
+        <div style={{flex:1}}>
+          {allergies.length>0&&<Card style={{padding:'12px 14px',marginBottom:'8px'}}>
+            {allergies.map((a,i)=>(<div key={i} style={{fontSize:'12px',fontWeight:600,color:a.severity==='severe'?C.red:C.text,padding:'3px 0'}}>{'\u26a0'} {a.allergen}</div>))}
+          </Card>}
+          {conditions.length>0&&<Card style={{padding:'12px 14px'}}>
+            {conditions.map((c,i)=>(<div key={i} style={{fontSize:'12px',padding:'3px 0'}}>{'\u25ce'} {c.condition_name}</div>))}
+          </Card>}
+        </div>
+        <div style={{flex:2}}>
+          {!recordsVisible&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',fontSize:'12px',color:C.textMuted,textAlign:'center'}}>Full visit history not available yet for this check-in - reload and re-check-in the patient to resolve.</div>}
+          {recordsVisible&&records.slice(0,5).map((r,i)=>{
+            const isOpen = expandedRecord===i
+            const requested = reportRequests[i]
+            return (
+              <Card key={i} style={{padding:'10px 14px',marginBottom:'6px'}}>
+                <div onClick={()=>setExpandedRecord(isOpen?null:i)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+                  <div>
+                    <div style={{fontSize:'12px',fontWeight:600}}>{r.title}</div>
+                    <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - {r.institutions?.name||'-'}</div>
                   </div>
-                  {isOpen&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-                    {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
-                    {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
-                    {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
-                    {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={async()=>{
-                      const { error } = await supabase.from('record_access_requests').insert({
-                        patient_id: patient.id, requesting_staff: staffMember?.name || 'Unknown',
-                        requesting_clinic: r.institutions?.name || null,
-                        reason: `Full detail requested for record: ${r.title || r.diagnosis || 'record'}`,
-                      })
-                      if (error) { alert(`Could not send request: ${error.message}`); return }
-                      setReportRequests({...reportRequests,[i]:true})
-                    }}>Request full/detailed report</Btn>
-                      :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>}
-                  </div>}
-                </Card>
-              )
-            })}
-          </div>
-        </div>}
-      </> : <div style={{background:C.card,borderRadius:'10px',padding:'14px',fontSize:'12px',color:C.textMuted,textAlign:'center',marginBottom:'20px'}}>24-hour record access has expired for this visit. Request renewed access from Check-in / Search.</div>}
+                  <span style={{color:C.textMuted,fontSize:'12px'}}>{isOpen?'\u2212':'+'}</span>
+                </div>
+                {isOpen&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+                  {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
+                  {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
+                  {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
+                  {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={async()=>{
+                    const { error } = await supabase.from('record_access_requests').insert({
+                      patient_id: patient.id, requesting_staff: staffMember?.name || 'Unknown',
+                      requesting_clinic: r.institutions?.name || null,
+                      reason: `Full detail requested for record: ${r.title || r.diagnosis || 'record'}`,
+                    })
+                    if (error) { alert(`Could not send request: ${error.message}`); return }
+                    setReportRequests({...reportRequests,[i]:true})
+                  }}>Request full/detailed report</Btn>
+                    :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>}
+                </div>}
+              </Card>
+            )
+          })}
+        </div>
+      </div>}
 
       <SecLabel>Diagnosis</SecLabel>
-      <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+      <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} disabled={saved} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px',background:saved?C.card:'#fff'}}/>
 
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Weight (kg) - optional, used for dose-safety reference ranges below</div>
       <input value={weightKg} onChange={e=>setWeightKg(e.target.value)} type="number" placeholder="e.g. 68" style={{width:'120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'14px'}}/>
@@ -1113,7 +1147,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           </div>}
 
       <SecLabel>Consultation notes</SecLabel>
-      <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical'}}/>
+      <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={saved} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical',background:saved?C.card:'#fff'}}/>
 
       <SecLabel>Itemized Treatment & Charges</SecLabel>
       <div style={{marginBottom:'10px'}}>
@@ -1279,8 +1313,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
       {draftSaved&&<div style={{fontSize:'13px',color:C.green,marginBottom:'12px'}}>✓ Draft saved - keep editing, or submit when ready</div>}
       <div style={{display:'flex',gap:'8px'}}>
-        <Btn style={{flex:1}} onClick={handleSaveDraft} disabled={savingDraft||saving}>{savingDraft?'Saving…':'Save'}</Btn>
-        <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||savingDraft}>{saving?'Submitting...':'Submit'}</Btn>
+        <Btn style={{flex:1}} onClick={handleSaveDraft} disabled={savingDraft||saving||saved}>{savingDraft?'Saving…':'Save'}</Btn>
+        <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||savingDraft||saved}>{saved?'Submitted':saving?'Submitting...':'Submit'}</Btn>
       </div>
     </PageWrap>
   )
@@ -2344,9 +2378,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     if (!appt?.medsaId) return
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
     if (!patientRow) return
+    const isWalkIn = !appt.scheduledAt || appt.ticket === 'SCH' // no real booked time - this is a walk-in
     const apptTime = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
-    const windowStart = new Date(apptTime.getTime() - 12*60*60*1000)
-    const windowEnd = new Date(apptTime.getTime() + 12*60*60*1000)
+    // Booked: 24h before AND after the consultation time (48h window
+    // total). Walk-in: no "before" makes sense since there's no scheduled
+    // time to count back from - 24h after the actual visit only.
+    const windowStart = isWalkIn ? apptTime : new Date(apptTime.getTime() - 24*60*60*1000)
+    const windowEnd = new Date(apptTime.getTime() + 24*60*60*1000)
     await supabase.from('appointment_intake').insert({
       patient_id: patientRow.id, appointment_time: apptTime.toISOString(),
       doctor_name: appt.doctor, reason_for_visit: appt.notes||null,
@@ -3764,6 +3802,24 @@ export default function ClinicOpsApp() {
       setCheckInError(`Could not check in ${patient.full_name}: ${error?.message || 'unknown error'}`)
       return false
     }
+
+    // Real consent window, created the moment of physical check-in -
+    // this was previously only ever created from the Schedule screen's
+    // modal, meaning a walk-in (or anyone checking in through this
+    // general screen) never got a window at all and would always fail
+    // the consent check. Booked appointments still get their real
+    // scheduled time and the 24h-before/24h-after window; a genuine
+    // walk-in gets 24h-after-only, since there's no scheduled time to
+    // count backward from.
+    const checkInTime = new Date()
+    const windowStart = matchingAppt ? new Date(new Date(matchingAppt.scheduled_at).getTime() - 24*60*60*1000) : checkInTime
+    const windowEnd = new Date((matchingAppt ? new Date(matchingAppt.scheduled_at).getTime() : checkInTime.getTime()) + 24*60*60*1000)
+    await supabase.from('appointment_intake').insert({
+      patient_id: patient.id, appointment_time: (matchingAppt?.scheduled_at || checkInTime.toISOString()),
+      doctor_name: matchingAppt?.doctor_name || staffMember?.name || null,
+      consent_given: true, consent_given_at: checkInTime.toISOString(),
+      access_window_start: windowStart.toISOString(), access_window_end: windowEnd.toISOString(),
+    })
 
     setCheckedInQueue([...checkedInQueue, {
       id: data.id, ticket: data.ticket, patientName: data.patient_name,
