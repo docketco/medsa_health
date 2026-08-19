@@ -3141,7 +3141,8 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     if (!file) return
     const text = await file.text()
     const rows = parseCSV(text)
-    let imported=0, skipped=0, skippedNoCode=0
+    let imported=0, skipped=0
+    const skippedForNoCode = []
     for (const row of rows) {
       if (!row.drug_name) { skipped++; continue }
       // Mandatory ID-matching field - without a real standardized code,
@@ -3152,7 +3153,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       // import never touches.
       const hkReg = row.hk_registration_number?.trim() || null
       const atc = row.atc_code?.trim() || null
-      if (!hkReg && !atc) { skippedNoCode++; continue }
+      if (!hkReg && !atc) { skippedForNoCode.push(row.drug_name); continue }
       const rowType = (row.medicine_type||medicineType||'western').toLowerCase()
       await supabase.from('drug_reference').upsert({
         drug_name: row.drug_name, medicine_type: rowType, effects: row.effects||null, intake_info: row.intake_info||null,
@@ -3163,7 +3164,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       }, { onConflict: 'drug_name,medicine_type' })
       imported++
     }
-    setImportResult({ type:'reference', imported, skipped: skipped+skippedNoCode, skippedNoCode, total: rows.length })
+    setImportResult({ type:'reference', imported, skipped: skipped+skippedForNoCode.length, skippedForNoCode, total: rows.length })
   }
 
   // ICD-10 updates are Medsa-managed centrally (direct SQL import against
@@ -3245,7 +3246,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
         {{stock:'Stock', reference:'Drug info'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
-        {importResult.skippedNoCode>0&&<div style={{marginTop:'4px'}}>{importResult.skippedNoCode} skipped for missing a required HK Registration Number or ATC Code - add one of these to import that row.</div>}
+        {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
