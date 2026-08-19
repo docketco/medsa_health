@@ -634,7 +634,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   )
 }
 
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={} }) {
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, onShareBundle }) {
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
@@ -802,6 +802,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{selectedIds.size} {isEn?'selected':'項已選取'}</div>
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setBundleMode(false);setSelectedIds(new Set());setBundleFilter('')}}>{isEn?'Cancel':'取消'}</Btn>
+              <Btn style={{flex:1,fontSize:'12px'}} disabled={selectedIds.size===0} onClick={()=>onShareBundle(Array.from(selectedIds))}>{isEn?'Share':'分享'}</Btn>
               <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={selectedIds.size===0||generatingPdf} onClick={downloadBundle}>{generatingPdf?(isEn?'Generating...':'生成中...'):(isEn?'Download PDF':'下載 PDF')}</Btn>
             </div>
           </Card>}
@@ -2751,7 +2752,7 @@ function SelfRegisterFlow({ onBack, onComplete }) {
 // a short code with an expiry, and hands it to the clinic themselves - the
 // clinic then enters it on a public, non-authenticated page to view (and
 // download) just that tier of information.
-function ShareForVisitModal({ open, onClose, patient }) {
+function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
   const [tiers,setTiers]=useState({ allergies:true, conditions:true, medications:true, vaccinations:false, fullHistory:false })
   const [reason,setReason]=useState('')
   const [expiryMinutes,setExpiryMinutes]=useState(60)
@@ -2784,6 +2785,7 @@ function ShareForVisitModal({ open, onClose, patient }) {
         include_full_history: tiers.fullHistory,
         reason_note: reason || null,
         expires_at: expiresAt,
+        record_ids: recordIds && recordIds.length>0 ? recordIds : null,
       })
       if (insErr) throw insErr
       setGeneratedCode(code)
@@ -2806,6 +2808,9 @@ function ShareForVisitModal({ open, onClose, patient }) {
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Share for this visit</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>For a clinic that doesn't use Medsa. Choose what to share - a routine visit needs less than something like a vaccination.</div>
 
+          {recordIds?.length>0 ? (
+            <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'13px',color:C.green}}>Sharing {recordIds.length} selected record{recordIds.length>1?'s':''}.</div>
+          ) : (
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
             {[
               {key:'allergies',label:'Allergies'},
@@ -2820,6 +2825,7 @@ function ShareForVisitModal({ open, onClose, patient }) {
               </div>
             ))}
           </div>
+          )}
 
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>What's this visit for? (optional, for your own reference)</div>
           <input value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Flu vaccination" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box'}}/>
@@ -2835,7 +2841,12 @@ function ShareForVisitModal({ open, onClose, patient }) {
           <Btn variant="primary" style={{width:'100%'}} onClick={handleGenerate} disabled={saving}>{saving?'Generating...':'Generate code'}</Btn>
         </> : <>
           <div style={{textAlign:'center'}}>
-            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>Give this code to the clinic</div>
+            <div style={{fontSize:'13px',color:C.textSub,marginBottom:'10px'}}>Give this code to the clinic, or have them scan this</div>
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`https://medsa.health/share?code=${generatedCode}`)}`}
+              alt="QR code to redeem this share code" width={200} height={200}
+              style={{marginBottom:'14px',borderRadius:'8px'}}
+            />
             <div style={{fontSize:'32px',fontWeight:700,letterSpacing:'4px',color:C.green,marginBottom:'10px'}}>{generatedCode}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Valid for {expiryMinutes>=60?`${expiryMinutes/60} hour(s)`:`${expiryMinutes} minutes`}. They'll enter it at medsa.health/share to view and download what you've chosen to share.</div>
             <Btn variant="primary" style={{width:'100%'}} onClick={handleClose}>Done</Btn>
@@ -2873,6 +2884,7 @@ export default function PatientApp({ liveData={} }) {
   const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
   const [shareOpen,setShareOpen]=useState(false)
+  const [shareRecordIds,setShareRecordIds]=useState(null)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
   const [realPatientData,setRealPatientData]=useState(null) // null = not fetched yet, object = real fetched data
@@ -2935,7 +2947,7 @@ export default function PatientApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
@@ -2969,7 +2981,7 @@ export default function PatientApp({ liveData={} }) {
         liveMedications={liveMedications}
         patient={patient}
       />
-      <ShareForVisitModal open={shareOpen} onClose={()=>setShareOpen(false)} patient={patient}/>
+      <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
