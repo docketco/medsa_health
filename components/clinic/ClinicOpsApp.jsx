@@ -1958,7 +1958,6 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newDisciplinary,setNewDisciplinary]=useState('clear')
   const [newSex,setNewSex]=useState('')
   const [newDob,setNewDob]=useState('')
-  const [newHasEpc,setNewHasEpc]=useState(false)
   const [newEpcLink,setNewEpcLink]=useState('')
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
@@ -2048,6 +2047,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
+    if ((newRole==='doctor'||newRole==='frontdesk') && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
     setSaving(true)
     setOnboardError(null)
     const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
@@ -2057,7 +2057,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
-      has_epc:newHasEpc, epc_link:newHasEpc?(newEpcLink||null):null,
+      has_epc: !!newEpcLink?.trim(), epc_link: newEpcLink?.trim() || null,
       mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
       mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
       schemes: newRole==='doctor' ? newSchemes : null,
@@ -2130,14 +2130,12 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <input type="date" value={newDob} onChange={e=>setNewDob(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
-          {(newRole==='doctor')&&<>
-            <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'10px',cursor:'pointer'}}>
-              <input type="checkbox" checked={newHasEpc} onChange={e=>setNewHasEpc(e.target.checked)}/>
-              Has an e-PC (electronic Practising Certificate)
-            </label>
-            {newHasEpc&&<input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>}
+          {(newRole==='doctor'||newRole==='frontdesk')&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required, this is the real MCHK-issued credential</div>
+            <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
+          <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px',marginTop:'-6px'}}>Enter manually for now - no public MCHK API exists yet to cross-check this automatically against live license status.</div>
           <input type="date" value={newExpiry} onChange={e=>setNewExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>License / registration document, or other relevant copy</div>
           <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',marginBottom:'10px',boxSizing:'border-box'}}>
@@ -2166,7 +2164,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||newRole==='frontdesk')&&!newEpcLink?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
