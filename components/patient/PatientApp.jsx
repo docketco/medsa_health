@@ -2752,6 +2752,55 @@ function SelfRegisterFlow({ onBack, onComplete }) {
 // a short code with an expiry, and hands it to the clinic themselves - the
 // clinic then enters it on a public, non-authenticated page to view (and
 // download) just that tier of information.
+function ExternalRequestModal({ request, records=[], onDone }) {
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [submitting, setSubmitting] = useState(false)
+
+  if (!request) return null
+
+  function toggle(id) {
+    setSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+  }
+
+  async function handleSend() {
+    setSubmitting(true)
+    await supabase.from('external_share_requests').update({
+      status: 'fulfilled', bundled_record_ids: Array.from(selectedIds), responded_at: new Date().toISOString(),
+    }).eq('id', request.id)
+    setSubmitting(false)
+    onDone()
+  }
+
+  async function handleDecline() {
+    setSubmitting(true)
+    await supabase.from('external_share_requests').update({ status: 'declined', responded_at: new Date().toISOString() }).eq('id', request.id)
+    setSubmitting(false)
+    onDone()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
+      <div style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{request.clinic_name} is requesting your records</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>Registration: {request.clinic_registration_number}. Choose what to share.</div>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'18px',maxHeight:280,overflowY:'auto'}}>
+          {records.map(r=>(
+            <div key={r.id} onClick={()=>toggle(r.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${selectedIds.has(r.id)?C.green:C.border}`,background:selectedIds.has(r.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{selectedIds.has(r.id)?'\u2713':''}</div>
+              <div style={{fontSize:'13px'}}>{r.title} - {r.date_of_record}</div>
+            </div>
+          ))}
+          {records.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>No records on file to share.</div>}
+        </div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={handleDecline} disabled={submitting} style={{flex:1,padding:'12px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer'}}>Decline</button>
+          <button onClick={handleSend} disabled={submitting||selectedIds.size===0} style={{flex:1,padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:selectedIds.size===0?0.5:1}}>{submitting?'Sending...':'Send'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
   const [tiers,setTiers]=useState({ allergies:true, conditions:true, medications:true, vaccinations:false, fullHistory:false })
   const [reason,setReason]=useState('')
@@ -2884,6 +2933,7 @@ export default function PatientApp({ liveData={} }) {
   const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
   const [shareOpen,setShareOpen]=useState(false)
+  const [pendingExternalRequest,setPendingExternalRequest]=useState(null)
   const [shareRecordIds,setShareRecordIds]=useState(null)
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
@@ -2923,6 +2973,19 @@ export default function PatientApp({ liveData={} }) {
   }
 
   const patient = signedInPatient || liveData.patient || { full_name:'', preferred_name:'', medsa_id:'', date_of_birth:null, blood_type:null, emergency_card_active:false, emergency_contact_name:null, emergency_contact_rel:null, emergency_contact_phone:null, storage_tier:'essential' }
+
+  useEffect(() => {
+    if (!patient?.id) return
+    async function checkExternalRequests() {
+      const { data } = await supabase.from('external_share_requests').select('*')
+        .eq('patient_id', patient.id).eq('status', 'pending').eq('direction', 'download')
+        .order('requested_at', { ascending: false }).limit(1).maybeSingle()
+      setPendingExternalRequest(data || null)
+    }
+    checkExternalRequests()
+    const interval = setInterval(checkExternalRequests, 8000)
+    return () => clearInterval(interval)
+  }, [patient?.id])
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
@@ -2982,6 +3045,7 @@ export default function PatientApp({ liveData={} }) {
         patient={patient}
       />
       <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
+      <ExternalRequestModal request={pendingExternalRequest} records={liveRecords} onDone={()=>setPendingExternalRequest(null)}/>
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
