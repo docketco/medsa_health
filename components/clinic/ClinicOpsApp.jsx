@@ -14,7 +14,7 @@ function Card({ children, style:sx={}, onClick }) {
 function SecLabel({ children }) {
   return <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,marginBottom:'10px'}}>{children}</div>
 }
-function StatCard({ label, value, sub, color=C.green, bg=C.greenLight }) {
+function StatCard({ label, value, sub, color=C.green, bg=C.greenLight }) { 
   return (
     <div style={{flex:1,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'16px'}}>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase'}}>{label}</div>
@@ -55,6 +55,21 @@ function hoursRemaining(checkedInAt) {
   const elapsed = Date.now() - checkedInAt
   const remaining = 24*60*60*1000 - elapsed
   return Math.max(0, remaining / (60*60*1000))
+}
+
+// Module-level, not scoped to any one component - moved here after
+// discovering it was previously local to InventoryScreen only, making it
+// inaccessible to the new bulk staff import (a different component)
+// that also needs real CSV parsing.
+function parseCSV(text) {
+  const lines = text.trim().split('\n')
+  const headers = lines[0].split(',').map(h=>h.trim())
+  return lines.slice(1).filter(l=>l.trim()).map(line=>{
+    const values = (line.match(/(".*?"|[^",]+)(?=,|$)/g)||[]).map(v=>v.trim().replace(/^"|"$/g,''))
+    const row = {}
+    headers.forEach((h,i)=>row[h]=values[i]||'')
+    return row
+  })
 }
 
 function StaffLogin({ onLogin }) {
@@ -1948,6 +1963,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
   const [onboardError,setOnboardError]=useState(null)
+  const [bulkImportResult,setBulkImportResult]=useState(null)
   const [newPin,setNewPin]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
@@ -1986,6 +2002,44 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   useEffect(() => { load() }, [])
 
   const expiringSoon = staff.filter(s => s.registration_expiry && new Date(s.registration_expiry) <= new Date(Date.now()+120*24*60*60*1000))
+
+  async function handleStaffBulkFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    if (!institutionId) { setBulkImportResult({ imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported=0
+    const skippedRows = []
+    for (const row of rows) {
+      if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
+      if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
+      const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
+      const { error: insErr } = await supabase.from('staff_credentials').insert({
+        institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
+        full_name:row.full_name, role:row.role, department:row.department,
+        registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
+        sex:row.sex||null, date_of_birth:row.date_of_birth||null,
+        has_epc: ['true','yes','1'].includes((row.has_epc||'').toLowerCase()),
+        epc_link: row.epc_link||null,
+        // Deliberately never true via bulk import, regardless of CSV
+        // content - this is a personal legal declaration a doctor makes
+        // about themselves, not something an admin import can set on
+        // their behalf. Each doctor confirms this individually later.
+        mchk_declaration_agreed: false, mchk_declaration_timestamp: null,
+        schemes: row.role==='doctor' && row.schemes ? row.schemes.split(';').map(s=>s.trim()).filter(Boolean) : null,
+        disciplinary_status: row.disciplinary_status||'none', onboarded_by:staffMember?.name, status:'active',
+        verification_status:'verified',
+      })
+      if (insErr) { skippedRows.push(`${row.full_name} - ${insErr.message}`); continue }
+      // Same temporary-password precedent already established in the
+      // migration script - real hashing, never plain text, each person
+      // changes it individually once they can actually log in.
+      await supabase.rpc('set_staff_password', { p_medsa_id: medsaId, p_new_password: 'TempPass2026!' })
+      imported++
+    }
+    setBulkImportResult({ imported, skipped: skippedRows.length, skippedRows, total: rows.length })
+  }
 
   async function handleOnboard() {
     if (!newFirstName || !newDept || !newPin) return
@@ -2039,6 +2093,16 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           <div key={k} onClick={()=>setTab(k)} style={{padding:'8px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub}}>{l}</div>
         ))}
       </div>
+
+      <label style={{display:'inline-block',fontSize:'12px',fontWeight:600,padding:'9px 16px',borderRadius:'10px',cursor:'pointer',background:C.card,color:C.textSub,marginBottom:'12px'}}>
+        {'\u2191'} Bulk import staff CSV
+        <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
+      </label>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role, department per row (doctors also require date_of_birth). Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf.</div>
+      {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
+        Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
+        {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
+      </div>}
 
       {loading&&<div style={{padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
 
@@ -3128,15 +3192,38 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   const [addingItem,setAddingItem]=useState(false)
   const [addItemError,setAddItemError]=useState(null)
 
-  function parseCSV(text) {
-    const lines = text.trim().split('\n')
-    const headers = lines[0].split(',').map(h=>h.trim())
-    return lines.slice(1).filter(l=>l.trim()).map(line=>{
-      const values = (line.match(/(".*?"|[^",]+)(?=,|$)/g)||[]).map(v=>v.trim().replace(/^"|"$/g,''))
-      const row = {}
-      headers.forEach((h,i)=>row[h]=values[i]||'')
-      return row
-    })
+  async function handleOrderSetFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    if (!institutionId) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported=0
+    const skippedForMissingFields = []
+    for (const row of rows) {
+      if (!row.drug_name) continue
+      // Real chain of responsibility - who approved this rule and when
+      // is not optional, since that's what makes it the institution's own
+      // clinical judgment rather than something Medsa invented. Unlike
+      // drug_reference, this CSV genuinely does carry real safety logic -
+      // that's the entire point of this table.
+      if (!row.approved_by) { skippedForMissingFields.push(`${row.drug_name} (no approved_by)`); continue }
+      await supabase.from('order_sets').upsert({
+        institution_id: institutionId, drug_name: row.drug_name,
+        min_dose_per_kg: row.min_dose_per_kg ? parseFloat(row.min_dose_per_kg) : null,
+        max_dose_per_kg: row.max_dose_per_kg ? parseFloat(row.max_dose_per_kg) : null,
+        dose_unit: row.dose_unit || 'mg',
+        min_age_years: row.min_age_years ? parseFloat(row.min_age_years) : null,
+        max_age_years: row.max_age_years ? parseFloat(row.max_age_years) : null,
+        renal_adjustment_notes: row.renal_adjustment_notes || null,
+        high_alert: ['true','yes','1'].includes((row.high_alert||'').toLowerCase()),
+        hard_stop_conditions: row.hard_stop_conditions ? row.hard_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
+        soft_stop_conditions: row.soft_stop_conditions ? row.soft_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
+        approved_by: row.approved_by, approved_at: row.approved_at || new Date().toISOString(),
+      }, { onConflict: 'institution_id,drug_name' })
+      imported++
+    }
+    setImportResult({ type:'orderset', imported, skipped: skippedForMissingFields.length, skippedForMissingFields, total: rows.length })
   }
 
   async function handleStockFile(e) {
@@ -3280,11 +3367,17 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           {'\u2191'} Import drug info CSV
           <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
         </label>
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'\u2191'} Import order sets CSV
+          <input type="file" accept=".csv" onChange={handleOrderSetFile} style={{display:'none'}}/>
+        </label>
       </div>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name and approved_by per row - this is the actual safety-rule table, so who approved each rule is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple), approved_by, approved_at.</div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
-        {{stock:'Stock', reference:'Drug info'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {{stock:'Stock', reference:'Drug info', orderset:'Order sets'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
         {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
+        {importResult.skippedForMissingFields?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing required fields: {importResult.skippedForMissingFields.join(', ')}</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
