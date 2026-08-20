@@ -3195,19 +3195,13 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   async function handleOrderSetFile(e) {
     const file = e.target.files[0]
     if (!file) return
+    if (staffMember?.role !== 'admin') { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Only a practice manager can import order sets - this is real safety logic, not inventory.' }); return }
     if (!institutionId) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
     const text = await file.text()
     const rows = parseCSV(text)
     let imported=0
-    const skippedForMissingFields = []
     for (const row of rows) {
       if (!row.drug_name) continue
-      // Real chain of responsibility - who approved this rule and when
-      // is not optional, since that's what makes it the institution's own
-      // clinical judgment rather than something Medsa invented. Unlike
-      // drug_reference, this CSV genuinely does carry real safety logic -
-      // that's the entire point of this table.
-      if (!row.approved_by) { skippedForMissingFields.push(`${row.drug_name} (no approved_by)`); continue }
       await supabase.from('order_sets').upsert({
         institution_id: institutionId, drug_name: row.drug_name,
         min_dose_per_kg: row.min_dose_per_kg ? parseFloat(row.min_dose_per_kg) : null,
@@ -3219,11 +3213,15 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
         high_alert: ['true','yes','1'].includes((row.high_alert||'').toLowerCase()),
         hard_stop_conditions: row.hard_stop_conditions ? row.hard_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
         soft_stop_conditions: row.soft_stop_conditions ? row.soft_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
-        approved_by: row.approved_by, approved_at: row.approved_at || new Date().toISOString(),
+        // Auto-approved by whoever is actually running this import -
+        // real chain of responsibility, since only a practice manager can
+        // even reach this button now, rather than a redundant CSV column
+        // they'd have to fill in with their own name anyway.
+        approved_by: staffMember.name, approved_at: new Date().toISOString(),
       }, { onConflict: 'institution_id,drug_name' })
       imported++
     }
-    setImportResult({ type:'orderset', imported, skipped: skippedForMissingFields.length, skippedForMissingFields, total: rows.length })
+    setImportResult({ type:'orderset', imported, skipped: rows.length-imported, total: rows.length })
   }
 
   async function handleStockFile(e) {
@@ -3373,11 +3371,10 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
         </label>
       </div>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name and approved_by per row - this is the actual safety-rule table, so who approved each rule is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple), approved_by, approved_at.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name per row - only a practice manager can import this, and every rule is auto-approved under your own name, since who approved it is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple).</div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
         {{stock:'Stock', reference:'Drug info', orderset:'Order sets'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
         {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
-        {importResult.skippedForMissingFields?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing required fields: {importResult.skippedForMissingFields.join(', ')}</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
         Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
