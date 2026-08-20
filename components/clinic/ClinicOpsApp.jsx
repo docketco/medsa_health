@@ -14,7 +14,7 @@ function Card({ children, style:sx={}, onClick }) {
 function SecLabel({ children }) {
   return <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,marginBottom:'10px'}}>{children}</div>
 }
-function StatCard({ label, value, sub, color=C.green, bg=C.greenLight }) { 
+function StatCard({ label, value, sub, color=C.green, bg=C.greenLight }) {
   return (
     <div style={{flex:1,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'16px'}}>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase'}}>{label}</div>
