@@ -14,6 +14,7 @@ export default function SharePage() {
   const [stage, setStage] = useState('gate') // gate | choose | upload_file | upload_scan | upload_syncing | upload_done | download_scan | download_waiting | download_ready | error
   const [clinicName, setClinicName] = useState('')
   const [clinicRegNumber, setClinicRegNumber] = useState('')
+  const [businessRegNumber, setBusinessRegNumber] = useState('')
   const [gateError, setGateError] = useState(null)
   const [verifying, setVerifying] = useState(false)
   const [verificationResult, setVerificationResult] = useState(null)
@@ -24,13 +25,13 @@ export default function SharePage() {
 
   async function handleGateSubmit() {
     if (!clinicName.trim()) { setGateError('Clinic name is required.'); return }
-    if (!clinicRegNumber.trim()) { setGateError('A real registration/license number is required to verify eligibility.'); return }
+    if (!clinicRegNumber.trim() && !businessRegNumber.trim()) { setGateError('At least one real registration number (ORPHF or Business Registration) is required to verify eligibility.'); return }
     setGateError(null)
     setVerifying(true)
     try {
-      const res = await fetch('/api/verify-license', {
+      const res = await fetch('/api/verify-clinic-credentials', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ registrationCode: clinicRegNumber }),
+        body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName }),
       })
       const result = await res.json()
       setVerificationResult(result)
@@ -92,14 +93,21 @@ export default function SharePage() {
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>Medsa Share</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'18px'}}>For a clinic not using Medsa. Verify your clinic before sending or requesting patient data.</div>
           <input value={clinicName} onChange={e=>setClinicName(e.target.value)} placeholder="Clinic name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
-          <input value={clinicRegNumber} onChange={e=>setClinicRegNumber(e.target.value)} placeholder="Clinic registration/license number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px'}}/>
+          <input value={clinicRegNumber} onChange={e=>setClinicRegNumber(e.target.value)} placeholder="ORPHF licence/exemption code (e.g. CE000001)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+          <input value={businessRegNumber} onChange={e=>setBusinessRegNumber(e.target.value)} placeholder="Business Registration Number (e.g. C1572528)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px'}}/>
           {gateError && <div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{gateError}</div>}
           <button onClick={handleGateSubmit} disabled={verifying} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:verifying?'default':'pointer',opacity:verifying?0.7:1}}>{verifying?'Verifying...':'Continue'}</button>
         </>}
 
         {stage==='choose' && <>
-          {verificationResult?.status==='FOUND'&&<div style={{background:'#e8f5e9',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#2e7d32'}}>{'\u2713'} Matched in HK Small Practice Clinic registry: {verificationResult.facilityName} (data as of {verificationResult.dataAsOf})</div>}
-          {verificationResult?.status==='NOT_FOUND'&&<div style={{background:'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#e65100'}}>{'\u25c7'} No match in the Small Practice Clinic registry - this doesn't mean invalid, this dataset only covers that specific facility type. Proceeding on the registration number provided.</div>}
+          {verificationResult?.status==='REMEMBERED'&&<div style={{background:'#e3f2fd',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#1565c0'}}>{'\u2713'} Already verified on a previous visit (checked {new Date(verificationResult.last_checked_at).toLocaleDateString()}) - no need to re-check.</div>}
+          {verificationResult?.status==='CHECKED'&&<>
+            {verificationResult.br_status==='matched'&&<div style={{background:'#e8f5e9',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#2e7d32'}}>{'\u2713'} Business Registration matched live: {verificationResult.clinic_name_matched_br}</div>}
+            {verificationResult.br_status==='no_match'&&<div style={{background:'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#e65100'}}>{'\u25c7'} Business Registration Number not found in the live Companies Registry.</div>}
+            {verificationResult.orphf_status==='matched'&&<div style={{background:'#e8f5e9',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#2e7d32'}}>{'\u2713'} ORPHF licence matched: {verificationResult.clinic_name_matched_orphf}</div>}
+            {verificationResult.orphf_status==='no_match'&&<div style={{background:'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#e65100'}}>{'\u25c7'} No match in the Small Practice Clinic registry - this covers that facility type only, not every licensed clinic yet.</div>}
+            {verificationResult.overall_status==='unverified'&&<div style={{background:'#ffebee',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#c62828'}}>{'\u26a0'} Neither number matched a real registry. Proceeding, but this clinic is not verified.</div>}
+          </>}
           {verificationResult?.status==='ERROR'&&<div style={{background:'#ffebee',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#c62828'}}>{'\u26a0'} Verification service unavailable - proceeding on the registration number provided without confirmation.</div>}
           <div style={{fontSize:'15px',fontWeight:700,marginBottom:'16px'}}>What do you need to do?</div>
           <button onClick={()=>setStage('upload_file')} style={{width:'100%',padding:'14px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'10px',textAlign:'left'}}>
