@@ -83,8 +83,8 @@ function StaffLogin({ onLogin }) {
   const [stage,setStage]=useState('pick') // pick | pin | department
   const [chosenDept,setChosenDept]=useState(null)
 
-  const ROLE_LABELS = { doctor:'Doctor', frontdesk:'Nurse / Front Desk', admin:'Practice Manager' }
-  const ROLE_COLORS = { doctor:C.green, frontdesk:C.blue, admin:C.purple }
+  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+  const ROLE_COLORS = { doctor:C.green, clinic_assistant:C.blue, admin:C.purple }
 
   useEffect(() => {
     async function load() {
@@ -1959,6 +1959,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newSex,setNewSex]=useState('')
   const [newDob,setNewDob]=useState('')
   const [newEpcLink,setNewEpcLink]=useState('')
+  const [newIsNurse,setNewIsNurse]=useState(false)
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
   const [onboardError,setOnboardError]=useState(null)
@@ -2020,6 +2021,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
         sex:row.sex||null, date_of_birth:row.date_of_birth||null,
         has_epc: ['true','yes','1'].includes((row.has_epc||'').toLowerCase()),
+        is_nurse: row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase()),
         epc_link: row.epc_link||null,
         // Deliberately never true via bulk import, regardless of CSV
         // content - this is a personal legal declaration a doctor makes
@@ -2047,7 +2049,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
-    if ((newRole==='doctor'||newRole==='frontdesk') && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    if ((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)) && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
     setSaving(true)
     setOnboardError(null)
     const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
@@ -2058,6 +2060,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
       has_epc: !!newEpcLink?.trim(), epc_link: newEpcLink?.trim() || null,
+      is_nurse: newRole==='clinic_assistant' ? newIsNurse : false,
       mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
       mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
       schemes: newRole==='doctor' ? newSchemes : null,
@@ -2072,7 +2075,17 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
-    setNewSex('');setNewDob('');setNewHasEpc(false);setNewEpcLink('');setNewMchkDeclared(false);setNewSchemes([])
+    setNewSex('');setNewDob('');setNewEpcLink('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
+    load()
+  }
+
+  async function handleTogglePortalAccess(person) {
+    const granting = !person.practitioner_portal_enabled
+    await supabase.from('staff_credentials').update({
+      practitioner_portal_enabled: granting,
+      practitioner_portal_granted_by: granting ? staffMember?.name : null,
+      practitioner_portal_granted_at: granting ? new Date().toISOString() : null,
+    }).eq('id', person.id)
     load()
   }
 
@@ -2098,7 +2111,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role, department per row (doctors also require date_of_birth). Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
@@ -2113,7 +2126,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           <input value={newLastName} onChange={e=>setNewLastName(e.target.value)} placeholder="Last name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
             <option value="doctor">Doctor</option>
-            <option value="frontdesk">Nurse / Front Desk</option>
+            <option value="clinic_assistant">Clinic Assistant</option>
             <option value="admin">Practice Manager</option>
           </select>
           <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" list="dept-suggestions" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
@@ -2130,7 +2143,11 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <input type="date" value={newDob} onChange={e=>setNewDob(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
-          {(newRole==='doctor'||newRole==='frontdesk')&&<>
+          {newRole==='clinic_assistant'&&<label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'10px',cursor:'pointer'}}>
+            <input type="checkbox" checked={newIsNurse} onChange={e=>setNewIsNurse(e.target.checked)}/>
+            Also a credentialed nurse (unlocks e-PC requirement and portal eligibility)
+          </label>}
+          {(newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required, this is the real MCHK-issued credential</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
@@ -2164,16 +2181,20 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||newRole==='frontdesk')&&!newEpcLink?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&!newEpcLink?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
-          <div key={s.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div key={s.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
             <div>
               <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
-              <div style={{fontSize:'11px',color:C.textSub}}>{s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
+              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} Practitioner Portal - granted by {s.practitioner_portal_granted_by}</div>}
             </div>
-            <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
+            <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke portal':'Grant portal'}</button>}
+              <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
+            </div>
           </div>
         ))}
       </>}
@@ -4032,20 +4053,20 @@ export default function ClinicOpsApp() {
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
 
   const allNavItems = [
-    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','frontdesk']},
+    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant']},
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
-    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','frontdesk']},
-    {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','frontdesk','doctor']},
-    {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','frontdesk'], badge: pendingCount},
-    {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','frontdesk']},
-    {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','frontdesk']},
-    {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','frontdesk']},
+    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant']},
+    {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
+    {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','clinic_assistant'], badge: pendingCount},
+    {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},
+    {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','clinic_assistant']},
+    {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','clinic_assistant']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
     {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
-    {key:'help', icon:'\u25cc', label:'Help', roles:['admin','frontdesk','doctor']},
+    {key:'help', icon:'\u25cc', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
-  if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='frontdesk'?'checkin':'overview')}}/>
+  if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
 
   const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role))
 
