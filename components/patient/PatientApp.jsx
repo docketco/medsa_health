@@ -1075,7 +1075,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         return all
       }
       const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
-        supabase.from('staff_credentials').select('*, institutions(name, name_tc)').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true).eq('has_epc', true),
+        supabase.from('staff_credentials').select('*, institutions(name, name_tc)').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
         fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
         fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
         filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
