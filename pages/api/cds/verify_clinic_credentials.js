@@ -19,7 +19,7 @@ const REVERIFY_DAYS = 90
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { businessRegistrationNumber, orphfCode, clinicNameDeclared } = req.body
+  const { businessRegistrationNumber, orphfCode, clinicNameDeclared, businessRegDocPath, orphfLicenceDocPath } = req.body
   if (!businessRegistrationNumber?.trim() && !orphfCode?.trim()) {
     return res.status(400).json({ status: 'ERROR', message: 'At least one of businessRegistrationNumber or orphfCode is required.' })
   }
@@ -56,15 +56,24 @@ export default async function handler(req, res) {
     }
   }
 
-  // Real check against the imported ORPHF registry. Honest about scope -
-  // this only covers Small Practice Clinics right now, so "no_match"
-  // here doesn't mean invalid, only "not in this specific dataset."
+  // Real check against the imported ORPHF registry - now covers Small
+  // Practice Clinics, hospitals, day procedure centres, and scheduled
+  // nursing homes across two tables. "no_match" still doesn't mean
+  // invalid - it means not in either of these datasets specifically
+  // (e.g. a regular licensed clinic not yet covered by a bulk open-data
+  // export of that particular category).
   let orphfStatus = 'unchecked', orphfMatchedName = null
   if (orphf) {
-    const { data: orphfRow } = await supabase.from('hk_small_practice_clinics')
+    const { data: spcRow } = await supabase.from('hk_small_practice_clinics')
       .select('phf_name').eq('phf_num', orphf).maybeSingle()
-    if (orphfRow) { orphfStatus = 'matched'; orphfMatchedName = orphfRow.phf_name }
-    else orphfStatus = 'no_match'
+    if (spcRow) {
+      orphfStatus = 'matched'; orphfMatchedName = spcRow.phf_name
+    } else {
+      const { data: licensedRow } = await supabase.from('hk_licensed_facilities')
+        .select('phf_name').eq('phf_num', orphf).maybeSingle()
+      if (licensedRow) { orphfStatus = 'matched'; orphfMatchedName = licensedRow.phf_name }
+      else orphfStatus = 'no_match'
+    }
   }
 
   const overallStatus = (brStatus === 'matched' || orphfStatus === 'matched')
@@ -81,13 +90,17 @@ export default async function handler(req, res) {
     br_status: brStatus, orphf_status: orphfStatus, overall_status: overallStatus,
     first_verified_at: now.toISOString(), last_checked_at: now.toISOString(),
     re_verify_after: reVerifyAfter.toISOString(), raw_br_response: brRaw,
+    business_reg_doc_path: businessRegDocPath || null, orphf_licence_doc_path: orphfLicenceDocPath || null,
   }
 
+  let savedRow = null
   if (brn) {
-    await supabase.from('verified_clinics').upsert(record, { onConflict: 'business_registration_number' })
+    const { data } = await supabase.from('verified_clinics').upsert(record, { onConflict: 'business_registration_number' }).select().maybeSingle()
+    savedRow = data
   } else {
-    await supabase.from('verified_clinics').insert(record)
+    const { data } = await supabase.from('verified_clinics').insert(record).select().maybeSingle()
+    savedRow = data
   }
 
-  return res.status(200).json({ status: 'CHECKED', ...record })
+  return res.status(200).json({ status: 'CHECKED', ...(savedRow || record) })
 }
