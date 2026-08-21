@@ -2015,13 +2015,14 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
       if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
       const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
+      const rowIsNurse = row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase())
       const { error: insErr } = await supabase.from('staff_credentials').insert({
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
         full_name:row.full_name, role:row.role, department:row.department,
         registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
         sex:row.sex||null, date_of_birth:row.date_of_birth||null,
         has_epc: ['true','yes','1'].includes((row.has_epc||'').toLowerCase()),
-        is_nurse: row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase()),
+        is_nurse: rowIsNurse,
         epc_link: row.epc_link||null,
         // Deliberately never true via bulk import, regardless of CSV
         // content - this is a personal legal declaration a doctor makes
@@ -2031,6 +2032,12 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         schemes: row.role==='doctor' && row.schemes ? row.schemes.split(';').map(s=>s.trim()).filter(Boolean) : null,
         disciplinary_status: row.disciplinary_status||'none', onboarded_by:staffMember?.name, status:'active',
         verification_status:'verified',
+        // Automatic at onboarding, not a separate manual grant - the
+        // portal should always exist for a doctor or nurse-flagged
+        // clinic assistant, whether or not they actually choose to use
+        // it. A practice manager can still revoke it later if needed.
+        practitioner_portal_enabled: row.role==='doctor' || rowIsNurse,
+        practitioner_portal_granted_by: 'onboarding', practitioner_portal_granted_at: new Date().toISOString(),
       })
       if (insErr) { skippedRows.push(`${row.full_name} - ${insErr.message}`); continue }
       // Same temporary-password precedent already established in the
@@ -2066,6 +2073,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       schemes: newRole==='doctor' ? newSchemes : null,
       disciplinary_status:newDisciplinary, onboarded_by:staffMember?.name, status:'active',
       verification_status:'verified',
+      practitioner_portal_enabled: newRole==='doctor' || (newRole==='clinic_assistant' && newIsNurse),
+      practitioner_portal_granted_by: 'onboarding', practitioner_portal_granted_at: new Date().toISOString(),
     })
     if (onboardErr) { setSaving(false); setOnboardError(onboardErr.message); return }
     // Real hashing happens here, server-side inside Postgres - the plain
