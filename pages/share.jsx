@@ -11,13 +11,21 @@ import QrScanner from '../components/QrScanner'
 // moment it's decoded, so the choice has to come before it, not after.
 
 export default function SharePage() {
-  const [stage, setStage] = useState('gate') // gate | choose | upload_file | upload_scan | upload_syncing | upload_done | download_scan | download_waiting | download_ready | error
+  const [stage, setStage] = useState('gate') // gate | otp_channel_choice | otp_challenge | choose | upload_file | upload_scan | upload_syncing | upload_done | download_scan | download_waiting | download_ready | error
   const [clinicName, setClinicName] = useState('')
   const [clinicRegNumber, setClinicRegNumber] = useState('')
   const [businessRegNumber, setBusinessRegNumber] = useState('')
+  const [businessRegDoc, setBusinessRegDoc] = useState(null)
+  const [orphfLicenceDoc, setOrphfLicenceDoc] = useState(null)
   const [gateError, setGateError] = useState(null)
   const [verifying, setVerifying] = useState(false)
   const [verificationResult, setVerificationResult] = useState(null)
+  const [otpState, setOtpState] = useState(null)
+  const [otpChannels, setOtpChannels] = useState([])
+  const [otpSending, setOtpSending] = useState(false)
+  const [otpCode, setOtpCode] = useState('')
+  const [otpVerifying, setOtpVerifying] = useState(false)
+  const [otpVerifyResult, setOtpVerifyResult] = useState(null)
   const [file, setFile] = useState(null)
   const [error, setError] = useState(null)
   const [requestId, setRequestId] = useState(null)
@@ -29,17 +37,80 @@ export default function SharePage() {
     setGateError(null)
     setVerifying(true)
     try {
+      // Real upload of the actual credential documents, before the
+      // verification call, so their storage paths can be attached to
+      // the record - kept on file for record-keeping, not itself proof
+      // of affiliation (that's the OTP step below).
+      let businessRegDocPath = null, orphfLicenceDocPath = null
+      if (businessRegDoc) {
+        const path = `${businessRegNumber||'unknown'}/${Date.now()}-br-${businessRegDoc.name}`
+        const { error: upErr } = await supabase.storage.from('clinic-credential-documents').upload(path, businessRegDoc)
+        if (!upErr) businessRegDocPath = path
+      }
+      if (orphfLicenceDoc) {
+        const path = `${clinicRegNumber||'unknown'}/${Date.now()}-orphf-${orphfLicenceDoc.name}`
+        const { error: upErr } = await supabase.storage.from('clinic-credential-documents').upload(path, orphfLicenceDoc)
+        if (!upErr) orphfLicenceDocPath = path
+      }
+
       const res = await fetch('/api/verify-clinic-credentials', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName }),
+        body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName, businessRegDocPath, orphfLicenceDocPath }),
       })
       const result = await res.json()
       setVerificationResult(result)
+      setVerifying(false)
+
+      // Already remembered and already contact-verified from a past
+      // visit - nothing further needed.
+      if (result.status === 'REMEMBERED' && result.contact_verified) { setStage('choose'); return }
+
+      // Otherwise, find out which real channels are actually available -
+      // never guess or auto-pick one.
+      if (result.id) {
+        const chRes = await fetch('/api/send-clinic-otp', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ verifiedClinicId: result.id, action: 'list_channels' }),
+        })
+        const chResult = await chRes.json()
+        if (chResult.channels?.length > 0) {
+          setOtpChannels(chResult.channels)
+          setStage('otp_channel_choice')
+          return
+        }
+      }
+      // No registry contact of any kind on file for this clinic at all -
+      // contact verification genuinely isn't possible here, not skipped.
+      setStage('choose')
     } catch (e) {
       setVerificationResult({ status: 'ERROR', message: 'Could not reach the verification service.' })
+      setVerifying(false)
+      setStage('choose')
     }
-    setVerifying(false)
-    setStage('choose')
+  }
+
+  async function handleChooseChannel(channel) {
+    setOtpSending(true)
+    const res = await fetch('/api/send-clinic-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ verifiedClinicId: verificationResult.id, action: 'send', channel }),
+    })
+    const result = await res.json()
+    setOtpState(result)
+    setOtpSending(false)
+    if (result.status === 'SENT') setStage('otp_challenge')
+  }
+
+  async function handleOtpVerify() {
+    setOtpVerifying(true)
+    const res = await fetch('/api/verify-clinic-otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ verifiedClinicId: verificationResult.id, code: otpCode }),
+    })
+    const result = await res.json()
+    setOtpVerifyResult(result)
+    setOtpVerifying(false)
+    if (result.status === 'VERIFIED') setStage('choose')
   }
 
   async function handleQrScanned(qrData, direction) {
@@ -95,8 +166,34 @@ export default function SharePage() {
           <input value={clinicName} onChange={e=>setClinicName(e.target.value)} placeholder="Clinic name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
           <input value={clinicRegNumber} onChange={e=>setClinicRegNumber(e.target.value)} placeholder="ORPHF licence/exemption code (e.g. CE000001)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
           <input value={businessRegNumber} onChange={e=>setBusinessRegNumber(e.target.value)} placeholder="Business Registration Number (e.g. C1572528)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px'}}/>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Business Registration Certificate (kept on file)</div>
+          <input type="file" accept="image/*,.pdf" onChange={e=>setBusinessRegDoc(e.target.files[0])} style={{width:'100%',marginBottom:'10px',fontSize:'13px'}}/>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>ORPHF Licence / Letter of Exemption (kept on file)</div>
+          <input type="file" accept="image/*,.pdf" onChange={e=>setOrphfLicenceDoc(e.target.files[0])} style={{width:'100%',marginBottom:'14px',fontSize:'13px'}}/>
           {gateError && <div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{gateError}</div>}
           <button onClick={handleGateSubmit} disabled={verifying} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:verifying?'default':'pointer',opacity:verifying?0.7:1}}>{verifying?'Verifying...':'Continue'}</button>
+        </>}
+
+        {stage==='otp_channel_choice' && <>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Confirm you're from this clinic</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Choose how to receive a code - sent only to the contact the government registry has on file for this clinic, not anything typed above.</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+            {otpChannels.includes('call')&&<button onClick={()=>handleChooseChannel('call')} disabled={otpSending} style={{width:'100%',padding:'14px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',textAlign:'left'}}>Phone call</button>}
+            {otpChannels.includes('text')&&<button onClick={()=>handleChooseChannel('text')} disabled={otpSending} style={{width:'100%',padding:'14px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',textAlign:'left'}}>Text message</button>}
+            {otpChannels.includes('email')&&<button onClick={()=>handleChooseChannel('email')} disabled={otpSending} style={{width:'100%',padding:'14px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',textAlign:'left'}}>Email</button>}
+          </div>
+          {otpSending&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px',textAlign:'center'}}>Sending...</div>}
+        </>}
+
+        {stage==='otp_challenge' && <>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Enter the code</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>Sent via {otpState?.channel} to {otpState?.target} - the registry's own contact for this clinic.</div>
+          {otpState?.devOnlyCode&&<div style={{background:'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#e65100'}}>{'\u25c7'} No live SMS/voice/email provider connected yet - shown here for now: <strong>{otpState.devOnlyCode}</strong></div>}
+          <input value={otpCode} onChange={e=>setOtpCode(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px',letterSpacing:'2px'}}/>
+          {otpVerifyResult?.status==='INCORRECT'&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>That code doesn't match.</div>}
+          {otpVerifyResult?.status==='EXPIRED'&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>That code expired - request a new one.</div>}
+          <button onClick={handleOtpVerify} disabled={otpVerifying||otpCode.length<6} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px',opacity:otpVerifying||otpCode.length<6?0.6:1}}>{otpVerifying?'Checking...':'Confirm'}</button>
+          <button onClick={()=>setStage('otp_channel_choice')} style={{width:'100%',padding:'10px',background:'none',border:'none',color:C.textSub,fontSize:'12px',cursor:'pointer'}}>Try a different channel</button>
         </>}
 
         {stage==='choose' && <>
