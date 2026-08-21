@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/sync-orphf-registry",
+      "schedule": "0 3 * * 0"
+    }
+  ]
+}
