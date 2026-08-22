@@ -560,16 +560,27 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
 }
 
 
-// ── DOCTOR VIDEO CALL (demo) ─────────────────────────────────────────────────
-function DoctorVideoCallModal({ patientName, onClose }) {
+// ── DOCTOR VIDEO CALL — real, working embed via Jitsi Meet's public
+// server. No account, API key, or signup required, and it's a genuine,
+// functioning video call, not a demo - the trade-off is it runs on
+// meet.jit.si's shared infrastructure rather than Medsa's own, which is
+// fine for now and can move to a dedicated/self-hosted provider later
+// without changing anything else in this file.
+function DoctorVideoCallModal({ patientName, roomId, onClose }) {
   if (!patientName) return null
+  const roomName = `medsa-${(roomId||patientName).toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
+  const jitsiUrl = `https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`
   return (
-    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff'}}>
-      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'8px'}}>Video call (demo)</div>
-      <div style={{width:96,height:96,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700,marginBottom:'16px'}}>{patientName[0]}</div>
-      <div style={{fontSize:'18px',fontWeight:600,marginBottom:'6px'}}>{patientName}</div>
-      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'40px'}}>Calling…</div>
-      <div onClick={onClose} style={{width:56,height:56,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'20px'}}>✕</div>
+    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column'}}>
+      <div style={{padding:'10px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',background:'#111'}}>
+        <div style={{color:'#fff',fontSize:'13px'}}>Video call with {patientName}</div>
+        <div onClick={onClose} style={{width:36,height:36,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'16px',color:'#fff'}}>✕</div>
+      </div>
+      <iframe
+        src={jitsiUrl}
+        style={{flex:1,border:'none'}}
+        allow="camera; microphone; fullscreen; display-capture; autoplay"
+      />
     </div>
   )
 }
@@ -614,7 +625,7 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
         </div>
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName)}>◈ Video call</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName, patient.patientMedsaId)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           <Btn style={{width:'100%'}} onClick={onGoToConsultation}>📋 Go to full consultation</Btn>
         </div>}
@@ -640,7 +651,7 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
 
 function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
-  const [callingName,setCallingName]=useState(null)
+  const [callingPatient,setCallingPatient]=useState(null) // {name, medsaId}
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>My Patients</h2>
@@ -666,19 +677,20 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
         patient={actionPatient}
         onClose={()=>setActionPatient(null)}
         doctorLabel={staffMember?.name || 'Doctor'}
-        onStartCall={(name)=>{setCallingName(name);setActionPatient(null)}}
+        onStartCall={(name, medsaId)=>{setCallingPatient({name, medsaId});setActionPatient(null)}}
         onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
       />
-      <DoctorVideoCallModal patientName={callingName} onClose={()=>setCallingName(null)}/>
+      <DoctorVideoCallModal patientName={callingPatient?.name} roomId={callingPatient?.medsaId} onClose={()=>setCallingPatient(null)}/>
     </PageWrap>
   )
 }
 
-function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId }) {
+function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
   const [records,setRecords]=useState([])
   const [conditions,setConditions]=useState([])
   const [allergies,setAllergies]=useState([])
+  const [activeMedications,setActiveMedications]=useState([])
   const [loading,setLoading]=useState(true)
   const [notes,setNotes]=useState('')
   const [diagnosis,setDiagnosis]=useState('')
@@ -693,6 +705,20 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
   const [overrideReasons,setOverrideReasons]=useState({}) // rxIndex -> reason text
 
+  // Real drug-to-drug interaction engine. Collects every other drug
+  // actually in play for this patient right now - both the other drugs
+  // in this same prescription being written today, and the patient's
+  // existing active medications from past visits. This is the piece that
+  // was missing before: the old version only ever checked a single drug
+  // against conditions/allergies, never against other drugs.
+  function getAllActiveDrugNames(excludeIdx) {
+    const otherNewDrugs = prescriptions
+      .map((p, i) => i === excludeIdx ? null : p.drug?.trim())
+      .filter(Boolean)
+    const existingDrugNames = activeMedications.map(m => m.medication_name).filter(Boolean)
+    return [...new Set([...otherNewDrugs, ...existingDrugNames])]
+  }
+
   async function checkDrugSafety(idx, drugName) {
     if (!drugName.trim()) return
     setSafetyChecks(prev => ({...prev, [idx]: {status:'checking'}}))
@@ -704,7 +730,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         .eq('drug_name', drugName.trim()).eq('medicine_type', medicineType||'western').maybeSingle(),
     ])
 
-    // Local, institution-approved rules - same check as before.
+    // Local, institution-approved rules - condition/allergy/age checks.
     let localStatus = orderSet ? 'passed' : 'no_data_on_file'
     const localTriggered = []
     if (orderSet) {
@@ -723,6 +749,31 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       else if (softMatches.length > 0) { localStatus = 'soft_stop'; localTriggered.push(...softMatches) }
     }
 
+    // Real drug-to-drug check - looks at every OTHER drug already in play
+    // (other new prescriptions this visit, plus existing active
+    // medications) and treats an explicit interaction listed against this
+    // new drug the same way condition/allergy matches are treated: hard
+    // stop blocks, soft stop requires a reason. Once a real CDS/MIMS
+    // provider is connected, this is the one place that changes - it
+    // would receive this same otherDrugs list and return a verdict the
+    // same way, without needing anything downstream to change.
+    const otherDrugs = getAllActiveDrugNames(idx)
+    if (otherDrugs.length > 0) {
+      const { data: interactionRows } = await supabase.from('order_sets')
+        .select('drug_name, hard_stop_conditions, soft_stop_conditions')
+        .eq('institution_id', institutionId).in('drug_name', otherDrugs)
+      for (const row of interactionRows || []) {
+        const nameLower = drugName.trim().toLowerCase()
+        if ((row.hard_stop_conditions||[]).some(c => c.toLowerCase() === nameLower)) {
+          localStatus = 'hard_stop_blocked'
+          localTriggered.push(`Interacts with ${row.drug_name} (already prescribed)`)
+        } else if ((row.soft_stop_conditions||[]).some(c => c.toLowerCase() === nameLower) && localStatus !== 'hard_stop_blocked') {
+          localStatus = 'soft_stop'
+          localTriggered.push(`Possible interaction with ${row.drug_name} (already prescribed)`)
+        }
+      }
+    }
+
     // Real, external CDS plugin check - only runs if this drug actually
     // has a standardized code on file, since without one no real lookup
     // is possible (same "no data" honesty as the local check).
@@ -737,6 +788,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           body: JSON.stringify({
             patientId: patient.id, ageInMonths, weightKg: parseFloat(weightKg)||null,
             drugName: drugName.trim(), atcCode: drugRef.atc_code, hkRegistrationNumber: drugRef.hk_registration_number,
+            otherDrugs,
           }),
         })
         cdsResult = await res.json()
@@ -745,10 +797,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       }
     }
 
-    // Merge - the more cautious of the two sources wins. A hard stop from
-    // either source blocks; a warning from either requires an override
-    // reason; only clear from both (or no data from both) passes through
-    // cleanly.
+    // Merge - the more cautious of all sources wins. A hard stop from
+    // any source blocks; a warning from any requires an override reason;
+    // only clear from all (or no data from all) passes through cleanly.
     const severity = { hard_stop_blocked: 3, WARNING: 2, soft_stop: 2, ERROR: 2, passed: 1, CLEAR: 1, no_data_on_file: 0 }
     const cdsStatus = cdsResult?.safetyStatus === 'WARNING' ? 'soft_stop' : cdsResult?.safetyStatus === 'ERROR' ? 'soft_stop' : cdsResult ? 'passed' : 'no_data_on_file'
     const finalStatus = severity[cdsStatus] > severity[localStatus] ? cdsStatus : localStatus
@@ -759,7 +810,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   }
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
-  const [catalogClinicType,setCatalogClinicType]=useState('tcm') // TODO: should come from real institution setting once one exists
+  const [catalogClinicType,setCatalogClinicType]=useState(medicineType==='chinese'?'tcm':'western')
   const [itemPickerOpen,setItemPickerOpen]=useState(false)
 
   // Real service catalog, filtered by clinic type - what the doctor
@@ -893,12 +944,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         // window status. Real, live search against the shared patient
         // record every time - not a local copy stored in this clinic's
         // own data, so it always reflects the patient's actual, current
-        // Medsa profile.
-        const [{data:c},{data:a}] = await Promise.all([
+        // Medsa profile. Active medications loaded here too - this is
+        // what the drug interaction engine checks new prescriptions
+        // against.
+        const [{data:c},{data:a},{data:m}] = await Promise.all([
           supabase.from('conditions').select('*').eq('patient_id',p.id).eq('active',true),
           supabase.from('allergies').select('*').eq('patient_id',p.id),
+          supabase.from('medications').select('*').eq('patient_id',p.id).eq('active',true),
         ])
-        setConditions(c||[]); setAllergies(a||[])
+        setConditions(c||[]); setAllergies(a||[]); setActiveMedications(m||[])
 
         // Full history (past visit records) is the part that's actually
         // gated - checks that real consent exists and that the current
@@ -1399,7 +1453,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, refillRequests=[], onRefillDecision, institutionName }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, institutionName }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -1487,22 +1541,6 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
         <button onClick={handleExportMedicationLog} disabled={exporting} style={{padding:'8px 16px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{exporting?'Preparing…':'Export medication log (CSV)'}</button>
       </div>
       {inventoryWarning&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.red}}>{'\u26a0'} {inventoryWarning}</div>}
-
-      {refillRequests.length>0&&<>
-        <SecLabel>Refill requests</SecLabel>
-        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'24px'}}>
-          {refillRequests.map(r=>(
-            <Card key={r.id} style={{padding:'14px 16px',border:`1.5px solid ${C.blue}`}}>
-              <div style={{fontSize:'14px',fontWeight:600}}>{r.patients?.full_name||'Unknown'}</div>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{r.medication_name} {r.dosage} - requested {new Date(r.refill_requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
-              <div style={{display:'flex',gap:'8px'}}>
-                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>onRefillDecision(r,false)}>Deny</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onRefillDecision(r,true)}>Approve - HK$150</Btn>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </>}
 
       {waiting.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px',marginBottom:'20px'}}>No pending prescriptions right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'28px'}}>
@@ -1595,6 +1633,23 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
   const [loadingQueue,setLoadingQueue]=useState(true)
   const [activeAction,setActiveAction]=useState(null) // {type:'checkedin'|'scheduled', entry}
 
+  // Real revenue stat - queries today's actual transactions. This was
+  // previously a static "HK$4,820" string that never changed at all, and
+  // then briefly a reference to variables that were never declared,
+  // which crashed this entire screen. Both are fixed here: real query,
+  // real state.
+  const [todaysRevenue,setTodaysRevenue]=useState(0)
+  const [todaysTransactionCount,setTodaysTransactionCount]=useState(0)
+
+  async function loadRevenue() {
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    const { data } = await supabase.from('transactions').select('patient_pays')
+      .gte('created_at', dayStart.toISOString()).lte('created_at', dayEnd.toISOString())
+    setTodaysRevenue((data||[]).reduce((sum,t)=>sum+(t.patient_pays||0),0))
+    setTodaysTransactionCount((data||[]).length)
+  }
+
   async function loadTodaysQueue() {
     setLoadingQueue(true)
     const dayStart = new Date(); dayStart.setHours(0,0,0,0)
@@ -1612,7 +1667,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
     setLoadingQueue(false)
   }
 
-  useEffect(() => { loadTodaysQueue() }, [])
+  useEffect(() => { loadTodaysQueue(); loadRevenue() }, [])
 
   return (
     <PageWrap maxWidth={720}>
@@ -1620,7 +1675,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Checked in today" value={inRoom} sub="patients" color={C.blue} bg={C.blueLight}/>
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
-       <StatCard label="Today's revenue" value={`HK$${todaysRevenue.toFixed(0)}`} sub={`${todaysTransactionCount} transaction${todaysTransactionCount===1?'':'s'}`} color={C.green} bg={C.greenLight}/>
+        <StatCard label="Today's revenue" value={`HK$${todaysRevenue.toFixed(0)}`} sub={`${todaysTransactionCount} transaction${todaysTransactionCount===1?'':'s'}`} color={C.green} bg={C.greenLight}/>
       </div>
       <SecLabel>Checked-in patients</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
@@ -1676,8 +1731,8 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn }) {
-  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes' | 'prepnotes'
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup }) {
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
@@ -1693,15 +1748,45 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const [medications,setMedications]=useState([])
   const [records,setRecords]=useState([])
 
+  // Real working-hours-based slots for rescheduling - replaces the
+  // hardcoded ['09:00','09:30',...] list, which never reflected the
+  // doctor's actual hours (set in Working Hours) and could suggest a
+  // time they don't even work.
+  const [availableSlots,setAvailableSlots]=useState([])
+  const [slotsLoading,setSlotsLoading]=useState(true)
+
+  useEffect(() => {
+    loadClinicDoctors().then(setClinicDoctors)
+  }, [])
+
+  useEffect(() => {
+    async function loadSlots() {
+      setSlotsLoading(true)
+      if (!appt?.doctor) { setAvailableSlots([]); setSlotsLoading(false); return }
+      const dayOfWeek = new Date().getDay()
+      const { data } = await supabase.from('doctor_availability').select('*')
+        .eq('doctor_name', appt.doctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+      if (!data || data.is_off) { setAvailableSlots([]); setSlotsLoading(false); return }
+      const slots = []
+      const [startH, startM] = (data.start_time||'09:00').split(':').map(Number)
+      const [endH, endM] = (data.end_time||'17:00').split(':').map(Number)
+      let current = startH*60 + startM
+      const end = endH*60 + endM
+      while (current < end) {
+        slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
+        current += data.slot_duration_minutes || 30
+      }
+      setAvailableSlots(slots)
+      setSlotsLoading(false)
+    }
+    loadSlots()
+  }, [appt?.doctor])
+
   // Show real patient info here - the same view as when their Medsa ID is
   // scanned at check-in - not just a bare scheduling row. Full medical
   // history is available here (within the consent window) so a doctor
   // can review and prep ahead of a follow-up or first visit - this is
   // separate from "Log diagnosis," which still requires actual check-in.
-  useEffect(() => {
-    loadClinicDoctors().then(setClinicDoctors)
-  }, [])
-
   useEffect(() => {
     async function loadPatient() {
       if (!appt?.medsaId) { setLoadingPatient(false); setPatientFetchError('This appointment has no linked Medsa ID.'); return }
@@ -1739,7 +1824,6 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   // Only offer doctors in the same department/specialty as this
   // appointment - switching to an unrelated specialty wouldn't make sense.
   const DOCTORS = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
-  const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00']
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
@@ -1792,7 +1876,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
 
         {!loadingPatient&&!withinDataWindow&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>
           ◇ {appt.patient} · {appt.time} · {appt.type} — {consentReason==='outside_window'
-            ? "outside this patient's consent window (12 hours either side of their appointment), so clinical details aren't shown here."
+            ? "outside this patient's consent window, so clinical details aren't shown here."
             : 'no consent is on file for this patient yet, so clinical details aren\'t shown here.'} Scheduling changes still work below.
         </div>}
         {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&role!=='doctor'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
@@ -1837,11 +1921,13 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
 
         {mode==='reschedule'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>New time for {appt.patient}</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px',marginBottom:'14px'}}>
-            {TIMES.map(t=>(
+          {slotsLoading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>Loading {appt.doctor}'s working hours…</div>}
+          {!slotsLoading&&availableSlots.length===0&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'14px'}}>{'\u26a0'} No working hours set for {appt.doctor} today - set them in Working Hours before rescheduling here.</div>}
+          {!slotsLoading&&availableSlots.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px',marginBottom:'14px'}}>
+            {availableSlots.map(t=>(
               <div key={t} onClick={()=>setNewTime(t)} style={{border:`0.5px solid ${newTime===t?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newTime===t?C.green:C.card,color:newTime===t?'#fff':C.text}}>{t}</div>
             ))}
-          </div>
+          </div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
             <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,time:newTime||appt.time});onClose()}} disabled={!newTime}>Confirm change</Btn>
@@ -1867,9 +1953,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Follow-up appointment for {appt.patient}</div>
           <input value={followupDate} onChange={e=>setFollowupDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>This takes you to Schedule with {appt.patient} already selected, so you just pick the day and time - no need to search or re-enter their details.</div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-           <Btn variant="primary" style={{flex:1}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
           </div>
         </>}
 
@@ -1916,7 +2003,7 @@ function HelpScreen({ staffMember }) {
     { key:'technical', title:'Report a technical issue', sub:'Contact Medsa support team', isForm:true, formType:'technical_issue' },
     { key:'complaint', title:'Submit a complaint', sub:'About a patient, colleague, or process', isForm:true, formType:'complaint' },
     { key:'faq', title:'FAQ', sub:'Common questions about the portal', content:'Q: How do I reset a staff PIN?\nA: Practice Manager → Staff → select the staff member → Reset PIN.\n\nQ: What if a patient has no appointment when checking in?\nA: Book one via Scheduling first - check-in requires a real appointment to correctly notify the doctor.\n\nQ: How do I add a new insurance plan?\nA: Use the Insurance Plans admin page - real age-banded pricing tiers are required.' },
-    { key:'privacy', title:'Data & privacy', sub:'How patient data is protected', content:'Patient records are only visible within their consent window (12 hours either side of a scheduled appointment), or with explicit patient-granted access. Staff actions on patient records are logged. Patients own their claimed records - a clinic never retains ownership once a profile is claimed.' },
+    { key:'privacy', title:'Data & privacy', sub:'How patient data is protected', content:'Patient records are only visible within their consent window, or with explicit patient-granted access. Staff actions on patient records are logged. Patients own their claimed records - a clinic never retains ownership once a profile is claimed.' },
   ]
 
   return (
@@ -1969,6 +2056,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [uploadedDocName,setUploadedDocName]=useState(null)
   const [uploading,setUploading]=useState(false)
 
+  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+
   async function handleDocUpload(file) {
     setUploading(true)
     setUploadedDocName(file.name)
@@ -2014,16 +2103,26 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     for (const row of rows) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
       if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
-      const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
       const rowIsNurse = row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase())
+      // e-PC required per row for doctors and nurse-flagged assistants -
+      // this is the real scan target itself (see epc_link below), not a
+      // separately Medsa-generated code, so it can't be skipped here.
+      if ((row.role==='doctor' || rowIsNurse) && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
+      const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
+      // Check for an existing person with this same e-PC before creating
+      // a duplicate - the e-PC is the real, durable identity here.
+      if (row.epc_link?.trim()) {
+        const { data: existing } = await supabase.from('staff_credentials').select('id').eq('epc_link', row.epc_link.trim()).maybeSingle()
+        if (existing) { skippedRows.push(`${row.full_name} - e-PC already on file for another staff record`); continue }
+      }
       const { error: insErr } = await supabase.from('staff_credentials').insert({
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
         full_name:row.full_name, role:row.role, department:row.department,
         registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
         sex:row.sex||null, date_of_birth:row.date_of_birth||null,
-        has_epc: ['true','yes','1'].includes((row.has_epc||'').toLowerCase()),
+        has_epc: !!row.epc_link?.trim(),
         is_nurse: rowIsNurse,
-        epc_link: row.epc_link||null,
+        epc_link: row.epc_link?.trim() || null,
         // Deliberately never true via bulk import, regardless of CSV
         // content - this is a personal legal declaration a doctor makes
         // about themselves, not something an admin import can set on
@@ -2120,7 +2219,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link - this is the real, scannable e-PC identifier itself, checked against existing records to avoid duplicates. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
@@ -2157,9 +2256,10 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             Also a credentialed nurse (unlocks e-PC requirement and portal eligibility)
           </label>}
           {(newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&<>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required, this is the real MCHK-issued credential</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real MCHK-issued identifier and the actual scan target itself, not a separate Medsa-generated code.</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
+          {newRole==='clinic_assistant'&&!newIsNurse&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{'\u25c7'} No e-PC required - Medsa will onboard this person separately with their own generated QR code (a paid, Medsa-run process, not urgent).</div>}
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
           <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px',marginTop:'-6px'}}>Enter manually for now - no public MCHK API exists yet to cross-check this automatically against live license status.</div>
           <input type="date" value={newExpiry} onChange={e=>setNewExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
@@ -2331,7 +2431,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -2351,12 +2451,46 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   const [newApptSaving,setNewApptSaving]=useState(false)
   const [newApptError,setNewApptError]=useState(null)
 
+  // Real working-hours-based slots for the new-appointment form too - this
+  // is the actual point of Working Hours syncing to booking: it should be
+  // impossible to book outside a doctor's real hours from here, not just
+  // from the reschedule modal.
+  const [newApptSlots,setNewApptSlots]=useState([])
+  const [newApptSlotsLoading,setNewApptSlotsLoading]=useState(false)
+
   useEffect(() => {
     loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setNewApptDoctor(docs[0].name) })
   }, [])
 
+  useEffect(() => {
+    async function loadSlots() {
+      if (!newApptDoctor) { setNewApptSlots([]); return }
+      setNewApptSlotsLoading(true)
+      setNewApptTime('')
+      const dayOfWeek = selectedDay.getDay()
+      const { data } = await supabase.from('doctor_availability').select('*')
+        .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+      if (!data || data.is_off) { setNewApptSlots([]); setNewApptSlotsLoading(false); return }
+      const slots = []
+      const [startH, startM] = (data.start_time||'09:00').split(':').map(Number)
+      const [endH, endM] = (data.end_time||'17:00').split(':').map(Number)
+      let current = startH*60 + startM
+      const end = endH*60 + endM
+      while (current < end) {
+        slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
+        current += data.slot_duration_minutes || 30
+      }
+      setNewApptSlots(slots)
+      setNewApptSlotsLoading(false)
+    }
+    if (showNewApptForm) loadSlots()
+  }, [newApptDoctor, selectedDay, showNewApptForm])
+
   // Arrived here after registering a new walk-in patient - open the form
   // with them already selected instead of making reception search again.
+  // Also arrives here when scheduling a follow-up from the schedule
+  // action modal, for the exact same reason - both cases mean the patient
+  // is already known and shouldn't need re-searching.
   useEffect(() => {
     if (!preselectPatient) return
     setNewApptPatient(preselectPatient)
@@ -2472,9 +2606,9 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     if (!patientRow) return
     const isWalkIn = !appt.scheduledAt || appt.ticket === 'SCH' // no real booked time - this is a walk-in
     const apptTime = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
-    // Booked: 24h before AND after the consultation time (48h window
-    // total). Walk-in: no "before" makes sense since there's no scheduled
-    // time to count back from - 24h after the actual visit only.
+    // Booked: 24h before AND after the consultation time. Walk-in: no
+    // "before" makes sense since there's no scheduled time to count back
+    // from - 24h after the actual visit only.
     const windowStart = isWalkIn ? apptTime : new Date(apptTime.getTime() - 24*60*60*1000)
     const windowEnd = new Date(apptTime.getTime() + 24*60*60*1000)
     await supabase.from('appointment_intake').insert({
@@ -2527,7 +2661,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       <SecLabel>{isDoctorView?`Today's patients · ${staffMember.name}`:'All doctors'} · {selectedDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})}</SecLabel>
       {loadingAppts&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>Loading...</div>}
       <div style={{margin:'0 16px 12px',background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 14px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
-        ◇ Clinical data access is based on each patient's 48-hour consent window from booking, not just whether they're physically checked in - see the badge on each appointment.
+        ◇ Clinical data access is based on each patient's consent window from booking, not just whether they're physically checked in - see the badge on each appointment.
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
@@ -2542,14 +2676,26 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
           </Card>
         ))}
       </div>
-      <ClinicScheduleActionModal appt={activeAppt} onClose={()=>setActiveAppt(null)} onSave={handleSaveAppt} withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false} consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null} onConfirmConsent={handleConfirmConsent} onGoToConsultation={onGoToConsultation} role={staffMember?.role} onCheckedIn={onCheckedIn} onCancelCheckIn={async(appt)=>{
-        await onCancelCheckIn(appt)
-        // The backend update alone doesn't refresh what's on screen - this
-        // was the actual bug: the row would revert in Supabase but the
-        // local list kept showing the stale "checked in" state until a
-        // manual reload.
-        loadRealAppointments(selectedDay)
-      }}/>
+      <ClinicScheduleActionModal
+        appt={activeAppt}
+        onClose={()=>setActiveAppt(null)}
+        onSave={handleSaveAppt}
+        withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false}
+        consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null}
+        onConfirmConsent={handleConfirmConsent}
+        onGoToConsultation={onGoToConsultation}
+        role={staffMember?.role}
+        onCheckedIn={onCheckedIn}
+        onScheduleFollowup={onPreselectPatientForFollowup}
+        onCancelCheckIn={async(appt)=>{
+          await onCancelCheckIn(appt)
+          // The backend update alone doesn't refresh what's on screen - this
+          // was the actual bug: the row would revert in Supabase but the
+          // local list kept showing the stale "checked in" state until a
+          // manual reload.
+          loadRealAppointments(selectedDay)
+        }}
+      />
       {showNewApptForm&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setShowNewApptForm(false)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'16px'}}>New appointment</div>
@@ -2558,12 +2704,19 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
             <Btn onClick={handleNewApptSearch}>Search</Btn>
           </div>
           {newApptPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginBottom:'12px',fontSize:'12px',color:C.green}}>✓ {newApptPatient.full_name} ({newApptPatient.medsa_id})</div>}
-          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-            <input value={newApptTime} onChange={e=>setNewApptTime(e.target.value)} type="time" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}}/>
-            <select value={newApptDoctor} onChange={e=>setNewApptDoctor(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px'}}>
-              {clinicDoctors.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
-            </select>
-          </div>
+          <select value={newApptDoctor} onChange={e=>setNewApptDoctor(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px'}}>
+            {clinicDoctors.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
+          </select>
+          {/* Real, working-hours-based time slots - replaces the bare
+              <input type="time"> that let front desk book any time at all,
+              regardless of whether the doctor actually works then. */}
+          {newApptSlotsLoading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>Loading {newApptDoctor}'s working hours…</div>}
+          {!newApptSlotsLoading&&newApptSlots.length===0&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'10px'}}>{'\u26a0'} {newApptDoctor} has no working hours set for {selectedDay.toLocaleDateString('en-HK',{weekday:'long'})} - set them in Working Hours first.</div>}
+          {!newApptSlotsLoading&&newApptSlots.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'6px',marginBottom:'12px'}}>
+            {newApptSlots.map(t=>(
+              <div key={t} onClick={()=>setNewApptTime(t)} style={{border:`0.5px solid ${newApptTime===t?C.green:C.border}`,borderRadius:'8px',padding:'7px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newApptTime===t?C.green:C.card,color:newApptTime===t?'#fff':C.text}}>{t}</div>
+            ))}
+          </div>}
           <input value={newApptReason} onChange={e=>setNewApptReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
           {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}>{newApptError}</div>}
           {newApptError&&<div style={{marginBottom:'10px'}}><span onClick={()=>onNavNewPatient?.(newApptSearch)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span></div>}
@@ -2629,10 +2782,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setPendingPayments(withAmountOwed)
     setPendingLoading(false)
   }
-
-  // Fee calculation now lives centrally in insuranceAdapter.js
-  // (calculatePaymentProcessingFee) - single source of truth, matching
-  // ClaimsScreen's identical refactor.
 
   async function loadLedger() {
     setLedgerLoading(true)
@@ -2781,15 +2930,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(false)
   }
 
-  // The immediate copay-collection step - same claim, same screen, right
-  // after the insurance portion comes back. Matches the exact pattern the
-  // existing (older) collect-payment screen already uses: call the
-  // adapter to record the payment, then log a real transactions row so it
-  // shows up on Financial records - this was the real gap before, since
-  // neither of these two functions logged anything there at all.
-  // Real fix for a genuine gap - there was previously no way anywhere in
-  // ClinicOps to record a patient's insurance at all. Lazy-loads the full
-  // plan list only when front desk actually opens this, not preemptively.
   useEffect(() => {
     if (!addPlanOpen || allPlans.length > 0) return
     async function loadPlans() {
@@ -2812,8 +2952,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     }
     setAddPlanOpen(false)
     setAddPlanSearch('')
-    // Re-run the matching engine now that this patient genuinely holds
-    // this plan, so it shows up in the eligible list immediately.
     setEligiblePlansLoading(true)
     const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
     setEligiblePlans(matches)
@@ -2846,9 +2984,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    // Real gap fixed - this never logged to transactions before, meaning
-    // a direct cash/card/Octopus visit (no insurance involved) would
-    // never have appeared on Financial records at all.
     await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -2861,9 +2996,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(false)
   }
 
-  // Real billing flow from the task board - takes priority over the tab
-  // system below, since arriving here means a specific consultation needs
-  // billing regardless of which tab was last open.
   if (preselectRecordId || billingRecord) {
     if (billingRecordLoading) return <PageWrap maxWidth={520}><div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>Loading consultation...</div></PageWrap>
     if (!billingRecord) return <PageWrap maxWidth={520}><div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>Consultation record not found.</div></PageWrap>
@@ -3194,9 +3326,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           </div>
         ))}
       </div>
-      <div style={{padding:'10px 8px',borderRadius:'8px',textAlign:'center',background:C.card,opacity:0.5,marginBottom:'18px'}}>
-        <div style={{fontSize:'12px',fontWeight:500,color:C.textMuted}}>{'\u25c6'} Care Card - coming soon</div>
-      </div>
       <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${(selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)}`}</Btn>
       </>}
     </PageWrap>
@@ -3260,9 +3389,6 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     let imported=0, skipped=0
     for (const row of rows) {
       if (!row.item_name) { skipped++; continue }
-      // No DB-level unique constraint on (item_name, institution_id) yet,
-      // so check manually before deciding insert vs update - this keeps
-      // each institution's stock properly separate.
       const { data: existing } = await supabase
         .from('clinic_inventory').select('id')
         .eq('item_name', row.item_name).eq('institution_id', institutionId).maybeSingle()
@@ -3295,12 +3421,6 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     const skippedForNoCode = []
     for (const row of rows) {
       if (!row.drug_name) { skipped++; continue }
-      // Mandatory ID-matching field - without a real standardized code,
-      // this drug can never be looked up against a real safety database,
-      // no matter how complete the rest of the row is. This CSV is
-      // strictly inventory/reference data, never actual safety logic -
-      // hard/soft stop rules only ever come from order_sets, which this
-      // import never touches.
       const hkReg = row.hk_registration_number?.trim() || null
       const atc = row.atc_code?.trim() || null
       if (!hkReg && !atc) { skippedForNoCode.push(row.drug_name); continue }
@@ -3316,11 +3436,6 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     }
     setImportResult({ type:'reference', imported, skipped: skipped+skippedForNoCode.length, skippedForNoCode, total: rows.length })
   }
-
-  // ICD-10 updates are Medsa-managed centrally (direct SQL import against
-  // the shared, non-institution-scoped icd10_reference table), not exposed
-  // to individual clinics - removed to avoid a Practice Manager accidentally
-  // overwriting the shared national dataset with the wrong file.
 
   async function handleAddItem() {
     if (!newItemName.trim()) { setAddItemError('Item name is required.'); return }
@@ -3398,7 +3513,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
         </label>
       </div>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name per row - only a practice manager can import this, and every rule is auto-approved under your own name, since who approved it is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple).</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name per row - only a practice manager can import this, and every rule is auto-approved under your own name, since who approved it is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple). Same-drug-name rows in hard_stop_conditions/soft_stop_conditions on another drug's row are what the drug-to-drug interaction check reads at prescribing time.</div>
       {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
         {{stock:'Stock', reference:'Drug info', orderset:'Order sets'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
         {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
@@ -3490,9 +3605,6 @@ function ClaimsScreen({ onNavPayment }) {
   const [adjudicationResult,setAdjudicationResult]=useState(null)
   const [affiliatedPolicies,setAffiliatedPolicies]=useState(null) // null = not checked yet, [] = checked, none found
 
-  // Once a patient is selected, find which plans they're actually
-  // affiliated with - the claim form should only ever offer plans they
-  // genuinely have, not every plan in the system.
   useEffect(() => {
     if (!selectedPatient?.id) { setAffiliatedPolicies(null); return }
     async function loadAffiliations() {
@@ -3503,12 +3615,6 @@ function ClaimsScreen({ onNavPayment }) {
     loadAffiliations()
   }, [selectedPatient?.id])
 
-  // Real link for the receipt to later find diagnosis/prescriptions for
-  // this claim - the most recent visit record for this patient that
-  // isn't already linked to a different claim. Not linked yet if there
-  // isn't one (e.g. patient is walking in to pay without a prior consult
-  // captured in medical_records) - the claim still submits fine, just
-  // without a receipt breakdown to show.
   const [pendingMedicalRecordId,setPendingMedicalRecordId]=useState(null)
   useEffect(() => {
     if (!selectedPatient?.id) { setPendingMedicalRecordId(null); return }
@@ -3549,10 +3655,6 @@ function ClaimsScreen({ onNavPayment }) {
     load()
   }, [reloadTrigger])
 
-  // Fee calculation now lives centrally in insuranceAdapter.js
-  // (calculatePlatformClaimFee) - single source of truth, matching
-  // PaymentScreen's identical refactor below.
-
   const statusMeta = {
     approved: {label:'Approved', type:'ok', desc:'Insurer has approved this claim in full'},
     partially_approved: {label:'Partially approved', type:'due', desc:'Insurer covered part of the claim - patient owes the remainder'},
@@ -3560,13 +3662,6 @@ function ClaimsScreen({ onNavPayment }) {
     pending_review: {label:'Pending review', type:'waiting', desc:'High-value claim - held for manual review before settlement'},
     settled: {label:'Settled', type:'ok', desc:'Payment collected and claim fully closed'},
   }
-
-  // Payment method is chosen exclusively in Payment now, never here - this
-  // screen just navigates there and later displays whatever was recorded.
-
-  // Manual settle removed - a claim auto-settles the instant it's resolved:
-  // immediately on approval if nothing's owed, or the moment a copay is
-  // actually collected (see recordCopayPayment / adjudicateClaim).
 
   if (step==='list') return (
     <PageWrap maxWidth={680}>
@@ -3761,55 +3856,9 @@ export default function ClinicOpsApp() {
     setPendingPrescriptions(withDrugs)
   }
 
-  // Refill requests - a genuinely separate workflow from new consultations
-  // (patient-initiated, not doctor-initiated), but shown alongside the
-  // same task board since front desk handles both.
-  const [refillRequests,setRefillRequests]=useState([])
-  async function loadRefillRequests() {
-    const { data } = await supabase.from('medications').select('*, patients(full_name, medsa_id)')
-      .eq('refill_status', 'requested').order('refill_requested_at', { ascending: false })
-    setRefillRequests(data || [])
-  }
-  async function handleRefillDecision(med, approved) {
-    if (!approved) {
-      await supabase.from('medications').update({ refill_status: 'denied' }).eq('id', med.id)
-      await loadRefillRequests()
-      return
-    }
-    // Real, itemized medication-only charge - no consultation fee, since a
-    // refill in HK practice doesn't require a full follow-up visit, per
-    // the earlier research. Creates a proper visit record so it can flow
-    // through the exact same real billing screen as everything else.
-    const { error: recErr } = await supabase.from('medical_records').insert({
-      patient_id: med.patient_id, record_type: 'refill', title: `Refill: ${med.medication_name}`,
-      date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'submitted',
-      doctor_name: staffMember?.name || 'Unknown',
-      line_items: [{ description: `${med.medication_name} refill`, category: 'medication', fee: 150, qty: 1 }],
-      total_fee: 150,
-    })
-    let newRecord = null
-    if (!recErr) {
-      const { data } = await supabase.from('medical_records').select('id')
-        .eq('patient_id', med.patient_id).eq('record_type', 'refill').eq('title', `Refill: ${med.medication_name}`)
-        .order('date_of_record', { ascending: false }).limit(1).maybeSingle()
-      newRecord = data
-    }
-    await supabase.from('medications').update({ refill_status: 'approved' }).eq('id', med.id)
-    if (newRecord) {
-      await supabase.from('medications').insert({
-        patient_id: med.patient_id, medical_record_id: newRecord.id, medication_name: med.medication_name,
-        dosage: med.dosage, frequency: med.frequency, quantity: med.quantity, duration_days: med.duration_days,
-        active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
-        prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
-      })
-    }
-    await loadRefillRequests()
-    await loadTaskBoard()
-  }
   useEffect(() => {
     loadTaskBoard()
-    loadRefillRequests()
-    const interval = setInterval(() => { loadTaskBoard(); loadRefillRequests() }, 15000)
+    const interval = setInterval(loadTaskBoard, 15000)
     return () => clearInterval(interval)
   }, [])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
@@ -3858,6 +3907,22 @@ export default function ClinicOpsApp() {
         department: r.department || 'All departments',
         status: r.status,
       })))
+
+      // Real, per-day ticket sequencing - was previously starting from 1
+      // every time this app reloaded, meaning a second reload (or a
+      // second staff member's own session) could easily hand out a ticket
+      // number that already existed earlier the same day. Reads today's
+      // actual highest ticket number from the checked-in queue and
+      // continues from there, so tickets stay unique and roughly ordered
+      // for the whole day regardless of how many times anyone reloads.
+      const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+      const { data: todaysTickets } = await supabase.from('clinic_queue').select('ticket')
+        .gte('checked_in_at', dayStart.toISOString())
+      const highestToday = (todaysTickets||[]).reduce((max, r) => {
+        const n = parseInt((r.ticket||'').replace(/[^0-9]/g,''), 10)
+        return isNaN(n) ? max : Math.max(max, n)
+      }, 0)
+      setNextTicket(highestToday + 1)
 
       const { data: rxRows } = await supabase
         .from('medications')
@@ -3931,9 +3996,8 @@ export default function ClinicOpsApp() {
     // modal, meaning a walk-in (or anyone checking in through this
     // general screen) never got a window at all and would always fail
     // the consent check. Booked appointments still get their real
-    // scheduled time and the 24h-before/24h-after window; a genuine
-    // walk-in gets 24h-after-only, since there's no scheduled time to
-    // count backward from.
+    // scheduled time and the before/after window; a genuine walk-in gets
+    // after-only, since there's no scheduled time to count backward from.
     const checkInTime = new Date()
     const windowStart = matchingAppt ? new Date(new Date(matchingAppt.scheduled_at).getTime() - 24*60*60*1000) : checkInTime
     const windowEnd = new Date((matchingAppt ? new Date(matchingAppt.scheduled_at).getTime() : checkInTime.getTime()) + 24*60*60*1000)
@@ -4090,30 +4154,39 @@ export default function ClinicOpsApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
-        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId}/>}
+        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
           prefillName={newPatientPrefillName}
           onCreated={newPatientOrigin==='schedule' ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')} : undefined}
         />}
-        {screen==='schedule'&&<ScheduleScreen staffMember={staffMember} onCheckedIn={handleCheckedIn} preselectPatient={schedulePreselectPatient} onConsumedPreselect={()=>setSchedulePreselectPatient(null)} onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}} onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now()});setScreen('consultation')}} onCancelCheckIn={async(appt)=>{
-          if (!appt?.medsaId) return
-          const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
-          if (!pRow) return
-          const dayStart=new Date(); dayStart.setHours(0,0,0,0)
-          const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
-          await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
-          // Also remove them from today's active clinic_queue, since
-          // ClinicOps check-in writes there too - undoing check-in should
-          // undo both, not just the appointment status.
-          const matching = checkedInQueue.find(q=>q.patientName===appt.patient && hoursRemaining(q.checkedInAt)>0)
-          if (matching) {
-            await supabase.from('clinic_queue').delete().eq('id', matching.id)
-            setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
-          }
-        }}/>}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} refillRequests={refillRequests} onRefillDecision={handleRefillDecision} institutionName={institutionName}/>}
+        {screen==='schedule'&&<ScheduleScreen
+          staffMember={staffMember}
+          onCheckedIn={handleCheckedIn}
+          preselectPatient={schedulePreselectPatient}
+          onConsumedPreselect={()=>setSchedulePreselectPatient(null)}
+          onPreselectPatientForFollowup={setSchedulePreselectPatient}
+          onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}}
+          onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now(), patientMedsaId: appt.medsaId});setScreen('consultation')}}
+          onCancelCheckIn={async(appt)=>{
+            if (!appt?.medsaId) return
+            const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
+            if (!pRow) return
+            const dayStart=new Date(); dayStart.setHours(0,0,0,0)
+            const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
+            await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+            // Also remove them from today's active clinic_queue, since
+            // ClinicOps check-in writes there too - undoing check-in should
+            // undo both, not just the appointment status.
+            const matching = checkedInQueue.find(q=>q.patientName===appt.patient && hoursRemaining(q.checkedInAt)>0)
+            if (matching) {
+              await supabase.from('clinic_queue').delete().eq('id', matching.id)
+              setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
+            }
+          }}
+        />}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} institutionName={institutionName}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
