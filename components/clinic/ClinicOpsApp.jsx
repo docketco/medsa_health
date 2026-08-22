@@ -93,13 +93,13 @@ function StaffLogin({ onLogin }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department')
-        .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
-      const mapped = (data||[]).map(s => ({
-        id: s.medsa_id, name: s.full_name, role: s.role,
-        roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
-        department: s.department,
-      }))
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id')
+  .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
+const mapped = (data||[]).map(s => ({
+  id: s.medsa_id, name: s.full_name, role: s.role,
+  roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
+  department: s.department, institutionId: s.institution_id,
+}))
       setStaff(mapped)
       setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
       setLoading(false)
@@ -1620,7 +1620,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Checked in today" value={inRoom} sub="patients" color={C.blue} bg={C.blueLight}/>
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
-        <StatCard label="Today's revenue" value="HK$4,820" sub="12 consultations" color={C.green} bg={C.greenLight}/>
+       <StatCard label="Today's revenue" value={`HK$${todaysRevenue.toFixed(0)}`} sub={`${todaysTransactionCount} transaction${todaysTransactionCount===1?'':'s'}`} color={C.green} bg={C.greenLight}/>
       </div>
       <SecLabel>Checked-in patients</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
@@ -1869,7 +1869,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
           <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={onClose} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
+           <Btn variant="primary" style={{flex:1}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
           </div>
         </>}
 
@@ -3105,7 +3105,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div style={{fontSize:'15px',fontWeight:700,color:p.remaining>0?C.green:C.amber}}>{p.remaining}</div>
               </div>
             </div>
-            {p.status==='unpaid_renewal'&&<Btn variant="amber" style={{width:'100%',marginTop:'10px'}}>Send renewal reminder to patient</Btn>}
           </Card>
         ))}
       </div>
@@ -3814,7 +3813,7 @@ export default function ClinicOpsApp() {
     return () => clearInterval(interval)
   }, [])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
-  const [nextTicket,setNextTicket]=useState(13)
+  const [nextTicket,setNextTicket]=useState(1)
   const [institutionId,setInstitutionId]=useState(null)
   const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
@@ -3824,13 +3823,19 @@ export default function ClinicOpsApp() {
   // Poisons Ordinance, or Chinese - Chinese Medicine Ordinance). These are
   // two separate regulatory systems in Hong Kong, so a clinic's drug
   // reference pool never mixes between them.
-  useEffect(() => {
-    async function loadInstitution() {
-      const { data } = await supabase.from('institutions').select('id, name, medicine_type').eq('name', 'Pacific Medical Group').maybeSingle()
-      if (data) { setInstitutionId(data.id); setInstitutionName(data.name || ''); setMedicineType(data.medicine_type || 'western') }
-    }
-    loadInstitution()
-  }, [])
+ useEffect(() => {
+  async function loadInstitution() {
+    // Real fix - resolves from whichever institution the logged-in staff
+    // member actually belongs to, not a hardcoded clinic name. This was
+    // the reason ClinicOps only ever worked for one specific clinic -
+    // onboarding a second clinic would have silently mixed their data
+    // into the first one's institution.
+    if (!staffMember?.institutionId) return
+    const { data } = await supabase.from('institutions').select('id, name, medicine_type').eq('id', staffMember.institutionId).maybeSingle()
+    if (data) { setInstitutionId(data.id); setInstitutionName(data.name || ''); setMedicineType(data.medicine_type || 'western') }
+  }
+  loadInstitution()
+}, [staffMember])
 
   // Load today's queue and pending prescriptions from Supabase - now
   // reusable (see effects below), since loading this only once at login
