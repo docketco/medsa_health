@@ -716,12 +716,55 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     loadUploads()
   }, [patient?.id])
 
-  async function handleFileUpload(file) {
-    if (!file || !patient?.id) return
+  // ── Clinic verification for patient uploads ──────────────────────────────
+  // Same underlying design as the out-of-network clinic verification used
+  // in share.jsx (the "clinic verifying itself" side of this) - not a
+  // second, parallel system. Reuses the exact same real registry table
+  // (`directory_clinics`, sourced from Companies Registry + ORPHF open
+  // data) that Find Care already queries, rather than inventing a new one.
+  // Freshness window matches the agreed 365 days (same as e-PC renewal).
+  // NOTE: assumes `directory_clinics` carries (or is extended with)
+  // `verification_status` and `last_verified_at` columns, and that a
+  // `clinic_verification_requests` table exists for the pending/email-sent
+  // state - reconcile these exact names with share.jsx's real schema once
+  // that file is rebuilt, so the two never drift into two different systems.
+  const [pendingUploadFile,setPendingUploadFile]=useState(null)
+  const [uploadStage,setUploadStage]=useState('idle') // idle | identify_clinic | confirm | done
+  const [clinicSearch,setClinicSearch]=useState('')
+  const [clinicPhone,setClinicPhone]=useState('')
+  const [clinicMatches,setClinicMatches]=useState([])
+  const [selectedClinic,setSelectedClinic]=useState(null)
+  const [verifyingClinic,setVerifyingClinic]=useState(false)
+  const [uploadOutcome,setUploadOutcome]=useState(null) // {status:'verified'|'pending'|'unverified', clinicName?}
+
+  function handlePickFile(file) {
+    if (!file) return
+    setPendingUploadFile(file)
+    setUploadStage('identify_clinic')
+    setClinicSearch(''); setClinicPhone(''); setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null)
+  }
+
+  async function searchUploadClinic(term) {
+    setClinicSearch(term)
+    setSelectedClinic(null)
+    if (!term.trim()) { setClinicMatches([]); return }
+    const { data } = await supabase.from('directory_clinics').select('*').ilike('name', `%${term}%`).limit(6)
+    setClinicMatches(data || [])
+  }
+
+  function phonesLooselyMatch(a, b) {
+    if (!a || !b) return null // nothing typed yet - not a mismatch, just unconfirmed
+    const digitsA = a.replace(/\D/g,'').slice(-8)
+    const digitsB = b.replace(/\D/g,'').slice(-8)
+    return digitsA && digitsB ? digitsA === digitsB : null
+  }
+
+  async function proceedWithUpload({ clinicId=null, verificationStatus }) {
+    if (!pendingUploadFile || !patient?.id) return
     setUploading(true)
     setUploadError(null)
-    const path = `${patient.medsa_id || patient.id}/${Date.now()}-${file.name}`
-    const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    const path = `${patient.medsa_id || patient.id}/${Date.now()}-${pendingUploadFile.name}`
+    const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, pendingUploadFile)
     if (uploadErr) { setUploadError(uploadErr.message); setUploading(false); return }
     // Storing the path, not a public URL - this bucket should be private,
     // with a signed, expiring URL generated only when actually viewed
@@ -729,26 +772,91 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     // app). A permanent public URL for medical documents would mean
     // anyone with the link could view them without ever authenticating.
     const { error: insErr } = await supabase.from('medical_record_attachments').insert({
-      patient_id: patient.id, category: 'other', file_url: path, file_name: file.name,
+      patient_id: patient.id, category: 'other', file_url: path, file_name: pendingUploadFile.name,
+      verification_status: verificationStatus, verified_clinic_id: clinicId,
     })
     if (insErr) { setUploadError(insErr.message); setUploading(false); return }
     const { data } = await supabase.from('medical_record_attachments').select('*')
       .eq('patient_id', patient.id).order('uploaded_at', { ascending: false })
     setMyUploads(data || [])
     setUploading(false)
+    setUploadStage('idle')
+    setPendingUploadFile(null)
+  }
+
+  async function handleConfirmClinic(clinic) {
+    setSelectedClinic(clinic)
+    setVerifyingClinic(true)
+    const alreadyVerified = clinic.verification_status === 'verified'
+      && clinic.last_verified_at
+      && (Date.now() - new Date(clinic.last_verified_at).getTime()) < 365*24*60*60*1000
+
+    if (alreadyVerified) {
+      await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'verified' })
+      setVerifyingClinic(false)
+      setUploadOutcome({ status:'verified', clinicName: clinic.name })
+      setUploadStage('done')
+      return
+    }
+
+    // Not yet verified, or verification has gone stale - send a real
+    // confirmation request to the clinic's own listed contact (never
+    // anything the patient typed), same as the clinic-side flow. The
+    // clinic confirms/denies against their real records; a phone-call
+    // reminder only follows after ~3 days with no response, and it's
+    // system-initiated, never routed through the patient.
+    const code = Math.random().toString(36).slice(2,8).toUpperCase()
+    await supabase.from('clinic_verification_requests').insert({
+      clinic_id: clinic.id, patient_id: patient.id, code,
+      contact_email_used: clinic.contact_email || null,
+      patient_name: patient.full_name || null,
+      requested_at: new Date().toISOString(), status: 'pending',
+    })
+    await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'pending' })
+    setVerifyingClinic(false)
+    setUploadOutcome({ status:'pending', clinicName: clinic.name })
+    setUploadStage('done')
+  }
+
+  async function handleClinicNotListed() {
+    // No registry match at all - the upload still isn't blocked (a
+    // patient shouldn't lose access to their own document over an
+    // automated-matching miss), but it's honestly marked unverified
+    // rather than silently treated as confirmed.
+    await proceedWithUpload({ clinicId: null, verificationStatus: 'unverified' })
+    setUploadOutcome({ status:'unverified' })
+    setUploadStage('done')
+  }
+
+  function resetUploadFlow() {
+    setUploadStage('idle'); setPendingUploadFile(null); setClinicSearch(''); setClinicPhone('')
+    setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null)
   }
   // Real records only - the honest empty state below handles the
   // no-data case, no demo fallback needed.
   const hasLiveData = records.length > 0
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
-  const vaccines=[
-    {name:'COVID-19',status:'ok',label:'Up to date',doses:[['Dose 1 — BioNTech','12 Mar 2021'],['Dose 2 — BioNTech','3 Apr 2021'],['Booster 1','18 Jan 2022'],['Booster 2 — XBB','9 Oct 2023']]},
-    {name:'Influenza (seasonal)',status:'due',label:'Due soon',doses:[['2023–24 Quadrivalent','6 Oct 2023'],['2024–25 — Book now','Recommended']]},
-    {name:'Hepatitis B',status:'ok',label:'Complete',doses:[['Dose 1','Jan 1992'],['Dose 2','Mar 1992'],['Dose 3','Jul 1992']]},
-    {name:'HPV (Gardasil 9)',status:'ok',label:'Complete',doses:[['Dose 1','5 Sep 2018'],['Dose 2','5 Nov 2018'],['Dose 3','5 Mar 2019']]},
-    {name:'Tetanus / Td booster',status:'full',label:'Overdue',doses:[['Last booster','Mar 2013'],['Next due — every 10 yrs','Overdue 2023']]},
-  ]
+
+  // Real vaccination records, grouped by vaccine name into the same shape
+  // the UI already renders - was previously a hardcoded array of 5
+  // vaccines shown identically to every patient regardless of the real
+  // `vaccinations` prop this component already receives (and previously
+  // ignored entirely). Assumes a `vaccinations` row per dose:
+  // {vaccine_name, dose_label, administered_date, status, status_label}.
+  const vaccineGroups = Object.values(
+    vaccinations.reduce((acc, v) => {
+      const key = v.vaccine_name
+      if (!acc[key]) acc[key] = { name: v.vaccine_name, status: v.status||'ok', label: v.status_label||'On file', doses: [] }
+      acc[key].doses.push([v.dose_label || 'Dose', v.administered_date ? new Date(v.administered_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : '—'])
+      // The most recent dose's status reflects the vaccine's current
+      // standing (e.g. a booster due date), so let a later row's status
+      // override an earlier one rather than freezing on the first seen.
+      acc[key].status = v.status || acc[key].status
+      acc[key].label = v.status_label || acc[key].label
+      return acc
+    }, {})
+  )
   const providers=[] // No real data-sharing consent system exists yet
   // to back this list (which institutions/doctors can see this patient's
   // records) - was previously hardcoded identically for every patient,
@@ -773,7 +881,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     'Dose 1':'第1劑','Dose 2':'第2劑','Dose 3':'第3劑','Last booster':'上次加強劑',
     'Next due — every 10 yrs':'下次應接種——每10年一次','Overdue 2023':'2023年已逾期',
     'Medsa partner':'Medsa合作夥伴','Private practitioner':'私人執業醫生','Valley Fitness Clinic':'谷澤健身診所',
-    'Non-Medsa':'非Medsa','Link share':'連結分享',
+    'Non-Medsa':'非Medsa','Link share':'連結分享','On file':'已記錄',
   }
   function mt(term) {
     if (isEn || !term) return term
@@ -849,12 +957,13 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       </>}
       {tab==='vax'&&<>
         <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
-        {vaccines.map(v=>(
+        {vaccineGroups.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No vaccination records yet - these appear once a clinic logs one.':'暫無疫苗記錄 - 診所記錄後將顯示於此。'}</div>}
+        {vaccineGroups.map(v=>(
           <Card key={v.name}>
             <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'14px',fontWeight:500}}>{mt(v.name)}</span><Badge text={mt(v.label)} type={v.status}/></div>
             <div style={{padding:'0 16px 14px'}}>
-              {v.doses.map(([d,date])=>(
-                <div key={d} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
+              {v.doses.map(([d,date],i)=>(
+                <div key={i} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
                   <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:C.green,flexShrink:0}}/>
                   <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{mt(d)}</strong></div>
                   <span style={{fontSize:'11px',color:C.textMuted}}>{date}</span>
@@ -863,7 +972,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>
           </Card>
         ))}
-        <div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>
+        {vaccineGroups.length>0&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>}
       </>}
       {tab==='sharing'&&<>
         <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
@@ -889,21 +998,72 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       </>}
       {tab==='upload'&&<>
         <SecLabel>{isEn?'Upload a record':'上傳記錄'}</SecLabel>
-        <label style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer',display:'block'}}>
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.csv" style={{display:'none'}} onChange={e=>handleFileUpload(e.target.files[0])} disabled={uploading}/>
-          <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
-          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{uploading?(isEn?'Uploading...':'上傳中...'):(isEn?'Tap to upload':'點擊上傳')}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
-          <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
-            {['PDF','JPG/PNG','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
+
+        {uploadStage==='idle'&&<>
+          <label style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer',display:'block'}}>
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png,.csv" style={{display:'none'}} onChange={e=>handlePickFile(e.target.files[0])}/>
+            <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
+            <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{isEn?'Tap to upload':'點擊上傳'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
+            <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
+              {['PDF','JPG/PNG','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
+            </div>
+          </label>
+          <div style={{margin:'0 16px 10px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>{isEn?"You'll be asked which clinic this is from, so we can verify it against the real registry - same check used for out-of-network clinic access.":'系統會詢問此文件來自哪間診所，以便與真實登記冊核對——與非Medsa診所存取所用的核實方式相同。'}</div>
+        </>}
+
+        {uploadStage==='identify_clinic'&&<Card style={{padding:'16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?'Which clinic is this record from?':'此記錄來自哪間診所？'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>{isEn?"We check this against the real government clinic registry, not what you type - this just helps us find the right one.":'我們會核對真實的政府診所登記冊，而非您輸入的內容——此步驟只是協助尋找正確的診所。'}</div>
+          <input value={clinicSearch} onChange={e=>searchUploadClinic(e.target.value)} placeholder={isEn?'Clinic name':'診所名稱'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+          <input value={clinicPhone} onChange={e=>setClinicPhone(e.target.value)} placeholder={isEn?'Phone number (as you remember it)':'電話號碼（憑記憶填寫）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+          {clinicMatches.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'12px'}}>
+            {clinicMatches.map(c=>{
+              const match = phonesLooselyMatch(clinicPhone, c.contact_phone)
+              return (
+                <div key={c.id} onClick={()=>handleConfirmClinic(c)} style={{padding:'12px',background:C.card,borderRadius:'10px',cursor:'pointer'}}>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{c.name}</div>
+                  <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{c.contact_phone||(isEn?'No phone on file':'無電話記錄')}</div>
+                  {match===false&&<div style={{fontSize:'10px',color:C.amber,marginTop:'2px'}}>{isEn?"Doesn't match what you typed - check this is the right clinic":'與您輸入的不符 - 請確認是否為正確診所'}</div>}
+                  {match===true&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{isEn?'✓ Phone matches':'✓ 電話相符'}</div>}
+                </div>
+              )
+            })}
+          </div>}
+          {clinicSearch.trim()&&clinicMatches.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{isEn?'No match in the registry yet.':'登記冊中暫無相符結果。'}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={resetUploadFlow}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn style={{flex:1}} onClick={handleClinicNotListed} disabled={uploading}>{isEn?"Can't find it - upload anyway":'找不到 - 仍然上傳'}</Btn>
           </div>
-        </label>
+        </Card>}
+
+        {uploadStage==='done'&&uploadOutcome&&<Card style={{padding:'16px',textAlign:'center'}}>
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>{uploadOutcome.status==='verified'?'✓':uploadOutcome.status==='pending'?'◇':'◈'}</div>
+          {uploadOutcome.status==='verified'&&<div style={{fontSize:'13px',color:C.green,fontWeight:600,marginBottom:'6px'}}>{isEn?`Uploaded - ${uploadOutcome.clinicName} is already verified`:`已上傳 - ${uploadOutcome.clinicName}已完成核實`}</div>}
+          {uploadOutcome.status==='pending'&&<>
+            <div style={{fontSize:'13px',color:C.amber,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - verification pending':'已上傳 - 核實中'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?`We've sent a verification request to ${uploadOutcome.clinicName}'s registered contact. Your document is saved now and will be marked verified once they confirm - this usually takes a few days.`:`已向${uploadOutcome.clinicName}的登記聯絡方式發送核實請求。您的文件已儲存，待對方確認後將標示為已核實 - 通常需時數天。`}</div>
+          </>}
+          {uploadOutcome.status==='unverified'&&<>
+            <div style={{fontSize:'13px',color:C.textSub,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - unverified':'已上傳 - 未經核實'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - Medsa may follow up to confirm.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - Medsa可能會跟進確認。'}</div>
+          </>}
+          <Btn variant="primary" style={{width:'100%',marginTop:'14px'}} onClick={resetUploadFlow}>{isEn?'Done':'完成'}</Btn>
+        </Card>}
+
         {uploadError&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:C.red}}>{uploadError}</div>}
+        <SecLabel>{isEn?'Your uploads':'您的上傳'}</SecLabel>
         {myUploads.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No files uploaded yet.':'尚未上傳任何文件。'}</div>}
         {myUploads.map(u=>(
           <Card key={u.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',marginBottom:'8px'}}>
             <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.green,fontSize:'18px'}}>◈</div>
-            <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{u.file_name}</div><div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Uploaded':'已上傳'} {new Date(u.uploaded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div></div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{u.file_name}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Uploaded':'已上傳'} {new Date(u.uploaded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
+              {u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?C.greenLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?C.green:u.verification_status==='pending'?C.amber:C.textMuted}}>
+                {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Unverified':'未經核實')}
+              </span>}
+            </div>
             <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={async()=>{
               const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(u.file_url, 300)
               if (error) { alert(`Could not open file: ${error.message}`); return }
@@ -918,9 +1078,17 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
 // ── VIDEO CONSULTATION MODAL ─────────────────────────────────────────────────
 // Matches iMeddy's model: video call + medical certificate/referral issuance
-function VideoCallModal({ doc, isEn, onClose }) {
+function VideoCallModal({ doc, isEn, dt, onClose }) {
   const [stage,setStage]=useState('connecting') // connecting | active | ended
   const [docsIssued,setDocsIssued]=useState([])
+  // `dt` translates specialty/location terms (e.g. "General Practice" ->
+  // "全科") and lives in DoctorsScreen, the only place that builds the
+  // dictionary it needs - passed down as a prop rather than duplicated
+  // here. This component crashed every time a video call became active,
+  // since it called `dt(doc.spec)` without `dt` existing anywhere in its
+  // own scope; falling back to the identity function keeps this safe even
+  // if a future caller forgets to pass it.
+  const translate = dt || ((s)=>s)
 
   useEffect(() => {
     if (stage==='connecting') {
@@ -955,7 +1123,7 @@ function VideoCallModal({ doc, isEn, onClose }) {
             <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
           </div>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
-          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{dt(doc.spec)}</div>
+          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{translate(doc.spec)}</div>
           <div style={{display:'flex',gap:'16px'}}>
             <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◉</button>
             <button onClick={()=>setStage('ended')} style={{width:52,height:52,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>✕</button>
@@ -966,7 +1134,7 @@ function VideoCallModal({ doc, isEn, onClose }) {
           <div style={{textAlign:'center',marginBottom:'16px'}}>
             <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
             <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {dt(doc.spec)}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {translate(doc.spec)}</div>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
           {[
@@ -1008,7 +1176,6 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
   const [booked,setBooked]=useState(false)
-  const [sortBy,setSortBy]=useState('distance')
   const [videoCallDoc,setVideoCallDoc]=useState(null)
   const [whatsappReminder,setWhatsappReminder]=useState(true)
   const [selectedDoctor,setSelectedDoctor]=useState(null)
@@ -1020,6 +1187,13 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [intakeSaving,setIntakeSaving]=useState(false)
   const [intakeError,setIntakeError]=useState(null)
   const [searchQuery,setSearchQuery]=useState('')
+  // No sortBy state - the old 'Nearest'/'Top rated' toggle never actually
+  // controlled the sort (sortedDoctors always sorted by distance/name
+  // regardless of which was selected), and "Top rated" specifically is
+  // exactly the promotional sorting label MCHK-safe neutral search design
+  // means to avoid - removed rather than fixed, since automatic
+  // distance-then-alphabetical sorting is already the objective behaviour
+  // this screen should have.
   const [doctors,setDoctors]=useState([])
   const [doctorsLoading,setDoctorsLoading]=useState(true)
   const [filterSpecialty,setFilterSpecialty]=useState('')
@@ -1085,49 +1259,76 @@ function DoctorsScreen({ isEn, patient={} }) {
       const clinicIdsWithDoctors = new Set(clinicsWithDoctorsData.map(d=>d.clinic_id))
       const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
-        spec: d.department||'General Practice', clinic: d.institutions?.name || (d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital'), clinicTc: d.institutions?.name_tc,
-        institution: d.institution_source, district: null, lat:null, lng:null,
+        spec: d.department||'General Practice', specialties: [d.department||'General Practice'],
+        clinic: d.institutions?.name || (d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital'), clinicTc: d.institutions?.name_tc,
+        institution: d.institution_source, institutionId: d.institution_id, district: null, lat:null, lng:null,
         phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
         ownershipType: 'private', facilityType: d.institution_source==='clinic_ops'?'small_practice_clinic':'hospital', schemes: d.schemes||[],
       }))
-      const directoryDoctors = filterPartnerOnly ? [] : (dirRes.data||[]).map(d => sanitizeMCHKDisplayData({
-        source:'directory', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, nameTc: d.full_name_tc,
-        spec: (d.specialties||[])[0]||'General Practice', clinic: d.directory_clinics?.name||'—', clinicTc: d.directory_clinics?.name_tc,
-        institution: d.directory_clinics?.partnership_status==='medsa_partnered' ? d.directory_clinics?.institution_source : null,
-        district: d.directory_clinics?.district||null, lat: d.directory_clinics?.latitude, lng: d.directory_clinics?.longitude,
-        address: d.directory_clinics?.address||null, addressTc: d.directory_clinics?.address_tc||null,
-        phone: d.directory_clinics?.contact_phone, email: d.directory_clinics?.contact_email,
-        isPartnered: d.directory_clinics?.partnership_status==='medsa_partnered', registrationNumber: d.registration_number,
-        languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
-        ownershipType: d.directory_clinics?.ownership_type||null, facilityType: d.directory_clinics?.facility_type||null, schemes: d.directory_clinics?.schemes||[],
-      }))
-      // Clinics with no named individual doctor listed - a real, common
-      // case (public health programs, walk-in clinics) that was previously
-      // completely invisible to search, since only directory_doctors was
-      // ever queried.
+      // Non-partnered listings are shown at clinic level only - no
+      // individual doctor name, specialty, or profile is displayed for a
+      // clinic Medsa has no real relationship with, matching the
+      // directory data-boundary decision: public institutional info
+      // (name, address, phone) only, never an individual practitioner's
+      // personal profile without their own verification/consent. Doctors
+      // at these clinics are aggregated into the clinic's own available
+      // specialties instead of being listed as named individuals.
+      const nonPartneredDoctorRows = filterPartnerOnly ? [] : (dirRes.data||[])
+        .filter(d => d.directory_clinics?.partnership_status!=='medsa_partnered')
+      const specialtiesByClinicId = {}
+      nonPartneredDoctorRows.forEach(d => {
+        const cid = d.clinic_id
+        if (!cid) return
+        if (!specialtiesByClinicId[cid]) specialtiesByClinicId[cid] = new Set()
+        ;(d.specialties||['General Practice']).forEach(s => specialtiesByClinicId[cid].add(s))
+      })
+      const clinicRowById = {}
+      nonPartneredDoctorRows.forEach(d => { if (d.clinic_id && d.directory_clinics) clinicRowById[d.clinic_id] = d.directory_clinics })
+      const nonPartneredClinicsWithDoctors = Object.keys(specialtiesByClinicId).map(cid => {
+        const c = clinicRowById[cid] || {}
+        return sanitizeMCHKDisplayData({
+          source:'clinic', id: cid, init: c.name?.[0]||'?', name: c.name||'—', nameTc: c.name_tc,
+          specialties: Array.from(specialtiesByClinicId[cid]), clinic: c.name||'—', clinicTc: c.name_tc,
+          institution: null, institutionId: null,
+          district: c.district||null, lat: c.latitude, lng: c.longitude,
+          address: c.address||null, addressTc: c.address_tc||null,
+          phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
+          ownershipType: c.ownership_type||null, facilityType: c.facility_type||null, schemes: c.schemes||[],
+        })
+      })
+      // Clinics with no named individual doctor listed at all (public
+      // health programs, walk-in clinics) - same clinic-level shape.
       const clinicOnlyListings = (allClinicsRes.data||[])
         .filter(c => !clinicIdsWithDoctors.has(c.id) && c.partnership_status!=='medsa_partnered')
         .map(c => sanitizeMCHKDisplayData({
-          source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, nameTc: c.name_tc, spec: 'Clinic',
-          clinic: c.name, clinicTc: c.name_tc, institution: null, district: c.district, lat: c.latitude, lng: c.longitude,
+          source:'clinic', id: c.id, init: c.name?.[0]||'?', name: c.name, nameTc: c.name_tc,
+          specialties: [], clinic: c.name, clinicTc: c.name_tc, institution: null, institutionId: null, district: c.district, lat: c.latitude, lng: c.longitude,
           address: c.address||null, addressTc: c.address_tc||null,
           phone: c.contact_phone, email: c.contact_email, isPartnered: false, noNamedDoctor: true,
           ownershipType: c.ownership_type||null, facilityType: c.facility_type||null, schemes: c.schemes||[],
         }))
-      setDoctors([...medsaDoctors, ...directoryDoctors, ...clinicOnlyListings])
+      setDoctors([...medsaDoctors, ...nonPartneredClinicsWithDoctors, ...clinicOnlyListings])
       setDoctorsLoading(false)
     }
     loadDoctors()
   }, [filterPartnerOnly])
 
   // Real sanitizer - restricts displayed doctor data to exactly what MCHK's
-  // Guidelines on Doctors Directories (Appendix D) permits, whitelist-style
-  // rather than trusting call sites to remember not to add anything else.
+  // Guidelines on Doctors Directories permits, whitelist-style rather than
+  // trusting call sites to remember not to add anything else. Every entry
+  // carries a `specialties` array now (even partnered doctors get a
+  // single-item array) so filtering and the specialty dropdown work off
+  // one consistent shape regardless of whether this is a named doctor or
+  // an aggregated clinic-level listing.
+  // institutionId is carried through even though it's never shown in the
+  // UI itself - it's what lets booking attribute an appointment to the
+  // doctor's real institution (see handleConfirmBooking) instead of a
+  // hardcoded clinic name.
   function sanitizeMCHKDisplayData(d) {
     return {
       source: d.source, id: d.id, init: d.init, name: d.name, sex: d.sex||null,
-      spec: d.spec, clinic: d.clinic, institution: d.institution,
+      spec: d.spec||null, specialties: d.specialties||[], clinic: d.clinic, institution: d.institution, institutionId: d.institutionId||null,
       district: d.district, lat: d.lat, lng: d.lng, phone: d.phone, email: d.email,
       isPartnered: d.isPartnered, registrationNumber: d.registrationNumber||null,
       languages: d.languages||null, feeMin: d.feeMin||null, feeMax: d.feeMax||null,
@@ -1152,8 +1353,8 @@ function DoctorsScreen({ isEn, patient={} }) {
   }
   const searchedDoctors = doctors.filter(d => {
     const q = searchQuery.toLowerCase().trim()
-    if (q && !(d.name?.toLowerCase().includes(q) || d.spec?.toLowerCase().includes(q) || d.clinic?.toLowerCase().includes(q))) return false
-    if (filterSpecialty && d.spec !== filterSpecialty) return false
+    if (q && !(d.name?.toLowerCase().includes(q) || (d.specialties||[]).some(s=>s.toLowerCase().includes(q)) || d.clinic?.toLowerCase().includes(q))) return false
+    if (filterSpecialty && !(d.specialties||[]).includes(filterSpecialty)) return false
     if (filterDistrict && d.district !== filterDistrict) return false
     if (filterPartnerOnly && !d.isPartnered) return false
     if (filterOwnership && d.ownershipType !== filterOwnership) return false
@@ -1167,7 +1368,7 @@ function DoctorsScreen({ isEn, patient={} }) {
     if (userLocation && b.distanceKm!=null) return 1
     return (a.name||'').localeCompare(b.name||'')
   })
-  const availableSpecialties = [...new Set(doctors.map(d=>d.spec).filter(Boolean))].sort()
+  const availableSpecialties = [...new Set(doctors.flatMap(d=>d.specialties||[]))].sort()
   const availableDistricts = [...new Set(doctors.map(d=>d.district).filter(Boolean))].sort()
   const availableFacilityTypes = [...new Set(doctors.map(d=>d.facilityType).filter(Boolean))].sort()
   const availableSchemes = [...new Set(doctors.flatMap(d=>d.schemes||[]))].sort()
@@ -1309,18 +1510,20 @@ function DoctorsScreen({ isEn, patient={} }) {
       })
       if (insErr) throw insErr
 
-      // This is the piece that was actually missing: booking only ever
-      // wrote the consent record above, never a real appointment the
-      // clinic side could see. Try to link a real practitioner_id if one
-      // matches this doctor's name; otherwise fall back to doctor_name as
-      // plain text so the booking still shows up either way.
+      // Real fix - this used to look up an institution by a hardcoded
+      // literal name ("Pacific Medical Group"), regardless of which
+      // doctor or clinic was actually being booked, meaning every booking
+      // through this screen got attributed to one specific clinic no
+      // matter who the patient actually chose. activeDoctor.institutionId
+      // is now carried through directly from the real staff_credentials
+      // row (see sanitizeMCHKDisplayData) - no lookup needed, and it's
+      // correct for whichever doctor this booking is actually for.
       const { data: practitionerRow } = await supabase.from('practitioners').select('id').ilike('full_name', `%${activeDoctor.name.replace('Dr ','')}%`).maybeSingle()
-      const { data: institutionRow } = await supabase.from('institutions').select('id').eq('name', 'Pacific Medical Group').maybeSingle()
 
       const { error: apptErr } = await supabase.from('appointments').insert({
         patient_id: patientRow.id,
         practitioner_id: practitionerRow?.id || null,
-        institution_id: institutionRow?.id || null,
+        institution_id: activeDoctor.institutionId || null,
         institution_source: activeDoctor.institution || null,
         doctor_name: activeDoctor.name,
         department: activeDoctor.spec || null,
@@ -1374,7 +1577,7 @@ function DoctorsScreen({ isEn, patient={} }) {
             <option value="subsidized">{isEn?'Subsidized':'資助'}</option>
           </select>
           <div onClick={()=>setFilterPartnerOnly(!filterPartnerOnly)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:filterPartnerOnly?'#fff':'rgba(255,255,255,0.2)',color:filterPartnerOnly?C.green:'#fff'}}>
-            {isEn?'Medsa partners only':'只顯示Medsa合作夥伴'}
+            {isEn?'Online booking':'網上預約'}
           </div>
         </div>
         {locationError&&<div style={{fontSize:'10px',color:'#ffe066',marginTop:'6px'}}>{locationError}</div>}
@@ -1385,49 +1588,54 @@ function DoctorsScreen({ isEn, patient={} }) {
         ))}
       </div>
       {tab==='search'&&<>
-        <div style={{padding:'12px 16px 4px',display:'flex',gap:'8px',alignItems:'center'}}>
-          <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Sort by':'排序方式'}</span>
-          {[['distance',isEn?'Nearest':'最近'],['rating',isEn?'Top rated':'評分最高']].map(([k,l])=>(
-            <div key={k} onClick={()=>setSortBy(k)} style={{fontSize:'11px',padding:'5px 12px',borderRadius:'20px',cursor:'pointer',background:sortBy===k?C.green:C.card,color:sortBy===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
-          ))}
-        </div>
-        <SecLabel>{isEn?'Doctors near you · Wan Chai':'附近的醫生 · 灣仔'}</SecLabel>
+        <SecLabel>{isEn?'Near you':'附近'}</SecLabel>
         {sortedDoctors.map((doc,i)=>(
           <Card key={i}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
               <div style={{flex:1}}>
+                {/* Headline is the doctor's name for a real, partnered practitioner -
+                    or the clinic's name for any non-partnered listing, since
+                    individual non-partnered doctor profiles aren't shown at all. */}
                 <div style={{fontSize:'14px',fontWeight:500}}>{!isEn && doc.nameTc ? doc.nameTc : doc.name}</div>
-                <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{!isEn && doc.clinicTc ? doc.clinicTc : dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>
+                {doc.noNamedDoctor
+                  ? (doc.specialties?.length>0 && <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.specialties.map(s=>dt(s)).join(', ')}</div>)
+                  : <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>}
+                {!doc.noNamedDoctor && <div style={{fontSize:'12px',color:C.textSub}}>{!isEn && doc.clinicTc ? doc.clinicTc : dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>}
+                {doc.noNamedDoctor && <div style={{fontSize:'12px',color:C.textSub}}>{doc.district?doc.district:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>}
                 {doc.address&&<div onClick={(e)=>{e.stopPropagation(); const q = (doc.lat&&doc.lng) ? `${doc.lat},${doc.lng}` : encodeURIComponent(doc.address); window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank')}} style={{fontSize:'11px',color:C.green,marginTop:'2px',cursor:'pointer',textDecoration:'underline'}}>{!isEn && doc.addressTc ? doc.addressTc : doc.address}</div>}
                 {(doc.feeMin||doc.languages||doc.registrationNumber)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>
                   {doc.feeMin&&`HK$${doc.feeMin}-${doc.feeMax||doc.feeMin}`}
                   {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
                   {doc.registrationNumber&&` · MCHK ${doc.registrationNumber}`}
                 </div>}
-                <div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
-                  {doc.isPartnered
-                    ? <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Medsa Verified Partner':'Medsa認證合作夥伴'}</span>
-                    : doc.source==='directory'&&<span style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{isEn?'Listed via directory':'目錄列表'}</span>}
+                {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).length>0&&<div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
                   {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).map(s=>(
                     <span key={s} style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{schemeLabel(s)}</span>
                   ))}
-                </div>
+                </div>}
               </div>
-              <div style={{textAlign:'right',flexShrink:0}}><Badge text={doc.isPartnered?(doc.avail||(isEn?'Book instantly':'即時預約')):(isEn?'Contact clinic':'聯絡診所')} type={doc.isPartnered?'ok':'due'}/></div>
             </div>
+            {/* The CTA itself is the only status signal now - no separate
+                "verified"/"unverified" badge. A patient sees exactly one of
+                two real, functional differences: book online now, or call
+                the clinic directly - nothing framed as endorsement. */}
             <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
               {doc.isPartnered
-                ? <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, 'in-person')}>{isEn?'Book instantly':'即時預約'}</Btn>
-                : <>
-                    {doc.phone&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`tel:${doc.phone}`}>{'\u260e'} {isEn?'Call':'致電'}</Btn>}
-                    {doc.email&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`mailto:${doc.email}`}>{'\u2709'} {isEn?'Email':'電郵'}</Btn>}
-                    {!doc.phone&&!doc.email&&<Btn style={{flex:1,fontSize:'12px'}} disabled>{isEn?'No contact info':'無聯絡資料'}</Btn>}
-                  </>}
+                ? <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleBookClick(doc, 'in-person')}>{isEn?'Book Appointment':'預約診症'}</Btn>
+                : doc.phone
+                  ? <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`tel:${doc.phone}`}>{'\u260e'} {isEn?'Call Clinic':'致電診所'}</Btn>
+                  : doc.email
+                    ? <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>window.location.href=`mailto:${doc.email}`}>{'\u2709'} {isEn?'Email Clinic':'電郵診所'}</Btn>
+                    : <Btn style={{flex:1,fontSize:'12px'}} disabled>{isEn?'No contact info':'無聯絡資料'}</Btn>}
             </div>
           </Card>
         ))}
+        <div style={{margin:'12px 16px 20px',fontSize:'11px',color:C.textMuted,lineHeight:1.5,textAlign:'center'}}>
+          {isEn
+            ? 'Directory listings and technical integrations do not constitute a medical endorsement or recommendation of any practitioner.'
+            : '目錄列表及技術整合並不構成對任何醫護人員的醫療認可或推薦。'}
+        </div>
       </>}
       {tab==='book'&&!activeDoctor&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Select a doctor first to book an appointment.':'請先選擇醫生以預約。'}</div>}
       {tab==='book'&&activeDoctor&&<>
@@ -1572,7 +1780,7 @@ function DoctorsScreen({ isEn, patient={} }) {
           </Card>
         ))}
       </>}
-      <VideoCallModal doc={videoCallDoc} isEn={isEn} onClose={()=>setVideoCallDoc(null)}/>
+      <VideoCallModal doc={videoCallDoc} isEn={isEn} dt={dt} onClose={()=>setVideoCallDoc(null)}/>
     </div>
   )
 }
@@ -2260,10 +2468,8 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
   )
 }
 
-
-function PrescriptionsScreen({ isEn, medications=[] }) {
+function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
-  const [refillRequested,setRefillRequested]=useState({})
   const [drugSearch,setDrugSearch]=useState('')
   const [drugSearchResults,setDrugSearchResults]=useState([])
 
@@ -2280,10 +2486,11 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
     setDrugInfoFor(data || 'none')
   }
 
-  async function requestRefill(m) {
-    setRefillRequested({...refillRequested, [m.id]: true})
-    await supabase.from('medications').update({ refill_requested_at: new Date().toISOString(), refill_status: 'requested' }).eq('id', m.id)
-  }
+  // Refills are no longer their own concept - a patient wanting more of a
+  // medication just books a normal consultation, same as any other visit.
+  // This replaces the old request/approve/deny flow (which charged a
+  // standalone HK$150) with a direct hand-off to Find Care, where a real
+  // appointment gets booked against the doctor's actual schedule.
   const hasLiveMeds = medications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -2308,8 +2515,8 @@ function PrescriptionsScreen({ isEn, medications=[] }) {
             </div>
           </div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>showDrugInfo(rx.raw)}>Drug info</Btn>
-            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={refillRequested[rx.raw.id]||rx.raw.refill_status==='requested'||rx.raw.refill_status==='approved'} onClick={()=>requestRefill(rx.raw)}>{rx.raw.refill_status==='approved'?(isEn?'Refill approved':'已批准補領'):(refillRequested[rx.raw.id]||rx.raw.refill_status==='requested')?(isEn?'Refill requested':'已申請補領'):rx.raw.refill_status==='denied'?(isEn?'Request again':'再次申請'):'Refill'}</Btn>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>showDrugInfo(rx.raw)}>{isEn?'Drug info':'藥物資訊'}</Btn>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onNav?.('doctors')}>{isEn?'Book a consultation':'預約診症'}</Btn>
           </div>
         </Card>
       ))}
@@ -2941,23 +3148,28 @@ export default function PatientApp({ liveData={} }) {
 
   // Once we know who's really signed in, fetch everything fresh from
   // Supabase - conditions, allergies, medications, records, appointments,
-  // claims all previously came only from the static liveData prop, which
-  // never reflected the actual signed-in patient (same root cause as the
-  // identity bug, just for every other data category too).
+  // claims, and vaccinations all previously came only from the static
+  // liveData prop, which never reflected the actual signed-in patient
+  // (same root cause as the identity bug, just for every other data
+  // category too). Vaccinations was missing from this fetch entirely
+  // until now, which is why RecordsScreen always fell back to a
+  // hardcoded, identical vaccine list for every patient.
   useEffect(() => {
     if (!signedInPatient?.id) { setRealPatientData(null); return }
     async function loadRealData() {
-      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes] = await Promise.all([
+      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes] = await Promise.all([
         supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
         supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
         supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
         supabase.from('medical_records').select('*,institutions(name)').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
         supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
         supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
+        supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
       ])
       setRealPatientData({
         conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
         records: recRes.data||[], appointments: apptRes.data||[], claims: claimRes.data||[],
+        vaccinations: vaxRes.data||[],
       })
     }
     loadRealData()
@@ -2990,7 +3202,12 @@ export default function PatientApp({ liveData={} }) {
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
   const liveMedications = signedInPatient ? (realPatientData?.medications||[]) : (liveData.medications || [])
-  const liveVaccinations = liveData.vaccinations || []
+  // Previously never checked signedInPatient at all, unlike every other
+  // liveXxx variable here - meaning a real signed-in patient always fell
+  // through to liveData.vaccinations (empty, since real sign-in doesn't
+  // populate that prop), and RecordsScreen compensated with a hardcoded
+  // fake vaccine list. Now consistent with the rest of this block.
+  const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
@@ -3014,7 +3231,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
-        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications}/>}
+        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
