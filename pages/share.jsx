@@ -53,7 +53,7 @@ export default function SharePage() {
         if (!upErr) orphfLicenceDocPath = path
       }
 
-      const res = await fetch('/api/verify-clinic-credentials', {
+      const res = await fetch('/api/cds/verify_clinic_credentials', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName, businessRegDocPath, orphfLicenceDocPath }),
       })
@@ -68,7 +68,7 @@ export default function SharePage() {
       // Otherwise, find out which real channels are actually available -
       // never guess or auto-pick one.
       if (result.id) {
-        const chRes = await fetch('/api/send-clinic-otp', {
+        const chRes = await fetch('/api/cds/send_clinic_otp', {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ verifiedClinicId: result.id, action: 'list_channels' }),
         })
@@ -91,7 +91,7 @@ export default function SharePage() {
 
   async function handleChooseChannel(channel) {
     setOtpSending(true)
-    const res = await fetch('/api/send-clinic-otp', {
+    const res = await fetch('/api/cds/send_clinic_otp', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ verifiedClinicId: verificationResult.id, action: 'send', channel }),
     })
@@ -103,7 +103,7 @@ export default function SharePage() {
 
   async function handleOtpVerify() {
     setOtpVerifying(true)
-    const res = await fetch('/api/verify-clinic-otp', {
+    const res = await fetch('/api/cds/verify_clinic_otp', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ verifiedClinicId: verificationResult.id, code: otpCode }),
     })
