@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import jsQR from 'jsqr'
-import C from '../shared/colours'
+import C from './shared/colours'
 
 // Real QR scanner - requests camera access, continuously captures frames
 // to a hidden canvas, and decodes each one. Calls onScan(text) once with

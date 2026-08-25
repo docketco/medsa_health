@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-import C from '../shared/colours'
+import C from '../components/shared/colours'
 
 // medsa.health/clinic-signup - the actual missing piece. StaffLogin only
 // ever worked for a clinic that already had an institution row and at

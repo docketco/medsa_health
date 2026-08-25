@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import C from '../shared/colours'
+import C from '../components/shared/colours'
 import QrScanner from '../components/QrScanner'
 
 // medsa.health/share - public, no login required. For a non-Medsa clinic
