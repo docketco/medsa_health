@@ -33,19 +33,29 @@ export default async function handler(req, res) {
     const csvText = await csvRes.text()
     const rows = parseCSV(csvText)
 
+    const importedAt = new Date().toISOString()
+    const records = rows.filter(row => row.PHF_num).map(row => ({
+      phf_num: row.PHF_num, phf_name: row.PHF_name, phf_address: row.PHF_address,
+      phf_category: row.PHF_category, licence_type: row.Licence_type,
+      type_practice: row.Type_practice, phone: row.Phone, email: row.Email,
+      source_last_update: row.Last_update, imported_at: importedAt,
+    }))
+
+    // Batched, not one row at a time - a few hundred sequential round
+    // trips to the database was blowing past Vercel's function timeout
+    // before the sync could ever finish. A batch of 500 per upsert call
+    // stays well under Supabase's request size limits while cutting the
+    // round trips from one-per-clinic to one-per-500-clinics.
+    const BATCH_SIZE = 500
     let upserted = 0
-    for (const row of rows) {
-      if (!row.PHF_num) continue
-      await supabase.from('hk_small_practice_clinics').upsert({
-        phf_num: row.PHF_num, phf_name: row.PHF_name, phf_address: row.PHF_address,
-        phf_category: row.PHF_category, licence_type: row.Licence_type,
-        type_practice: row.Type_practice, phone: row.Phone, email: row.Email,
-        source_last_update: row.Last_update, imported_at: new Date().toISOString(),
-      }, { onConflict: 'phf_num' })
-      upserted++
+    for (let i = 0; i < records.length; i += BATCH_SIZE) {
+      const batch = records.slice(i, i + BATCH_SIZE)
+      const { error } = await supabase.from('hk_small_practice_clinics').upsert(batch, { onConflict: 'phf_num' })
+      if (error) throw error
+      upserted += batch.length
     }
 
-    return res.status(200).json({ status: 'OK', rowsProcessed: rows.length, upserted, syncedAt: new Date().toISOString() })
+    return res.status(200).json({ status: 'OK', rowsProcessed: rows.length, upserted, syncedAt: importedAt })
   } catch (e) {
     return res.status(500).json({ status: 'ERROR', message: e.message })
   }
