@@ -34,12 +34,21 @@ export default async function handler(req, res) {
     const rows = parseCSV(csvText)
 
     const importedAt = new Date().toISOString()
-    const records = rows.filter(row => row.PHF_num).map(row => ({
-      phf_num: row.PHF_num, phf_name: row.PHF_name, phf_address: row.PHF_address,
-      phf_category: row.PHF_category, licence_type: row.Licence_type,
-      type_practice: row.Type_practice, phone: row.Phone, email: row.Email,
-      source_last_update: row.Last_update, imported_at: importedAt,
-    }))
+    // De-duplicated by phf_num - the source CSV has the same clinic
+    // listed more than once in places, and a single upsert statement
+    // can't apply "DO UPDATE" to the same conflict key twice. Later
+    // rows win, same as if they'd been upserted one at a time in order.
+    const recordsByPhfNum = new Map()
+    for (const row of rows) {
+      if (!row.PHF_num) continue
+      recordsByPhfNum.set(row.PHF_num, {
+        phf_num: row.PHF_num, phf_name: row.PHF_name, phf_address: row.PHF_address,
+        phf_category: row.PHF_category, licence_type: row.Licence_type,
+        type_practice: row.Type_practice, phone: row.Phone, email: row.Email,
+        source_last_update: row.Last_update, imported_at: importedAt,
+      })
+    }
+    const records = [...recordsByPhfNum.values()]
 
     // Batched, not one row at a time - a few hundred sequential round
     // trips to the database was blowing past Vercel's function timeout
