@@ -3175,15 +3175,11 @@ export default function PatientApp({ liveData={} }) {
     loadRealData()
   }, [signedInPatient?.id])
 
-  if (checkingPersistedSignIn) return null
-
-  if (showGate && !signedInPatient) {
-    return <SignUpGate onComplete={(p)=>{
-      setSignedInPatient(p); setShowGate(false)
-      if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
-    }} onSkipDemo={()=>setShowGate(false)}/>
-  }
-
+  // Computed and hooked before the early returns below (not after) -
+  // every hook in this component must run on every render regardless of
+  // gate/loading state, or React throws "rendered more hooks than
+  // during the previous render" the moment that state changes (e.g. the
+  // instant sign-up completes and the gate stops returning early).
   const patient = signedInPatient || liveData.patient || { full_name:'', preferred_name:'', medsa_id:'', date_of_birth:null, blood_type:null, emergency_card_active:false, emergency_contact_name:null, emergency_contact_rel:null, emergency_contact_phone:null, storage_tier:'essential' }
 
   useEffect(() => {
@@ -3198,6 +3194,16 @@ export default function PatientApp({ liveData={} }) {
     const interval = setInterval(checkExternalRequests, 8000)
     return () => clearInterval(interval)
   }, [patient?.id])
+
+  if (checkingPersistedSignIn) return null
+
+  if (showGate && !signedInPatient) {
+    return <SignUpGate onComplete={(p)=>{
+      setSignedInPatient(p); setShowGate(false)
+      if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+    }} onSkipDemo={()=>setShowGate(false)}/>
+  }
+
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
