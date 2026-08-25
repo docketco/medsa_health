@@ -13,11 +13,7 @@
 
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-
-const C = {
-  green:'#4a7c59', greenLight:'#e8f2ea', beige:'#f0ede8', cream:'#faf8f5',
-  text:'#1a1a1a', textSub:'#6b6560', textMuted:'#9c9690', border:'#e5e0d8', red:'#c0392b',
-}
+import C from '../components/shared/colours'
 
 const DISTRICTS = ['Central','Sheung Wan','Sai Ying Pun','Wan Chai','Causeway Bay','Aberdeen',
   'Yau Ma Tei','Mong Kok','Sham Shui Po','Ho Man Tin','San Po Kong','Kwun Tong','Ngau Tau Kok',
