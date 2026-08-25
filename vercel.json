@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/sync-orphf-registry",
+      "path": "/api/cds/sync_orphf_registry",
       "schedule": "0 3 * * 0"
     }
   ]
