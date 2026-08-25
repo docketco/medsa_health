@@ -3354,30 +3354,18 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     if (staffMember?.role !== 'admin') { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Only a practice manager can import order sets - this is real safety logic, not inventory.' }); return }
     if (!institutionId) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
     const text = await file.text()
-    const rows = parseCSV(text)
-    let imported=0
-    for (const row of rows) {
-      if (!row.drug_name) continue
-      await supabase.from('order_sets').upsert({
-        institution_id: institutionId, drug_name: row.drug_name,
-        min_dose_per_kg: row.min_dose_per_kg ? parseFloat(row.min_dose_per_kg) : null,
-        max_dose_per_kg: row.max_dose_per_kg ? parseFloat(row.max_dose_per_kg) : null,
-        dose_unit: row.dose_unit || 'mg',
-        min_age_years: row.min_age_years ? parseFloat(row.min_age_years) : null,
-        max_age_years: row.max_age_years ? parseFloat(row.max_age_years) : null,
-        renal_adjustment_notes: row.renal_adjustment_notes || null,
-        high_alert: ['true','yes','1'].includes((row.high_alert||'').toLowerCase()),
-        hard_stop_conditions: row.hard_stop_conditions ? row.hard_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
-        soft_stop_conditions: row.soft_stop_conditions ? row.soft_stop_conditions.split(';').map(s=>s.trim()).filter(Boolean) : [],
-        // Auto-approved by whoever is actually running this import -
-        // real chain of responsibility, since only a practice manager can
-        // even reach this button now, rather than a redundant CSV column
-        // they'd have to fill in with their own name anyway.
-        approved_by: staffMember.name, approved_at: new Date().toISOString(),
-      }, { onConflict: 'institution_id,drug_name' })
-      imported++
-    }
-    setImportResult({ type:'orderset', imported, skipped: rows.length-imported, total: rows.length })
+    const rows = parseCSV(text).filter(row => row.drug_name)
+    // Writes go through a server route now, not straight to the database -
+    // order sets drive real hard-stop/soft-stop safety logic, so the write
+    // itself is re-checked server-side against the caller's actual stored
+    // role rather than trusting this client-side check alone.
+    const res = await fetch('/api/staff/import-order-sets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ medsaId: staffMember.id, institutionId, rows }),
+    })
+    const result = await res.json()
+    if (!res.ok) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error: result.error || 'Import failed.' }); return }
+    setImportResult({ type:'orderset', imported: result.imported, skipped: result.skipped, total: result.total })
   }
 
   async function handleStockFile(e) {
