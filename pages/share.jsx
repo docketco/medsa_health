@@ -30,6 +30,7 @@ export default function SharePage() {
   const [error, setError] = useState(null)
   const [requestId, setRequestId] = useState(null)
   const [bundledRecords, setBundledRecords] = useState(null)
+  const [noContactOnFile, setNoContactOnFile] = useState(false)
 
   async function handleGateSubmit() {
     if (!clinicName.trim()) { setGateError('Clinic name is required.'); return }
@@ -60,6 +61,7 @@ export default function SharePage() {
       const result = await res.json()
       setVerificationResult(result)
       setVerifying(false)
+      setNoContactOnFile(false)
 
       // Already remembered and already contact-verified from a past
       // visit - nothing further needed.
@@ -81,6 +83,9 @@ export default function SharePage() {
       }
       // No registry contact of any kind on file for this clinic at all -
       // contact verification genuinely isn't possible here, not skipped.
+      // Flagged explicitly rather than landing on "choose" with no
+      // explanation - this previously looked identical to a bug.
+      setNoContactOnFile(true)
       setStage('choose')
     } catch (e) {
       setVerificationResult({ status: 'ERROR', message: 'Could not reach the verification service.' })
@@ -206,6 +211,7 @@ export default function SharePage() {
             {verificationResult.overall_status==='unverified'&&<div style={{background:'#ffebee',borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:'#c62828'}}>{'\u26a0'} Neither number matched a real registry. Proceeding, but this clinic is not verified.</div>}
           </>}
           {verificationResult?.status==='ERROR'&&<div style={{background:'#ffebee',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#c62828'}}>{'\u26a0'} Verification service unavailable - proceeding on the registration number provided without confirmation.</div>}
+          {noContactOnFile&&<div style={{background:'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:'#e65100'}}>{'\u26a0'} This clinic matched a real registry, but the registry has no phone or email on file for it - a contact code couldn't be sent. Proceeding without contact confirmation.</div>}
           <div style={{fontSize:'15px',fontWeight:700,marginBottom:'16px'}}>What do you need to do?</div>
           <button onClick={()=>setStage('upload_file')} style={{width:'100%',padding:'14px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'10px',textAlign:'left'}}>
             Upload — send a file into this patient's Medsa record
