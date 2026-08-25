@@ -8,14 +8,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-
-const C = {
-  green:'#4a7c59', greenLight:'#e8f2ea', greenXLight:'#f2f8f4',
-  beige:'#f0ede8', cream:'#faf8f5', card:'#f0ede8',
-  text:'#1a1a1a', textSub:'#6b6560', textMuted:'#9c9690',
-  border:'#e5e0d8', red:'#c0392b', redLight:'#fbeae8',
-  amber:'#d4a017', amberLight:'#fbf3e0', navy:'#1e3a5f',
-}
+import C from '../components/shared/colours'
 
 const CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
 

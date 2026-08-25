@@ -8,12 +8,7 @@
 
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-
-const C = {
-  green:'#4a7c59', greenLight:'#e8f2ea', beige:'#f0ede8', cream:'#faf8f5',
-  text:'#1a1a1a', textSub:'#6b6560', textMuted:'#9c9690', border:'#e5e0d8',
-  red:'#c0392b', redLight:'#fbeae8', amber:'#d4a017', amberLight:'#fdf3e0',
-}
+import C from '../components/shared/colours'
 
 export default function ClaimClinicPage() {
   const [search, setSearch] = useState('')
