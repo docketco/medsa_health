@@ -10,13 +10,32 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 // vercel.json) - never requires a person to remember to re-import.
 const SOURCE_URL = 'https://www.dh.gov.hk/datagovhk/orphf/SPC_data_for_PSI_20260109.csv'
 
+// Same proven character-by-character parser already used in
+// directory-import.jsx - the regex this used to use (`[^",]+`, one or
+// more characters) silently drops empty fields instead of producing an
+// empty string for them, which shifts every column after a blank field
+// one position to the left for that row. That's how a phone number
+// ended up readable back as a phf_num: a blank category/licence-type
+// field earlier in a real government row shifted everything after it.
 function parseCSV(text) {
   const lines = text.trim().split('\n')
-  const headers = lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,''))
-  return lines.slice(1).filter(l=>l.trim()).map(line=>{
-    const values = (line.match(/(".*?"|[^",]+)(?=,|$)/g)||[]).map(v=>v.trim().replace(/^"|"$/g,''))
+  function parseLine(line) {
+    const fields = []
+    let cur = '', inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]
+      if (c === '"') { inQuotes = !inQuotes }
+      else if (c === ',' && !inQuotes) { fields.push(cur); cur = '' }
+      else { cur += c }
+    }
+    fields.push(cur)
+    return fields.map(f => f.trim())
+  }
+  const headers = parseLine(lines[0]).map(h => h.replace(/^"|"$/g, ''))
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const values = parseLine(line)
     const row = {}
-    headers.forEach((h,i)=>row[h]=values[i]||'')
+    headers.forEach((h, i) => { row[h] = (values[i] || '').replace(/^"|"$/g, '') })
     return row
   })
 }
@@ -49,6 +68,14 @@ export default async function handler(req, res) {
       })
     }
     const records = [...recordsByPhfNum.values()]
+
+    // Wipe the table before repopulating - it's a pure mirror of the
+    // external CSV, not a table anything appends to independently, so
+    // there's nothing to lose. This also clears out rows corrupted by
+    // the parsing bug above from any earlier sync run, rather than
+    // leaving them sitting alongside the now-correct data.
+    const { error: clearError } = await supabase.from('hk_small_practice_clinics').delete().neq('phf_num', '__never_matches__')
+    if (clearError) throw clearError
 
     // Batched, not one row at a time - a few hundred sequential round
     // trips to the database was blowing past Vercel's function timeout

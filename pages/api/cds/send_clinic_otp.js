@@ -51,7 +51,17 @@ export default async function handler(req, res) {
   // available so the frontend can offer real choices, not guesses.
   if (action === 'list_channels') {
     const channels = []
-    if (registryPhone) { channels.push('call'); channels.push('text') }
+    if (registryPhone) {
+      channels.push('call')
+      // HK mobile numbers start with 5/6/9 (8 digits) - landlines start
+      // with 2/3. Registry phone numbers are very often the clinic's
+      // office landline, which can't receive SMS at all - offering
+      // "text" there would just silently fail. Only offer it when the
+      // number actually looks mobile.
+      const digitsOnly = registryPhone.replace(/\D/g, '')
+      const looksMobile = /^[569]\d{7}$/.test(digitsOnly)
+      if (looksMobile) channels.push('text')
+    }
     if (registryEmail) channels.push('email')
     return res.status(200).json({ status: 'CHANNELS', channels, hasPhone: !!registryPhone, hasEmail: !!registryEmail })
   }
