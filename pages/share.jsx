@@ -15,8 +15,6 @@ export default function SharePage() {
   const [clinicName, setClinicName] = useState('')
   const [clinicRegNumber, setClinicRegNumber] = useState('')
   const [businessRegNumber, setBusinessRegNumber] = useState('')
-  const [businessRegDoc, setBusinessRegDoc] = useState(null)
-  const [orphfLicenceDoc, setOrphfLicenceDoc] = useState(null)
   const [gateError, setGateError] = useState(null)
   const [verifying, setVerifying] = useState(false)
   const [verificationResult, setVerificationResult] = useState(null)
@@ -38,25 +36,13 @@ export default function SharePage() {
     setGateError(null)
     setVerifying(true)
     try {
-      // Real upload of the actual credential documents, before the
-      // verification call, so their storage paths can be attached to
-      // the record - kept on file for record-keeping, not itself proof
-      // of affiliation (that's the OTP step below).
-      let businessRegDocPath = null, orphfLicenceDocPath = null
-      if (businessRegDoc) {
-        const path = `${businessRegNumber||'unknown'}/${Date.now()}-br-${businessRegDoc.name}`
-        const { error: upErr } = await supabase.storage.from('clinic-credential-documents').upload(path, businessRegDoc)
-        if (!upErr) businessRegDocPath = path
-      }
-      if (orphfLicenceDoc) {
-        const path = `${clinicRegNumber||'unknown'}/${Date.now()}-orphf-${orphfLicenceDoc.name}`
-        const { error: upErr } = await supabase.storage.from('clinic-credential-documents').upload(path, orphfLicenceDoc)
-        if (!upErr) orphfLicenceDocPath = path
-      }
-
+      // Document upload is shelved for now - nothing reads these files
+      // back or checks them against anything, so they added no real
+      // verification, only storage. OTP against the registry's own
+      // contact info is the actual gate here.
       const res = await fetch('/api/cds/verify_clinic_credentials', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName, businessRegDocPath, orphfLicenceDocPath }),
+        body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode: clinicRegNumber, clinicNameDeclared: clinicName }),
       })
       const result = await res.json()
       setVerificationResult(result)
@@ -171,10 +157,6 @@ export default function SharePage() {
           <input value={clinicName} onChange={e=>setClinicName(e.target.value)} placeholder="Clinic name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
           <input value={clinicRegNumber} onChange={e=>setClinicRegNumber(e.target.value)} placeholder="ORPHF licence/exemption code (e.g. CE000001)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
           <input value={businessRegNumber} onChange={e=>setBusinessRegNumber(e.target.value)} placeholder="Business Registration Number (e.g. C1572528)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px'}}/>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Business Registration Certificate (kept on file)</div>
-          <input type="file" accept="image/*,.pdf" onChange={e=>setBusinessRegDoc(e.target.files[0])} style={{width:'100%',marginBottom:'10px',fontSize:'13px'}}/>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>ORPHF Licence / Letter of Exemption (kept on file)</div>
-          <input type="file" accept="image/*,.pdf" onChange={e=>setOrphfLicenceDoc(e.target.files[0])} style={{width:'100%',marginBottom:'14px',fontSize:'13px'}}/>
           {gateError && <div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{gateError}</div>}
           <button onClick={handleGateSubmit} disabled={verifying} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:verifying?'default':'pointer',opacity:verifying?0.7:1}}>{verifying?'Verifying...':'Continue'}</button>
         </>}
