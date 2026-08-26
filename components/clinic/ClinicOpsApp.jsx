@@ -3620,6 +3620,51 @@ function OrderSetsScreen({ institutionId }) {
   )
 }
 
+// ── ANOMALY REVIEW ───────────────────────────────────────────────────────────
+// Shows flags raised by detect_claim_anomalies.js (a daily cron job) -
+// patterns like one practitioner logging an implausible number of
+// distinct patients in a single day. Never blocks anything on its own -
+// this is a review queue for staff to look at and clear, same as the
+// existing post-call and order-escalation flag screens elsewhere in this
+// file. A flag here is a reason to look closer, not a verdict.
+function AnomalyFlagsScreen({ staffMember }) {
+  const [flags, setFlags] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('claim_anomaly_flags').select('*').eq('status', 'active').order('created_at', { ascending: false })
+    setFlags(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleClear(flag) {
+    await supabase.from('claim_anomaly_flags').update({ status: 'cleared', cleared_at: new Date().toISOString(), cleared_by: staffMember?.name || null }).eq('id', flag.id)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={640}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Anomaly Review</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>Automated volume checks on consultations and claims - nothing here is blocked, just flagged for a look.</div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&flags.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>No active flags.</div>}
+      {flags.map(f=>(
+        <Card key={f.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div style={{fontSize:'14px',fontWeight:700}}>{f.doctor_name}</div>
+            <Badge text={`${f.distinct_patient_count} patients / day`} type="full"/>
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{f.detail}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Window: {f.window_date} · Flagged {new Date(f.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          <button onClick={()=>handleClear(f)} style={{padding:'8px 14px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>Clear — reviewed, no issue</button>
+        </Card>
+      ))}
+    </PageWrap>
+  )
+}
+
 // ── CLAIMS CLEARINGHOUSE ─────────────────────────────────────────────────────
 // Validates claims before they leave the clinic, calculates the per-claim
 // Medsa clearinghouse fee, and tracks status through the pipeline. Actual
@@ -4177,6 +4222,7 @@ export default function ClinicOpsApp() {
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','clinic_assistant']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
     {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
+    {key:'anomalyflags', icon:'\u2691', label:'Anomaly Review', roles:['admin']},
     {key:'help', icon:'\u25cc', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
@@ -4229,6 +4275,7 @@ export default function ClinicOpsApp() {
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
+        {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
     </div>
