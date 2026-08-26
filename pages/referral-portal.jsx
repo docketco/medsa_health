@@ -12,10 +12,12 @@ import QrScanner from '../components/QrScanner'
 //   and who to. Verified via Medsa login (in-network) or the same
 //   credential-check + OTP already built for /share (out-of-network).
 // - The RECEIVING practitioner (doctor 2) - arrives via a link doctor 1
-//   shares (?receive=<referralId>), and can optionally add their own
-//   treatment log against that same referral. Optional, not required for
-//   the referral or a claim to go through - see the reminder note on
-//   doctor 1's "done" screen instead of a hard gate here.
+//   shares (?receive=<referralId>). Using this portal at all is optional
+//   (nobody can require an outside doctor to log into it), but what they
+//   submit here is their real consultation record - findings, diagnosis,
+//   materials like x-rays - the same as doctor 1's own submission, not a
+//   lesser add-on. Same scan step doctor 1 went through too, not skipped
+//   just because the link already knows the patient.
 //
 // How much doctor 2 has to verify depends on doctor 1's own trust level -
 // this is the actual point of asking doctor 1 to verify at all:
@@ -227,7 +229,7 @@ export default function ReferralPortalPage() {
       setVerifying(false)
       if (result.status === 'REMEMBERED' && result.contact_verified) {
         setReceiverVerificationMethod('clinic_otp')
-        setStage('receive_form')
+        setStage('receive_scan')
         return
       }
       if (result.id) {
@@ -254,11 +256,24 @@ export default function ReferralPortalPage() {
     const result = await res.json()
     setOtpVerifyResult(result)
     setOtpVerifying(false)
-    if (result.status === 'VERIFIED') { setReceiverVerificationMethod('clinic_otp'); setStage('receive_form') }
+    if (result.status === 'VERIFIED') { setReceiverVerificationMethod('clinic_otp'); setStage('receive_scan') }
   }
 
   async function handleVouchedContinue() {
     if (!receiverName.trim()) return
+    setStage('receive_scan')
+  }
+
+  // Same scan step doctor 1 goes through - not skipped just because the
+  // link already carries a patient_id. Confirms doctor 2 actually has the
+  // patient in front of them (or the patient's own QR in hand), and
+  // catches a stale/mistargeted link before anything gets uploaded.
+  async function handleReceiveScan(qrData) {
+    if (qrData !== patient?.medsa_id) {
+      setError("That QR code doesn't match this referral's patient.")
+      setStage('error')
+      return
+    }
     setStage('receive_form')
   }
 
@@ -366,8 +381,8 @@ export default function ReferralPortalPage() {
           <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Referral submitted</div>
           <div style={{fontSize:'13px',color:C.textSub,textAlign:'center',marginBottom:'18px'}}>Medsa will review this referral. Once approved, it's on file for {patient?.full_name}'s record.</div>
           <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>Optional: invite {form.referredToPractitionerName} to add their own treatment log</div>
-            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Not required for this referral or any claim to go through - but it does make for a stronger claim file. Send them this link:</div>
+            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>Invite {form.referredToPractitionerName} to add their own consultation record</div>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Whether they use this link at all is up to them - but if they do, it's their real consultation record (findings, diagnosis, materials like x-rays), not just an extra step. Send them this link:</div>
             <div style={{fontSize:'11px',color:C.textMuted,wordBreak:'break-all',marginBottom:'10px',padding:'8px',background:'#fff',borderRadius:'6px'}}>{shareLink}</div>
             <a href={mailtoLink} style={{display:'block',textAlign:'center',padding:'10px',background:C.green,color:'#fff',borderRadius:'8px',fontSize:'12px',fontWeight:600,textDecoration:'none'}}>Email this link</a>
           </div>
@@ -402,13 +417,18 @@ export default function ReferralPortalPage() {
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'10px',textAlign:'center'}}>Powered by Medsa - a health record platform for Hong Kong clinics.</div>
         </>}
 
+        {stage==='receive_scan' && <>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'12px'}}>Scan the patient's Medsa QR code - same step doctor 1 went through, confirms this is really their file.</div>
+          <QrScanner onScan={handleReceiveScan} onCancel={()=>{}}/>
+        </>}
+
         {stage==='receive_form' && <>
-          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>Add your treatment log</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Optional - not required for this referral to be on file. Adding it makes for a stronger claim file if the patient submits one.</div>
-          <textarea value={treatmentLog.findings} onChange={e=>setTreatmentLog(t=>({...t,findings:e.target.value}))} rows={2} placeholder="Findings" style={{...inputStyle,resize:'none',fontFamily:'inherit'}}/>
-          <textarea value={treatmentLog.interventions} onChange={e=>setTreatmentLog(t=>({...t,interventions:e.target.value}))} rows={2} placeholder="Interventions performed" style={{...inputStyle,resize:'none',fontFamily:'inherit'}}/>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>Your consultation for {patient?.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Coming here at all is optional - nobody can require an outside doctor to use this portal. But if you do, this is your real consultation record, not an extra step: findings, diagnosis, what was done, and any materials like x-rays or lab results, the same as if you were entering it directly into Medsa.</div>
+          <textarea value={treatmentLog.findings} onChange={e=>setTreatmentLog(t=>({...t,findings:e.target.value}))} rows={2} placeholder="Findings / diagnosis" style={{...inputStyle,resize:'none',fontFamily:'inherit'}}/>
+          <textarea value={treatmentLog.interventions} onChange={e=>setTreatmentLog(t=>({...t,interventions:e.target.value}))} rows={2} placeholder="Interventions / treatment performed" style={{...inputStyle,resize:'none',fontFamily:'inherit'}}/>
           <input type="number" value={treatmentLog.sessionDurationMinutes} onChange={e=>setTreatmentLog(t=>({...t,sessionDurationMinutes:e.target.value}))} placeholder="Session duration (minutes)" style={inputStyle}/>
-          <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px',marginTop:'6px'}}>Supporting documents (referral letter, signed log, etc.)</div>
+          <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px',marginTop:'6px'}}>Referral letter, x-rays, lab results, or any other materials</div>
           <input type="file" multiple onChange={e=>setReceiverFiles([...e.target.files])} style={{marginBottom:'16px',fontSize:'12px'}}/>
           <button onClick={handleReceiveSubmit} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer'}}>Submit</button>
         </>}
