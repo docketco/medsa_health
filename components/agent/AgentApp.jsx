@@ -663,7 +663,10 @@ function ReferralsScreen({ agent }) {
       {referrals.map(r=>(
         <Card key={r.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
           <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{r.patients?.full_name || 'Unknown patient'}</div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Referred by {r.referring_doctor_name}{r.referring_doctor_mchk_no?` (MCHK ${r.referring_doctor_mchk_no})`:''}{r.referring_practice_name?` · ${r.referring_practice_name}`:''}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Referred by {r.referring_doctor_name}{r.referring_doctor_mchk_no?` (MCHK ${r.referring_doctor_mchk_no})`:''}{r.referring_practice_name?` · ${r.referring_practice_name}`:''}</div>
+          <div style={{fontSize:'10px',color:r.referring_staff_medsa_id?C.green:(r.referring_clinic_verification_id?C.green:C.amber),marginBottom:'8px',fontWeight:600}}>
+            {r.referring_staff_medsa_id ? '✓ Verified - existing Medsa doctor login' : r.referring_clinic_verification_id ? '✓ Verified - practice OTP-confirmed' : '⚠ Not identity-verified'}
+          </div>
           <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>To: <strong>{r.referred_to_practitioner_name}</strong></div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{r.reason}</div>
           {r.clinical_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{r.clinical_notes}</div>}
