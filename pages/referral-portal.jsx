@@ -71,6 +71,7 @@ export default function ReferralPortalPage() {
   const [receiverName, setReceiverName] = useState('')
   const [receiverRegNumber, setReceiverRegNumber] = useState('')
   const [receiverPhone, setReceiverPhone] = useState('')
+  const [receiverEmail, setReceiverEmail] = useState('')
   const [receiverVerificationMethod, setReceiverVerificationMethod] = useState(null)
   const [receiverVerifiedPractitionerId, setReceiverVerifiedPractitionerId] = useState(null)
   const [treatmentLog, setTreatmentLog] = useState({ findings: '', interventions: '', sessionDurationMinutes: '' })
@@ -293,11 +294,12 @@ export default function ReferralPortalPage() {
     // someone who's only ever been vouched-for, not BR-checked, and
     // exact dedup isn't essential for this pending bucket.
     let verifiedPractitionerId = null
-    if (receiverRegNumber.trim() || receiverPhone.trim()) {
+    if (receiverRegNumber.trim() || receiverPhone.trim() || receiverEmail.trim()) {
       const { data: vp } = await supabase.from('verified_practitioners').insert({
         practitioner_name_declared: receiverName.trim() || form.referredToPractitionerName,
         registration_number: receiverRegNumber.trim() || null,
         phone: receiverPhone.trim() || null,
+        email: receiverEmail.trim() || null,
         br_status: 'unchecked',
       }).select('id').maybeSingle()
       verifiedPractitionerId = vp?.id || null
@@ -409,10 +411,13 @@ export default function ReferralPortalPage() {
 
         {stage==='receive_vouched' && <>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>Referral for {patient?.full_name}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Referred by {referral?.referring_doctor_name}, a verified Medsa doctor - {referral?.reason}. Their referral vouches for this, so no verification step is needed right now. We'd still like your registration number and phone, kept on file for a real check if this is ever needed for a claim.</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Referred by {referral?.referring_doctor_name}, a verified Medsa doctor - {referral?.reason}. Their referral vouches for you, so there's no verification step here - go ahead and log this consultation. If you'd like, leave a registration number and a way to reach you, purely for your own convenience next time (so you're not asked to verify again for 90 days) - entirely optional.</div>
           <input value={receiverName} onChange={e=>setReceiverName(e.target.value)} placeholder="Your full name" style={inputStyle}/>
-          <input value={receiverRegNumber} onChange={e=>setReceiverRegNumber(e.target.value)} placeholder="Registration number (e.g. SMPC/MCHK)" style={inputStyle}/>
-          <input value={receiverPhone} onChange={e=>setReceiverPhone(e.target.value)} placeholder="Phone number" style={inputStyle}/>
+          <input value={receiverRegNumber} onChange={e=>setReceiverRegNumber(e.target.value)} placeholder="Registration number (optional)" style={inputStyle}/>
+          <input value={receiverPhone} onChange={e=>setReceiverPhone(e.target.value)} placeholder="Phone number (optional)" style={inputStyle}/>
+          <input value={receiverEmail} onChange={e=>setReceiverEmail(e.target.value)} placeholder="Email (optional)" style={inputStyle}/>
+          {((receiverPhone.trim()&&!receiverEmail.trim())||(receiverEmail.trim()&&!receiverPhone.trim()))&&
+            <div style={{fontSize:'11px',color:C.amber,marginTop:'-4px',marginBottom:'10px'}}>{'◇'} Got a {receiverPhone.trim()?'email':'phone number'} too? Having both means we can reach you whichever way works when this is next needed.</div>}
           <button onClick={handleVouchedContinue} disabled={!receiverName.trim()} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:!receiverName.trim()?0.6:1}}>Continue</button>
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'10px',textAlign:'center'}}>Powered by Medsa - a health record platform for Hong Kong clinics.</div>
         </>}
