@@ -1924,18 +1924,53 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
 }
 
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-function ClaimsTab({ isEn, claims=[] }) {
+// The "auto-attach" version of this tab used to be a stub (MEDSA_RECORDS
+// was always {}) - matching a real record to a generic checklist line
+// like "Diagnosis and treatment notes" by guessing isn't reliable, and
+// every insurer/plan/claim actually wants something different. So this
+// picks real candidates (the patient's own visits, referrals, and
+// documents) but the patient always chooses which ones apply - the
+// checklist stays a guide, not an auto-selector.
+function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   const hasLiveClaims = claims.length > 0
   const [claimType,setClaimType]=useState(null)
   const [checklist,setChecklist]=useState({})
   const [bundleReady,setBundleReady]=useState(false)
+  const [selections,setSelections]=useState({}) // checklistKey -> [{type,id,label,sublabel,claimedFor}]
+  const [pickerOpenFor,setPickerOpenFor]=useState(null)
+  const [pickerFilter,setPickerFilter]=useState('')
+  const [referrals,setReferrals]=useState([])
+  const [attachments,setAttachments]=useState([])
 
-  // Documents that already exist in this patient's Medsa records.
-  // NOT YET WIRED TO REAL DATA - this needs patient/records/medications
-  // threaded into this component as real props, then matched per
-  // document type. Left honestly empty (not fake data) until that's
-  // built, so nothing false displays or gets marked as confirmed.
-  const MEDSA_RECORDS = {}
+  useEffect(() => {
+    if (!patient?.id) return
+    async function load() {
+      const [{ data: refs }, { data: atts }] = await Promise.all([
+        supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
+        supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
+      ])
+      setReferrals(refs || [])
+      setAttachments(atts || [])
+    }
+    load()
+  }, [patient?.id])
+
+  // One combined, real candidate pool - visits, referrals, and uploaded
+  // documents - the patient picks from this for any checklist line
+  // marked medsa:true, instead of the app guessing a match.
+  const candidatePool = [
+    ...records.map(r => ({ type:'record', id:r.id, label:r.title||r.diagnosis||'Visit record', sublabel:r.date_of_record, claimedFor:r.insurance_claim_id })),
+    ...referrals.map(r => ({ type:'referral', id:r.id, label:`Referral to ${r.referred_to_practitioner_name}`, sublabel:r.reason, claimedFor:r.insurance_claim_id })),
+    ...attachments.map(a => ({ type:'attachment', id:a.id, label:a.file_name||a.category, sublabel:a.category, claimedFor:a.insurance_claim_id })),
+  ]
+
+  function toggleCandidate(key, item) {
+    setSelections(prev => {
+      const current = prev[key] || []
+      const exists = current.some(c=>c.type===item.type && c.id===item.id)
+      return { ...prev, [key]: exists ? current.filter(c=>!(c.type===item.type&&c.id===item.id)) : [...current, item] }
+    })
+  }
 
   const CLAIM_TYPES=[
     {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:[
@@ -1976,9 +2011,10 @@ function ClaimsTab({ isEn, claims=[] }) {
   ]
 
   const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
-  // Medsa docs auto-checked, manual docs need patient action
+  // Medsa docs need at least one real record picked; manual docs need
+  // patient confirmation - neither happens automatically.
   const getKey = (type,i) => `${type}_${i}`
-  const isReady = (doc,key) => (doc.medsa && !!MEDSA_RECORDS[doc.name]) || checklist[key]
+  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : checklist[key]
   const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
   const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
   const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
@@ -2037,7 +2073,7 @@ function ClaimsTab({ isEn, claims=[] }) {
       {!claimType&&<>
         <div style={{padding:'0 16px 6px',fontSize:'12px',color:C.textSub}}>Select the type of claim you are preparing:</div>
         {CLAIM_TYPES.map(t=>(
-          <Card key={t.key} onClick={()=>{setClaimType(t.key);setChecklist({});setBundleReady(false)}} style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px',cursor:'pointer'}}>
+          <Card key={t.key} onClick={()=>{setClaimType(t.key);setChecklist({});setBundleReady(false);setSelections({});setPickerOpenFor(null)}} style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px',cursor:'pointer'}}>
             <div style={{width:40,height:40,background:C.greenLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{t.icon}</div>
             <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{t.label}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{t.docs.length} documents typically required</div></div>
             <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
@@ -2047,42 +2083,59 @@ function ClaimsTab({ isEn, claims=[] }) {
 
       {claimType&&selectedType&&<>
         <div style={{padding:'0 16px 10px',display:'flex',alignItems:'center',gap:'10px'}}>
-          <div onClick={()=>{setClaimType(null);setChecklist({});setBundleReady(false)}} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Change claim type</div>
+          <div onClick={()=>{setClaimType(null);setChecklist({});setBundleReady(false);setSelections({});setPickerOpenFor(null)}} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Change claim type</div>
           <span style={{fontSize:'12px',color:C.textMuted}}>· {selectedType.label}</span>
         </div>
 
-        {/* Auto-attach summary */}
+        {/* Checklist summary */}
         <div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'12px 14px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◎ {medsaCount} of {selectedType.docs.length} documents auto-attached from your Medsa records</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{manualCount > 0 ? `${manualCount} item${manualCount>1?'s':''} need your attention — marked below.` : 'All documents are ready. You can bundle your claim now.'}</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◎ {medsaCount} item{medsaCount!==1?'s':''} can be picked from your real Medsa records</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{allChecked ? 'All documents are ready. You can bundle your claim now.' : `${selectedType.docs.length - selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length} item${selectedType.docs.length - selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length!==1?'s':''} still need your action — marked below.`}</div>
         </div>
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>Documents checklist</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Green items are auto-attached from your Medsa records. Upload or confirm the remaining items.</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>This is a guide, not an auto-selector — pick which of your real Medsa records apply to each item yourself. Upload or confirm the rest.</div>
           {selectedType.docs.map((doc,i)=>{
             const key=getKey(claimType,i)
             const ready=isReady(doc,key)
-            const medsaRecord=MEDSA_RECORDS[doc.name]
+            const picked=selections[key]||[]
             return(
-              <div key={i} style={{display:'flex',gap:'12px',alignItems:'flex-start',padding:'12px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent',margin:doc.medsa?'0 -16px':undefined,padding:doc.medsa?'12px 16px':'12px 0'}}>
-                {/* Checkbox — auto-checked and locked for Medsa records */}
-                <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',cursor:(doc.medsa&&MEDSA_RECORDS[doc.name])?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}
-                  onClick={()=>!(doc.medsa&&MEDSA_RECORDS[doc.name])&&setChecklist(prev=>({...prev,[key]:!prev[key]}))}>
-                  {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+              <div key={i} style={{padding:doc.medsa?'12px 16px':'12px 0',margin:doc.medsa?'0 -16px':undefined,borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent'}}>
+                <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
+                  <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',cursor:doc.medsa?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}
+                    onClick={()=>!doc.medsa&&setChecklist(prev=>({...prev,[key]:!prev[key]}))}>
+                    {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
+                    {!doc.medsa&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
+                    {doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Not selected yet</div>}
+                    {doc.medsa&&picked.map(p=>(
+                      <div key={`${p.type}_${p.id}`} style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
+                        <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{p.label}</div>
+                        <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{p.sublabel}{p.claimedFor?' · already used in a previous claim':''}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {doc.medsa&&<div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>{picked.length>0?'Change':'Select'}</div>}
+                  {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
                 </div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                  {doc.medsa&&medsaRecord&&<>
-                    <div style={{fontSize:'11px',color:C.green,marginTop:'3px',fontWeight:500}}>◎ Auto-attached from Medsa records</div>
-                    <div style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
-                      <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{medsaRecord.title}</div>
-                      <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{medsaRecord.date} · {medsaRecord.institution}</div>
-                    </div>
-                  </>}
-                  {!(doc.medsa&&MEDSA_RECORDS[doc.name])&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
-                </div>
-                {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
-                {doc.medsa&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px',fontWeight:600,flexShrink:0,alignSelf:'center'}}>From Medsa</span>}
+                {doc.medsa&&pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
+                  <input value={pickerFilter} onChange={e=>setPickerFilter(e.target.value)} placeholder="Filter your records…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',marginBottom:'8px'}}/>
+                  {candidatePool.length===0&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'10px'}}>No records on file yet.</div>}
+                  {candidatePool.filter(c=>c.label.toLowerCase().includes(pickerFilter.toLowerCase())).map(c=>{
+                    const isPicked = picked.some(p=>p.type===c.type&&p.id===c.id)
+                    return (
+                      <div key={`${c.type}_${c.id}`} onClick={()=>toggleCandidate(key,c)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'8px 6px',cursor:'pointer',borderRadius:'6px',background:isPicked?C.greenXLight:'transparent'}}>
+                        <div style={{width:16,height:16,borderRadius:4,border:`1.5px solid ${isPicked?C.green:C.border}`,background:isPicked?C.green:'transparent',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>{isPicked&&<span style={{color:'#fff',fontSize:'10px'}}>✓</span>}</div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:'12px',color:C.text}}>{c.label}</div>
+                          <div style={{fontSize:'10px',color:C.textMuted}}>{c.sublabel}{c.claimedFor?' · already used in a previous claim':''}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>}
               </div>
             )
           })}
@@ -2130,7 +2183,7 @@ function ClaimsTab({ isEn, claims=[] }) {
   )
 }
 
-function InsuranceScreen({ isEn, claims=[], patient={} }) {
+function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
   const [expanded,setExpanded]=useState(null)
@@ -2389,7 +2442,7 @@ function InsuranceScreen({ isEn, claims=[], patient={} }) {
       </>}
 
       {/* ── CLAIMS ── */}
-      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims}/>}
+      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
@@ -3236,7 +3289,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
-        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient}/>}
+        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
