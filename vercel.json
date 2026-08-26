@@ -3,6 +3,10 @@
     {
       "path": "/api/cds/sync_orphf_registry",
       "schedule": "0 3 * * 0"
+    },
+    {
+      "path": "/api/cds/sync_licensed_facilities",
+      "schedule": "0 4 * * 0"
     }
   ]
 }
