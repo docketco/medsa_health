@@ -704,6 +704,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [consultationStartedAt]=useState(() => new Date().toISOString())
   const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
   const [overrideReasons,setOverrideReasons]=useState({}) // rxIndex -> reason text
+  // For a patient referred in by an out-of-network doctor with no Medsa
+  // presence at all - the receiving doctor here is already logged in and
+  // verified, so the simplest, most honest way to get that outside
+  // referral letter on file is to just attach it directly to this visit,
+  // no separate portal or verification step needed.
+  const [outsideReferralFile,setOutsideReferralFile]=useState(null)
 
   // Real drug-to-drug interaction engine. Collects every other drug
   // actually in play for this patient right now - both the other drugs
@@ -1072,6 +1078,16 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           .order('date_of_record', { ascending: false }).limit(1).maybeSingle()
         savedRecordId = recData?.id || null
       }
+      if (outsideReferralFile && savedRecordId && patient) {
+        const path = `referral_letters/${patient.medsa_id}/${Date.now()}-${outsideReferralFile.name}`
+        const { error: upErr } = await supabase.storage.from('external-clinic-uploads').upload(path, outsideReferralFile)
+        if (!upErr) {
+          await supabase.from('medical_record_attachments').insert({
+            patient_id: patient.id, medical_record_id: savedRecordId, category: 'referral_letter',
+            file_url: path, file_name: outsideReferralFile.name, verification_status: 'attached_by_treating_doctor',
+          })
+        }
+      }
       // Real audit logging - every safety check that ran gets a
       // permanent record, regardless of outcome. Uses rx.drug directly
       // rather than assuming safetyChecks keys line up with rxRows
@@ -1217,6 +1233,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
 
       <SecLabel>Consultation notes</SecLabel>
       <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={saved} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical',background:saved?C.card:'#fff'}}/>
+
+      {!saved&&<>
+        <SecLabel>Outside referral letter (optional)</SecLabel>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>If this patient was referred in by a doctor outside Medsa, attach their letter here - it saves with this visit.</div>
+        <input type="file" onChange={e=>setOutsideReferralFile(e.target.files[0]||null)} style={{marginBottom:'18px',fontSize:'12px'}}/>
+      </>}
 
       <SecLabel>Itemized Treatment & Charges</SecLabel>
       <div style={{marginBottom:'10px'}}>
