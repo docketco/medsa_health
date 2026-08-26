@@ -28,11 +28,16 @@ export default async function handler(req, res) {
   const orphf = orphfCode?.trim()?.toUpperCase() || null
 
   // System remembers - check for an existing, still-fresh verification
-  // before doing any real work.
+  // before doing any real work. Only takes the shortcut if the ORPHF
+  // code submitted this time still matches what's on file - otherwise
+  // a BRN reused across a different clinic/ORPHF code would silently
+  // keep returning the first record's stale orphf_registration_code
+  // forever, since upsert-on-BRN never runs while this shortcut fires.
   if (brn) {
     const { data: existing } = await supabase.from('verified_clinics')
       .select('*').eq('business_registration_number', brn).maybeSingle()
-    if (existing && existing.overall_status !== 'unverified' && existing.re_verify_after && new Date(existing.re_verify_after) > new Date()) {
+    if (existing && existing.overall_status !== 'unverified' && existing.re_verify_after && new Date(existing.re_verify_after) > new Date()
+        && (!orphf || existing.orphf_registration_code === orphf)) {
       return res.status(200).json({ status: 'REMEMBERED', ...existing })
     }
   }
