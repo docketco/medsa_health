@@ -7,6 +7,10 @@
     {
       "path": "/api/cds/sync_licensed_facilities",
       "schedule": "0 4 * * 0"
+    },
+    {
+      "path": "/api/cds/detect_claim_anomalies",
+      "schedule": "0 20 * * *"
     }
   ]
 }
