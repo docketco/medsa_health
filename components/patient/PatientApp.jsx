@@ -293,6 +293,21 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   const [replyBody,setReplyBody]=useState('')
   const [replying,setReplying]=useState(false)
   const [replyError,setReplyError]=useState(null)
+  const [carouselItems,setCarouselItems]=useState([])
+  const [openCarouselItem,setOpenCarouselItem]=useState(null)
+
+  useEffect(() => {
+    async function loadCarousel() {
+      const now = new Date().toISOString()
+      const { data } = await supabase.from('home_carousel_items').select('*')
+        .eq('active', true).order('display_order')
+      // Scheduling window checked client-side, not in the query - keeps
+      // this simple to read and the table is small (a handful of cards,
+      // not thousands of rows).
+      setCarouselItems((data||[]).filter(c => (!c.starts_at || c.starts_at <= now) && (!c.ends_at || c.ends_at >= now)))
+    }
+    loadCarousel()
+  }, [])
 
   function msgThreadKey(m) { return m.thread_id || m.id }
 
@@ -508,6 +523,23 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         </div>
         <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
+
+{carouselItems.length>0&&<div style={{margin:'14px 0 0',overflowX:'auto',display:'flex',gap:'10px',padding:'0 16px',scrollSnapType:'x mandatory'}}>
+  {carouselItems.map(item=>(
+    <div key={item.id} onClick={()=>item.link_url?window.open(item.link_url,'_blank'):setOpenCarouselItem(item)}
+      style={{flex:'0 0 auto',width:260,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'14px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
+      {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+      <div style={{padding:'12px 14px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+          <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+        </div>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
+        {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
+      </div>
+    </div>
+  ))}
+</div>}
+
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
@@ -626,6 +658,18 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
               {replyError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{replyError}</div>}
               <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(isEn?'Sending…':'傳送中…'):(isEn?'Send reply':'傳送回覆')}</Btn>
             </Card>
+          </div>
+        </div>
+      )}
+
+      {openCarouselItem&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenCarouselItem(null)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+            <div onClick={()=>setOpenCarouselItem(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
+            {openCarouselItem.image_url&&<img src={openCarouselItem.image_url} alt="" style={{width:'100%',borderRadius:'12px',marginBottom:'14px',display:'block'}}/>}
+            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:openCarouselItem.item_type==='ad'?C.amber:C.green}}>{openCarouselItem.item_type==='ad'?(openCarouselItem.sponsor_name?`Sponsored · ${openCarouselItem.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+            <div style={{fontSize:'17px',fontWeight:700,margin:'6px 0 12px'}}>{openCarouselItem.title}</div>
+            <div style={{fontSize:'14px',color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap'}}>{openCarouselItem.content}</div>
           </div>
         </div>
       )}
