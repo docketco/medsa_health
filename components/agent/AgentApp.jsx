@@ -571,6 +571,113 @@ function RenewalsScreen({ agent, policies, onRenewed }) {
 
 
 // ── ROOT ──────────────────────────────────────────────────────────────────
+// ── PENDING CLAIMS REVIEW ────────────────────────────────────────────────
+// Claims that adjudicateClaim flagged - an unverified/out-of-network
+// practitioner, or a plan that requires a referral and doesn't have an
+// approved one yet. Never auto-settled; this is the manual step that
+// decides whether it goes through. Scoped to this agent's own book of
+// business (policies they wrote), same scoping as everything else here.
+function ClaimsReviewScreen({ agent }) {
+  const [claims, setClaims] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  async function load() {
+    setLoading(true)
+    const { data: myPolicies } = await supabase.from('agent_policies').select('plan_id').eq('agent_id', agent.id)
+    const planIds = [...new Set((myPolicies||[]).map(p=>p.plan_id).filter(Boolean))]
+    if (planIds.length === 0) { setClaims([]); setLoading(false); return }
+    const { data } = await supabase.from('insurance_claims').select('*, patients(full_name), insurance_plans(plan_name, company_name)')
+      .eq('status', 'pending_review').in('plan_id', planIds).order('submitted_at', { ascending: false })
+    setClaims(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleDecision(claim, approve) {
+    const payableTotal = (claim.patient_copay_amount||0) + (claim.deductible_applied||0)
+    const settlesNow = approve && payableTotal === 0
+    await supabase.from('insurance_claims').update({
+      status: approve ? (settlesNow ? 'settled' : 'approved') : 'rejected',
+      settled_at: settlesNow ? new Date().toISOString() : null,
+    }).eq('id', claim.id)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={680}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Pending Claims</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>Flagged for review - an unverified practitioner, or a referral requirement not yet met. Nothing here auto-settles until you decide.</div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&claims.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>Nothing pending review.</div>}
+      {claims.map(c=>(
+        <Card key={c.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:700}}>{c.patients?.full_name || 'Unknown patient'}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name} · {c.insurance_plans?.company_name}</div>
+            </div>
+            <Badge text={c.verification_flag==='referral_required'?'Referral required':'Unverified practitioner'} type="due"/>
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Claim {c.claim_ref} · HK${c.amount}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleDecision(c, true)}>Approve</Btn>
+            <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleDecision(c, false)}>Reject</Btn>
+          </div>
+        </Card>
+      ))}
+    </PageWrap>
+  )
+}
+
+// ── REFERRALS REVIEW ─────────────────────────────────────────────────────
+// Referrals submitted via /referral-portal by out-of-network doctors.
+// Not insurer-scoped - a referral exists independently of which plan
+// eventually processes the claim it supports, so every agent sees the
+// same shared queue here.
+function ReferralsScreen({ agent }) {
+  const [referrals, setReferrals] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('referrals').select('*, patients(full_name)').eq('status', 'submitted').order('created_at', { ascending: false })
+    setReferrals(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleDecision(referral, approve) {
+    await supabase.from('referrals').update({
+      status: approve ? 'approved' : 'rejected',
+      reviewed_by: agent.name, reviewed_at: new Date().toISOString(),
+    }).eq('id', referral.id)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={680}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Referrals</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>Submitted through the out-of-network referral portal. Approving one is what lets a plan requiring a referral treat the matching claim as covered.</div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&referrals.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>No referrals waiting for review.</div>}
+      {referrals.map(r=>(
+        <Card key={r.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
+          <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{r.patients?.full_name || 'Unknown patient'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Referred by {r.referring_doctor_name}{r.referring_doctor_mchk_no?` (MCHK ${r.referring_doctor_mchk_no})`:''}{r.referring_practice_name?` · ${r.referring_practice_name}`:''}</div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>To: <strong>{r.referred_to_practitioner_name}</strong></div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{r.reason}</div>
+          {r.clinical_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{r.clinical_notes}</div>}
+          {r.document_paths?.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{r.document_paths.length} document(s) attached</div>}
+          <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+            <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleDecision(r, true)}>Approve</Btn>
+            <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleDecision(r, false)}>Reject</Btn>
+          </div>
+        </Card>
+      ))}
+    </PageWrap>
+  )
+}
+
 export default function AgentApp() {
   const [agent,setAgent]=useState(null)
   const [screen,setScreen]=useState('overview')
@@ -608,6 +715,8 @@ export default function AgentApp() {
     {key:'overview', icon:'\u25a3', label:'Overview'},
     {key:'policies', icon:'\u25c7', label:'Policies'},
     {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
+    {key:'claimsreview', icon:'\u26a0', label:'Pending Claims'},
+    {key:'referrals', icon:'\u25c8', label:'Referrals'},
     {key:'renewals', icon:'\u25ce', label:'Renewals', badge: renewalsSoonCount},
   ]
 
@@ -622,6 +731,8 @@ export default function AgentApp() {
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>setScreen('newpolicy')}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} onBack={()=>setScreen('policies')} onSaved={()=>{loadData(agent);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
+        {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
+        {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
       </div>
     </div>

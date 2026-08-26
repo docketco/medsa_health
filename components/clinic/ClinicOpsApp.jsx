@@ -3876,6 +3876,11 @@ function ClaimsScreen({ onNavPayment }) {
       <div style={{textAlign:'center',padding:'60px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{adjudicationResult?.status==='REJECTED'?'\u26a0':'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{{APPROVED:'Claim approved',PARTIALLY_APPROVED:'Claim partially approved',REJECTED:'Claim rejected',PENDING_REVIEW:'Pending review',SETTLED:'Approved & settled - fully covered'}[adjudicationResult?.status]||'Claim validated'}</div>
+        {adjudicationResult?.verificationFlag&&<div style={{background:C.amberLight||'#fff3e0',borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber||'#e65100',textAlign:'left'}}>
+          {'\u26a0'} {adjudicationResult.verificationFlag==='referral_required'
+            ? 'This plan requires a doctor referral for this practitioner, and none is on file yet - submitted, but held for manual review until a referral is approved.'
+            : 'This practitioner isn\u2019t verified (not on a clinic roster, no matching Business Registration) - submitted, but held for manual review rather than auto-settled.'}
+        </div>}
         {adjudicationResult&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px',textAlign:'left',fontSize:'12px'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.fees.grossAmount}</strong></div>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Deductible applied</span><strong>HK${adjudicationResult.deductibleApplied}</strong></div>

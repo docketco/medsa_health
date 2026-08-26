@@ -16,7 +16,7 @@ export default function InsurerPlansPage() {
   const [plans, setPlans] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [form, setForm] = useState({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+  const [form, setForm] = useState({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
   const [tiers, setTiers] = useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [saving, setSaving] = useState(false)
 
@@ -57,6 +57,7 @@ export default function InsurerPlansPage() {
       covered_categories: form.covered_categories,
       key_benefits: form.key_benefits || null,
       sponsored: form.sponsored,
+      requires_doctor_referral_for_allied_health: form.requires_doctor_referral_for_allied_health,
       status: 'active',
     }).select().maybeSingle()
 
@@ -72,7 +73,7 @@ export default function InsurerPlansPage() {
     }
     setSaving(false)
     setCreating(false)
-    setForm({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false })
+    setForm({ insurer_name:'', plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -80,6 +81,11 @@ export default function InsurerPlansPage() {
   async function toggleStatus(plan) {
     const newStatus = plan.status === 'active' ? 'inactive' : 'active'
     await supabase.from('insurance_plans').update({ status: newStatus }).eq('id', plan.id)
+    load()
+  }
+
+  async function toggleReferralRequirement(plan) {
+    await supabase.from('insurance_plans').update({ requires_doctor_referral_for_allied_health: !plan.requires_doctor_referral_for_allied_health }).eq('id', plan.id)
     load()
   }
 
@@ -130,9 +136,13 @@ export default function InsurerPlansPage() {
         </div>
         <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} rows={2} placeholder="Key benefits summary"
           style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
-        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'14px',cursor:'pointer'}}>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'8px',cursor:'pointer'}}>
           <input type="checkbox" checked={form.sponsored} onChange={e=>setForm(f=>({...f,sponsored:e.target.checked}))}/>
           Sponsored placement
+        </label>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'14px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.requires_doctor_referral_for_allied_health} onChange={e=>setForm(f=>({...f,requires_doctor_referral_for_allied_health:e.target.checked}))}/>
+          Requires a doctor referral for out-of-network allied health claims
         </label>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
@@ -158,7 +168,13 @@ export default function InsurerPlansPage() {
                   `Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`
                 ).join(' · ')}
           </div>
-          <button onClick={()=>toggleStatus(p)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.status==='active'?'Deactivate':'Reactivate'}</button>
+          <div style={{fontSize:'11px',color:p.requires_doctor_referral_for_allied_health?C.amber:C.textMuted,marginBottom:'8px'}}>
+            {p.requires_doctor_referral_for_allied_health ? '⚠ Requires doctor referral for out-of-network allied health' : 'No referral requirement for out-of-network allied health'}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleStatus(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.status==='active'?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>toggleReferralRequirement(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.requires_doctor_referral_for_allied_health?'Remove referral requirement':'Require referral'}</button>
+          </div>
         </div>
       ))}
     </div>
