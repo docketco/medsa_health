@@ -3573,6 +3573,53 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   )
 }
 
+// Read-only reference for order sets - these previously only ever
+// surfaced implicitly, as a safety check fired while actually
+// prescribing. A doctor or nurse who just wants to look up "what's the
+// safe dose range / hard-stop conditions for this drug" without
+// starting a prescription had nowhere to go for that.
+function OrderSetsScreen({ institutionId }) {
+  const [orderSets, setOrderSets] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    async function load() {
+      if (!institutionId) return
+      setLoading(true)
+      const { data } = await supabase.from('order_sets').select('*').eq('institution_id', institutionId).order('drug_name')
+      setOrderSets(data || [])
+      setLoading(false)
+    }
+    load()
+  }, [institutionId])
+
+  const filtered = orderSets.filter(o => o.drug_name?.toLowerCase().includes(search.toLowerCase()))
+
+  return (
+    <PageWrap maxWidth={640}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Order Sets</h2>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by drug name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{orderSets.length===0?'No order sets imported yet - a practice manager can add them from Inventory.':'No drug matches that search.'}</div>}
+      {filtered.map(o=>(
+        <Card key={o.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div style={{fontSize:'14px',fontWeight:700}}>{o.drug_name}</div>
+            {o.high_alert&&<Badge text="High alert" type="full"/>}
+          </div>
+          {(o.min_dose_per_kg||o.max_dose_per_kg)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Dose range: {o.min_dose_per_kg||'?'}{'–'}{o.max_dose_per_kg||'?'} {o.dose_unit}/kg</div>}
+          {(o.min_age_years!=null||o.max_age_years!=null)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Age range: {o.min_age_years??'0'}{'–'}{o.max_age_years??'∞'} years</div>}
+          {o.renal_adjustment_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Renal: {o.renal_adjustment_notes}</div>}
+          {o.hard_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.red,marginBottom:'4px'}}>{'⚠'} Hard stop: {o.hard_stop_conditions.join(', ')}</div>}
+          {o.soft_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'4px'}}>{'⚠'} Soft stop: {o.soft_stop_conditions.join(', ')}</div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Approved by {o.approved_by}{o.approved_at?` on ${new Date(o.approved_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+        </Card>
+      ))}
+    </PageWrap>
+  )
+}
+
 // ── CLAIMS CLEARINGHOUSE ─────────────────────────────────────────────────────
 // Validates claims before they leave the clinic, calculates the per-claim
 // Medsa clearinghouse fee, and tracks status through the pipeline. Actual
@@ -4125,6 +4172,7 @@ export default function ClinicOpsApp() {
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
     {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},
+    {key:'ordersets', icon:'\u25c9', label:'Order Sets', roles:['admin','doctor']},
     {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','clinic_assistant']},
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','clinic_assistant']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
@@ -4176,6 +4224,7 @@ export default function ClinicOpsApp() {
         />}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} institutionName={institutionName}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
+        {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
