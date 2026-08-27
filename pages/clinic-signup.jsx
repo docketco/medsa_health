@@ -8,17 +8,30 @@ import C from '../components/shared/colours'
 // clinic to get into the system at all. This creates the institution
 // itself, plus its first admin (practice manager) account, in one real,
 // atomic flow.
+//
+// BR/ORPHF/phone/address were missing entirely until now - a clinic
+// could self-onboard with full prescribing/billing capability and zero
+// tie to any real registry, while every outside-clinic upload elsewhere
+// in this app goes through a real BR/ORPHF check. Same check here now
+// (verify_clinic_credentials.js, already built for /share and the
+// referral portal) - never blocks creation, just records whether it
+// actually matched a real registry.
 
 export default function ClinicSignupPage() {
-  const [stage, setStage] = useState('form') // form | done
+  const [stage, setStage] = useState('form') // form | verifying | done
   const [clinicName, setClinicName] = useState('')
   const [medicineType, setMedicineType] = useState('western')
+  const [businessRegNumber, setBusinessRegNumber] = useState('')
+  const [orphfCode, setOrphfCode] = useState('')
+  const [phone, setPhone] = useState('')
+  const [address, setAddress] = useState('')
   const [adminFirstName, setAdminFirstName] = useState('')
   const [adminLastName, setAdminLastName] = useState('')
   const [adminEmail, setAdminEmail] = useState('')
   const [pin, setPin] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const [verificationResult, setVerificationResult] = useState(null)
 
   async function handleSubmit() {
     setError(null)
@@ -30,10 +43,28 @@ export default function ClinicSignupPage() {
     }
     setSaving(true)
     try {
+      // Real check against the live registries - same one used
+      // throughout the rest of the app. Never blocks signup either way;
+      // this just records what's actually true.
+      let verification = { status: 'unchecked' }
+      if (businessRegNumber.trim() || orphfCode.trim()) {
+        setStage('verifying')
+        const res = await fetch('/api/cds/verify_clinic_credentials', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ businessRegistrationNumber: businessRegNumber, orphfCode, clinicNameDeclared: clinicName }),
+        })
+        verification = await res.json()
+        setVerificationResult(verification)
+        setStage('form')
+      }
+
       const { data: institution, error: instErr } = await supabase.from('institutions').insert({
         name: clinicName.trim(), medicine_type: medicineType,
         onboarding_status: 'pending', created_by_name: `${adminFirstName} ${adminLastName}`.trim(),
         created_by_email: adminEmail.trim(),
+        business_registration_number: businessRegNumber.trim() || null,
+        orphf_code: orphfCode.trim() || null, phone: phone.trim() || null, address: address.trim() || null,
+        verification_status: verification.overall_status || verification.status || 'unchecked',
       }).select().maybeSingle()
       if (instErr) throw instErr
 
@@ -52,6 +83,7 @@ export default function ClinicSignupPage() {
       setStage('done')
     } catch (e) {
       setError(e.message)
+      setStage('form')
     } finally {
       setSaving(false)
     }
@@ -60,8 +92,11 @@ export default function ClinicSignupPage() {
   if (stage === 'done') return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
       <div style={{background:'#fff',borderRadius:'16px',padding:'32px',maxWidth:420,width:'100%',textAlign:'center'}}>
-        <div style={{fontSize:'32px',marginBottom:'12px'}}>{'\u2713'}</div>
+        <div style={{fontSize:'32px',marginBottom:'12px'}}>✓</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>{clinicName} is set up</div>
+        {verificationResult&&<div style={{fontSize:'12px',color:verificationResult.overall_status==='verified'?C.green:C.amber,marginBottom:'12px'}}>
+          {verificationResult.overall_status==='verified' ? '✓ Matched a real government registry.' : '◇ Registration number provided did not match a live registry - can be updated later.'}
+        </div>}
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>You're the Practice Manager - sign in to ClinicOps with the password you just set to start onboarding your own staff.</div>
         <a href="/clinic-ops" style={{display:'block',padding:'12px',background:C.green,color:'#fff',borderRadius:'10px',fontWeight:600,textDecoration:'none'}}>Go to ClinicOps</a>
       </div>
@@ -83,6 +118,12 @@ export default function ClinicSignupPage() {
           <option value="chinese">Chinese</option>
         </select>
 
+        <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>Clinic registration (checked against real government registries)</div>
+        <input value={businessRegNumber} onChange={e=>setBusinessRegNumber(e.target.value)} placeholder="Business Registration Number (e.g. C1572528)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <input value={orphfCode} onChange={e=>setOrphfCode(e.target.value)} placeholder="ORPHF licence/exemption code (e.g. CE000001)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Clinic phone number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <input value={address} onChange={e=>setAddress(e.target.value)} placeholder="Clinic address" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px'}}/>
+
         <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>Your account (Practice Manager)</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           <input value={adminFirstName} onChange={e=>setAdminFirstName(e.target.value)} placeholder="First name" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',boxSizing:'border-box'}}/>
@@ -92,7 +133,7 @@ export default function ClinicSignupPage() {
         <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="Password (8+ chars, number, capital, special)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px'}}/>
 
         {error && <div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-        <button onClick={handleSubmit} disabled={saving} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer'}}>{saving?'Setting up...':'Create clinic'}</button>
+        <button onClick={handleSubmit} disabled={saving} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer'}}>{saving?(stage==='verifying'?'Verifying registration...':'Setting up...'):'Create clinic'}</button>
       </div>
     </div>
   )

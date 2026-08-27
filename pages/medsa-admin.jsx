@@ -1,30 +1,33 @@
-// pages/content-manager.jsx
+// pages/medsa-admin.jsx (was content-manager.jsx)
 // ─────────────────────────────────────────────────────────────────────────────
-// The one Medsa-employee admin tool for the home carousel (ads/
-// newsletter), the community forum (duplicate review, sponsor
-// assignment, reported-post moderation), and onboarding partner
-// organisations. Password-gated via middleware.js, same as the other
-// admin/data tools. All future onboarding tools belong here too, rather
-// than as their own standalone pages.
+// The one Medsa-employee admin tool: home carousel (ads/newsletter), the
+// community forum (duplicate review, sponsor assignment, reported-post
+// moderation), onboarding insurance partners, and admin-assisted clinic
+// onboarding (clinic-signup.jsx still exists too, for clinics that want
+// to self-serve - this is the same real flow, run on their behalf).
+// Password-gated via middleware.js, same as the other admin/data tools.
+// All future onboarding tools belong here too, rather than as their own
+// standalone pages.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
 
-export default function ContentManagerPage() {
+export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
-      <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
-        {[['carousel','Carousel'],['forum','Forum'],['partners','Partners']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text}}>{l}</div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
+        {[['carousel','Carousel'],['forum','Forum'],['partners','Insurers'],['clinics','Clinics']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text}}>{l}</div>
         ))}
       </div>
       {tab==='carousel' && <CarouselTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
+      {tab==='clinics' && <ClinicsTab/>}
     </div>
   )
 }
@@ -92,6 +95,104 @@ function PartnersTab() {
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
           </div>
           <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Same real flow as clinic-signup.jsx (real institution + real staff
+// login + the same BR/ORPHF check), just run by a Medsa employee on the
+// clinic's behalf instead of the clinic filling it in themselves - for
+// when onboarding happens over a call, not a link. A temp password is
+// generated and shown once, same pattern as the CSV bulk staff import.
+function ClinicsTab() {
+  const [clinics, setClinics] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [result, setResult] = useState(null)
+  const [form, setForm] = useState({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'' })
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('institutions').select('*').order('created_at',{ascending:false}).limit(50)
+    setClinics(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleSubmit() {
+    if (!form.name.trim() || !form.adminName.trim() || !form.adminEmail.trim()) return
+    setSaving(true)
+    setResult(null)
+    let verification = { status: 'unchecked' }
+    if (form.businessRegNumber.trim() || form.orphfCode.trim()) {
+      setVerifying(true)
+      const res = await fetch('/api/cds/verify_clinic_credentials', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ businessRegistrationNumber: form.businessRegNumber, orphfCode: form.orphfCode, clinicNameDeclared: form.name }),
+      })
+      verification = await res.json()
+      setVerifying(false)
+    }
+    const { data: institution, error: instErr } = await supabase.from('institutions').insert({
+      name: form.name.trim(), medicine_type: form.medicineType,
+      onboarding_status: 'pending', created_by_name: form.adminName.trim(), created_by_email: form.adminEmail.trim(),
+      business_registration_number: form.businessRegNumber.trim()||null, orphf_code: form.orphfCode.trim()||null,
+      phone: form.phone.trim()||null, address: form.address.trim()||null,
+      verification_status: verification.overall_status || verification.status || 'unchecked',
+    }).select().maybeSingle()
+    if (instErr) { setResult({ error: instErr.message }); setSaving(false); return }
+
+    const medsaId = `MED-${Date.now().toString(36).toUpperCase()}`
+    const tempPassword = `Temp${Math.floor(1000+Math.random()*9000)}!`
+    await supabase.from('staff_credentials').insert({
+      institution_source: 'clinic_ops', institution_id: institution.id, medsa_id: medsaId,
+      full_name: form.adminName.trim(), role: 'admin', department: 'All departments',
+      onboarded_by: 'medsa-admin', status: 'active', verification_status: 'verified', mchk_declaration_agreed: false,
+    })
+    await supabase.rpc('set_staff_password', { p_medsa_id: medsaId, p_new_password: tempPassword })
+
+    setResult({ medsaId, tempPassword, verified: verification.overall_status==='verified' })
+    setSaving(false)
+    setCreating(false)
+    setForm({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'' })
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard a clinic on their behalf - same real flow as clinic-signup.jsx (real institution, real staff login, same BR/ORPHF check), for when it happens over a call instead of them using the link themselves.</div>
+
+      {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Clinic created{result.verified?' - registration matched a real registry':' - registration not matched, can be updated later'}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>Medsa ID: <strong>{result.medsaId}</strong> · Temp password: <strong>{result.tempPassword}</strong></div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay these to the clinic directly - not shown again.</div>
+      </div>}
+      {result?.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'16px'}}>{result.error}</div>}
+
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Onboard a clinic</button>}
+
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New clinic</div>
+        {[['name','Clinic name'],['businessRegNumber','Business Registration Number'],['orphfCode','ORPHF licence/exemption code'],['phone','Clinic phone'],['address','Clinic address'],['adminName','Practice manager full name'],['adminEmail','Practice manager email']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.name.trim()||!form.adminName.trim()||!form.adminEmail.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?(verifying?'Verifying…':'Creating…'):'Onboard'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&clinics.map(c => (
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+          <div style={{fontSize:'12px',color:C.textSub}}>{c.address||'No address on file'}{c.phone?` · ${c.phone}`:''}</div>
+          <div style={{fontSize:'11px',marginTop:'4px',color:c.verification_status==='verified'?C.green:C.amber}}>{c.verification_status==='verified'?'✓ Verified':c.verification_status||'Unchecked'}</div>
         </div>
       ))}
     </div>
