@@ -27,5 +27,5 @@ export function middleware(req) {
 }
 
 export const config = {
-  matcher: ['/csv-import', '/import-doctors-csv', '/directory-import', '/seed-osm-clinics', '/content-manager', '/insurer-plans'],
+  matcher: ['/csv-import', '/import-doctors-csv', '/directory-import', '/seed-osm-clinics', '/content-manager', '/insurer-plans', '/institution'],
 }
