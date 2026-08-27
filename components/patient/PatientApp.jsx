@@ -684,6 +684,21 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
   const [generatingPdf,setGeneratingPdf]=useState(false)
+  const [accessRequests,setAccessRequests]=useState([])
+  const [accessRequestsLoading,setAccessRequestsLoading]=useState(true)
+
+  async function loadAccessRequests() {
+    if (!patient?.id) { setAccessRequestsLoading(false); return }
+    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patient.id).eq('status','pending').order('created_at',{ascending:false})
+    setAccessRequests(data||[])
+    setAccessRequestsLoading(false)
+  }
+  useEffect(() => { loadAccessRequests() }, [patient?.id])
+
+  async function handleAccessDecision(req, approve) {
+    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
+    setAccessRequests(prev=>prev.filter(r=>r.id!==req.id))
+  }
 
   function toggleSelect(id) {
     setSelectedIds(prev => {
@@ -1020,6 +1035,19 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         {vaccineGroups.length>0&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>}
       </>}
       {tab==='sharing'&&<>
+        {!accessRequestsLoading&&accessRequests.length>0&&<>
+          <SecLabel>{isEn?'Pending access requests':'待處理的存取請求'}</SecLabel>
+          {accessRequests.map(req=>(
+            <Card key={req.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{req.requesting_clinic||req.requesting_staff}</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Requesting your records':'要求查看您的記錄'}{req.reason?` - ${req.reason}`:''}</div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleAccessDecision(req,true)}>{isEn?'Approve':'批准'}</Btn>
+                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>handleAccessDecision(req,false)}>{isEn?'Deny':'拒絕'}</Btn>
+              </div>
+            </Card>
+          ))}
+        </>}
         <SecLabel>{isEn?'Who can see your records':'誰可以查看您的記錄'}</SecLabel>
         {providers.length===0&&<div style={{margin:'0 16px 10px',padding:'20px',textAlign:'center',color:C.textMuted,fontSize:'13px'}}>{isEn?'No access controls set up yet.':'尚未設定存取控制。'}</div>}
         <Card>
@@ -2285,6 +2313,7 @@ function ForumScreen({ isEn, patient={} }) {
   const [posting,setPosting]=useState(false)
   const [patientId,setPatientId]=useState(null)
   const [creating,setCreating]=useState(false)
+  const [postRating,setPostRating]=useState(null)
 
   useEffect(() => {
     async function resolvePatient() {
@@ -2345,9 +2374,17 @@ function ForumScreen({ isEn, patient={} }) {
     const pseudonym = await getOrCreateForumIdentity(patientId)
     await supabase.from('forum_posts').insert({
       product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
+      rating: postRating || null,
     })
-    await supabase.from('forum_products').update({ post_count: (activeProduct.post_count||0)+1 }).eq('id', activeProduct.id)
+    const updatedFields = { post_count: (activeProduct.post_count||0)+1 }
+    if (postRating) {
+      updatedFields.rating_sum = (activeProduct.rating_sum||0) + postRating
+      updatedFields.rating_count = (activeProduct.rating_count||0) + 1
+    }
+    await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
+    setActiveProduct(prev=>({...prev, ...updatedFields}))
     setPostBody('')
+    setPostRating(null)
     setPosting(false)
     const { data } = await supabase.from('forum_posts').select('*').eq('product_id', activeProduct.id).order('created_at')
     setPosts(data||[])
@@ -2366,6 +2403,7 @@ function ForumScreen({ isEn, patient={} }) {
       <div style={{padding:'0 16px 10px'}}>
         <div style={{fontSize:'17px',fontWeight:700}}>{activeProduct.canonical_name}</div>
         {activeProduct.sponsored_by&&<div style={{fontSize:'11px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {activeProduct.sponsored_by}</div>}
+        {activeProduct.rating_count>0&&<div style={{fontSize:'12px',color:'#d4a017',marginTop:'4px'}}>{'★'.repeat(Math.round(activeProduct.rating_sum/activeProduct.rating_count))}{'☆'.repeat(5-Math.round(activeProduct.rating_sum/activeProduct.rating_count))} <span style={{color:C.textMuted}}>{(activeProduct.rating_sum/activeProduct.rating_count).toFixed(1)} ({activeProduct.rating_count})</span></div>}
         <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{posts.length} {isEn?'posts · posted anonymously, verified accounts only':'則貼文 · 匿名發佈，僅限已驗證帳戶'}</div>
       </div>
       <div style={{padding:'0 16px'}}>
@@ -2376,6 +2414,7 @@ function ForumScreen({ isEn, patient={} }) {
               <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}</span>
               <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
             </div>
+            {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
             <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
             {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
             {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
@@ -2383,6 +2422,10 @@ function ForumScreen({ isEn, patient={} }) {
         ))}
       </div>
       <div style={{padding:'12px 16px 24px'}}>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Rate this product (optional):':'為此產品評分（可選）：'}</div>
+        <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+          {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setPostRating(postRating===n?null:n)} style={{fontSize:'22px',cursor:'pointer',opacity:postRating&&postRating>=n?1:0.25}}>★</div>)}
+        </div>
         <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={isEn?'Share your experience, anonymously...':'匿名分享您的經驗...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>{posting?(isEn?'Posting...':'發佈中...'):(isEn?'Post anonymously':'匿名發佈')}</Btn>
       </div>
@@ -2402,6 +2445,7 @@ function ForumScreen({ isEn, patient={} }) {
             <div>
               <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
               {p.sponsored_by&&<div style={{fontSize:'10px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {p.sponsored_by}</div>}
+              {p.rating_count>0&&<div style={{fontSize:'11px',color:'#d4a017',marginTop:'2px'}}>{'★'} {(p.rating_sum/p.rating_count).toFixed(1)} <span style={{color:C.textMuted}}>({p.rating_count})</span></div>}
             </div>
             <span style={{fontSize:'11px',color:C.textMuted}}>{p.post_count||0} {isEn?'posts':'貼文'}</span>
           </Card>
@@ -2436,6 +2480,44 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [anonRating,setAnonRating]=useState(null)
   const [feedbackText,setFeedbackText]=useState('')
   const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
+  const [feedbackSubmitting,setFeedbackSubmitting]=useState(false)
+  const [worksWithAgents,setWorksWithAgents]=useState([])
+  const [worksWithAgentsLoading,setWorksWithAgentsLoading]=useState(true)
+  const [selectedFeedbackAgentId,setSelectedFeedbackAgentId]=useState(null)
+
+  // Only an agent this patient has a real policy with (any status - past
+  // or present) is eligible to be rated. Rating requires having actually
+  // worked with them, same principle as a verified purchase review.
+  useEffect(() => {
+    async function loadWorksWithAgents() {
+      const medsaId = patient?.medsa_id
+      if (!medsaId) { setWorksWithAgentsLoading(false); return }
+      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      if (!patientRow) { setWorksWithAgentsLoading(false); return }
+      const { data } = await supabase.from('agent_policies').select('agent_id, agents(id, name)').eq('patient_id', patientRow.id)
+      const distinct = Object.values((data||[]).reduce((acc,row)=>{
+        if (row.agents) acc[row.agent_id] = row.agents
+        return acc
+      }, {}))
+      setWorksWithAgents(distinct)
+      setWorksWithAgentsLoading(false)
+    }
+    loadWorksWithAgents()
+  }, [patient?.medsa_id])
+
+  // Real save - no patient_id stored, matching the "never stored" promise
+  // already shown in the form's copy. Eligibility (has this patient
+  // actually worked with this agent) is checked before this ever runs,
+  // not enforced by the insert itself.
+  async function handleSubmitFeedback() {
+    if (!anonRating || !selectedFeedbackAgentId) return
+    setFeedbackSubmitting(true)
+    await supabase.from('agent_feedback').insert({
+      agent_id: selectedFeedbackAgentId, rating: anonRating, comment: feedbackText.trim()||null,
+    })
+    setFeedbackSubmitting(false)
+    setFeedbackSubmitted(true)
+  }
   const [activePolicy,setActivePolicy]=useState(null)
   const [policyLoading,setPolicyLoading]=useState(true)
   const [renewalRequested,setRenewalRequested]=useState(false)
@@ -2727,16 +2809,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         {/* Anonymous feedback form — available now for patients who have interacted */}
         <SecLabel>{isEn?'Leave anonymous feedback':'留下匿名評價'}</SecLabel>
         <Card style={{padding:'16px'}}>
-          {!feedbackSubmitted?<>
+          {worksWithAgentsLoading&&<div style={{textAlign:'center',padding:'10px',color:C.textMuted,fontSize:'12px'}}>Loading…</div>}
+          {!worksWithAgentsLoading&&!feedbackSubmitted&&worksWithAgents.length===0&&
+            <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.5,textAlign:'center',padding:'10px 0'}}>You haven't worked with an agent through Medsa yet - feedback opens up once you have a real policy with one.</div>}
+          {!worksWithAgentsLoading&&!feedbackSubmitted&&worksWithAgents.length>0&&<>
             <div style={{fontSize:'13px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>Had a recent interaction with an agent through Medsa? Leave anonymous feedback — your identity will never be revealed.</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Which agent?</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'12px'}}>
+              {worksWithAgents.map(a=>(
+                <div key={a.id} onClick={()=>setSelectedFeedbackAgentId(a.id)} style={{padding:'10px 12px',borderRadius:'8px',border:`1.5px solid ${selectedFeedbackAgentId===a.id?C.green:C.border}`,background:selectedFeedbackAgentId===a.id?C.greenXLight:C.cream,cursor:'pointer',fontSize:'13px',fontWeight:selectedFeedbackAgentId===a.id?600:400}}>{a.name}</div>
+              ))}
+            </div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
             <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
               {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setAnonRating(n)} style={{flex:1,textAlign:'center',fontSize:'24px',cursor:'pointer',opacity:anonRating&&anonRating>=n?1:0.25}}>★</div>)}
             </div>
             <textarea value={feedbackText} onChange={e=>setFeedbackText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px'}} rows={3} placeholder="Optional comment — anonymous, never attributed to you…"/>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>◇ Your name and account details are never stored with this feedback.</div>
-            <Btn variant="primary" style={{width:'100%'}} disabled={!anonRating} onClick={()=>setFeedbackSubmitted(true)}>Submit anonymously</Btn>
-          </>:<>
+            <Btn variant="primary" style={{width:'100%'}} disabled={!anonRating||!selectedFeedbackAgentId||feedbackSubmitting} onClick={handleSubmitFeedback}>{feedbackSubmitting?'Submitting…':'Submit anonymously'}</Btn>
+          </>}
+          {feedbackSubmitted&&<>
             <div style={{textAlign:'center',padding:'16px 0'}}>
               <div style={{fontSize:'28px',marginBottom:'10px'}}>✓</div>
               <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'6px'}}>Feedback submitted anonymously</div>
