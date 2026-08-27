@@ -29,7 +29,7 @@ function PortalSelector({ onSelect }) {
           </div>
         ))}
         <div style={{ background:C.brownLight, border:`0.5px solid ${C.border}`, borderRadius:'12px', padding:'14px 16px', marginTop:'8px' }}>
-          <div style={{ fontSize:'12px', color:C.brown, lineHeight:1.6 }}><strong>New organisation?</strong> Contact Medsa to apply for an institution or partner account. All credentials are verified before portal access is granted.</div>
+          <div style={{ fontSize:'12px', color:C.brown, lineHeight:1.6 }}><strong>New organisation?</strong> Contact Medsa to apply for an institution or partner account. This portal is a shared preview for now - it doesn't yet check who you are before letting you in, so it's kept behind Medsa's own admin access rather than given out directly.</div>
         </div>
       </div>
     </div>
