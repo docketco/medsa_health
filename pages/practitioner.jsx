@@ -2,6 +2,17 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import PractitionerApp from '../components/practitioner/PractitionerApp'
 
+// Shelved for now - clinics are workstation-based (front desk, consult
+// room, each with a computer for uploads anyway), not ward-based like a
+// hospital, so a native "walk around" mobile app isn't solving a real
+// problem for clinic doctors/nurses today. /clinic-ops already covers
+// them for real (real login, real per-clinic data, real writes). This
+// page still exists as an unfinished prototype for a bigger future idea
+// (hospital-style multi-role wards - EMS, pharmacist, nurse, therapist),
+// but nothing on it is wired to real search or real per-patient data -
+// it always shows one fixed demo patient. Not deleted, not being built
+// out further right now either.
+
 const FALLBACK = {
   patient: {
     full_name: 'Wong Mei-ling, Lisa', medsa_id: 'MDS-84921-HK', date_of_birth: '1988-03-14', blood_type: 'O+',
@@ -35,5 +46,12 @@ export default function PractitionerPage() {
     load()
   }, [])
 
-  return <PractitionerApp liveData={liveData} />
+  return (
+    <>
+      <div style={{position:'sticky',top:0,zIndex:500,background:'#7a4a1f',color:'#fff',padding:'8px 16px',fontSize:'12px',textAlign:'center',lineHeight:1.5}}>
+        ◇ Preview only, not live yet - doctors and nurses at clinics should use <strong>/clinic-ops</strong> instead, which has real login and real patient data.
+      </div>
+      <PractitionerApp liveData={liveData} />
+    </>
+  )
 }

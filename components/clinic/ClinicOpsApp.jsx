@@ -679,20 +679,24 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
 function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
   const [callingPatient,setCallingPatient]=useState(null) // {name, medsaId}
+  // Completed/no-show tickets used to sit here all day (the queue only
+  // ever grew, never shrank) - a doctor's active list should only be who
+  // still needs seeing.
+  const activeQueue = queue.filter(q=>q.status!=='done'&&q.status!=='no_show')
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>My Patients</h2>
       {onRefresh&&<div style={{textAlign:'center',marginBottom:'16px'}}><span onClick={onRefresh} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>{'\u21bb'} Refresh</span></div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {queue.length===0&&<div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>No patients checked in yet today.</div>}
-        {queue.map((q,i)=>{
+        {activeQueue.length===0&&<div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>No patients checked in yet today.</div>}
+        {activeQueue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
           return (
             <Card key={i} onClick={()=>setActionPatient(q)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'14px'}}>
-              <div style={{width:36,height:36,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
+              <div style={{width:36,height:36,borderRadius:'8px',background:q.status==='serving'?C.green:C.greenLight,color:q.status==='serving'?'#fff':C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:600}}>{q.patientName}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>Checked in {new Date(q.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{q.status==='serving'?'Being seen \u00b7 ':''}Checked in {new Date(q.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>
               <Badge text={hrsLeft>0?`Records ${Math.floor(hrsLeft)}h left`:'Access expired'} type={hrsLeft>0?'ok':'full'}/>
               <span style={{color:C.textMuted,fontSize:'16px'}}>{'\u203a'}</span>
@@ -1155,6 +1159,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           timestamp: Date.now(),
           status: 'pending',
         })
+      }
+      if (queueEntry?.id) {
+        await supabase.from('clinic_queue').update({ status: 'done' }).eq('id', queueEntry.id)
       }
       setSaved(true)
     } catch (e) {
@@ -1676,11 +1683,22 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   )
 }
 
-function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment }) {
-  const inRoom = queue.length
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus }) {
+  const inRoom = queue.filter(q=>q.status!=='done'&&q.status!=='no_show').length
   const [todaysQueue,setTodaysQueue]=useState([]) // scheduled but not yet checked in
   const [loadingQueue,setLoadingQueue]=useState(true)
   const [activeAction,setActiveAction]=useState(null) // {type:'checkedin'|'scheduled', entry}
+  const [calling,setCalling]=useState(false)
+  const nowServing = queue.filter(q=>q.status==='serving')
+  const waitingList = queue.filter(q=>q.status==='waiting')
+
+  async function callNext() {
+    const next = waitingList[0]
+    if (!next) return
+    setCalling(true)
+    await onUpdateStatus(next, 'serving')
+    setCalling(false)
+  }
 
   // Real revenue stat - queries today's actual transactions. This was
   // previously a static "HK$4,820" string that never changed at all, and
@@ -1726,11 +1744,36 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
         <StatCard label="Today's revenue" value={`HK$${todaysRevenue.toFixed(0)}`} sub={`${todaysTransactionCount} transaction${todaysTransactionCount===1?'':'s'}`} color={C.green} bg={C.greenLight}/>
       </div>
+      <SecLabel>Now serving</SecLabel>
+      <div style={{marginBottom:'20px'}}>
+        {nowServing.length===0&&<Card style={{padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{fontSize:'12px',color:C.textMuted}}>{waitingList.length===0?'No one waiting.':`${waitingList.length} waiting`}</div>
+          <Btn variant="primary" onClick={callNext} disabled={calling||waitingList.length===0}>{calling?'Calling…':`Call next${waitingList[0]?' · '+waitingList[0].ticket:''}`}</Btn>
+        </Card>}
+        {nowServing.map(q=>(
+          <Card key={q.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'10px'}}>
+              <div style={{width:36,height:36,borderRadius:'8px',background:C.green,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
+              </div>
+              <Badge text="Serving" type="ok"/>
+            </div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>onUpdateStatus(q,'no_show')}>No-show</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={()=>onUpdateStatus(q,'done')}>Mark done</Btn>
+            </div>
+          </Card>
+        ))}
+      </div>
+
       <SecLabel>Checked-in patients</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
         {queue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No one checked in yet.</div>}
         {queue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
+          const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
           return (
             <Card key={i} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:i})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
               <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
@@ -1738,7 +1781,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
                 <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
               </div>
-              <Badge text={hrsLeft>0?`${Math.floor(hrsLeft)}h left`:'Expired'} type={hrsLeft>0?'ok':'full'}/>
+              <Badge text={statusBadge[0]} type={statusBadge[1]}/>
               <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
             </Card>
           )
@@ -1765,6 +1808,11 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAction.entry.patientName}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{activeAction.type==='checkedin'?`${activeAction.entry.ticket} · checked in`:`${activeAction.entry.time} · scheduled`}</div>
+          {activeAction.type==='checkedin'&&activeAction.entry.status==='waiting'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'serving');setActiveAction(null)}}>Call now</Btn>}
+          {activeAction.type==='checkedin'&&activeAction.entry.status==='serving'&&<div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+            <Btn style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'no_show');setActiveAction(null)}}>No-show</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'done');setActiveAction(null)}}>Mark done</Btn>
+          </div>}
           {activeAction.type==='checkedin'
             ? <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onRemoveFromQueue(activeAction.index);setActiveAction(null)}}>↩ Cancel check-in</Btn>
             : <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onCancelAppointment(activeAction.entry.id);setActiveAction(null);loadTodaysQueue()}}>✕ Cancel appointment</Btn>}
@@ -4239,6 +4287,16 @@ export default function ClinicOpsApp() {
     return inventoryWarnings
   }
 
+  // Real ticket lifecycle - the queue previously had a `status` column
+  // that was set to 'waiting' at check-in and then never touched again,
+  // so there was no way to actually run a walk-in queue: no "who's being
+  // seen right now," no skip/no-show, nothing. This is the one place
+  // that moves a ticket between waiting/serving/done/no_show.
+  async function updateQueueStatus(entry, newStatus) {
+    setCheckedInQueue(prev => prev.map(q => q.id===entry.id ? {...q, status:newStatus} : q))
+    await supabase.from('clinic_queue').update({ status: newStatus }).eq('id', entry.id)
+  }
+
   async function handleRemoveFromQueue(index) {
     const entry = scopedQueue[index]
     setCheckedInQueue(prev => prev.filter(q => q.id !== entry.id))
@@ -4288,8 +4346,8 @@ export default function ClinicOpsApp() {
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
