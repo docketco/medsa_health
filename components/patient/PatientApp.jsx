@@ -563,6 +563,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'◐',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
           {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
+          {key:'forum',icon:'◈',bg:C.greenLight,label:isEn?'Community':'社群',sub:isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
@@ -2227,6 +2228,194 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   )
 }
 
+// ── COMMUNITY FORUM ─────────────────────────────────────────────────────────
+// Anonymous product discussion - every patient here has already gone
+// through real ID verification for their portfolio, so posting still
+// ties to a real patient_id for moderation, but only a stable pseudonym
+// (generated once, reused forever) ever shows on screen.
+//
+// One thread per product, search-first creation - same pattern already
+// used in claim-clinic.jsx (search before you can create, so an exact
+// match never gets duplicated). For a near-miss that isn't an exact
+// match ("Panadol" vs "Panadol Extra"), the new thread still gets
+// created - never blocked - but a forum_duplicate_flags row goes to a
+// Medsa employee to confirm/merge in content-manager.jsx. No auto-merge.
+
+const FORUM_FILLER_WORDS = new Set(['extra','strength','tablets','tablet','capsules','capsule','caps','softgel','softgels','mg','ml','plus','the','a','an'])
+
+function normalizeProductName(name) {
+  return (name||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
+    .filter(w=>w && !FORUM_FILLER_WORDS.has(w) && !/^\d+$/.test(w)).sort().join(' ')
+}
+
+function nameSimilarity(a, b) {
+  const wordsA = new Set(a.split(' ').filter(Boolean))
+  const wordsB = new Set(b.split(' ').filter(Boolean))
+  if (wordsA.size===0 || wordsB.size===0) return 0
+  const intersection = [...wordsA].filter(w=>wordsB.has(w)).length
+  const union = new Set([...wordsA,...wordsB]).size
+  return intersection/union
+}
+
+async function getOrCreateForumIdentity(patientId) {
+  const { data: existing } = await supabase.from('forum_identities').select('pseudonym').eq('patient_id', patientId).maybeSingle()
+  if (existing) return existing.pseudonym
+  const ADJ = ['Calm','Bright','Steady','Quiet','Gentle','Curious','Hopeful','Patient','Kind','Wise']
+  const NOUN = ['Panda','Maple','River','Harbor','Lotus','Cedar','Falcon','Willow','Comet','Orchid']
+  const pseudonym = `${ADJ[Math.floor(Math.random()*ADJ.length)]} ${NOUN[Math.floor(Math.random()*NOUN.length)]} ${Math.floor(100+Math.random()*900)}`
+  const { data: inserted, error } = await supabase.from('forum_identities').insert({ patient_id: patientId, pseudonym }).select('pseudonym').maybeSingle()
+  // A unique-constraint collision on pseudonym is rare but possible -
+  // whoever lost the race just re-reads the winning row rather than
+  // erroring out.
+  if (error) {
+    const { data: winner } = await supabase.from('forum_identities').select('pseudonym').eq('patient_id', patientId).maybeSingle()
+    return winner?.pseudonym || pseudonym
+  }
+  return inserted?.pseudonym || pseudonym
+}
+
+function ForumScreen({ isEn, patient={} }) {
+  const [view,setView]=useState('list') // list | thread
+  const [search,setSearch]=useState('')
+  const [products,setProducts]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [activeProduct,setActiveProduct]=useState(null)
+  const [posts,setPosts]=useState([])
+  const [postBody,setPostBody]=useState('')
+  const [posting,setPosting]=useState(false)
+  const [patientId,setPatientId]=useState(null)
+  const [creating,setCreating]=useState(false)
+
+  useEffect(() => {
+    async function resolvePatient() {
+      if (!patient?.medsa_id) return
+      const { data } = await supabase.from('patients').select('id').eq('medsa_id', patient.medsa_id).maybeSingle()
+      setPatientId(data?.id || null)
+    }
+    resolvePatient()
+  }, [patient?.medsa_id])
+
+  async function loadProducts() {
+    setLoading(true)
+    const { data } = await supabase.from('forum_products').select('*').order('sponsored_by',{ascending:false,nullsFirst:false}).order('post_count',{ascending:false})
+    setProducts(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { loadProducts() }, [])
+
+  const searchNorm = normalizeProductName(search)
+  const matches = search.trim() ? products.filter(p=>p.canonical_name.toLowerCase().includes(search.toLowerCase().trim())) : products
+
+  async function handleOpenThread(product) {
+    setActiveProduct(product)
+    setView('thread')
+    const { data } = await supabase.from('forum_posts').select('*').eq('product_id', product.id).order('created_at')
+    setPosts(data||[])
+  }
+
+  async function handleCreateProduct() {
+    if (!search.trim() || !patientId) return
+    setCreating(true)
+    const normalized = searchNorm
+    // Likely-duplicate check - flags for review, never blocks creation.
+    let bestMatch = null, bestScore = 0
+    for (const p of products) {
+      const score = nameSimilarity(normalized, p.normalized_name)
+      if (score > bestScore) { bestScore = score; bestMatch = p }
+    }
+    const { data: newProduct, error } = await supabase.from('forum_products').insert({
+      canonical_name: search.trim(), normalized_name: normalized, created_by_patient_id: patientId,
+    }).select().maybeSingle()
+    setCreating(false)
+    if (error || !newProduct) return
+    if (bestMatch && bestScore >= 0.5) {
+      await supabase.from('forum_duplicate_flags').insert({
+        product_id_a: newProduct.id, product_id_b: bestMatch.id,
+        similarity_reason: `${Math.round(bestScore*100)}% word overlap: "${newProduct.canonical_name}" vs "${bestMatch.canonical_name}"`,
+      })
+    }
+    setSearch('')
+    await loadProducts()
+    handleOpenThread(newProduct)
+  }
+
+  async function handlePost() {
+    if (!postBody.trim() || !activeProduct || !patientId) return
+    setPosting(true)
+    const pseudonym = await getOrCreateForumIdentity(patientId)
+    await supabase.from('forum_posts').insert({
+      product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
+    })
+    await supabase.from('forum_products').update({ post_count: (activeProduct.post_count||0)+1 }).eq('id', activeProduct.id)
+    setPostBody('')
+    setPosting(false)
+    const { data } = await supabase.from('forum_posts').select('*').eq('product_id', activeProduct.id).order('created_at')
+    setPosts(data||[])
+  }
+
+  async function handleReport(post) {
+    await supabase.from('forum_posts').update({ flagged_for_review: true }).eq('id', post.id)
+    setPosts(prev=>prev.map(p=>p.id===post.id?{...p,flagged_for_review:true}:p))
+  }
+
+  if (view==='thread'&&activeProduct) return (
+    <div>
+      <div style={{padding:'16px',display:'flex',alignItems:'center',gap:'10px'}}>
+        <div onClick={()=>setView('list')} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{isEn?'← All discussions':'← 所有討論'}</div>
+      </div>
+      <div style={{padding:'0 16px 10px'}}>
+        <div style={{fontSize:'17px',fontWeight:700}}>{activeProduct.canonical_name}</div>
+        {activeProduct.sponsored_by&&<div style={{fontSize:'11px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {activeProduct.sponsored_by}</div>}
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{posts.length} {isEn?'posts · posted anonymously, verified accounts only':'則貼文 · 匿名發佈，僅限已驗證帳戶'}</div>
+      </div>
+      <div style={{padding:'0 16px'}}>
+        {posts.length===0&&<div style={{textAlign:'center',padding:'30px 0',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first to share.':'尚無貼文 - 成為第一個分享的人。'}</div>}
+        {posts.map(p=>(
+          <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+              <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}</span>
+              <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+            </div>
+            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
+            {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
+            {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
+          </Card>
+        ))}
+      </div>
+      <div style={{padding:'12px 16px 24px'}}>
+        <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={isEn?'Share your experience, anonymously...':'匿名分享您的經驗...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>{posting?(isEn?'Posting...':'發佈中...'):(isEn?'Post anonymously':'匿名發佈')}</Btn>
+      </div>
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{padding:'16px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>{isEn?'Discuss supplements and healthcare products with other verified Medsa patients - anonymously.':'與其他已驗證的Medsa患者匿名討論保健品和醫療產品。'}</div>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={isEn?'Search a product to discuss...':'搜尋想討論的產品...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+      </div>
+      <div style={{padding:'0 16px'}}>
+        {loading&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px',padding:'20px'}}>{isEn?'Loading...':'載入中...'}</div>}
+        {!loading&&matches.map(p=>(
+          <Card key={p.id} onClick={()=>handleOpenThread(p)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
+              {p.sponsored_by&&<div style={{fontSize:'10px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {p.sponsored_by}</div>}
+            </div>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{p.post_count||0} {isEn?'posts':'貼文'}</span>
+          </Card>
+        ))}
+        {!loading&&search.trim()&&matches.every(p=>p.canonical_name.toLowerCase()!==search.toLowerCase().trim())&&(
+          <Card onClick={handleCreateProduct} style={{padding:'14px 16px',cursor:'pointer',border:`1px dashed ${C.green}`,background:'transparent'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.green}}>{creating?(isEn?'Starting...':'建立中...'):`${isEn?'Start a new discussion for':'開始新討論：'} "${search.trim()}"`}</div>
+          </Card>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
@@ -3313,7 +3502,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃'}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群'}
   const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
   const rootContent = (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
@@ -3335,6 +3524,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
+        {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
