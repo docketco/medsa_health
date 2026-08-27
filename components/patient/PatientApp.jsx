@@ -2269,6 +2269,18 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
 // created - never blocked - but a forum_duplicate_flags row goes to a
 // Medsa employee to confirm/merge in content-manager.jsx. No auto-merge.
 
+// A blocklist check, not a content-moderation model - catches plain
+// profanity in English and common Cantonese/Chinese slurs, not clever
+// misspellings or context-dependent abuse. That gap is exactly what the
+// existing per-post "Report" button and the moderation queue in
+// medsa-admin.jsx are there to cover.
+const FORUM_BLOCKED_WORDS = ['fuck','shit','bitch','asshole','cunt','faggot','retard','nigger','diu','7up','on9','on show','sei9','sei lo','屌','X你','仆街','冚家鏟','戇鳩','傻鳩','9up']
+
+function containsProfanity(text) {
+  const lower = (text||'').toLowerCase()
+  return FORUM_BLOCKED_WORDS.some(w => lower.includes(w.toLowerCase()))
+}
+
 const FORUM_FILLER_WORDS = new Set(['extra','strength','tablets','tablet','capsules','capsule','caps','softgel','softgels','mg','ml','plus','the','a','an'])
 
 function normalizeProductName(name) {
@@ -2314,6 +2326,7 @@ function ForumScreen({ isEn, patient={} }) {
   const [patientId,setPatientId]=useState(null)
   const [creating,setCreating]=useState(false)
   const [postRating,setPostRating]=useState(null)
+  const [postError,setPostError]=useState(null)
 
   useEffect(() => {
     async function resolvePatient() {
@@ -2344,6 +2357,8 @@ function ForumScreen({ isEn, patient={} }) {
 
   async function handleCreateProduct() {
     if (!search.trim() || !patientId) return
+    if (containsProfanity(search)) { setPostError(isEn?'Please remove inappropriate language from the product name.':'請移除產品名稱中的不當用語。'); return }
+    setPostError(null)
     setCreating(true)
     const normalized = searchNorm
     // Likely-duplicate check - flags for review, never blocks creation.
@@ -2370,6 +2385,8 @@ function ForumScreen({ isEn, patient={} }) {
 
   async function handlePost() {
     if (!postBody.trim() || !activeProduct || !patientId) return
+    if (containsProfanity(postBody)) { setPostError(isEn?'Please remove inappropriate language before posting.':'請移除不當用語後再發佈。'); return }
+    setPostError(null)
     setPosting(true)
     const pseudonym = await getOrCreateForumIdentity(patientId)
     await supabase.from('forum_posts').insert({
@@ -2427,6 +2444,7 @@ function ForumScreen({ isEn, patient={} }) {
           {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setPostRating(postRating===n?null:n)} style={{fontSize:'22px',cursor:'pointer',opacity:postRating&&postRating>=n?1:0.25}}>★</div>)}
         </div>
         <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={isEn?'Share your experience, anonymously...':'匿名分享您的經驗...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
+        {postError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{postError}</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>{posting?(isEn?'Posting...':'發佈中...'):(isEn?'Post anonymously':'匿名發佈')}</Btn>
       </div>
     </div>
@@ -2455,6 +2473,7 @@ function ForumScreen({ isEn, patient={} }) {
             <div style={{fontSize:'13px',fontWeight:600,color:C.green}}>{creating?(isEn?'Starting...':'建立中...'):`${isEn?'Start a new discussion for':'開始新討論：'} "${search.trim()}"`}</div>
           </Card>
         )}
+        {postError&&<div style={{fontSize:'12px',color:C.red,marginTop:'8px'}}>{postError}</div>}
       </div>
     </div>
   )
