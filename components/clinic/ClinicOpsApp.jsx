@@ -4267,7 +4267,7 @@ export default function ClinicOpsApp() {
   const allNavItems = [
     {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant']},
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
-    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant']},
+    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
     {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},

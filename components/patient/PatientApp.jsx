@@ -556,6 +556,19 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           </div>
         ))}
       </div>
+      {/* Community bubble - pulled out of the list below into its own
+          floating pill so it's not missed the way it was buried as just
+          another row. */}
+      <div style={{padding:'4px 16px 4px'}}>
+        <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${C.green} 0%, #3f6b4f 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(74,124,89,0.28)'}}>
+          <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'19px',color:'#fff',flexShrink:0}}>◈</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'14px',fontWeight:700,color:'#fff'}}>{isEn?'Community':'社群'}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'18px'}}>›</span>
+        </div>
+      </div>
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
@@ -563,7 +576,6 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'◐',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
           {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
-          {key:'forum',icon:'◈',bg:C.greenLight,label:isEn?'Community':'社群',sub:isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
