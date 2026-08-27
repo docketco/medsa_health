@@ -259,49 +259,96 @@ function InsuranceAdminClaimsLog() {
 }
 
 // ── AGENT CLAIM VIEW (standalone page sent to agents via link) ────────────────
-export function AgentClaimView() {
+// Real claim, real decision - claimRef comes from the URL (see
+// pages/claim-review.jsx), same pattern as the /referral-portal?receive=
+// and /share links elsewhere. Was previously a single hardcoded claim
+// object with no props at all - approve/reject never wrote anywhere.
+export function AgentClaimView({ claimRef }) {
   const [decision,setDecision]=useState(null)
   const [reason,setReason]=useState('')
+  const [otherReason,setOtherReason]=useState('')
   const [submitted,setSubmitted]=useState(false)
-  const claim={id:'CLM-44823',patient:'Wong Mei-ling, Lisa',patientId:'MDS-84921-HK',plan:'AIA Prime Care',agent:'Mr Cheung Ho-fai',submitted:'22 Jun 2025, 14:32',type:'Outpatient + lab tests',institution:'Queen Elizabeth Hospital',amount:'HK$1,200',planCovers:'HK$1,000',patientPays:'HK$200',notes:'Patient referred by Dr Chan for routine diabetic monitoring. Blood panel and glucose tolerance test conducted.'}
+  const [submitting,setSubmitting]=useState(false)
+  const [claim,setClaim]=useState(null)
+  const [medicalRecord,setMedicalRecord]=useState(null)
+  const [attachments,setAttachments]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [notFound,setNotFound]=useState(false)
   const REJECT_REASONS=['Not covered under current plan','Pre-existing condition exclusion','Missing supporting documents','Treatment not pre-authorised','Duplicate claim','Other (specify below)']
+
+  useEffect(() => {
+    async function load() {
+      if (!claimRef) { setLoading(false); setNotFound(true); return }
+      const { data: c } = await supabase.from('insurance_claims')
+        .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name)')
+        .eq('claim_ref', claimRef).maybeSingle()
+      if (!c) { setLoading(false); setNotFound(true); return }
+      setClaim(c)
+      const { data: rec } = await supabase.from('medical_records').select('*').eq('insurance_claim_id', c.id).maybeSingle()
+      setMedicalRecord(rec||null)
+      if (rec) {
+        const { data: atts } = await supabase.from('medical_record_attachments').select('*').eq('medical_record_id', rec.id)
+        setAttachments(atts||[])
+      }
+      setLoading(false)
+    }
+    load()
+  }, [claimRef])
+
+  async function handleDecide() {
+    if (!claim) return
+    setSubmitting(true)
+    const finalReason = reason==='Other (specify below)' ? otherReason : reason
+    if (decision==='approve') {
+      const payable = (claim.patient_copay_amount||0) + (claim.deductible_applied||0)
+      await supabase.from('insurance_claims').update({
+        status: payable===0 ? 'settled' : 'approved',
+        settled_at: payable===0 ? new Date().toISOString() : null,
+      }).eq('id', claim.id)
+    } else {
+      await supabase.from('insurance_claims').update({ status:'rejected', rejection_reason: finalReason||null }).eq('id', claim.id)
+    }
+    setSubmitting(false)
+    setSubmitted(true)
+  }
+
+  if (loading) return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>Loading...</div>
+  if (notFound) return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No claim found for this link.</div>
+
   if(submitted) return (
     <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center'}}>
       <div style={{fontSize:'40px',marginBottom:'16px'}}>{decision==='approve'?'✓':'◎'}</div>
       <div style={{fontSize:'18px',fontWeight:700,color:decision==='approve'?C.green:C.red,marginBottom:'8px'}}>Claim {decision==='approve'?'approved':'rejected'}</div>
-      <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6,marginBottom:'16px'}}>{decision==='approve'?`${claim.patient} will be notified. Payment processes in 3–5 business days.`:`${claim.patient} will be notified with the rejection reason. They can appeal within 30 days.`}</div>
       <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',textAlign:'left'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Logged to admin portal</div>
-        <div style={{fontSize:'13px',fontWeight:500}}>Claim {claim.id} · {decision==='approve'?'Approved':'Rejected'}</div>
-        {reason&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>Reason: {reason}</div>}
-        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>by {claim.agent}</div>
+        <div style={{fontSize:'13px',fontWeight:500}}>Claim {claim.claim_ref} · {decision==='approve'?'Approved':'Rejected'}</div>
+        {reason&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>Reason: {reason==='Other (specify below)'?otherReason:reason}</div>}
       </div>
     </div>
   )
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.navy,padding:'20px 16px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.6,letterSpacing:'1px',textTransform:'uppercase',marginBottom:'4px'}}>Claim review · {claim.id}</div>
-        <div style={{fontSize:'18px',fontWeight:700}}>{claim.patient}</div>
-        <div style={{fontSize:'12px',opacity:0.8,marginTop:'2px'}}>{claim.plan} · Submitted {claim.submitted}</div>
+        <div style={{fontSize:'11px',opacity:0.6,letterSpacing:'1px',textTransform:'uppercase',marginBottom:'4px'}}>Claim review · {claim.claim_ref}</div>
+        <div style={{fontSize:'18px',fontWeight:700}}>{claim.patients?.full_name||'Unknown patient'}</div>
+        <div style={{fontSize:'12px',opacity:0.8,marginTop:'2px'}}>{claim.insurance_plans?.plan_name} · Submitted {new Date(claim.submitted_at).toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
       </div>
       <SecLabel>Claim details</SecLabel>
       <Card style={{padding:'0 16px'}}>
-        {[['Claim ID',claim.id],['Patient',claim.patient],['Medsa ID',claim.patientId],['Claim type',claim.type],['Institution',claim.institution],['Total amount',claim.amount],['Plan covers',claim.planCovers],['Patient pays',claim.patientPays]].map(([l,v],i,arr)=>(
-          <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,textAlign:'right',maxWidth:'60%'}}>{v}</span></div>
+        {[['Claim ID',claim.claim_ref],['Patient',claim.patients?.full_name],['Medsa ID',claim.patients?.medsa_id],['Insurer',claim.insurance_plans?.company_name],['Total amount',`HK$${claim.amount}`],['Insurer covers',`HK$${claim.insurer_covered_amount}`],['Patient pays',`HK$${(claim.patient_copay_amount||0)+(claim.deductible_applied||0)}`]].map(([l,v],i,arr)=>(
+          <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,textAlign:'right',maxWidth:'60%'}}>{v||'—'}</span></div>
         ))}
       </Card>
+      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {claim.verification_flag==='referral_required'?'referral required, not yet approved':'treating practitioner not verified'}</div>}
       <SecLabel>Clinical notes</SecLabel>
       <Card style={{padding:'14px 16px'}}>
-        <div style={{fontSize:'13px',color:C.text,lineHeight:1.6,fontStyle:'italic'}}>"{claim.notes}"</div>
+        {medicalRecord ? <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{medicalRecord.diagnosis&&<div style={{fontWeight:600,marginBottom:'4px'}}>{medicalRecord.diagnosis}</div>}{medicalRecord.notes||'No notes on file.'}</div>
+          : <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>No linked consultation record.</div>}
       </Card>
       <SecLabel>Supporting documents</SecLabel>
       <Card style={{padding:'12px 16px'}}>
-        {['Lab report — Blood panel CBC (QE Hospital 12 Jun)','Receipt — Consultation HK$380','Receipt — Lab tests HK$820'].map((doc,i,arr)=>(
-          <div key={i} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <span style={{fontSize:'13px',color:C.text}}>{doc}</span>
-            <span style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500}}>View</span>
-          </div>
+        {attachments.length===0&&<div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',padding:'4px 0'}}>None on file.</div>}
+        {attachments.map((doc,i,arr)=>(
+          <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text}}>{doc.file_name||doc.category}</div>
         ))}
       </Card>
       <SecLabel>Your decision</SecLabel>
@@ -309,7 +356,7 @@ export function AgentClaimView() {
         <div onClick={()=>setDecision('approve')} style={{flex:1,border:`1.5px solid ${decision==='approve'?C.green:C.border}`,background:decision==='approve'?C.greenXLight:C.cream,borderRadius:'12px',padding:'14px',textAlign:'center',cursor:'pointer'}}>
           <div style={{fontSize:'20px',marginBottom:'4px'}}>✓</div>
           <div style={{fontSize:'13px',fontWeight:600,color:decision==='approve'?C.green:C.textSub}}>Approve</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Pay {claim.planCovers}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Pay HK${claim.insurer_covered_amount}</div>
         </div>
         <div onClick={()=>setDecision('reject')} style={{flex:1,border:`1.5px solid ${decision==='reject'?C.red:C.border}`,background:decision==='reject'?C.redLight:C.cream,borderRadius:'12px',padding:'14px',textAlign:'center',cursor:'pointer'}}>
           <div style={{fontSize:'20px',marginBottom:'4px'}}>◎</div>
@@ -324,14 +371,14 @@ export function AgentClaimView() {
             <div key={i} onClick={()=>setReason(r)} style={{border:`0.5px solid ${reason===r?C.red:C.border}`,background:reason===r?C.redLight:C.cream,borderRadius:'10px',padding:'10px 14px',marginBottom:'6px',cursor:'pointer',fontSize:'13px',fontWeight:reason===r?500:400,color:reason===r?C.red:C.text}}>{r}</div>
           ))}
           {reason==='Other (specify below)'&&(
-            <textarea style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginTop:'6px'}} rows={3} placeholder="Specify reason…" onChange={e=>setReason(e.target.value)}/>
+            <textarea value={otherReason} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginTop:'6px'}} rows={3} placeholder="Specify reason…" onChange={e=>setOtherReason(e.target.value)}/>
           )}
         </div>
       )}
       {decision&&(
         <div style={{padding:'0 16px 24px'}}>
-          <button onClick={()=>{if(decision==='approve'||reason)setSubmitted(true)}} style={{width:'100%',border:'none',background:decision==='approve'?C.green:C.red,borderRadius:'10px',padding:'14px',fontSize:'14px',fontWeight:500,cursor:'pointer',color:'#fff',fontFamily:'inherit'}}>
-            {decision==='approve'?`Approve · ${claim.planCovers}`:'Reject claim'}
+          <button onClick={handleDecide} disabled={submitting||(decision==='reject'&&!reason)} style={{width:'100%',border:'none',background:decision==='approve'?C.green:C.red,borderRadius:'10px',padding:'14px',fontSize:'14px',fontWeight:500,cursor:'pointer',color:'#fff',fontFamily:'inherit',opacity:submitting||(decision==='reject'&&!reason)?0.6:1}}>
+            {submitting?'Saving...':decision==='approve'?`Approve · HK$${claim.insurer_covered_amount}`:'Reject claim'}
           </button>
           {decision==='reject'&&!reason&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginTop:'8px'}}>Please select a rejection reason before submitting.</div>}
         </div>

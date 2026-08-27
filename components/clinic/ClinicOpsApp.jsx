@@ -220,6 +220,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   const [searchTerm,setSearchTerm]=useState('')
   const [searchResult,setSearchResult]=useState(null)
   const [requestSent,setRequestSent]=useState(false)
+  const [accessRequestStatus,setAccessRequestStatus]=useState(null) // null | 'pending' | 'approved' | 'denied'
   const [checkingIn,setCheckingIn]=useState(false)
   const [revealedClaimCode,setRevealedClaimCode]=useState(null)
   const [regeneratingCode,setRegeneratingCode]=useState(false)
@@ -269,6 +270,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setRequestSent(false)
     setSearched(true)
     setRevealedClaimCode(null)
+    // Real status, not just "did I click the button this session" - a
+    // fresh search should show whether the patient already approved or
+    // denied a request from an earlier visit, not just "not sent yet."
+    if (data) {
+      const { data: existingRequest } = await supabase.from('record_access_requests')
+        .select('status').eq('patient_id', data.id).eq('requesting_clinic', staffMember?.institution_source||null)
+        .order('created_at',{ascending:false}).limit(1).maybeSingle()
+      setAccessRequestStatus(existingRequest?.status || null)
+    } else {
+      setAccessRequestStatus(null)
+    }
   }
 
   function isClaimCodeExpired(patient) {
@@ -373,16 +385,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
           {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
-          {!requestSent&&<Btn style={{width:'100%'}} onClick={async()=>{
+          {!requestSent&&!accessRequestStatus&&<Btn style={{width:'100%'}} onClick={async()=>{
             const { error } = await supabase.from('record_access_requests').insert({
               patient_id: searchResult.id, requesting_staff: staffMember?.name || 'Unknown',
               requesting_clinic: staffMember?.institution_source || null,
-              reason: 'Ahead of upcoming visit',
+              reason: 'Ahead of upcoming visit', status: 'pending',
             })
             if (error) { alert(`Could not send request: ${error.message}`); return }
             setRequestSent(true)
+            setAccessRequestStatus('pending')
           }}>Request record access ahead of visit</Btn>}
-          {requestSent&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
+          {(requestSent||accessRequestStatus==='pending')&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.amber}}>{'\u25c7'} Request sent to patient for approval. Records will be available here once granted, ahead of check-in.</div>}
+          {accessRequestStatus==='approved'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green}}>{'\u2713'} Patient approved this request.</div>}
+          {accessRequestStatus==='denied'&&<div style={{marginTop:'10px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.red}}>Patient declined this request.</div>}
           {searchResult.registration_path==='unclaimed'&&<div style={{marginTop:'14px',paddingTop:'14px',borderTop:`0.5px solid ${C.border}`}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>This patient hasn't claimed their profile yet - that's why clinical data isn't available. Lost or forgot the claim code?</div>
             {revealedClaimCode
