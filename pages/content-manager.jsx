@@ -1,9 +1,11 @@
 // pages/content-manager.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-// The one Medsa-employee admin tool for both the home carousel
-// (ads/newsletter) and the community forum - duplicate-product review,
-// sponsor assignment, and reported-post moderation. Password-gated via
-// middleware.js, same as the other admin/data tools.
+// The one Medsa-employee admin tool for the home carousel (ads/
+// newsletter), the community forum (duplicate review, sponsor
+// assignment, reported-post moderation), and onboarding partner
+// organisations. Password-gated via middleware.js, same as the other
+// admin/data tools. All future onboarding tools belong here too, rather
+// than as their own standalone pages.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react'
@@ -14,14 +16,84 @@ export default function ContentManagerPage() {
   const [tab, setTab] = useState('carousel')
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
-      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Content & Community</div>
+      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
-        {[['carousel','Carousel'],['forum','Forum']].map(([k,l])=>(
+        {[['carousel','Carousel'],['forum','Forum'],['partners','Partners']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text}}>{l}</div>
         ))}
       </div>
       {tab==='carousel' && <CarouselTab/>}
       {tab==='forum' && <ForumModerationTab/>}
+      {tab==='partners' && <PartnersTab/>}
+    </div>
+  )
+}
+
+function PartnersTab() {
+  const [companies, setCompanies] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_companies').select('*').order('created_at',{ascending:false})
+    setCompanies(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleSubmit() {
+    if (!form.name.trim()) return
+    setSaving(true)
+    await supabase.from('insurance_companies').insert({
+      name: form.name.trim(), contact_name: form.contact_name.trim()||null,
+      contact_email: form.contact_email.trim()||null, contact_phone: form.contact_phone.trim()||null,
+      onboarded_by: 'Medsa admin',
+    })
+    setSaving(false)
+    setCreating(false)
+    setForm({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+    load()
+  }
+
+  async function toggleStatus(company) {
+    await supabase.from('insurance_companies').update({ status: company.status==='active'?'inactive':'active' }).eq('id', company.id)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, use this exact company name in Insurer Plan Management to add their plans.</div>
+
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Onboard a company</button>}
+
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New insurance partner</div>
+        {[['name','Company name (e.g. AIA)'],['contact_name','Contact person'],['contact_email','Contact email'],['contact_phone','Contact phone']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&companies.map(c => (
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name}{c.contact_email?` · ${c.contact_email}`:''}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+          </div>
+          <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+        </div>
+      ))}
     </div>
   )
 }
