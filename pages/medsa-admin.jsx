@@ -39,8 +39,13 @@ function PartnersTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+  const [uploading, setUploading] = useState(false)
+  const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'', contractExpiryDate:'' })
+  const [contractDocUrl, setContractDocUrl] = useState(null)
+  const [contractDocName, setContractDocName] = useState(null)
   const [managingPlansFor, setManagingPlansFor] = useState(null)
+  const [renewingId, setRenewingId] = useState(null)
+  const [renewDate, setRenewDate] = useState('')
 
   async function load() {
     setLoading(true)
@@ -50,6 +55,18 @@ function PartnersTab() {
   }
   useEffect(() => { load() }, [])
 
+  async function handleContractUpload(file) {
+    setUploading(true)
+    setContractDocName(file.name)
+    // Same pattern as staff registration documents - storing the path,
+    // not a public URL, since a signed URL should be generated on
+    // demand when a real "view contract" feature is built.
+    const path = `insurance_companies/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('partner-contracts').upload(path, file)
+    if (!error) setContractDocUrl(path)
+    setUploading(false)
+  }
+
   async function handleSubmit() {
     if (!form.name.trim()) return
     setSaving(true)
@@ -57,10 +74,14 @@ function PartnersTab() {
       name: form.name.trim(), contact_name: form.contact_name.trim()||null,
       contact_email: form.contact_email.trim()||null, contact_phone: form.contact_phone.trim()||null,
       onboarded_by: 'Medsa admin',
+      contract_start_date: new Date().toISOString().slice(0,10),
+      contract_expiry_date: form.contractExpiryDate || null,
+      contract_doc_url: contractDocUrl || null,
     })
     setSaving(false)
     setCreating(false)
-    setForm({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+    setForm({ name:'', contact_name:'', contact_email:'', contact_phone:'', contractExpiryDate:'' })
+    setContractDocUrl(null); setContractDocName(null)
     load()
   }
 
@@ -69,11 +90,23 @@ function PartnersTab() {
     load()
   }
 
+  async function handleRenew(company) {
+    if (!renewDate) return
+    await supabase.from('insurance_companies').update({ contract_expiry_date: renewDate, contract_start_date: new Date().toISOString().slice(0,10) }).eq('id', company.id)
+    setRenewingId(null); setRenewDate('')
+    load()
+  }
+
+  function daysUntil(dateStr) {
+    if (!dateStr) return null
+    return Math.ceil((new Date(dateStr) - new Date()) / (1000*60*60*24))
+  }
+
   if (managingPlansFor) return <CompanyPlansManager company={managingPlansFor} onBack={()=>setManagingPlansFor(null)}/>
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, tap "Manage plans" on their card to add their plans - same place, no separate page.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, tap "Manage plans" on their card to add their plans - same place, no separate page. Onboarding here means a real contract - set an expiry date and upload the signed contract, and this flags it for renewal as it approaches, same as clinic onboarding.</div>
 
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Onboard a company</button>}
 
@@ -83,15 +116,27 @@ function PartnersTab() {
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Contract expiry date</div>
+        <input type="date" value={form.contractExpiryDate} onChange={e=>setForm(f=>({...f,contractExpiryDate:e.target.value}))}
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Signed contract (PDF or image)</div>
+        <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',marginBottom:'10px',boxSizing:'border-box'}}>
+          {contractDocName || 'Tap to upload'}
+          <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleContractUpload(e.target.files[0])}/>
+        </label>
+        {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
         <div style={{display:'flex',gap:'8px'}}>
-          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={()=>{setCreating(false);setContractDocUrl(null);setContractDocName(null)}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
         </div>
       </div>}
 
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&companies.map(c => (
-        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+      {!loading&&companies.map(c => {
+        const daysLeft = daysUntil(c.contract_expiry_date)
+        const expiringSoon = daysLeft!=null && daysLeft<=30
+        return (
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${expiringSoon?C.amber:C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
@@ -99,12 +144,22 @@ function PartnersTab() {
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
           </div>
+          {c.contract_expiry_date
+            ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
+            : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
+          {renewingId===c.id
+            ? <div style={{marginBottom:'8px',display:'flex',gap:'6px'}}>
+                <input type="date" value={renewDate} onChange={e=>setRenewDate(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+                <button onClick={()=>handleRenew(c)} disabled={!renewDate} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+              </div>
+            : <button onClick={()=>{setRenewingId(c.id);setRenewDate(c.contract_expiry_date||'')}} style={{width:'100%',marginBottom:'8px',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Set / renew contract date</button>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
             <button onClick={()=>setManagingPlansFor(c)} style={{flex:1,padding:'8px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Manage plans</button>
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -492,6 +547,28 @@ function CarouselTab() {
   )
 }
 
+// Same scoring PatientApp.jsx's forum uses for new products - kept in
+// sync manually since these are two separate files. Word-overlap alone
+// misses a typo-duplicate like "panadol" vs "panadoll" (zero shared
+// whole words); character-level distance on the full normalized string
+// catches that case.
+function levenshtein(a, b) {
+  const dp = Array.from({length:a.length+1},()=>new Array(b.length+1).fill(0))
+  for (let i=0;i<=a.length;i++) dp[i][0]=i
+  for (let j=0;j<=b.length;j++) dp[0][j]=j
+  for (let i=1;i<=a.length;i++) for (let j=1;j<=b.length;j++)
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1])
+  return dp[a.length][b.length]
+}
+function nameSimilarity(a, b) {
+  const wordsA = new Set(a.split(' ').filter(Boolean))
+  const wordsB = new Set(b.split(' ').filter(Boolean))
+  const jaccard = wordsA.size && wordsB.size ? [...wordsA].filter(w=>wordsB.has(w)).length / new Set([...wordsA,...wordsB]).size : 0
+  const dist = levenshtein(a, b)
+  const charSim = 1 - dist / Math.max(a.length, b.length, 1)
+  return Math.max(jaccard, charSim)
+}
+
 function ForumModerationTab() {
   const [flags, setFlags] = useState([])
   const [reportedPosts, setReportedPosts] = useState([])
@@ -499,6 +576,43 @@ function ForumModerationTab() {
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [sponsorResults, setSponsorResults] = useState([])
   const [sponsorName, setSponsorName] = useState('')
+  const [rescanning, setRescanning] = useState(false)
+  const [rescanResult, setRescanResult] = useState(null)
+
+  // One-off (and repeatable) catch-up scan across every existing
+  // product pair - needed because the duplicate check only ever ran
+  // once, at the moment the second of a pair was created, using
+  // whatever scoring existed then. A product created before a scoring
+  // improvement (like the typo fix above) never got re-checked against
+  // its actual duplicate.
+  async function handleRescan() {
+    setRescanning(true)
+    setRescanResult(null)
+    const { data: allProducts } = await supabase.from('forum_products').select('id, canonical_name, normalized_name')
+    const { data: existingFlags } = await supabase.from('forum_duplicate_flags').select('product_id_a, product_id_b')
+    const alreadyFlagged = new Set((existingFlags||[]).map(f => [f.product_id_a, f.product_id_b].sort().join('|')))
+    let found = 0
+    const products = allProducts||[]
+    for (let i=0;i<products.length;i++) {
+      for (let j=i+1;j<products.length;j++) {
+        const a = products[i], b = products[j]
+        const pairKey = [a.id, b.id].sort().join('|')
+        if (alreadyFlagged.has(pairKey)) continue
+        const score = nameSimilarity(a.normalized_name||'', b.normalized_name||'')
+        if (score >= 0.5) {
+          await supabase.from('forum_duplicate_flags').insert({
+            product_id_a: a.id, product_id_b: b.id,
+            similarity_reason: `${Math.round(score*100)}% match (re-scan): "${a.canonical_name}" vs "${b.canonical_name}"`,
+          })
+          alreadyFlagged.add(pairKey)
+          found++
+        }
+      }
+    }
+    setRescanning(false)
+    setRescanResult(found)
+    load()
+  }
 
   async function load() {
     setLoading(true)
@@ -554,7 +668,10 @@ function ForumModerationTab() {
   return (
     <div>
       <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Likely-duplicate threads ({flags.length})</div>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>Flagged automatically by name similarity - nothing merges without your confirmation.</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Flagged automatically by name similarity - nothing merges without your confirmation. New products are checked as they're created; use this to catch up existing ones too (e.g. after a scoring improvement, or just to double-check).</div>
+      <button onClick={handleRescan} disabled={rescanning} style={{padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'6px'}}>{rescanning?'Scanning…':'Re-scan all products for duplicates'}</button>
+      {rescanResult!==null&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>Found {rescanResult} new likely-duplicate pair{rescanResult===1?'':'s'}.</div>}
+      {rescanResult===null&&<div style={{marginBottom:'14px'}}/>}
       {loading&&<div style={{textAlign:'center',padding:'16px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&flags.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>Nothing pending.</div>}
       {flags.map(flag=>(

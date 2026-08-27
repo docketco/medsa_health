@@ -2374,13 +2374,30 @@ function normalizeProductName(name) {
     .filter(w=>w && !FORUM_FILLER_WORDS.has(w) && !/^\d+$/.test(w)).sort().join(' ')
 }
 
+function levenshtein(a, b) {
+  const dp = Array.from({length:a.length+1},()=>new Array(b.length+1).fill(0))
+  for (let i=0;i<=a.length;i++) dp[i][0]=i
+  for (let j=0;j<=b.length;j++) dp[0][j]=j
+  for (let i=1;i<=a.length;i++) for (let j=1;j<=b.length;j++)
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1])
+  return dp[a.length][b.length]
+}
+
 function nameSimilarity(a, b) {
   const wordsA = new Set(a.split(' ').filter(Boolean))
   const wordsB = new Set(b.split(' ').filter(Boolean))
   if (wordsA.size===0 || wordsB.size===0) return 0
   const intersection = [...wordsA].filter(w=>wordsB.has(w)).length
   const union = new Set([...wordsA,...wordsB]).size
-  return intersection/union
+  const jaccard = intersection/union
+  // Word-overlap alone misses a typo-duplicate like "panadol" vs
+  // "panadoll" - zero shared whole words, but one extra letter. A
+  // character-level distance on the full normalized string catches
+  // this; taking the max with Jaccard means neither check has to carry
+  // cases the other handles better.
+  const dist = levenshtein(a, b)
+  const charSim = 1 - dist / Math.max(a.length, b.length, 1)
+  return Math.max(jaccard, charSim)
 }
 
 async function getOrCreateForumIdentity(patientId) {
@@ -2511,18 +2528,31 @@ function ForumScreen({ isEn, patient={} }) {
       </div>
       <div style={{padding:'0 16px'}}>
         {posts.length===0&&<div style={{textAlign:'center',padding:'30px 0',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first to share.':'尚無貼文 - 成為第一個分享的人。'}</div>}
-        {posts.map(p=>(
-          <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-              <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}</span>
-              <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            </div>
-            {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
-            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
-            {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
-            {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
-          </Card>
-        ))}
+        {posts.map(p=>{
+          // Pseudonym is already stable per patient (getOrCreateForumIdentity),
+          // so the same person always shows the same name here - this adds
+          // a consistent colour tag so repeat commenters in one thread are
+          // visually obvious at a glance, not just readable if you compare
+          // names yourself. Posts stay in chronological order (already
+          // queried oldest-first) rather than being regrouped by author.
+          const sameAuthor = posts.filter(x=>x.pseudonym===p.pseudonym)
+          const authorIndex = sameAuthor.findIndex(x=>x.id===p.id) + 1
+          let hash = 0
+          for (let i=0;i<p.pseudonym.length;i++) hash = (hash*31 + p.pseudonym.charCodeAt(i)) % 360
+          const tagColor = `hsl(${hash}, 55%, 45%)`
+          return (
+            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px',borderLeft:`3px solid ${tagColor}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                <span style={{fontSize:'12px',fontWeight:700,color:tagColor}}>{p.pseudonym}{sameAuthor.length>1?` · ${authorIndex}/${sameAuthor.length} in this thread`:''}</span>
+                <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+              </div>
+              {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
+              <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
+              {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
+              {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
+            </Card>
+          )
+        })}
       </div>
       <div style={{padding:'12px 16px 24px'}}>
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Rate this product (optional):':'為此產品評分（可選）：'}</div>

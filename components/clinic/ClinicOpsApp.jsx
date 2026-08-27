@@ -1996,7 +1996,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
@@ -2012,6 +2012,39 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const [allergies,setAllergies]=useState([])
   const [medications,setMedications]=useState([])
   const [records,setRecords]=useState([])
+  const [accessRequestStatus,setAccessRequestStatus]=useState(null) // null | 'pending' | 'approved' | 'denied'
+  const [sendingAccessRequest,setSendingAccessRequest]=useState(false)
+
+  // Same "request record access ahead of visit" feature Check-in/Search
+  // has, offered here too - this is actually the more natural place for
+  // it, since seeing a scheduled patient's history hidden (outside
+  // their consent window) ahead of the visit is exactly when a doctor
+  // would want to ask for early access, not just at walk-in check-in.
+  async function loadAccessRequestStatus(patientId) {
+    if (!patientId || !staffMember?.institutionId) { setAccessRequestStatus(null); return }
+    const { data } = await supabase.from('record_access_requests')
+      .select('status').eq('patient_id', patientId).eq('requesting_institution_id', staffMember.institutionId)
+      .order('created_at',{ascending:false}).limit(1).maybeSingle()
+    setAccessRequestStatus(data?.status || null)
+  }
+
+  async function handleRequestAccess() {
+    if (!fullPatient?.id) return
+    setSendingAccessRequest(true)
+    let clinicName = null
+    if (staffMember?.institutionId) {
+      const { data: inst } = await supabase.from('institutions').select('name').eq('id', staffMember.institutionId).maybeSingle()
+      clinicName = inst?.name || null
+    }
+    const { error } = await supabase.from('record_access_requests').insert({
+      patient_id: fullPatient.id, requesting_staff: staffMember?.name || 'Unknown',
+      requesting_clinic: clinicName, requesting_institution_id: staffMember?.institutionId || null,
+      reason: 'Ahead of scheduled visit', status: 'pending',
+    })
+    setSendingAccessRequest(false)
+    if (error) { alert(`Could not send request: ${error.message}`); return }
+    setAccessRequestStatus('pending')
+  }
 
   // Real working-hours-based slots for rescheduling - replaces the
   // hardcoded ['09:00','09:30',...] list, which never reflected the
@@ -2072,6 +2105,9 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         setAllergies(allergyRes.data||[])
         setMedications(medRes.data||[])
         setRecords(recRes.data||[])
+        loadAccessRequestStatus(data.id)
+      } else {
+        setAccessRequestStatus(null)
       }
       setLoadingPatient(false)
     }
@@ -2145,6 +2181,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             : 'no consent is on file for this patient yet, so clinical details aren\'t shown here.'} Scheduling changes still work below.
         </div>}
         {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&role!=='doctor'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
+        {!loadingPatient&&!withinDataWindow&&fullPatient&&!accessRequestStatus&&<Btn style={{width:'100%',marginBottom:'14px'}} onClick={handleRequestAccess} disabled={sendingAccessRequest}>{sendingAccessRequest?'Sending…':'Request record access ahead of visit'}</Btn>}
+        {!loadingPatient&&accessRequestStatus==='pending'&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>◇ Request sent to patient for approval. Records will be available here once granted.</div>}
+        {!loadingPatient&&accessRequestStatus==='approved'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Patient approved this request.</div>}
+        {!loadingPatient&&accessRequestStatus==='denied'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.red}}>Patient declined this request.</div>}
 
         {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
           <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
@@ -3034,6 +3074,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         onConfirmConsent={handleConfirmConsent}
         onGoToConsultation={onGoToConsultation}
         role={staffMember?.role}
+        staffMember={staffMember}
         onCheckedIn={onCheckedIn}
         onScheduleFollowup={onPreselectPatientForFollowup}
         onCancelCheckIn={async(appt)=>{
