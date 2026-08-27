@@ -2014,19 +2014,87 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   const [pickerFilter,setPickerFilter]=useState('')
   const [referrals,setReferrals]=useState([])
   const [attachments,setAttachments]=useState([])
+  const [uploadingKey,setUploadingKey]=useState(null)
+  const [uploadErrorByKey,setUploadErrorByKey]=useState({})
+  const [bundlingPdf,setBundlingPdf]=useState(false)
 
-  useEffect(() => {
+  async function loadClaimDocs() {
     if (!patient?.id) return
-    async function load() {
-      const [{ data: refs }, { data: atts }] = await Promise.all([
-        supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
-        supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
-      ])
-      setReferrals(refs || [])
-      setAttachments(atts || [])
+    const [{ data: refs }, { data: atts }] = await Promise.all([
+      supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
+      supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
+    ])
+    setReferrals(refs || [])
+    setAttachments(atts || [])
+    return atts || []
+  }
+
+  useEffect(() => { loadClaimDocs() }, [patient?.id])
+
+  // Real upload for a manual checklist item (e.g. "Consultation receipt")
+  // - stores it as a real attachment the same way the Records tab does,
+  // then attaches it to this checklist line. Nothing here is a fake
+  // "Upload" pill anymore.
+  async function handleChecklistUpload(key, docName, file) {
+    if (!file || !patient?.id) return
+    setUploadingKey(key)
+    setUploadErrorByKey(prev => ({ ...prev, [key]: null }))
+    const path = `${patient.medsa_id || patient.id}/claim-${Date.now()}-${file.name}`
+    const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (uploadErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: uploadErr.message })); setUploadingKey(null); return }
+    const { data: newAtt, error: insErr } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: `${docName}: ${file.name}`,
+      verification_status: 'unverified',
+    }).select().maybeSingle()
+    if (insErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: insErr.message })); setUploadingKey(null); return }
+    await loadClaimDocs()
+    if (newAtt) {
+      const item = { type:'attachment', id:newAtt.id, label:newAtt.file_name, sublabel:newAtt.category, claimedFor:null }
+      setSelections(prev => ({ ...prev, [key]: [...(prev[key]||[]), item] }))
     }
-    load()
-  }, [patient?.id])
+    setUploadingKey(null)
+  }
+
+  // Real PDF summary of the checklist - what's selected/confirmed for
+  // each item - same jsPDF approach already used for the Records tab's
+  // bundle export. This isn't the source documents themselves (those are
+  // files/attachments, not text), it's a cover sheet listing what's
+  // included, for the patient to submit alongside them.
+  async function downloadClaimBundle() {
+    if (!selectedType) return
+    setBundlingPdf(true)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 20
+    doc.setFontSize(16)
+    doc.text(`Medsa Claim Checklist — ${selectedType.label}`, 14, y)
+    y += 8
+    doc.setFontSize(10)
+    doc.text(`${patient.full_name || ''} - ${patient.medsa_id || ''} - Generated ${new Date().toLocaleDateString('en-HK')}`, 14, y)
+    y += 4
+    doc.line(14, y, pageWidth-14, y)
+    y += 10
+    selectedType.docs.forEach((d,i) => {
+      const key = getKey(claimType,i)
+      const picked = selections[key]||[]
+      if (y > 260) { doc.addPage(); y = 20 }
+      doc.setFontSize(11)
+      doc.setFont(undefined, 'bold')
+      doc.text(`${i+1}. ${d.name}`, 14, y)
+      y += 6
+      doc.setFont(undefined, 'normal')
+      doc.setFontSize(9)
+      if (picked.length > 0) {
+        picked.forEach(p => { doc.text(`- ${p.label}${p.sublabel?' ('+p.sublabel+')':''}`, 18, y); y += 5 })
+      } else {
+        doc.text('- Confirmed ready (not stored in Medsa)', 18, y); y += 5
+      }
+      y += 4
+    })
+    doc.save(`Medsa-Claim-Checklist-${selectedType.key}-${patient.medsa_id || 'export'}.pdf`)
+    setBundlingPdf(false)
+  }
 
   // One combined, real candidate pool - visits, referrals, and uploaded
   // documents - the patient picks from this for any checklist line
@@ -2087,7 +2155,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   // Medsa docs need at least one real record picked; manual docs need
   // patient confirmation - neither happens automatically.
   const getKey = (type,i) => `${type}_${i}`
-  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : checklist[key]
+  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : (checklist[key] || (selections[key]?.length > 0))
   const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
   const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
   const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
@@ -2181,19 +2249,25 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                    {!doc.medsa&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
+                    {!doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload it, select an existing record, or confirm you have this ready</div>}
                     {doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Not selected yet</div>}
-                    {doc.medsa&&picked.map(p=>(
+                    {picked.map(p=>(
                       <div key={`${p.type}_${p.id}`} style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
                         <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{p.label}</div>
                         <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{p.sublabel}{p.claimedFor?' · already used in a previous claim':''}</div>
                       </div>
                     ))}
+                    {uploadErrorByKey[key]&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{uploadErrorByKey[key]}</div>}
                   </div>
-                  {doc.medsa&&<div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>{picked.length>0?'Change':'Select'}</div>}
-                  {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
+                  <div style={{display:'flex',flexDirection:'column',gap:'6px',flexShrink:0}}>
+                    <div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px',textAlign:'center'}}>{picked.length>0?'Change':'Select'}</div>
+                    {!doc.medsa&&<label style={{fontSize:'12px',color:uploadingKey===key?C.textMuted:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${uploadingKey===key?C.border:C.green}`,borderRadius:'8px',textAlign:'center'}}>
+                      {uploadingKey===key?'Uploading…':'Upload'}
+                      <input type="file" style={{display:'none'}} disabled={uploadingKey===key} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleChecklistUpload(key, doc.name, f)}}/>
+                    </label>}
+                  </div>
                 </div>
-                {doc.medsa&&pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
+                {pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
                   <input value={pickerFilter} onChange={e=>setPickerFilter(e.target.value)} placeholder="Filter your records…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',marginBottom:'8px'}}/>
                   {candidatePool.length===0&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'10px'}}>No records on file yet.</div>}
                   {candidatePool.filter(c=>c.label.toLowerCase().includes(pickerFilter.toLowerCase())).map(c=>{
@@ -2236,7 +2310,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
           {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Your documents have been bundled. Download the package and submit it directly to your insurer, or hold it ready for when direct submission via Medsa is available.</div>
-            <Btn style={{width:'100%',marginBottom:'6px'}}>Download claim package (PDF)</Btn>
+            <Btn style={{width:'100%',marginBottom:'6px'}} disabled={bundlingPdf} onClick={downloadClaimBundle}>{bundlingPdf?'Preparing…':'Download claim checklist (PDF)'}</Btn>
             <div style={{textAlign:'center'}}>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>or</div>
               <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px',textAlign:'center',opacity:0.5}}>

@@ -32,12 +32,15 @@ export default function MedsaAdminPage() {
   )
 }
 
+const PLAN_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+
 function PartnersTab() {
   const [companies, setCompanies] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+  const [managingPlansFor, setManagingPlansFor] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -66,9 +69,11 @@ function PartnersTab() {
     load()
   }
 
+  if (managingPlansFor) return <CompanyPlansManager company={managingPlansFor} onBack={()=>setManagingPlansFor(null)}/>
+
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, use this exact company name in Insurer Plan Management to add their plans.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, tap "Manage plans" on their card to add their plans - same place, no separate page.</div>
 
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Onboard a company</button>}
 
@@ -94,7 +99,176 @@ function PartnersTab() {
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
           </div>
-          <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>setManagingPlansFor(c)} style={{flex:1,padding:'8px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Manage plans</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Same real plan-management flow that used to live on its own page
+// (/insurer-plans) - folded in here so onboarding a company and setting
+// up its plans is one place, one tool, not two.
+function CompanyPlansManager({ company, onBack }) {
+  const [plans, setPlans] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+  const [tiers, setTiers] = useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name', company.name).order('created_at',{ascending:false})
+    setPlans(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.name])
+
+  function updateTier(i, field, value) {
+    setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
+  }
+  function addTier() {
+    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  }
+  function removeTier(i) {
+    setTiers(t => t.filter((_,idx)=>idx!==i))
+  }
+  function toggleCategory(cat) {
+    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+  }
+
+  async function handleSubmit() {
+    if (!form.plan_name) return
+    const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
+    if (validTiers.length===0) return
+    setSaving(true)
+    const { data: newPlan } = await supabase.from('insurance_plans').insert({
+      company_name: company.name,
+      plan_name: form.plan_name,
+      plan_type: form.plan_type || null,
+      covered_conditions: form.covered_conditions.split(',').map(s=>s.trim()).filter(Boolean),
+      covered_categories: form.covered_categories,
+      key_benefits: form.key_benefits || null,
+      sponsored: form.sponsored,
+      requires_doctor_referral_for_allied_health: form.requires_doctor_referral_for_allied_health,
+      status: 'active',
+    }).select().maybeSingle()
+
+    if (newPlan) {
+      await supabase.from('insurance_plan_pricing_tiers').insert(
+        validTiers.map(t => ({
+          plan_id: newPlan.id,
+          age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
+          monthly_premium: parseFloat(t.monthly_premium),
+          annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
+        }))
+      )
+    }
+    setSaving(false)
+    setCreating(false)
+    setForm({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    load()
+  }
+
+  async function toggleStatus(plan) {
+    await supabase.from('insurance_plans').update({ status: plan.status==='active'?'inactive':'active' }).eq('id', plan.id)
+    load()
+  }
+
+  async function toggleReferralRequirement(plan) {
+    await supabase.from('insurance_plans').update({ requires_doctor_referral_for_allied_health: !plan.requires_doctor_referral_for_allied_health }).eq('id', plan.id)
+    load()
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={{background:'none',border:'none',color:C.textSub,fontSize:'13px',cursor:'pointer',padding:0,marginBottom:'12px'}}>‹ Back to partners</button>
+      <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{company.name} — plans</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Plans added here appear in patient-facing plan matching immediately. Inactive plans stay on file but stop showing to patients.</div>
+
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add new plan</button>}
+
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New plan for {company.name}</div>
+        {[['plan_name','Plan name'],['plan_type','Plan type (e.g. Comprehensive)']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real insurance pricing varies by age, so at least one age-banded tier is required</div>
+        {tiers.map((tier,i) => (
+          <div key={i} style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+            <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+              <input type="number" value={tier.age_min} onChange={e=>updateTier(i,'age_min',e.target.value)} placeholder="Age from"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.age_max} onChange={e=>updateTier(i,'age_max',e.target.value)} placeholder="Age to (use 120 for +)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            </div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="Monthly premium (HK$)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.annual_limit} onChange={e=>updateTier(i,'annual_limit',e.target.value)} placeholder="Annual limit (HK$, optional)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              {tiers.length>1&&<button onClick={()=>removeTier(i)} style={{padding:'0 10px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>×</button>}
+            </div>
+          </div>
+        ))}
+        <button onClick={addTier} style={{width:'100%',padding:'8px',background:C.card,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'10px'}}>+ Add another age tier</button>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered conditions (comma-separated) - this drives real patient matching</div>
+        <input value={form.covered_conditions} onChange={e=>setForm(f=>({...f,covered_conditions:e.target.value}))} placeholder="e.g. diabetes, hypertension, asthma"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Coverage categories</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+          {PLAN_CATEGORIES.map(cat => (
+            <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+          ))}
+        </div>
+        <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} rows={2} placeholder="Key benefits summary"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'8px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.sponsored} onChange={e=>setForm(f=>({...f,sponsored:e.target.checked}))}/>
+          Sponsored placement
+        </label>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'14px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.requires_doctor_referral_for_allied_health} onChange={e=>setForm(f=>({...f,requires_doctor_referral_for_allied_health:e.target.checked}))}/>
+          Requires a doctor referral for out-of-network allied health claims
+        </label>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Submit plan'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No plans listed yet for {company.name}.</div>}
+      {!loading&&plans.map(p => (
+        <div key={p.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:p.status==='active'?C.greenLight:C.card,color:p.status==='active'?C.green:C.textMuted,fontWeight:600}}>{p.status}</span>
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Covers: {(p.covered_conditions||[]).join(', ')||'none listed'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
+            {(p.insurance_plan_pricing_tiers||[]).length===0
+              ? <span style={{color:C.red}}>No pricing tiers entered</span>
+              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>
+                  `Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`
+                ).join(' · ')}
+          </div>
+          <div style={{fontSize:'11px',color:p.requires_doctor_referral_for_allied_health?C.amber:C.textMuted,marginBottom:'8px'}}>
+            {p.requires_doctor_referral_for_allied_health ? '⚠ Requires doctor referral for out-of-network allied health' : 'No referral requirement for out-of-network allied health'}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleStatus(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.status==='active'?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>toggleReferralRequirement(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.requires_doctor_referral_for_allied_health?'Remove referral requirement':'Require referral'}</button>
+          </div>
         </div>
       ))}
     </div>
