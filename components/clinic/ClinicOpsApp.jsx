@@ -39,6 +39,14 @@ function Badge({ text, type }) {
 function PageWrap({ children, maxWidth=720 }) {
   return <div style={{maxWidth, margin:'0 auto', width:'100%'}}>{children}</div>
 }
+function InfoRow({ label, value, last }) {
+  return (
+    <div style={{padding:'11px 0',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:last?'none':`0.5px solid ${C.border}`,fontSize:'13px'}}>
+      <span style={{color:C.textSub}}>{label}</span>
+      <span style={{fontWeight:500}}>{value}</span>
+    </div>
+  )
+}
 
 // Shared doctor directory - single source of truth for name + department,
 // used both at staff login and when filtering/switching doctors elsewhere,
@@ -93,12 +101,14 @@ function StaffLogin({ onLogin }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link')
   .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
 const mapped = (data||[]).map(s => ({
   id: s.medsa_id, name: s.full_name, role: s.role,
   roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
   department: s.department, institutionId: s.institution_id,
+  practitionerPortalEnabled: s.practitioner_portal_enabled, practitionerIdentityId: s.practitioner_identity_id,
+  registrationNumber: s.registration_number, registrationExpiry: s.registration_expiry, hasEpc: !!s.epc_link,
 }))
       setStaff(mapped)
       setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
@@ -2237,6 +2247,51 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Deliberately consolidated into one screen with tabs, not five separate
 // screens like the Practitioner-side HR system - a small clinic doesn't need
 // that much structure, just needs the same real underlying jobs done.
+// ── MY CREDENTIALS — real replacement for the shelved /practitioner ────────
+// app's fake "Practitioner ID" screen (hardcoded name, hardcoded license
+// number, two different names shown on its own two tabs). Real fields
+// from this person's actual staff_credentials row, plus the one thing
+// that screen never had: if the same real person (matched by HKID +
+// e-PC at onboarding) also works at another clinic, switching to it
+// here doesn't need a second password - they already proved who they
+// are this session.
+function PractitionerCredentialsScreen({ staffMember, institutionName, affiliatedClinics, onSwitchClinic }) {
+  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>My Credentials</h2>
+      <div style={{margin:'0 0 16px',background:`linear-gradient(135deg,${C.green} 0%,#3f6b4f 100%)`,borderRadius:'16px',padding:'24px',color:'#fff'}}>
+        <div style={{fontSize:'10px',opacity:0.65,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'4px'}}>medsa practitioner</div>
+        <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>{staffMember.name}</div>
+        <div style={{fontSize:'13px',opacity:0.85,marginBottom:'16px'}}>{ROLE_LABELS[staffMember.role]||staffMember.role}{staffMember.department&&staffMember.department!=='All departments'?` · ${staffMember.department}`:''}</div>
+        <div style={{display:'flex',gap:'20px'}}>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Registration</div><div style={{fontSize:'13px',fontWeight:600}}>{staffMember.registrationNumber||'Not on file'}</div></div>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Institution</div><div style={{fontSize:'13px',fontWeight:600}}>{institutionName||'—'}</div></div>
+        </div>
+      </div>
+      <Card style={{padding:'0 16px'}}>
+        <InfoRow label="Full name" value={staffMember.name}/>
+        <InfoRow label="Registration no." value={staffMember.registrationNumber||'Not on file'}/>
+        <InfoRow label="Registration expiry" value={staffMember.registrationExpiry||'Not on file'}/>
+        <InfoRow label="e-PC on file" value={staffMember.hasEpc?'Yes':'No'} last/>
+      </Card>
+
+      <SecLabel>Switch clinic</SecLabel>
+      {affiliatedClinics.length===0
+        ? <div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 16px'}}>No other clinics linked to your identity yet. If you also work elsewhere on Medsa, your practice manager there onboards you with the same HKID and e-PC to link it here.</div>
+        : affiliatedClinics.map(c=>(
+          <Card key={c.institutionId} onClick={()=>onSwitchClinic(c)} style={{padding:'14px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{c.institutionName}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{ROLE_LABELS[c.role]||c.role}{c.department&&c.department!=='All departments'?` · ${c.department}`:''}</div>
+            </div>
+            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+          </Card>
+        ))}
+    </PageWrap>
+  )
+}
+
 function HelpScreen({ staffMember }) {
   const [expanded,setExpanded]=useState(null)
   const [submitType,setSubmitType]=useState(null) // 'technical_issue' | 'complaint' | null
@@ -2301,6 +2356,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newSex,setNewSex]=useState('')
   const [newDob,setNewDob]=useState('')
   const [newEpcLink,setNewEpcLink]=useState('')
+  const [newHkid,setNewHkid]=useState('')
   const [newIsNurse,setNewIsNurse]=useState(false)
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
@@ -2359,16 +2415,28 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
       if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
       const rowIsNurse = row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase())
-      // e-PC required per row for doctors and nurse-flagged assistants -
-      // this is the real scan target itself (see epc_link below), not a
-      // separately Medsa-generated code, so it can't be skipped here.
-      if ((row.role==='doctor' || rowIsNurse) && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
+      // e-PC and HKID required per row for doctors and nurse-flagged
+      // assistants - e-PC is the real scan target itself (see epc_link
+      // below), HKID + e-PC together are the real identity match used
+      // to recognise the same person already onboarded at another
+      // clinic, rather than blocking on a repeat e-PC as a "duplicate."
+      const rowNeedsEpc = row.role==='doctor' || rowIsNurse
+      if (rowNeedsEpc && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
+      if (rowNeedsEpc && !row.hkid?.trim()) { skippedRows.push(`${row.full_name} - HKID required for doctors/nurses`); continue }
       const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
-      // Check for an existing person with this same e-PC before creating
-      // a duplicate - the e-PC is the real, durable identity here.
-      if (row.epc_link?.trim()) {
-        const { data: existing } = await supabase.from('staff_credentials').select('id').eq('epc_link', row.epc_link.trim()).maybeSingle()
-        if (existing) { skippedRows.push(`${row.full_name} - e-PC already on file for another staff record`); continue }
+      let practitionerIdentityId = null
+      if (rowNeedsEpc) {
+        const { data: existingIdentity } = await supabase.from('practitioner_identities')
+          .select('id').eq('hkid', row.hkid.trim()).eq('epc_link', row.epc_link.trim()).maybeSingle()
+        if (existingIdentity) {
+          practitionerIdentityId = existingIdentity.id
+        } else {
+          const { data: newIdentity, error: identityErr } = await supabase.from('practitioner_identities').insert({
+            hkid: row.hkid.trim(), epc_link: row.epc_link.trim(), full_name: row.full_name, registration_number: row.registration_number||null,
+          }).select().maybeSingle()
+          if (identityErr) { skippedRows.push(`${row.full_name} - ${identityErr.message}`); continue }
+          practitionerIdentityId = newIdentity?.id || null
+        }
       }
       const { error: insErr } = await supabase.from('staff_credentials').insert({
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
@@ -2378,6 +2446,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         has_epc: !!row.epc_link?.trim(),
         is_nurse: rowIsNurse,
         epc_link: row.epc_link?.trim() || null,
+        hkid: rowNeedsEpc ? row.hkid.trim() : null, practitioner_identity_id: practitionerIdentityId,
         // Deliberately never true via bulk import, regardless of CSV
         // content - this is a personal legal declaration a doctor makes
         // about themselves, not something an admin import can set on
@@ -2410,9 +2479,31 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
-    if ((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)) && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    const needsEpc = newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)
+    if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
     setSaving(true)
     setOnboardError(null)
+
+    // HKID + e-PC together are the real identity match - if this exact
+    // pair already exists (same person onboarded at another clinic),
+    // reuse that identity instead of creating a disconnected new one.
+    let practitionerIdentityId = null
+    if (needsEpc) {
+      const { data: existingIdentity } = await supabase.from('practitioner_identities')
+        .select('id').eq('hkid', newHkid.trim()).eq('epc_link', newEpcLink.trim()).maybeSingle()
+      if (existingIdentity) {
+        practitionerIdentityId = existingIdentity.id
+      } else {
+        const { data: newIdentity, error: identityErr } = await supabase.from('practitioner_identities').insert({
+          hkid: newHkid.trim(), epc_link: newEpcLink.trim(),
+          full_name: `${newFirstName}${newLastName?' '+newLastName:''}`, registration_number: newReg||null,
+        }).select().maybeSingle()
+        if (identityErr) { setSaving(false); setOnboardError(identityErr.message); return }
+        practitionerIdentityId = newIdentity?.id || null
+      }
+    }
+
     const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
     const { error: onboardErr } = await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', institution_id:institutionId, medsa_id:newMedsaId,
@@ -2421,6 +2512,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
       has_epc: !!newEpcLink?.trim(), epc_link: newEpcLink?.trim() || null,
+      hkid: needsEpc ? newHkid.trim() : null, practitioner_identity_id: practitionerIdentityId,
       is_nurse: newRole==='clinic_assistant' ? newIsNurse : false,
       mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
       mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
@@ -2438,7 +2530,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
-    setNewSex('');setNewDob('');setNewEpcLink('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
+    setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
     load()
   }
 
@@ -2474,7 +2566,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link - this is the real, scannable e-PC identifier itself, checked against existing records to avoid duplicates. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
@@ -2513,6 +2605,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {(newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real MCHK-issued identifier and the actual scan target itself, not a separate Medsa-generated code.</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>HKID - required. Together with e-PC, this is how Medsa recognises the same real person if they also work at another clinic, so they log in once and switch clinics instead of getting a second, disconnected account.</div>
+            <input value={newHkid} onChange={e=>setNewHkid(e.target.value)} placeholder="HKID" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           {newRole==='clinic_assistant'&&!newIsNurse&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{'\u25c7'} No e-PC required - Medsa will onboard this person separately with their own generated QR code (a paid, Medsa-run process, not urgent).</div>}
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
@@ -2545,7 +2639,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&!newEpcLink?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
@@ -2553,10 +2647,10 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <div>
               <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
               <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
-              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} Practitioner Portal - granted by {s.practitioner_portal_granted_by}</div>}
+              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} My Credentials access - granted by {s.practitioner_portal_granted_by}</div>}
             </div>
             <div style={{display:'flex',gap:'6px',flexShrink:0}}>
-              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke portal':'Grant portal'}</button>}
+              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke My Credentials':'Grant My Credentials'}</button>}
               <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
             </div>
           </div>
@@ -4206,6 +4300,40 @@ export default function ClinicOpsApp() {
   const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
   const [clinicQueues,setClinicQueues]=useState([])
+  const [affiliatedClinics,setAffiliatedClinics]=useState([]) // other institutions this same real practitioner is also onboarded at
+
+  // A doctor/nurse who's the same real person (matched by HKID + e-PC at
+  // onboarding) at more than one clinic shares one practitioner_identity_id
+  // across their separate staff_credentials rows. This looks up their
+  // other clinics so "My Credentials" can offer switching without a
+  // second password - they already proved who they are once this session.
+  useEffect(() => {
+    async function loadAffiliated() {
+      if (!staffMember?.practitionerIdentityId) { setAffiliatedClinics([]); return }
+      const { data } = await supabase.from('staff_credentials')
+        .select('medsa_id, full_name, role, department, institution_id, practitioner_portal_enabled, practitioner_identity_id, registration_number, registration_expiry, epc_link, institutions(name)')
+        .eq('practitioner_identity_id', staffMember.practitionerIdentityId)
+        .eq('status', 'active')
+        .neq('institution_id', staffMember.institutionId)
+      const roleLabels = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+      setAffiliatedClinics((data||[]).map(r => ({
+        id: r.medsa_id, name: r.full_name, role: r.role, roleLabel: roleLabels[r.role]||r.role, department: r.department,
+        institutionId: r.institution_id, institutionName: r.institutions?.name || 'Unknown clinic',
+        practitionerPortalEnabled: r.practitioner_portal_enabled, practitionerIdentityId: r.practitioner_identity_id,
+        registrationNumber: r.registration_number, registrationExpiry: r.registration_expiry, hasEpc: !!r.epc_link,
+      })))
+    }
+    loadAffiliated()
+  }, [staffMember?.practitionerIdentityId, staffMember?.institutionId])
+
+  function switchClinic(clinic) {
+    // clinic already carries this row's own real fields (fetched fresh
+    // above) - portal access, registration details etc. can legitimately
+    // differ per clinic even for the same real person, so this isn't
+    // just merging over the old institution's values.
+    setStaffMember(clinic)
+    setScreen(clinic.role==='doctor' ? 'mypatients' : 'overview')
+  }
 
   async function loadClinicQueues() {
     if (!institutionId) { setClinicQueues([]); return }
@@ -4518,12 +4646,13 @@ export default function ClinicOpsApp() {
     {key:'queues', icon:'\u25a4', label:'Queues', roles:['admin']},
     {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
     {key:'anomalyflags', icon:'\u2691', label:'Anomaly Review', roles:['admin']},
+    {key:'mycredentials', icon:'\u25c8', label:'My Credentials', roles:['doctor','clinic_assistant'], portalOnly:true},
     {key:'help', icon:'\u25cc', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
 
-  const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role))
+  const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role) && (!item.portalOnly || staffMember.practitionerPortalEnabled))
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
@@ -4572,6 +4701,7 @@ export default function ClinicOpsApp() {
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
+        {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
     </div>
