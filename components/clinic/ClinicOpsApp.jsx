@@ -273,9 +273,13 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     // Real status, not just "did I click the button this session" - a
     // fresh search should show whether the patient already approved or
     // denied a request from an earlier visit, not just "not sent yet."
-    if (data) {
+    // Matched by institution_id, not institution_source - that field is
+    // a fixed literal ('clinic_ops') shared by every clinic using this
+    // app, not a per-clinic identifier, so matching on it would have
+    // shown one clinic's approval to every other clinic.
+    if (data && staffMember?.institutionId) {
       const { data: existingRequest } = await supabase.from('record_access_requests')
-        .select('status').eq('patient_id', data.id).eq('requesting_clinic', staffMember?.institution_source||null)
+        .select('status').eq('patient_id', data.id).eq('requesting_institution_id', staffMember.institutionId)
         .order('created_at',{ascending:false}).limit(1).maybeSingle()
       setAccessRequestStatus(existingRequest?.status || null)
     } else {
@@ -386,9 +390,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           </div>
           {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           {!requestSent&&!accessRequestStatus&&<Btn style={{width:'100%'}} onClick={async()=>{
+            // Real clinic name, not the fixed 'clinic_ops' app-source
+            // literal - that string was showing up as the "requesting
+            // clinic" in the patient's own approval screen.
+            let clinicName = null
+            if (staffMember?.institutionId) {
+              const { data: inst } = await supabase.from('institutions').select('name').eq('id', staffMember.institutionId).maybeSingle()
+              clinicName = inst?.name || null
+            }
             const { error } = await supabase.from('record_access_requests').insert({
               patient_id: searchResult.id, requesting_staff: staffMember?.name || 'Unknown',
-              requesting_clinic: staffMember?.institution_source || null,
+              requesting_clinic: clinicName, requesting_institution_id: staffMember?.institutionId || null,
               reason: 'Ahead of upcoming visit', status: 'pending',
             })
             if (error) { alert(`Could not send request: ${error.message}`); return }
