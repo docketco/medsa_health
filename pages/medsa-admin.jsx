@@ -461,17 +461,58 @@ function ClinicsTab() {
   )
 }
 
+// Same upload-or-URL choice used on the public sponsor-submit.jsx form -
+// duplicated here rather than shared since one's a page and one's a tab.
+function AdminImagePicker({ label, value, onChange }) {
+  const [mode, setMode] = useState('url')
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFile(file) {
+    setUploading(true)
+    const path = `admin/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('carousel-images').upload(path, file)
+    if (!error) {
+      const { data } = supabase.storage.from('carousel-images').getPublicUrl(path)
+      onChange(data.publicUrl)
+    }
+    setUploading(false)
+  }
+
+  return (
+    <div style={{marginBottom:'10px'}}>
+      {label&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>{label}</div>}
+      <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+        {[['url','Paste a URL'],['upload','Upload a file']].map(([k,l])=>(
+          <div key={k} onClick={()=>setMode(k)} style={{flex:1,padding:'6px',borderRadius:'6px',textAlign:'center',fontSize:'11px',cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub}}>{l}</div>
+        ))}
+      </div>
+      {mode==='url'&&<input value={value||''} onChange={e=>onChange(e.target.value)} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+      {mode==='upload'&&<label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
+        {uploading?'Uploading…':(value?'Uploaded ✓ - tap to replace':'Tap to upload (JPG/PNG)')}
+        <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+      </label>}
+      {value&&<img src={value} alt="" style={{width:'100%',maxHeight:100,objectFit:'cover',borderRadius:'8px',marginTop:'6px'}}/>}
+    </div>
+  )
+}
+
 function CarouselTab() {
   const [items, setItems] = useState([])
+  const [submissions, setSubmissions] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0 })
+  const [approving, setApproving] = useState(null)
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('home_carousel_items').select('*').order('display_order')
-    setItems(data||[])
+    const [{data:i},{data:s}] = await Promise.all([
+      supabase.from('home_carousel_items').select('*').order('display_order'),
+      supabase.from('home_carousel_submissions').select('*').eq('status','pending').order('submitted_at',{ascending:false}),
+    ])
+    setItems(i||[])
+    setSubmissions(s||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -502,11 +543,48 @@ function CarouselTab() {
     load()
   }
 
+  async function handleApprove(sub) {
+    setApproving(sub.id)
+    const maxOrder = items.reduce((m,i)=>Math.max(m,i.display_order||0), 0)
+    await supabase.from('home_carousel_items').insert({
+      item_type: sub.item_type, title: sub.title, subtitle: sub.subtitle,
+      image_url: sub.image_url, sponsor_name: sub.sponsor_name,
+      link_url: sub.link_url, cta_label: sub.cta_label, content_blocks: sub.content_blocks,
+      display_order: maxOrder+1, active: true,
+    })
+    await supabase.from('home_carousel_submissions').update({ status:'approved', reviewed_at:new Date().toISOString() }).eq('id', sub.id)
+    setApproving(null)
+    load()
+  }
+
+  async function handleReject(sub) {
+    await supabase.from('home_carousel_submissions').update({ status:'rejected', reviewed_at:new Date().toISOString() }).eq('id', sub.id)
+    load()
+  }
+
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen. A card with a link opens it externally; a card with content opens it inside the app.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you approve it below.</div>
 
-      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add card</button>}
+      {submissions.length>0&&<>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Pending submissions ({submissions.length})</div>
+        {submissions.map(sub=>(
+          <div key={sub.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+            {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:'8px',marginBottom:'8px'}}/>}
+            <div style={{fontSize:'14px',fontWeight:600}}>{sub.title}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.item_type} · from {sub.sponsor_name} ({sub.sponsor_contact_email})</div>
+            {sub.subtitle&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.subtitle}</div>}
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{(sub.content_blocks||[]).length} content block{(sub.content_blocks||[]).length===1?'':'s'}{sub.link_url?' · has a CTA link':''}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>handleReject(sub)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
+              <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post'}</button>
+            </div>
+          </div>
+        ))}
+      </>}
+
+      <div style={{fontSize:'15px',fontWeight:600,margin:'20px 0 10px'}}>Live cards</div>
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add card yourself</button>}
 
       {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New card</div>
@@ -515,7 +593,12 @@ function CarouselTab() {
             <div key={t} onClick={()=>setForm(f=>({...f,item_type:t}))} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:form.item_type===t?C.green:C.card,color:form.item_type===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
-        {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)'],['image_url','Image URL (optional)'],['link_url','External link (opens outside the app)'],['display_order','Display order (lower shows first)']].map(([field,ph]) => (
+        {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <AdminImagePicker label="Image" value={form.image_url} onChange={v=>setForm(f=>({...f,image_url:v}))}/>
+        {[['link_url','External link (opens outside the app)'],['display_order','Display order (lower shows first)']].map(([field,ph]) => (
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}

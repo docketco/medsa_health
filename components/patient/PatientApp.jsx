@@ -295,6 +295,13 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   const [replyError,setReplyError]=useState(null)
   const [carouselItems,setCarouselItems]=useState([])
   const [openCarouselItem,setOpenCarouselItem]=useState(null)
+  const [carouselIndex,setCarouselIndex]=useState(0)
+  const carouselScrollRef=useRef(null)
+  function handleCarouselScroll(e) {
+    const el = e.target
+    const cardWidth = el.firstChild ? el.firstChild.offsetWidth + 10 : 1
+    setCarouselIndex(Math.round(el.scrollLeft / cardWidth))
+  }
 
   useEffect(() => {
     async function loadCarousel() {
@@ -524,20 +531,33 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
 
-{carouselItems.length>0&&<div style={{margin:'14px 0 0',overflowX:'auto',display:'flex',gap:'10px',padding:'0 16px',scrollSnapType:'x mandatory'}}>
-  {carouselItems.map(item=>(
-    <div key={item.id} onClick={()=>item.link_url?window.open(item.link_url,'_blank'):setOpenCarouselItem(item)}
-      style={{flex:'0 0 auto',width:260,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'14px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
-      {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
-      <div style={{padding:'12px 14px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
-          <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+{carouselItems.length>0&&<div style={{margin:'14px 0 0'}}>
+  <div ref={carouselScrollRef} onScroll={handleCarouselScroll} style={{overflowX:'auto',display:'flex',gap:'10px',padding:'0 16px',scrollSnapType:'x mandatory'}}>
+    {carouselItems.map(item=>(
+      // Tapping always opens the in-app article now - an outbound link
+      // is a call-to-action button inside that article, not something
+      // that yanks you out of the app the instant you tap the card.
+      <div key={item.id} onClick={()=>setOpenCarouselItem(item)}
+        style={{flex:'0 0 82%',maxWidth:280,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'14px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
+        {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+        <div style={{padding:'12px 14px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+          </div>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
+          {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
         </div>
-        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
-        {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
       </div>
-    </div>
-  ))}
+    ))}
+  </div>
+  {/* Scroll-position dots - the card width leaves a deliberate peek of
+      the next card, but a swipeable row with no indicator at all still
+      reads as "only however many fit on screen," not "swipe for more." */}
+  {carouselItems.length>1&&<div style={{display:'flex',justifyContent:'center',gap:'5px',marginTop:'8px'}}>
+    {carouselItems.map((item,i)=>(
+      <div key={item.id} style={{width:6,height:6,borderRadius:'50%',background:i===carouselIndex?C.green:C.border}}/>
+    ))}
+  </div>}
 </div>}
 
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
@@ -676,18 +696,93 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       )}
 
       {openCarouselItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenCarouselItem(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-            <div onClick={()=>setOpenCarouselItem(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
-            {openCarouselItem.image_url&&<img src={openCarouselItem.image_url} alt="" style={{width:'100%',borderRadius:'12px',marginBottom:'14px',display:'block'}}/>}
-            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:openCarouselItem.item_type==='ad'?C.amber:C.green}}>{openCarouselItem.item_type==='ad'?(openCarouselItem.sponsor_name?`Sponsored · ${openCarouselItem.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
-            <div style={{fontSize:'17px',fontWeight:700,margin:'6px 0 12px'}}>{openCarouselItem.title}</div>
-            <div style={{fontSize:'14px',color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap'}}>{openCarouselItem.content}</div>
-          </div>
-        </div>
+        <CarouselArticleView item={openCarouselItem} allItems={carouselItems} isEn={isEn}
+          onClose={()=>setOpenCarouselItem(null)} onOpenItem={setOpenCarouselItem}/>
       )}
     </div>
     </PullToRefresh>
+  )
+}
+
+// Real article-style detail page for a carousel card - hero image, body
+// text with images interspersed (content_blocks, one entry per paragraph
+// or image, in the order the sponsor/admin arranged them), other cards
+// woven in as small sponsored slots every couple of paragraphs, a CTA
+// button for the outbound link (never an instant redirect on tap), and
+// related cards by subtitle at the bottom. Falls back to the old flat
+// `content` text field (split on blank lines into paragraphs) for any
+// card created before content_blocks existed.
+function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
+  const blocks = item.content_blocks?.length > 0
+    ? item.content_blocks
+    : (item.content ? item.content.split(/\n\s*\n/).filter(Boolean).map(text=>({type:'paragraph',text})) : [])
+
+  const others = allItems.filter(o=>o.id!==item.id)
+  let paragraphCount = 0
+
+  return (
+    <div style={{position:'fixed',inset:0,background:C.beige,zIndex:300,overflowY:'auto'}}>
+      <div style={{position:'sticky',top:0,background:C.beige,padding:'14px 16px',zIndex:1}}>
+        <div onClick={onClose} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>{isEn?'← Back':'← 返回'}</div>
+      </div>
+      <div style={{maxWidth:520,margin:'0 auto',paddingBottom:'32px'}}>
+        {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:220,objectFit:'cover',display:'block'}}/>}
+        <div style={{padding:'0 16px'}}>
+          <div style={{marginTop:'16px'}}>
+            <span style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+          </div>
+          <div style={{fontSize:'22px',fontWeight:700,margin:'8px 0 4px',lineHeight:1.3}}>{item.title}</div>
+          {item.subtitle&&<div style={{fontSize:'14px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{item.subtitle}</div>}
+
+          {blocks.length===0&&<div style={{fontSize:'13px',color:C.textMuted,marginBottom:'20px'}}>{isEn?'No further content on this one yet.':'暫無更多內容。'}</div>}
+
+          {blocks.map((blk,i)=>{
+            const rendered = blk.type==='image'
+              ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'12px',margin:'16px 0',display:'block'}}/>
+              : <p key={i} style={{fontSize:'15px',color:C.text,lineHeight:1.8,margin:'0 0 16px'}}>{blk.text}</p>
+
+            if (blk.type==='paragraph') paragraphCount++
+            // A small sponsored slot every 2 paragraphs, pulled from
+            // other live cards - swipeable if there's more than one to
+            // show, same "slide to the next one" idea as the home feed.
+            const showAdSlot = blk.type==='paragraph' && paragraphCount>0 && paragraphCount%2===0 && others.length>0
+            const adSlotItems = showAdSlot ? others.slice(0, 3) : []
+
+            return (
+              <div key={i}>
+                {rendered}
+                {showAdSlot&&<div style={{margin:'4px 0 16px',overflowX:'auto',display:'flex',gap:'8px',scrollSnapType:'x mandatory'}}>
+                  {adSlotItems.map(ad=>(
+                    <div key={ad.id} onClick={()=>onOpenItem(ad)} style={{flex:'0 0 auto',width:180,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'10px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
+                      {ad.image_url&&<img src={ad.image_url} alt="" style={{width:'100%',height:80,objectFit:'cover',display:'block'}}/>}
+                      <div style={{padding:'8px 10px'}}>
+                        <div style={{fontSize:'9px',fontWeight:700,color:C.amber,textTransform:'uppercase'}}>{ad.item_type==='ad'?'Sponsored':'Newsletter'}</div>
+                        <div style={{fontSize:'12px',fontWeight:600,marginTop:'2px'}}>{ad.title}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            )
+          })}
+
+          {item.link_url&&<a href={item.link_url} target="_blank" rel="noopener noreferrer" style={{display:'block',textAlign:'center',padding:'13px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'14px',fontWeight:600,textDecoration:'none',margin:'8px 0 28px'}}>{item.cta_label || (isEn?'Learn more':'了解更多')} ↗</a>}
+
+          {others.length>0&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'10px'}}>{isEn?'More from Medsa':'更多內容'}</div>
+            {others.map(o=>(
+              <div key={o.id} onClick={()=>onOpenItem(o)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'8px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{o.title}</div>
+                  {o.subtitle&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{o.subtitle}</div>}
+                </div>
+                <span style={{color:C.textMuted,fontSize:'16px',flexShrink:0}}>›</span>
+              </div>
+            ))}
+          </>}
+        </div>
+      </div>
+    </div>
   )
 }
 
