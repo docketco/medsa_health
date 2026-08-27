@@ -113,7 +113,9 @@ function ClinicsTab() {
   const [saving, setSaving] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [result, setResult] = useState(null)
-  const [form, setForm] = useState({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'' })
+  const [form, setForm] = useState({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'' })
+  const [renewingId, setRenewingId] = useState(null)
+  const [renewDate, setRenewDate] = useState('')
 
   async function load() {
     setLoading(true)
@@ -143,6 +145,8 @@ function ClinicsTab() {
       business_registration_number: form.businessRegNumber.trim()||null, orphf_code: form.orphfCode.trim()||null,
       phone: form.phone.trim()||null, address: form.address.trim()||null,
       verification_status: verification.overall_status || verification.status || 'unchecked',
+      contract_start_date: new Date().toISOString().slice(0,10),
+      contract_expiry_date: form.contractExpiryDate || null,
     }).select().maybeSingle()
     if (instErr) { setResult({ error: instErr.message }); setSaving(false); return }
 
@@ -158,13 +162,26 @@ function ClinicsTab() {
     setResult({ medsaId, tempPassword, verified: verification.overall_status==='verified' })
     setSaving(false)
     setCreating(false)
-    setForm({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'' })
+    setForm({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'' })
     load()
+  }
+
+  async function handleRenew(clinic) {
+    if (!renewDate) return
+    await supabase.from('institutions').update({ contract_expiry_date: renewDate, contract_start_date: new Date().toISOString().slice(0,10) }).eq('id', clinic.id)
+    setRenewingId(null)
+    setRenewDate('')
+    load()
+  }
+
+  function daysUntil(dateStr) {
+    if (!dateStr) return null
+    return Math.ceil((new Date(dateStr) - new Date()) / (1000*60*60*24))
   }
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard a clinic on their behalf - same real flow as clinic-signup.jsx (real institution, real staff login, same BR/ORPHF check), for when it happens over a call instead of them using the link themselves.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard a clinic on their behalf - same real flow as clinic-signup.jsx (real institution, real staff login, same BR/ORPHF check), for when it happens over a call instead of them using the link themselves. Onboarding here means a real contract, not self-serve - set a contract expiry date and this flags it for renewal as it approaches. No auto-email exists yet, so a flagged contract is your cue to send the new one yourself, tracked here once you do.</div>
 
       {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
         <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Clinic created{result.verified?' - registration matched a real registry':' - registration not matched, can be updated later'}</div>
@@ -181,6 +198,9 @@ function ClinicsTab() {
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Contract expiry date</div>
+        <input type="date" value={form.contractExpiryDate} onChange={e=>setForm(f=>({...f,contractExpiryDate:e.target.value}))}
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSubmit} disabled={saving||!form.name.trim()||!form.adminName.trim()||!form.adminEmail.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?(verifying?'Verifying…':'Creating…'):'Onboard'}</button>
@@ -188,13 +208,26 @@ function ClinicsTab() {
       </div>}
 
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&clinics.map(c => (
-        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
-          <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
-          <div style={{fontSize:'12px',color:C.textSub}}>{c.address||'No address on file'}{c.phone?` · ${c.phone}`:''}</div>
-          <div style={{fontSize:'11px',marginTop:'4px',color:c.verification_status==='verified'?C.green:C.amber}}>{c.verification_status==='verified'?'✓ Verified':c.verification_status||'Unchecked'}</div>
-        </div>
-      ))}
+      {!loading&&clinics.map(c => {
+        const daysLeft = daysUntil(c.contract_expiry_date)
+        const expiringSoon = daysLeft!=null && daysLeft<=30
+        return (
+          <div key={c.id} style={{background:C.cream,border:`0.5px solid ${expiringSoon?C.amber:C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{c.address||'No address on file'}{c.phone?` · ${c.phone}`:''}</div>
+            <div style={{fontSize:'11px',marginTop:'4px',color:c.verification_status==='verified'?C.green:C.amber}}>{c.verification_status==='verified'?'✓ Verified':c.verification_status||'Unchecked'}</div>
+            {c.contract_expiry_date
+              ? <div style={{fontSize:'11px',marginTop:'2px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}</div>
+              : <div style={{fontSize:'11px',marginTop:'2px',color:C.amber}}>⚠ No contract expiry on file</div>}
+            {renewingId===c.id
+              ? <div style={{marginTop:'8px',display:'flex',gap:'6px'}}>
+                  <input type="date" value={renewDate} onChange={e=>setRenewDate(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+                  <button onClick={()=>handleRenew(c)} disabled={!renewDate} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+                </div>
+              : <button onClick={()=>{setRenewingId(c.id);setRenewDate(c.contract_expiry_date||'')}} style={{width:'100%',marginTop:'8px',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Set / renew contract date</button>}
+          </div>
+        )
+      })}
     </div>
   )
 }
