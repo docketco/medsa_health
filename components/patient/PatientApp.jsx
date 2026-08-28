@@ -1684,7 +1684,9 @@ function DoctorsScreen({ isEn, patient={} }) {
   }
 
   async function handleConfirmBooking() {
-    if (!intakeConsent) return
+    // Declining consent no longer blocks booking - it only means the
+    // clinic won't be able to read past records for this visit. Only a
+    // real save failure should stop the booking from going through.
     setIntakeSaving(true)
     setIntakeError(null)
     try {
@@ -1719,7 +1721,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         reason_for_visit: reasonForVisit || null,
         symptoms: symptoms || null,
         current_medications: currentMeds || null,
-        consent_given: true,
+        consent_given: intakeConsent,
         consent_given_at: new Date().toISOString(),
         access_window_start: windowStart.toISOString(),
         access_window_end: windowEnd.toISOString(),
@@ -1952,8 +1954,8 @@ function DoctorsScreen({ isEn, patient={} }) {
               </div>
               <span style={{fontSize:'18px',color:'#25D366'}}>◈</span>
             </div>
-            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{isEn?'Complete the intake consent above to continue':'請先完成上方的問診同意'}</div>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={!intakeConsent||intakeSaving}>{intakeSaving?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm appointment':'確認預約')}</Btn>
+            {!intakeConsent&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'10px',textAlign:'center'}}>{isEn?"Booking will proceed, but the clinic won't be able to see your past records for this visit":'預約仍會繼續，但診所將無法查看您此次就診的過往記錄'}</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmBooking} disabled={intakeSaving}>{intakeSaving?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm appointment':'確認預約')}</Btn>
           </div>
         </Card>
         {booked&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:200,display:'flex',alignItems:'center',justifyContent:'center'}}>
