@@ -218,7 +218,7 @@ function CompanyPlansManager({ company, onBack }) {
     setPlans(data||[])
     const planIds = (data||[]).map(p=>p.id)
     if (planIds.length>0) {
-      const { data: inq } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name)').in('plan_id', planIds).order('created_at',{ascending:false})
+      const { data: inq } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name), agents:claimed_by_agent_id(name)').in('plan_id', planIds).order('created_at',{ascending:false})
       setInquiries(inq||[])
     } else {
       setInquiries([])
@@ -311,6 +311,7 @@ function CompanyPlansManager({ company, onBack }) {
             <div style={{fontSize:'13px',fontWeight:600}}>{inq.applicant_full_name||'Unknown applicant'} · {inq.insurance_plans?.plan_name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>HKID {inq.applicant_hkid||'—'} · DOB {inq.applicant_dob||'—'}</div>
             <div style={{fontSize:'12px',color:C.textSub}}>{inq.applicant_phone||'no phone on file'}{inq.applicant_email?` · ${inq.applicant_email}`:''}</div>
+            <div style={{fontSize:'11px',color:inq.agents?.name?C.green:C.textMuted,marginTop:'2px'}}>{inq.agents?.name?`Claimed by ${inq.agents.name}`:'Not yet claimed by an agent'}{inq.switch_requested_at&&' · patient requested a different agent'}</div>
             {inq.status==='new'
               ? <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
               : <div style={{marginTop:'6px',fontSize:'11px',color:C.green}}>✓ Contacted</div>}

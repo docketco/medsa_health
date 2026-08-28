@@ -9,7 +9,7 @@ const ICON_PATHS = {
   insurance: <path d="M12 3 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3Zm-2.5 8.5 1.8 1.8 3.7-3.7"/>,
   prescriptions: <><path d="m6.5 17.5 8-8a3 3 0 1 1 4 4l-8 8a3 3 0 0 1-4-4Z"/><path d="m13 7 4 4"/></>,
   calendar: <><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></>,
-  doctors: <><path d="M9 3v4a3 3 0 0 0 6 0V3"/><path d="M9 5H7a2 2 0 0 0-2 2v3a6 6 0 0 0 12 0V7a2 2 0 0 0-2-2h-2"/><circle cx="18.5" cy="16.5" r="2.5"/><path d="M18.5 13v-1.5"/></>,
+  doctors: <><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M9 8V6a3 3 0 0 1 3-3 3 3 0 0 1 3 3v2"/><path d="M12 12v4M10 14h4"/></>,
   family: <><circle cx="8.5" cy="8" r="3"/><circle cx="16" cy="9" r="2.4"/><path d="M3 20v-1.5A4.5 4.5 0 0 1 7.5 14h2A4.5 4.5 0 0 1 14 18.5V20"/><path d="M15.7 14.3A4 4 0 0 1 19 18v2"/></>,
   alert: <><path d="M12 3 3 8v5c0 4.5 3.6 7.6 9 9 5.4-1.4 9-4.5 9-9V8l-9-5Z"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.9" fill="currentColor" stroke="none"/></>,
   storage: <><path d="M12 4c-4.4 0-7 1.6-7 3s2.6 3 7 3 7-1.6 7-3-2.6-3-7-3Z"/><path d="M5 7v5c0 1.4 2.6 3 7 3s7-1.6 7-3V7"/><path d="M5 12v5c0 1.4 2.6 3 7 3s7-1.6 7-3v-5"/></>,
@@ -28,7 +28,7 @@ const ICON_PATHS = {
   help: <><circle cx="12" cy="12" r="8.5"/><path d="M9.3 9.3a2.7 2.7 0 1 1 3.9 2.4c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="16.5" r="0.9" fill="currentColor" stroke="none"/></>,
   slides: <><rect x="3.5" y="4.5" width="17" height="12" rx="1.5"/><path d="m3.5 13 4.5-4 3.5 3 4-4.5 4.5 4.5"/><path d="M8.5 20.5h7"/></>,
   shield: <path d="M12 3 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3Z"/>,
-  building: <><rect x="4.5" y="3.5" width="9" height="17" rx="1"/><path d="M13.5 9.5H18a1.5 1.5 0 0 1 1.5 1.5v9"/><path d="M7.5 7.5h2M7.5 11h2M7.5 14.5h2M15.5 13h2M15.5 16.5h2"/></>,
+  building: <><rect x="4" y="9" width="16" height="11" rx="1"/><path d="M8 9V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v4"/><path d="M12 12v4M10 14h4"/></>,
 }
 export default function Icon({ name, size=20, style }) {
   const body = ICON_PATHS[name]

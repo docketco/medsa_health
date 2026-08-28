@@ -81,6 +81,20 @@ function parseCSV(text) {
   })
 }
 
+// A random one-time temp password meeting the same rules handleOnboard
+// enforces (8+ chars, a number, a capital, a special character) - used
+// wherever an account is created without the person present to set
+// their own password, so no two accounts (and no deployed source file)
+// ever carry the same guessable default.
+function generateTempPassword() {
+  const words = ['Coral','Willow','Amber','Cedar','Harbor','Lotus','Maple','Ridge','Delta','Ember']
+  const word = words[Math.floor(Math.random()*words.length)]
+  const digits = Math.floor(1000 + Math.random()*9000)
+  const symbols = ['!','#','$','%','*']
+  const symbol = symbols[Math.floor(Math.random()*symbols.length)]
+  return `${word}${digits}${symbol}`
+}
+
 function StaffLogin({ onLogin }) {
   const [staff,setStaff]=useState([])
   const [departments,setDepartments]=useState([])
@@ -1052,6 +1066,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
 
   const [customItemName,setCustomItemName]=useState('')
   const [customItemPrice,setCustomItemPrice]=useState('')
+  const customItemMatches = customItemName.trim()
+    ? catalog.filter(i => i.name?.toLowerCase().includes(customItemName.trim().toLowerCase())).slice(0, 6)
+    : []
 
   // The catalog is real but necessarily incomplete - a charge that isn't
   // in it (a one-off, a clinic-specific service not yet added) had no
@@ -1487,12 +1504,19 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           ))}
           {catalog.length===0&&<div style={{padding:'12px 14px',fontSize:'12px',color:C.textMuted}}>No catalog items for this clinic type yet.</div>}
           <div style={{padding:'10px 14px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a custom charge not in the catalog</div>
-            <div style={{display:'flex',gap:'6px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a charge - matching catalog items suggest as you type</div>
+            <div style={{display:'flex',gap:'6px',position:'relative'}}>
               <input value={customItemName} onChange={e=>setCustomItemName(e.target.value)} placeholder="Description" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
               <input type="number" step="0.01" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
               <button onClick={addCustomLineItem} disabled={!customItemName.trim()} style={{padding:'7px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Add</button>
             </div>
+            {customItemMatches.length>0&&<div style={{marginTop:'6px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'6px',overflow:'hidden'}}>
+              {customItemMatches.map(m=>(
+                <div key={m.id} onClick={()=>{addLineItem(m);setCustomItemName('');setCustomItemPrice('')}} style={{padding:'8px 10px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between'}}>
+                  <span>{m.name}</span><span style={{color:C.textSub}}>HK${m.default_price}</span>
+                </div>
+              ))}
+            </div>}
           </div>
         </div>}
       </div>
@@ -2502,6 +2526,15 @@ function PriceListScreen({ medicineType }) {
   const [adding,setAdding]=useState(false)
   const [saving,setSaving]=useState(false)
   const [form,setForm]=useState({ name:'', category:'', default_price:'' })
+  const [editingId,setEditingId]=useState(null)
+  const [editForm,setEditForm]=useState({ name:'', category:'', default_price:'' })
+  const [editSaving,setEditSaving]=useState(false)
+
+  // Same vocabulary the consultation screen's catalog filter uses
+  // (ConsultationScreen.catalogClinicType) - 'chinese' maps to 'tcm',
+  // everything else to 'western'. Items saved here MUST match that or
+  // they silently never show up in the doctor's picker.
+  const catalogClinicType = medicineType==='chinese' ? 'tcm' : 'western'
 
   async function load() {
     setLoading(true)
@@ -2523,7 +2556,7 @@ function PriceListScreen({ medicineType }) {
       await supabase.from('service_items').insert({
         name: row.name.trim(), name_tc: row.name_tc?.trim()||null,
         category: row.category?.trim()||'General', default_price: parseFloat(row.default_price)||0,
-        clinic_type: row.clinic_type?.trim() || medicineType || 'general',
+        clinic_type: row.clinic_type?.trim() || catalogClinicType,
         active: true,
       })
       imported++
@@ -2537,7 +2570,7 @@ function PriceListScreen({ medicineType }) {
     setSaving(true)
     await supabase.from('service_items').insert({
       name: form.name.trim(), category: form.category.trim()||'General',
-      default_price: parseFloat(form.default_price)||0, clinic_type: medicineType||'general', active: true,
+      default_price: parseFloat(form.default_price)||0, clinic_type: catalogClinicType, active: true,
     })
     setSaving(false)
     setAdding(false)
@@ -2547,6 +2580,23 @@ function PriceListScreen({ medicineType }) {
 
   async function toggleActive(item) {
     await supabase.from('service_items').update({ active: !item.active }).eq('id', item.id)
+    load()
+  }
+
+  function startEdit(item) {
+    setEditingId(item.id)
+    setEditForm({ name: item.name||'', category: item.category||'', default_price: String(item.default_price ?? '') })
+  }
+
+  async function saveEdit(item) {
+    if (!editForm.name.trim() || !editForm.default_price) return
+    setEditSaving(true)
+    await supabase.from('service_items').update({
+      name: editForm.name.trim(), category: editForm.category.trim()||'General',
+      default_price: parseFloat(editForm.default_price) || 0,
+    }).eq('id', item.id)
+    setEditSaving(false)
+    setEditingId(null)
     load()
   }
 
@@ -2578,12 +2628,31 @@ function PriceListScreen({ medicineType }) {
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&items.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No items yet - bulk import a CSV or add one above.</div>}
       {!loading&&items.map(item=>(
-        <div key={item.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
-          <div>
-            <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>{item.category} · {item.clinic_type} · HK${item.default_price}</div>
-          </div>
-          <button onClick={()=>toggleActive(item)} style={{padding:'6px 12px',background:item.active?C.card:C.greenLight,color:item.active?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.active?'Deactivate':'Reactivate'}</button>
+        <div key={item.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
+          {editingId===item.id ? (
+            <>
+              <input value={editForm.name} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))} placeholder="Service name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',marginBottom:'6px',boxSizing:'border-box'}}/>
+              <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+                <input value={editForm.category} onChange={e=>setEditForm(f=>({...f,category:e.target.value}))} placeholder="Category" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <input type="number" step="0.01" value={editForm.default_price} onChange={e=>setEditForm(f=>({...f,default_price:e.target.value}))} placeholder="Price" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setEditingId(null)}>Cancel</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={editSaving} onClick={()=>saveEdit(item)}>{editSaving?'Saving…':'Save'}</Btn>
+              </div>
+            </>
+          ) : (
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{item.category} · {item.clinic_type} · HK${item.default_price}</div>
+              </div>
+              <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+                <button onClick={()=>startEdit(item)} style={{padding:'6px 12px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Edit</button>
+                <button onClick={()=>toggleActive(item)} style={{padding:'6px 12px',background:item.active?C.card:C.greenLight,color:item.active?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.active?'Deactivate':'Reactivate'}</button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </PageWrap>
@@ -2673,6 +2742,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     const rows = parseCSV(text)
     let imported=0
     const skippedRows = []
+    const newLogins = []
     for (const row of rows) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
       if (!row.email?.trim()) { skippedRows.push(`${row.full_name} - email required (used for password reset)`); continue }
@@ -2726,13 +2796,17 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         practitioner_portal_granted_by: 'onboarding', practitioner_portal_granted_at: new Date().toISOString(),
       })
       if (insErr) { skippedRows.push(`${row.full_name} - ${insErr.message}`); continue }
-      // Same temporary-password precedent already established in the
-      // migration script - real hashing, never plain text, each person
-      // changes it individually once they can actually log in.
-      await supabase.rpc('set_staff_password', { p_medsa_id: medsaId, p_new_password: 'TempPass2026!' })
+      // A fixed password shared by every bulk-imported account (as this
+      // used to be) is a real credential leak risk - it's sitting in
+      // plain sight in the deployed frontend bundle. Each person now
+      // gets their own random one-time temp password instead, shown
+      // once here for the practice manager to hand off.
+      const tempPassword = generateTempPassword()
+      await supabase.rpc('set_staff_password', { p_medsa_id: medsaId, p_new_password: tempPassword })
+      newLogins.push({ name: row.full_name, medsaId, tempPassword })
       imported++
     }
-    setBulkImportResult({ imported, skipped: skippedRows.length, skippedRows, total: rows.length })
+    setBulkImportResult({ imported, skipped: skippedRows.length, skippedRows, total: rows.length, newLogins })
   }
 
   async function handleOnboard() {
@@ -2830,10 +2904,16 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, email (used for password reset), role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, email (used for password reset), role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets their own real, hashed, random one-time temporary password (shown below after import) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
+        {bulkImportResult.newLogins?.length>0&&<div style={{marginTop:'8px'}}>
+          <div style={{fontWeight:600,marginBottom:'4px'}}>One-time temporary passwords - write these down, they won't be shown again:</div>
+          {bulkImportResult.newLogins.map(l=>(
+            <div key={l.medsaId}>{l.name} ({l.medsaId}): {l.tempPassword}</div>
+          ))}
+        </div>}
       </div>}
 
       {loading&&<div style={{padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
@@ -3360,7 +3440,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [printed,setPrinted]=useState(false)
   const [billingRecord,setBillingRecord]=useState(null) // the consultation record being billed, when arriving via preselectRecordId
   const [billingRecordLoading,setBillingRecordLoading]=useState(false)
-  const [billingChoice,setBillingChoice]=useState(null) // null | 'direct_payment' | 'insurance'
+  const [billingChoice,setBillingChoice]=useState(null) // null | 'direct_payment' | 'insurance' | 'treatment_plan'
+  const [eligibleTreatmentPlans,setEligibleTreatmentPlans]=useState(null)
+  const [eligibleTreatmentPlansLoading,setEligibleTreatmentPlansLoading]=useState(false)
+  const [selectedTreatmentPlan,setSelectedTreatmentPlan]=useState(null)
   const [eligiblePlans,setEligiblePlans]=useState(null)
   const [eligiblePlansLoading,setEligiblePlansLoading]=useState(false)
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
@@ -3389,6 +3472,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [planName,setPlanName]=useState('')
   const [planSessions,setPlanSessions]=useState('')
   const [planPrice,setPlanPrice]=useState('')
+  const [planExpiry,setPlanExpiry]=useState('')
   const [planMethod,setPlanMethod]=useState('card')
   const [planSaving,setPlanSaving]=useState(false)
 
@@ -3472,6 +3556,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       used: p.sessions_used,
       remaining: p.sessions_paid - p.sessions_used,
       status: p.status,
+      expiryDate: p.expiry_date,
     })))
     setPlansLoading(false)
   }
@@ -3528,6 +3613,41 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadEligible()
   }, [billingChoice, billingRecord])
 
+  useEffect(() => {
+    if (billingChoice !== 'treatment_plan' || !billingRecord) return
+    async function loadEligiblePlans() {
+      setEligibleTreatmentPlansLoading(true)
+      const { data } = await supabase.from('treatment_plans').select('*')
+        .eq('patient_id', billingRecord.patient_id).eq('status', 'active')
+      setEligibleTreatmentPlans((data||[]).filter(p => (p.sessions_paid - p.sessions_used) > 0))
+      setEligibleTreatmentPlansLoading(false)
+    }
+    loadEligiblePlans()
+  }, [billingChoice, billingRecord])
+
+  async function handleBillToTreatmentPlan() {
+    if (!selectedTreatmentPlan || !billingRecord) return
+    setSubmittingClaim(true)
+    const newUsed = selectedTreatmentPlan.sessions_used + 1
+    await supabase.from('treatment_plans').update({
+      sessions_used: newUsed,
+      status: newUsed >= selectedTreatmentPlan.sessions_paid ? 'completed' : 'active',
+    }).eq('id', selectedTreatmentPlan.id)
+    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    await supabase.from('transactions').insert({
+      institution_id: institutionId,
+      patient_name: billingRecord.patients?.full_name || 'Unknown',
+      consultation_fee: billingRecord.total_fee || 0,
+      insurer_covers: 0, patient_pays: 0,
+      payment_method: 'treatment_plan', card_processing_fee: 0,
+      treatment_plan_id: selectedTreatmentPlan.id,
+      medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
+      staff_name: staffMember?.name || 'Unknown',
+    })
+    setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed })
+    setSubmittingClaim(false)
+  }
+
   async function handleDirectBillingSubmit() {
     if (!selectedEligiblePlan || !billingRecord) return
     setSubmittingClaim(true)
@@ -3547,8 +3667,19 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setClaimAdjudication(result)
     // If nothing is owed (fully covered), we're actually done - skip
     // straight to the completion screen rather than showing an empty
-    // "collect $0" step.
+    // "collect $0" step. Still needs its own transaction/receipt row -
+    // previously this branch recorded nothing at all in the ledger.
     if (!result.fees || result.fees.patientPayableTotal <= 0) {
+      await supabase.from('transactions').insert({
+        institution_id: institutionId,
+        patient_name: billingRecord.patients?.full_name || 'Unknown',
+        consultation_fee: billingRecord.total_fee || 0,
+        insurer_covers: result.fees?.insurerCoveredAmount || billingRecord.total_fee || 0,
+        patient_pays: 0, payment_method: 'insurance', card_processing_fee: 0,
+        claim_ref: result.claimId,
+        medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
+        staff_name: staffMember?.name || 'Unknown',
+      })
       setBillingResult(result)
     }
     setSubmittingClaim(false)
@@ -3597,6 +3728,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       payment_method: copayMethod,
       card_processing_fee: fees.paymentProcessingFee,
       claim_ref: claimAdjudication.claimId,
+      medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
     })
     setBillingResult(claimAdjudication)
@@ -3614,6 +3746,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       consultation_fee: billingRecord.total_fee || 0,
       insurer_covers: 0, patient_pays: billingRecord.total_fee || 0,
       payment_method: paymentMethod, card_processing_fee: fees.paymentProcessingFee,
+      medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
     })
     setBillingResult({ status: 'PAID_DIRECT', fees })
@@ -3631,7 +3764,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Billing complete</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('')}}>Done</Btn>
+          {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null)}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -3656,7 +3790,21 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
             <Btn variant="secondary" style={{width:'100%',justifyContent:'flex-start',padding:'14px 16px'}} onClick={()=>setBillingChoice('direct_payment')}>Cash / Card / Octopus</Btn>
             <Btn variant="secondary" style={{width:'100%',justifyContent:'flex-start',padding:'14px 16px'}} onClick={()=>setBillingChoice('insurance')}>Insurance direct billing</Btn>
+            <Btn variant="secondary" style={{width:'100%',justifyContent:'flex-start',padding:'14px 16px'}} onClick={()=>setBillingChoice('treatment_plan')}>Bill to treatment plan</Btn>
           </div>
+        </>}
+
+        {billingChoice==='treatment_plan'&&<>
+          <SecLabel>Patient's treatment plans</SecLabel>
+          {eligibleTreatmentPlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking plans...</div>}
+          {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No active treatment plan with sessions remaining for this patient.</div>}
+          {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.map(p=>(
+            <div key={p.id} onClick={()=>setSelectedTreatmentPlan(p)} style={{padding:'12px 14px',borderRadius:'8px',border:`1.5px solid ${selectedTreatmentPlan?.id===p.id?C.green:C.border}`,marginBottom:'8px',cursor:'pointer'}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{p.sessions_paid - p.sessions_used} of {p.sessions_paid} sessions remaining{p.expiry_date?` - expires ${new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+            </div>
+          ))}
+          {selectedTreatmentPlan&&<Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={handleBillToTreatmentPlan} disabled={submittingClaim}>{submittingClaim?'Processing...':'Use 1 session from this plan'}</Btn>}
         </>}
 
         {billingChoice==='direct_payment'&&<>
@@ -3770,6 +3918,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       patient_id: planFoundPatient.id, institution_id: institutionId,
       plan_name: planName, sessions_paid: parseInt(planSessions)||0, sessions_used: 0,
       status: 'active', price_total: parseFloat(planPrice)||0, created_by: staffMember?.name,
+      expiry_date: planExpiry || null,
     }).select().maybeSingle()
     const fee = calculatePaymentProcessingFee(planMethod, parseFloat(planPrice)||0)
     await supabase.from('transactions').insert({
@@ -3786,7 +3935,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   function resetPlanCreation() {
     setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null)
-    setPlanName(''); setPlanSessions(''); setPlanPrice(''); setPlanMethod('card')
+    setPlanName(''); setPlanSessions(''); setPlanPrice(''); setPlanExpiry(''); setPlanMethod('card')
   }
 
   if (tab==='plans') return (
@@ -3806,9 +3955,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         </div>
         {planFoundPatient&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>{'\u2713'} {planFoundPatient.full_name}</div>}
         <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name (e.g. Physio - 10 sessions)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
-        <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           <input type="number" value={planSessions} onChange={e=>setPlanSessions(e.target.value)} placeholder="Total sessions" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
           <input type="number" value={planPrice} onChange={e=>setPlanPrice(e.target.value)} placeholder="Total price (HK$)" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{marginBottom:'14px'}}>
+          <label style={{fontSize:'11px',color:C.textSub,display:'block',marginBottom:'4px'}}>Expiry date (optional)</label>
+          <input type="date" value={planExpiry} onChange={e=>setPlanExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
         </div>
         <div style={{display:'flex',gap:'8px'}}>
           <Btn style={{flex:1}} onClick={resetPlanCreation}>Cancel</Btn>
@@ -3861,6 +4014,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div style={{fontSize:'15px',fontWeight:700,color:p.remaining>0?C.green:C.amber}}>{p.remaining}</div>
               </div>
             </div>
+            {p.expiryDate&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>Expires {new Date(p.expiryDate).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
           </Card>
         ))}
       </div>
