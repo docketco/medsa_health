@@ -325,6 +325,40 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   // it only decides whether this clinic can read past records today.
   const [walkInConsent,setWalkInConsent]=useState(true)
 
+  // A quick heads-up for the doctor/queue - "limping, priority" etc -
+  // front desk or the nurse usually already asks this at check-in, but
+  // had nowhere to put it before. Separate from clinical notes, which
+  // stay doctor-only inside the consultation itself.
+  const [checkinNote,setCheckinNote]=useState('')
+
+  // Weight/height logged at check-in, with its own date - a real
+  // history table (patient_vitals), not the transient weight field
+  // inside ConsultationScreen that only exists for a live dose
+  // calculation and is never saved anywhere.
+  const [vitalsWeight,setVitalsWeight]=useState('')
+  const [vitalsHeight,setVitalsHeight]=useState('')
+  const [vitalsSaving,setVitalsSaving]=useState(false)
+  const [vitalsSaved,setVitalsSaved]=useState(false)
+  const [lastVitals,setLastVitals]=useState(null)
+
+  async function loadLastVitals(patientId) {
+    const { data } = await supabase.from('patient_vitals').select('*').eq('patient_id', patientId).order('logged_at',{ascending:false}).limit(1).maybeSingle()
+    setLastVitals(data||null)
+  }
+
+  async function handleSaveVitals(patientId) {
+    if (!vitalsWeight && !vitalsHeight) return
+    setVitalsSaving(true)
+    await supabase.from('patient_vitals').insert({
+      patient_id: patientId, weight_kg: vitalsWeight?parseFloat(vitalsWeight):null,
+      height_cm: vitalsHeight?parseFloat(vitalsHeight):null,
+      logged_at: new Date().toISOString(), logged_by: staffMember?.name || null,
+    })
+    setVitalsSaving(false)
+    setVitalsSaved(true)
+    loadLastVitals(patientId)
+  }
+
   // Which queue this clinic runs, if more than one - lets front desk
   // route a check-in to the right line (e.g. General vs Chinese
   // Medicine) instead of everyone sharing one ticket sequence.
@@ -351,17 +385,15 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   // consent answer asked at check-in (appointment_intake, same table a
   // booked appointment already writes to), then runs the real check-in
   // and looks up the ticket that was just created so it can be offered
-  // for printing. The consent answer never blocks the check-in itself.
+  // for printing. The consent answer asked above is passed through to
+  // handleCheckedIn, which is the one place that actually writes
+  // appointment_intake - inserting a second row here too would just
+  // race with it and whichever one lands last wins, silently
+  // overwriting whatever the other one recorded.
   async function doCheckIn(p, force) {
     setCheckingIn(true)
-    const now = new Date()
-    await supabase.from('appointment_intake').insert({
-      patient_id: p.id, appointment_time: now.toISOString(),
-      consent_given: walkInConsent, consent_given_at: now.toISOString(),
-      access_window_start: now.toISOString(), access_window_end: new Date(now.getTime() + 24*60*60*1000).toISOString(),
-    })
     const qId = queues.length>1 ? selectedQueueId : undefined
-    const result = await onCheckedIn(p, force, qId)
+    const result = await onCheckedIn(p, force, qId, walkInConsent, checkinNote.trim()||null)
     setCheckingIn(false)
     if (result === true) {
       setJustCheckedIn(p.full_name)
@@ -392,6 +424,8 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   async function simulateScan(chosenPatient) {
     setStage('scanning')
     setWalkInConsent(true)
+    setCheckinNote(''); setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
+    loadLastVitals(chosenPatient.id)
     // Real scan hardware isn't wired up yet - this simulates it by letting
     // you pick which patient's card is being "scanned," pulled from real
     // Supabase data, rather than always fetching one fixed demo patient.
@@ -417,6 +451,8 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setSearched(true)
     setRevealedClaimCode(null)
     setWalkInConsent(true)
+    setCheckinNote(''); setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
+    if (data) loadLastVitals(data.id)
     // Real status, not just "did I click the button this session" - a
     // fresh search should show whether the patient already approved or
     // denied a request from an earlier visit, not just "not sent yet."
@@ -515,6 +551,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               </div>
               {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
             </div>
+            <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
+              <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Log weight/height{lastVitals?` - last logged ${new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: ${lastVitals.weight_kg?lastVitals.weight_kg+'kg':''}${lastVitals.height_cm?' '+lastVitals.height_cm+'cm':''}`:' (optional)'}</div>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input type="number" step="0.1" value={vitalsWeight} onChange={e=>setVitalsWeight(e.target.value)} placeholder="Weight (kg)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <input type="number" step="0.1" value={vitalsHeight} onChange={e=>setVitalsHeight(e.target.value)} placeholder="Height (cm)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <button onClick={()=>handleSaveVitals(patient.id)} disabled={vitalsSaving||(!vitalsWeight&&!vitalsHeight)} style={{padding:'8px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{vitalsSaving?'Saving…':'Save'}</button>
+              </div>
+              {vitalsSaved&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'✓'} Logged with today's date.</div>}
+            </div>
             {queues.length>1&&<div>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Queue</div>
               <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
@@ -531,7 +580,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
             <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
             {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);setCheckinNote('');setVitalsWeight('');setVitalsHeight('');setVitalsSaved(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
@@ -556,6 +605,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               <div onClick={()=>setWalkInConsent(false)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:!walkInConsent?C.amber:'#fff',color:!walkInConsent?'#fff':C.textSub,border:`1px solid ${C.border}`}}>No</div>
             </div>
             {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
+          </div>
+          <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
+            <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+          </div>
+          <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Log weight/height{lastVitals?` - last logged ${new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: ${lastVitals.weight_kg?lastVitals.weight_kg+'kg':''}${lastVitals.height_cm?' '+lastVitals.height_cm+'cm':''}`:' (optional)'}</div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input type="number" step="0.1" value={vitalsWeight} onChange={e=>setVitalsWeight(e.target.value)} placeholder="Weight (kg)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <input type="number" step="0.1" value={vitalsHeight} onChange={e=>setVitalsHeight(e.target.value)} placeholder="Height (cm)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <button onClick={()=>handleSaveVitals(searchResult.id)} disabled={vitalsSaving||(!vitalsWeight&&!vitalsHeight)} style={{padding:'8px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{vitalsSaving?'Saving…':'Save'}</button>
+            </div>
+            {vitalsSaved&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'✓'} Logged with today's date.</div>}
           </div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
             <Btn variant="primary" style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
@@ -939,6 +1001,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
   const [weightKg,setWeightKg]=useState('')
+  const [lastVitals,setLastVitals]=useState(null)
   const [consentWindow,setConsentWindow]=useState({checked:false,allowed:false})
   const [consultationStartedAt]=useState(() => new Date().toISOString())
   const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
@@ -1056,7 +1119,6 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
   const [catalogClinicType,setCatalogClinicType]=useState(medicineType==='chinese'?'tcm':'western')
-  const [itemPickerOpen,setItemPickerOpen]=useState(false)
 
   // Real service catalog, filtered by clinic type - what the doctor
   // actually picks from to build the itemized list, rather than typing
@@ -1093,7 +1155,6 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       if (existing) return prev.map(i => i.service_item_id === item.id ? {...i, qty: i.qty + 1} : i)
       return [...prev, { service_item_id: item.id, description: item.name, description_tc: item.name_tc, category: item.category, fee: parseFloat(item.default_price) || 0, qty: 1 }]
     })
-    setItemPickerOpen(false)
   }
 
   const [customItemName,setCustomItemName]=useState('')
@@ -1111,7 +1172,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       service_item_id: `custom-${Date.now()}`, description: customItemName.trim(),
       category: 'custom', fee: parseFloat(customItemPrice) || 0, qty: 1,
     }])
-    setCustomItemName(''); setCustomItemPrice(''); setItemPickerOpen(false)
+    setCustomItemName(''); setCustomItemPrice('')
   }
 
   function updateLineItemQty(id, qty) {
@@ -1225,12 +1286,18 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         // Medsa profile. Active medications loaded here too - this is
         // what the drug interaction engine checks new prescriptions
         // against.
-        const [{data:c},{data:a},{data:m}] = await Promise.all([
+        const [{data:c},{data:a},{data:m},{data:v}] = await Promise.all([
           supabase.from('conditions').select('*').eq('patient_id',p.id).eq('active',true),
           supabase.from('allergies').select('*').eq('patient_id',p.id),
           supabase.from('medications').select('*').eq('patient_id',p.id).eq('active',true),
+          supabase.from('patient_vitals').select('*').eq('patient_id',p.id).order('logged_at',{ascending:false}).limit(1).maybeSingle(),
         ])
         setConditions(c||[]); setAllergies(a||[]); setActiveMedications(m||[])
+        // Prefills the dose-safety weight field from the most recent
+        // logged vitals (usually just taken at check-in) so the doctor
+        // doesn't have to re-ask and re-type it.
+        if (v?.weight_kg) setWeightKg(String(v.weight_kg))
+        setLastVitals(v||null)
 
         // Full history (past visit records) is the part that's actually
         // gated - checks that real consent exists and that the current
@@ -1434,6 +1501,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px',textAlign:'center'}}>{queueEntry.patientName}</h2>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>{queueEntry.ticket} - checked in {new Date(queueEntry.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
 
+      {queueEntry.checkinNote&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber}}>{'◇'} Front desk note: {queueEntry.checkinNote}</div>}
+      {lastVitals&&(lastVitals.weight_kg||lastVitals.height_cm)&&<div style={{background:C.card,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub}}>Last logged {new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: {lastVitals.weight_kg?`${lastVitals.weight_kg}kg`:''}{lastVitals.height_cm?` ${lastVitals.height_cm}cm`:''}</div>}
+
       <SecLabel>Medical records{recordsVisible?' - full history open, closes on submit':''}</SecLabel>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {!loading&&<div style={{display:'flex',gap:'16px',marginBottom:'20px'}}>
@@ -1527,16 +1597,16 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           </div>
         ))}
         {lineItems.length>0&&<div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:700,fontSize:'14px'}}><span>Total</span><span>HK${invoiceTotal.toFixed(2)}</span></div>}
-        <div onClick={()=>setItemPickerOpen(!itemPickerOpen)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'6px 0'}}>{'+'} Add treatment or charge</div>
-        {itemPickerOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',maxHeight:280,overflowY:'auto'}}>
+        <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'6px'}}>Add treatment or charge</div>
+        <select value="" onChange={e=>{ const item = catalog.find(i=>i.id===e.target.value); if (item) addLineItem(item) }} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',background:'#fff'}}>
+          <option value="">{catalog.length===0?'No catalog items for this clinic type yet - use Price List to add some':`Select from price list (${catalog.length} items)...`}</option>
           {catalog.map(item=>(
-            <div key={item.id} onClick={()=>addLineItem(item)} style={{padding:'10px 14px',fontSize:'13px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between'}}>
-              <span>{item.name}</span><span style={{color:C.textSub}}>HK${item.default_price}</span>
-            </div>
+            <option key={item.id} value={item.id}>{item.name} - HK${item.default_price}</option>
           ))}
-          {catalog.length===0&&<div style={{padding:'12px 14px',fontSize:'12px',color:C.textMuted}}>No catalog items for this clinic type yet.</div>}
+        </select>
+        <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
           <div style={{padding:'10px 14px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a charge - matching catalog items suggest as you type</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a charge not in the price list - matching items suggest as you type</div>
             <div style={{display:'flex',gap:'6px',position:'relative'}}>
               <input value={customItemName} onChange={e=>setCustomItemName(e.target.value)} placeholder="Description" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
               <input type="number" step="0.01" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
@@ -1550,7 +1620,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
               ))}
             </div>}
           </div>
-        </div>}
+        </div>
       </div>
       <SecLabel>Prescription</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px'}}>
@@ -2586,12 +2656,20 @@ function PriceListScreen({ medicineType }) {
     const rows = parseCSV(text)
     let imported = 0
     const skipped = []
+    // A human-typed CSV clinic_type column ("Western", " general ", etc)
+    // won't match the exact lowercase values the consultation picker
+    // filters on ('western'/'tcm'/'general') - normalize it, and only
+    // trust it if it's actually one of those three once normalized,
+    // otherwise fall back to this clinic's own type so a typo can't
+    // silently make an imported row invisible to the picker.
+    const KNOWN_CLINIC_TYPES = ['western', 'tcm', 'general']
     for (const row of rows) {
       if (!row.name?.trim() || !row.default_price?.trim()) { skipped.push(`${row.name||'(no name)'} - name and default_price required`); continue }
+      const normalizedType = row.clinic_type?.trim().toLowerCase()
       await supabase.from('service_items').insert({
         name: row.name.trim(), name_tc: row.name_tc?.trim()||null,
         category: row.category?.trim()||'General', default_price: parseFloat(row.default_price)||0,
-        clinic_type: row.clinic_type?.trim() || catalogClinicType,
+        clinic_type: KNOWN_CLINIC_TYPES.includes(normalizedType) ? normalizedType : catalogClinicType,
         active: true,
       })
       imported++
@@ -2688,6 +2766,97 @@ function PriceListScreen({ medicineType }) {
               </div>
             </div>
           )}
+        </div>
+      ))}
+    </PageWrap>
+  )
+}
+
+// Bulk-seed icd10_reference, the table the diagnosis typeahead in
+// ConsultationScreen already queries - that search box was always
+// real, it just had nothing to search because nobody had a way to
+// load codes into it.
+function DiagnosisCodesScreen() {
+  const [codes,setCodes]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [bulkResult,setBulkResult]=useState(null)
+  const [adding,setAdding]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [form,setForm]=useState({ code:'', label:'' })
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('icd10_reference').select('*').order('code').limit(500)
+    setCodes(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleBulkFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported = 0
+    const skipped = []
+    for (const row of rows) {
+      if (!row.code?.trim() || !row.label?.trim()) { skipped.push(`${row.code||'(no code)'} - code and label both required`); continue }
+      await supabase.from('icd10_reference').insert({ code: row.code.trim(), label: row.label.trim() })
+      imported++
+    }
+    setBulkResult({ imported, skipped, total: rows.length })
+    load()
+  }
+
+  async function handleAdd() {
+    if (!form.code.trim() || !form.label.trim()) return
+    setSaving(true)
+    await supabase.from('icd10_reference').insert({ code: form.code.trim(), label: form.label.trim() })
+    setSaving(false)
+    setAdding(false)
+    setForm({ code:'', label:'' })
+    load()
+  }
+
+  async function handleDelete(c) {
+    await supabase.from('icd10_reference').delete().eq('code', c.code)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={560}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Diagnosis Codes</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',textAlign:'center'}}>The ICD-10 reference the diagnosis search box on a consultation suggests from. CSV needs a code and label column per row (e.g. J06.9, Acute upper respiratory infection).</div>
+
+      <label style={{display:'inline-block',fontSize:'12px',fontWeight:600,padding:'9px 16px',borderRadius:'10px',cursor:'pointer',background:C.card,color:C.textSub,marginBottom:'12px'}}>
+        {'↑'} Bulk import ICD-10 CSV
+        <input type="file" accept=".csv" onChange={handleBulkFile} style={{display:'none'}}/>
+      </label>
+      {bulkResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
+        Imported {bulkResult.imported} of {bulkResult.total} rows.
+        {bulkResult.skipped.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkResult.skipped.join(', ')}</div>}
+      </div>}
+
+      {!adding&&<Btn variant="primary" style={{width:'100%',marginBottom:'16px'}} onClick={()=>setAdding(true)}>+ Add one code</Btn>}
+      {adding&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+        <input value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value}))} placeholder="ICD-10 code (e.g. J06.9)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={form.label} onChange={e=>setForm(f=>({...f,label:e.target.value}))} placeholder="Description" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={()=>setAdding(false)}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleAdd} disabled={saving||!form.code.trim()||!form.label.trim()}>{saving?'Saving…':'Add'}</Btn>
+        </div>
+      </Card>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&codes.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No codes yet - bulk import a CSV or add one above.</div>}
+      {!loading&&codes.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>{codes.length} code{codes.length===1?'':'s'} loaded{codes.length>=500?' (showing first 500)':''}</div>}
+      {!loading&&codes.map(c=>(
+        <div key={c.code} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{c.code}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{c.label}</div>
+          </div>
+          <button onClick={()=>handleDelete(c)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>Remove</button>
         </div>
       ))}
     </PageWrap>
@@ -3472,6 +3641,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
   const [submittingClaim,setSubmittingClaim]=useState(false)
   const [billingResult,setBillingResult]=useState(null)
+  const [billingTxnError,setBillingTxnError]=useState(null)
   const [claimAdjudication,setClaimAdjudication]=useState(null) // the raw adjudicateClaim result, kept separate from billingResult so we know whether a copay still needs collecting
   const [copayMethod,setCopayMethod]=useState('card')
   const [collectingCopay,setCollectingCopay]=useState(false)
@@ -3492,6 +3662,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [planStep,setPlanStep]=useState('form') // form | payment | done
   const [planPatientQuery,setPlanPatientQuery]=useState('')
   const [planFoundPatient,setPlanFoundPatient]=useState(null)
+  const [planNotFound,setPlanNotFound]=useState(false)
   const [planName,setPlanName]=useState('')
   const [planSessions,setPlanSessions]=useState('')
   const [planPrice,setPlanPrice]=useState('')
@@ -3519,6 +3690,59 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const { data } = await supabase.from('transactions').select('*').order('created_at',{ascending:false}).limit(100)
     setLedger(data||[])
     setLedgerLoading(false)
+  }
+
+  // Real jsPDF export - same approach already used for the patient
+  // app's record bundle - combining the actual consultation (notes,
+  // diagnosis, itemized charges) with this specific receipt, not just
+  // the bare transaction line the ledger card shows.
+  async function handleDownloadReceipt(t) {
+    const { data: record } = await supabase.from('medical_records').select('*').eq('id', t.medical_record_id).maybeSingle()
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 20
+    doc.setFontSize(16)
+    doc.text('Medsa Health - Consultation & Receipt', 14, y); y += 8
+    doc.setFontSize(10)
+    doc.text(`${t.patient_name} - ${new Date(t.created_at).toLocaleDateString('en-HK')}`, 14, y); y += 4
+    doc.line(14, y, pageWidth-14, y); y += 10
+
+    if (record) {
+      doc.setFontSize(12); doc.setFont(undefined,'bold')
+      doc.text('Consultation notes', 14, y); y += 7
+      doc.setFont(undefined,'normal'); doc.setFontSize(10)
+      if (record.diagnosis) { doc.text(`Diagnosis: ${record.diagnosis}`, 14, y); y += 6 }
+      if (record.icd10_code) { doc.text(`ICD-10: ${record.icd10_code}`, 14, y); y += 6 }
+      if (record.notes) {
+        const lines = doc.splitTextToSize(`Notes: ${record.notes}`, pageWidth-28)
+        doc.text(lines, 14, y); y += lines.length*5 + 2
+      }
+      if ((record.line_items||[]).length > 0) {
+        doc.setFont(undefined,'bold'); doc.text('Itemized charges', 14, y); y += 6
+        doc.setFont(undefined,'normal')
+        for (const item of record.line_items) {
+          doc.text(`${item.description}${item.qty>1?` x${item.qty}`:''}`, 14, y)
+          doc.text(`HK$${(item.fee*item.qty).toFixed(2)}`, pageWidth-14, y, {align:'right'})
+          y += 6
+        }
+      }
+      y += 6
+    }
+
+    doc.setFont(undefined,'bold'); doc.text('Receipt', 14, y); y += 7
+    doc.setFont(undefined,'normal')
+    doc.text(`Amount paid: HK$${(t.patient_pays||0).toFixed(2)}`, 14, y); y += 6
+    doc.text(`Payment method: ${t.payment_method}`, 14, y); y += 6
+    if (t.insurer_covers>0) { doc.text(`Insurer covered: HK$${t.insurer_covers}`, 14, y); y += 6 }
+    doc.text(`Staff: ${t.staff_name}`, 14, y); y += 6
+
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Receipt-${t.patient_name.replace(/[^a-z0-9]/gi,'_')}-${new Date(t.created_at).toISOString().slice(0,10)}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   async function handleCharge() {
@@ -3652,12 +3876,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!selectedTreatmentPlan || !billingRecord) return
     setSubmittingClaim(true)
     const newUsed = selectedTreatmentPlan.sessions_used + 1
-    await supabase.from('treatment_plans').update({
+    const { data: planUpdateRows, error: planUpdateErr } = await supabase.from('treatment_plans').update({
       sessions_used: newUsed,
       status: newUsed >= selectedTreatmentPlan.sessions_paid ? 'completed' : 'active',
-    }).eq('id', selectedTreatmentPlan.id)
+    }).eq('id', selectedTreatmentPlan.id).select()
+    if (planUpdateErr) setBillingTxnError(planUpdateErr.message)
+    else if (!planUpdateRows || planUpdateRows.length === 0) setBillingTxnError('Sessions used could not be updated on the treatment plan (0 rows matched) - check the plan still exists.')
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    await supabase.from('transactions').insert({
+    const { error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
@@ -3667,6 +3893,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
     })
+    if (txnErr) setBillingTxnError(txnErr.message)
     setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed })
     setSubmittingClaim(false)
   }
@@ -3763,7 +3990,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    await supabase.from('transactions').insert({
+    const { error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
@@ -3772,6 +3999,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
     })
+    // A failed insert here (e.g. a column this code expects hasn't
+    // been added to the database yet) used to be silently swallowed -
+    // the visit was marked billed and the screen said "complete," but
+    // no row ever reached Financial Records. Surface it instead.
+    if (txnErr) setBillingTxnError(txnErr.message)
     setBillingResult({ status: 'PAID_DIRECT', fees })
     setSubmittingClaim(false)
   }
@@ -3788,7 +4020,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
           {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null)}}>Done</Btn>
+          {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.red,textAlign:'left'}}>{'⚠'} The visit is marked billed, but recording it failed: {billingTxnError}. It won't appear in Financial Records - let Medsa support know.</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null)}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -3918,11 +4151,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               </div>
               <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${t.patient_pays}</div>
             </div>
-            <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted}}>
+            <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted,marginBottom:t.medical_record_id?'8px':0}}>
               <span>Method: {t.payment_method}</span>
               {t.card_processing_fee>0&&<span>Processing fee (Medsa): HK${t.card_processing_fee}</span>}
               {t.clearinghouse_fee>0&&<span>Clearinghouse fee (Medsa): HK${t.clearinghouse_fee}</span>}
             </div>
+            {t.medical_record_id&&<div onClick={()=>handleDownloadReceipt(t)} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{'⬇'} Download consultation notes & receipt (PDF)</div>}
           </Card>
         ))}
       </div>
@@ -3930,9 +4164,16 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   )
 
   async function handleFindPlanPatient() {
+    // An empty search previously matched every patient (ilike '%%')
+    // and .limit(1) silently returned whichever row came back first -
+    // looked exactly like a hardcoded result, since it was always the
+    // same patient regardless of what (if anything) was typed.
+    const term = planPatientQuery.trim()
+    if (!term) { setPlanFoundPatient(null); setPlanNotFound(false); return }
     const { data } = await supabase.from('patients').select('id,full_name,medsa_id')
-      .or(`full_name.ilike.%${planPatientQuery}%,medsa_id.ilike.%${planPatientQuery}%`).limit(1).maybeSingle()
+      .or(`full_name.ilike.%${term}%,medsa_id.ilike.%${term}%`).limit(1).maybeSingle()
     setPlanFoundPatient(data||null)
+    setPlanNotFound(!data)
   }
 
   async function handleChargePlan() {
@@ -3957,7 +4198,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   }
 
   function resetPlanCreation() {
-    setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null)
+    setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null); setPlanNotFound(false)
     setPlanName(''); setPlanSessions(''); setPlanPrice(''); setPlanExpiry(''); setPlanMethod('card')
   }
 
@@ -3976,7 +4217,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <input value={planPatientQuery} onChange={e=>setPlanPatientQuery(e.target.value)} placeholder="Patient name or MedsaID" style={{flex:1,padding:'10px',fontSize:'13px'}}/>
           <Btn onClick={handleFindPlanPatient}>Find</Btn>
         </div>
-        {planFoundPatient&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>{'\u2713'} {planFoundPatient.full_name}</div>}
+        {planFoundPatient&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>{'\u2713'} {planFoundPatient.full_name} ({planFoundPatient.medsa_id})</div>}
+        {planNotFound&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'12px'}}>No patient matched that name or Medsa ID.</div>}
         <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name (e.g. Physio - 10 sessions)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           <input type="number" value={planSessions} onChange={e=>setPlanSessions(e.target.value)} placeholder="Total sessions" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
@@ -4839,6 +5081,7 @@ export default function ClinicOpsApp() {
         checkedInAt: new Date(r.checked_in_at).getTime(),
         department: r.department || 'All departments',
         status: r.status,
+        checkinNote: r.checkin_note || null,
       })))
 
       const { data: rxRows } = await supabase
@@ -4871,7 +5114,7 @@ export default function ClinicOpsApp() {
     if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
   }, [screen])
 
-  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined) {
+  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null) {
     const alreadyActive = checkedInQueue.some(q =>
       q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
     )
@@ -4929,6 +5172,7 @@ export default function ClinicOpsApp() {
       room: '-',
       department: matchingAppt?.department || staffMember?.department || 'All departments',
       status: 'waiting',
+      checkin_note: checkinNote || null,
     }).select().single()
 
     if (error || !data) {
@@ -4937,26 +5181,27 @@ export default function ClinicOpsApp() {
     }
 
     // Real consent window, created the moment of physical check-in -
-    // this was previously only ever created from the Schedule screen's
-    // modal, meaning a walk-in (or anyone checking in through this
-    // general screen) never got a window at all and would always fail
-    // the consent check. Booked appointments still get their real
-    // scheduled time and the before/after window; a genuine walk-in gets
-    // after-only, since there's no scheduled time to count backward from.
-    const checkInTime = new Date()
-    const windowStart = matchingAppt ? new Date(new Date(matchingAppt.scheduled_at).getTime() - 24*60*60*1000) : checkInTime
-    const windowEnd = new Date((matchingAppt ? new Date(matchingAppt.scheduled_at).getTime() : checkInTime.getTime()) + 24*60*60*1000)
-    await supabase.from('appointment_intake').insert({
-      patient_id: patient.id, appointment_time: (matchingAppt?.scheduled_at || checkInTime.toISOString()),
-      doctor_name: matchingAppt?.doctor_name || staffMember?.name || null,
-      consent_given: true, consent_given_at: checkInTime.toISOString(),
-      access_window_start: windowStart.toISOString(), access_window_end: windowEnd.toISOString(),
-    })
+    // but ONLY for a genuine walk-in (no matchingAppt). A booked
+    // appointment already has its own consent row from when the
+    // patient booked (default-on, they could have opted out) - writing
+    // a second hardcoded consent_given:true row here would silently
+    // overwrite that patient's real choice the moment front desk
+    // checks them in. consentAnswer is what was actually asked at the
+    // check-in screen for a walk-in; unused for a booked appointment.
+    if (!matchingAppt) {
+      const checkInTime = new Date()
+      await supabase.from('appointment_intake').insert({
+        patient_id: patient.id, appointment_time: checkInTime.toISOString(),
+        doctor_name: staffMember?.name || null,
+        consent_given: consentAnswer, consent_given_at: checkInTime.toISOString(),
+        access_window_start: checkInTime.toISOString(), access_window_end: new Date(checkInTime.getTime() + 24*60*60*1000).toISOString(),
+      })
+    }
 
     setCheckedInQueue([...checkedInQueue, {
       id: data.id, ticket: data.ticket, queueId: data.queue_id, patientName: data.patient_name,
       doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
-      department: data.department, status: data.status,
+      department: data.department, status: data.status, checkinNote: data.checkin_note || null,
     }])
     setCheckInError(null)
 
@@ -5098,6 +5343,7 @@ export default function ClinicOpsApp() {
     {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
+    {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
     {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant']},
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
@@ -5154,6 +5400,7 @@ export default function ClinicOpsApp() {
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
+        {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
         {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
