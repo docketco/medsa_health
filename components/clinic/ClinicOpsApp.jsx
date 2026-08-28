@@ -319,6 +319,12 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
   const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
 
+  // Asked live at check-in (scan or search) rather than buried in a
+  // separate screen - default on, staff taps it off if the patient
+  // says no when asked. Never blocks the check-in itself either way,
+  // it only decides whether this clinic can read past records today.
+  const [walkInConsent,setWalkInConsent]=useState(true)
+
   // Which queue this clinic runs, if more than one - lets front desk
   // route a check-in to the right line (e.g. General vs Chinese
   // Medicine) instead of everyone sharing one ticket sequence.
@@ -341,11 +347,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     loadQueues()
   }, [staffMember?.institutionId])
 
-  // Shared by both scan and search check-in paths - runs the real
-  // check-in, then looks up the ticket that was just created so it can
-  // be offered for printing.
+  // Shared by both scan and search check-in paths - records the
+  // consent answer asked at check-in (appointment_intake, same table a
+  // booked appointment already writes to), then runs the real check-in
+  // and looks up the ticket that was just created so it can be offered
+  // for printing. The consent answer never blocks the check-in itself.
   async function doCheckIn(p, force) {
     setCheckingIn(true)
+    const now = new Date()
+    await supabase.from('appointment_intake').insert({
+      patient_id: p.id, appointment_time: now.toISOString(),
+      consent_given: walkInConsent, consent_given_at: now.toISOString(),
+      access_window_start: now.toISOString(), access_window_end: new Date(now.getTime() + 24*60*60*1000).toISOString(),
+    })
     const qId = queues.length>1 ? selectedQueueId : undefined
     const result = await onCheckedIn(p, force, qId)
     setCheckingIn(false)
@@ -377,6 +391,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
   async function simulateScan(chosenPatient) {
     setStage('scanning')
+    setWalkInConsent(true)
     // Real scan hardware isn't wired up yet - this simulates it by letting
     // you pick which patient's card is being "scanned," pulled from real
     // Supabase data, rather than always fetching one fixed demo patient.
@@ -401,6 +416,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setRequestSent(false)
     setSearched(true)
     setRevealedClaimCode(null)
+    setWalkInConsent(true)
     // Real status, not just "did I click the button this session" - a
     // fresh search should show whether the patient already approved or
     // denied a request from an earlier visit, not just "not sent yet."
@@ -491,6 +507,14 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             </div>
           </div>
           {!justCheckedIn ? <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Ask: does {patient.full_name} consent to this clinic viewing their past Medsa records today?</div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <div onClick={()=>setWalkInConsent(true)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:walkInConsent?C.green:'#fff',color:walkInConsent?'#fff':C.textSub,border:`1px solid ${C.border}`}}>Yes, consents</div>
+                <div onClick={()=>setWalkInConsent(false)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:!walkInConsent?C.amber:'#fff',color:!walkInConsent?'#fff':C.textSub,border:`1px solid ${C.border}`}}>No</div>
+              </div>
+              {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
+            </div>
             {queues.length>1&&<div>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Queue</div>
               <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
@@ -507,7 +531,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
             <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
             {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
@@ -525,6 +549,14 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
         {searchResult&&!justCheckedIn&&<Card style={{padding:'20px'}}>
           <div style={{fontSize:'17px',fontWeight:700}}>{searchResult.full_name}</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{searchResult.medsa_id} - DOB {new Date(searchResult.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+          <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Ask: does {searchResult.full_name} consent to this clinic viewing their past Medsa records today?</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <div onClick={()=>setWalkInConsent(true)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:walkInConsent?C.green:'#fff',color:walkInConsent?'#fff':C.textSub,border:`1px solid ${C.border}`}}>Yes, consents</div>
+              <div onClick={()=>setWalkInConsent(false)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:!walkInConsent?C.amber:'#fff',color:!walkInConsent?'#fff':C.textSub,border:`1px solid ${C.border}`}}>No</div>
+            </div>
+            {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
+          </div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
             <Btn variant="primary" style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
@@ -2875,16 +2907,6 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     load()
   }
 
-  async function handleTogglePortalAccess(person) {
-    const granting = !person.practitioner_portal_enabled
-    await supabase.from('staff_credentials').update({
-      practitioner_portal_enabled: granting,
-      practitioner_portal_granted_by: granting ? staffMember?.name : null,
-      practitioner_portal_granted_at: granting ? new Date().toISOString() : null,
-    }).eq('id', person.id)
-    load()
-  }
-
   async function handleOffboard(person) {
     await supabase.from('staff_credentials').update({ status:'offboarded', offboarded_by:staffMember?.name, offboarded_at:new Date().toISOString() }).eq('id', person.id)
     load()
@@ -2996,10 +3018,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
-                {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} My Credentials access - granted by {s.practitioner_portal_granted_by}</div>}
               </div>
               <div style={{display:'flex',gap:'6px',flexShrink:0}}>
-                {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke My Credentials':'Grant My Credentials'}</button>}
                 <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
               </div>
             </div>
@@ -5079,7 +5099,7 @@ export default function ClinicOpsApp() {
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
-    {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant'], portalOnly:true},
+    {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant']},
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
