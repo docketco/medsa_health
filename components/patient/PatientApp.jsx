@@ -90,9 +90,10 @@ function Card({ children, style:sx={}, onClick }) {
 function SecLabel({ children }) {
   return <div style={{fontSize:'10px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,padding:'16px 16px 8px'}}>{children}</div>
 }
-function Toggle({ checked=false, onChange }) {
+function Toggle({ checked=false, onChange, disabled=false }) {
   const [on,setOn]=useState(checked)
-  return <div onClick={()=>{setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:'pointer',position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+  useEffect(() => { setOn(checked) }, [checked])
+  return <div onClick={()=>{if(disabled)return;setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:disabled?'default':'pointer',opacity:disabled?0.6:1,position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
 }
 function Badge({ text, type }) {
   const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
@@ -1691,7 +1692,7 @@ function DoctorsScreen({ isEn, patient={} }) {
     setIntakeError(null)
     try {
       const medsaId = patient?.medsa_id
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+      const { data: patientRow } = await supabase.from('patients').select('id,email,full_name,notify_email').eq('medsa_id', medsaId).maybeSingle()
       if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
 
       // Build the actual appointment datetime from the selected day/time,
@@ -1766,6 +1767,18 @@ function DoctorsScreen({ isEn, patient={} }) {
       })
       if (apptErr) throw apptErr
       setBooked(true)
+      // Best-effort - respects the patient's own toggle (Edit profile ->
+      // Notifications), defaults on. Never blocks the booking itself,
+      // which already succeeded above.
+      if (patientRow.notify_email !== false && patientRow.email) {
+        fetch('/api/appointments/notify_booking', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            email: patientRow.email, patientName: patientRow.full_name,
+            doctorName: activeDoctor.name, scheduledAt: apptDate.toISOString(),
+          }),
+        }).catch(()=>{})
+      }
     } catch (e) {
       // 23505 = unique_violation - the rare case where two bookings for
       // the same slot both passed the earlier check before either
@@ -1925,7 +1938,7 @@ function DoctorsScreen({ isEn, patient={} }) {
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Reason for visit':'求診原因'}</div>
             <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={isEn?'e.g. Persistent cough':'例如：持續咳嗽'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Symptoms':'症狀'}</div>
-            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={isEn?'Describe what you\\u2019re experiencing…':'描述您的症狀…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+            <textarea value={symptoms} onChange={e=>setSymptoms(e.target.value)} rows={3} placeholder={isEn?"Describe what you're experiencing…":'描述您的症狀…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Current medications (optional)':'目前藥物（可選）'}</div>
             <input value={currentMeds} onChange={e=>setCurrentMeds(e.target.value)} placeholder={isEn?'e.g. Metformin 500mg':'例如：二甲雙胍 500mg'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
 
@@ -3441,6 +3454,22 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
   const [savingContact,setSavingContact]=useState(false)
   const [contactSaved,setContactSaved]=useState(false)
 
+  // Defaults to on for email (matches every confirmation this app
+  // already sends real email for elsewhere - forgot-password OTP,
+  // sponsor submissions). SMS has no provider connected yet (would
+  // need Twilio or similar) so it stays off and disabled rather than
+  // offering a toggle that can't actually do anything.
+  const [notifyEmail,setNotifyEmail]=useState(patient.notify_email !== false)
+  const [savingNotify,setSavingNotify]=useState(false)
+  async function handleToggleNotifyEmail() {
+    const next = !notifyEmail
+    setNotifyEmail(next)
+    setSavingNotify(true)
+    await supabase.from('patients').update({ notify_email: next }).eq('id', patient.id)
+    setSavingNotify(false)
+    onSaved?.()
+  }
+
   const [myAllergies,setMyAllergies]=useState([])
   const [loadingAllergies,setLoadingAllergies]=useState(true)
   const [newAllergen,setNewAllergen]=useState('')
@@ -3495,6 +3524,24 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         <input value={contact.rel} onChange={e=>{setContact({...contact,rel:e.target.value});setContactSaved(false)}} placeholder={isEn?'Relationship (e.g. Mother)':'關係（例如：母親）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
         <input value={contact.phone} onChange={e=>{setContact({...contact,phone:e.target.value});setContactSaved(false)}} placeholder={isEn?'Phone number':'電話號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleSaveContact} disabled={savingContact}>{savingContact?'Saving…':contactSaved?'✓ Saved':(isEn?'Save':'儲存')}</Btn>
+      </Card>
+
+      <SecLabel>{isEn?'Notifications':'通知'}</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'12px'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'Email confirmations':'電郵確認'}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Booking confirmations and updates sent to your email':'預約確認及更新將發送至您的電郵'}</div>
+          </div>
+          <Toggle checked={notifyEmail} onChange={handleToggleNotifyEmail} disabled={savingNotify}/>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',opacity:0.5}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'Text (SMS) confirmations':'短訊確認'}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Not connected yet - coming once Medsa has an SMS provider':'尚未連接 - Medsa 接入短訊服務後開放'}</div>
+          </div>
+          <Toggle checked={false} onChange={()=>{}} disabled/>
+        </div>
       </Card>
 
       <SecLabel>{isEn?'My allergies':'我的過敏'}</SecLabel>
