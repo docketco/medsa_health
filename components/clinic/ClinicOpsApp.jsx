@@ -1019,6 +1019,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       const { data } = await supabase.from('service_items').select('*')
         .in('clinic_type', [catalogClinicType, 'general']).eq('active', true).order('category')
       setCatalog(data || [])
+      // A visit shouldn't need the doctor to remember to add a base
+      // consultation charge every single time - auto-itemize it from
+      // the catalog if one's listed (matched by name), otherwise as an
+      // editable placeholder so at minimum something reaches billing,
+      // including for a visit with no prescription at all.
+      setLineItems(prev => {
+        if (prev.length > 0) return prev
+        const consultItem = (data||[]).find(i => i.name?.toLowerCase().includes('consult'))
+        return [{
+          service_item_id: consultItem?.id || 'custom-consultation',
+          description: consultItem?.name || 'Consultation fee',
+          category: consultItem?.category || 'custom',
+          fee: parseFloat(consultItem?.default_price) || 0, qty: 1,
+        }]
+      })
     }
     loadCatalog()
   }, [catalogClinicType])
@@ -1032,6 +1047,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       return [...prev, { service_item_id: item.id, description: item.name, description_tc: item.name_tc, category: item.category, fee: parseFloat(item.default_price) || 0, qty: 1 }]
     })
     setItemPickerOpen(false)
+  }
+
+  const [customItemName,setCustomItemName]=useState('')
+  const [customItemPrice,setCustomItemPrice]=useState('')
+
+  // The catalog is real but necessarily incomplete - a charge that isn't
+  // in it (a one-off, a clinic-specific service not yet added) had no
+  // way in at all before this.
+  function addCustomLineItem() {
+    if (!customItemName.trim()) return
+    setLineItems(prev => [...prev, {
+      service_item_id: `custom-${Date.now()}`, description: customItemName.trim(),
+      category: 'custom', fee: parseFloat(customItemPrice) || 0, qty: 1,
+    }])
+    setCustomItemName(''); setCustomItemPrice(''); setItemPickerOpen(false)
   }
 
   function updateLineItemQty(id, qty) {
@@ -1448,13 +1478,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         ))}
         {lineItems.length>0&&<div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:700,fontSize:'14px'}}><span>Total</span><span>HK${invoiceTotal.toFixed(2)}</span></div>}
         <div onClick={()=>setItemPickerOpen(!itemPickerOpen)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'6px 0'}}>{'+'} Add treatment or charge</div>
-        {itemPickerOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',maxHeight:220,overflowY:'auto'}}>
+        {itemPickerOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',maxHeight:280,overflowY:'auto'}}>
           {catalog.map(item=>(
             <div key={item.id} onClick={()=>addLineItem(item)} style={{padding:'10px 14px',fontSize:'13px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between'}}>
               <span>{item.name}</span><span style={{color:C.textSub}}>HK${item.default_price}</span>
             </div>
           ))}
           {catalog.length===0&&<div style={{padding:'12px 14px',fontSize:'12px',color:C.textMuted}}>No catalog items for this clinic type yet.</div>}
+          <div style={{padding:'10px 14px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a custom charge not in the catalog</div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input value={customItemName} onChange={e=>setCustomItemName(e.target.value)} placeholder="Description" style={{flex:2,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <input type="number" step="0.01" value={customItemPrice} onChange={e=>setCustomItemPrice(e.target.value)} placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <button onClick={addCustomLineItem} disabled={!customItemName.trim()} style={{padding:'7px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Add</button>
+            </div>
+          </div>
         </div>}
       </div>
       <SecLabel>Prescription</SecLabel>
@@ -2470,6 +2508,17 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newEpcLink,setNewEpcLink]=useState('')
   const [newHkid,setNewHkid]=useState('')
   const [newEmail,setNewEmail]=useState('')
+  const [editingEmailId,setEditingEmailId]=useState(null)
+  const [editEmailValue,setEditEmailValue]=useState('')
+
+  // Anyone onboarded before the email field existed has no way to use
+  // "Forgot password" until this is filled in - lets a practice manager
+  // fix that themselves instead of needing a SQL update run for them.
+  async function handleSaveEmail(person) {
+    await supabase.from('staff_credentials').update({ email: editEmailValue.trim()||null }).eq('id', person.id)
+    setEditingEmailId(null)
+    load()
+  }
   const [newIsNurse,setNewIsNurse]=useState(false)
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
@@ -2759,16 +2808,25 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           </div>
         </div>}
         {staff.map(s=>(
-          <div key={s.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
-            <div>
-              <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
-              <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
-              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} My Credentials access - granted by {s.practitioner_portal_granted_by}</div>}
+          <div key={s.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',marginBottom:'8px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
+                {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} My Credentials access - granted by {s.practitioner_portal_granted_by}</div>}
+              </div>
+              <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+                {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke My Credentials':'Grant My Credentials'}</button>}
+                <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
+              </div>
             </div>
-            <div style={{display:'flex',gap:'6px',flexShrink:0}}>
-              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke My Credentials':'Grant My Credentials'}</button>}
-              <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
-            </div>
+            {editingEmailId===s.id
+              ? <div style={{display:'flex',gap:'6px'}}>
+                  <input value={editEmailValue} onChange={e=>setEditEmailValue(e.target.value)} placeholder="Email" style={{flex:1,padding:'7px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',boxSizing:'border-box'}}/>
+                  <button onClick={()=>handleSaveEmail(s)} style={{padding:'7px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+                  <button onClick={()=>setEditingEmailId(null)} style={{padding:'7px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Cancel</button>
+                </div>
+              : <div onClick={()=>{setEditingEmailId(s.id);setEditEmailValue(s.email||'')}} style={{fontSize:'11px',color:s.email?C.textMuted:C.amber,cursor:'pointer'}}>{s.email || '⚠ No email on file - required for password reset'}{s.email&&' · edit'}</div>}
           </div>
         ))}
       </>}
@@ -4754,7 +4812,7 @@ export default function ClinicOpsApp() {
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
     {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
-    {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','clinic_assistant'], badge: pendingCount},
+    {key:'prescriptions', icon:'\u25c9', label:'Consultations & Charges', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},
     {key:'ordersets', icon:'\u25c9', label:'Order Sets', roles:['admin','doctor']},
     {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','clinic_assistant']},
