@@ -39,6 +39,14 @@ function Badge({ text, type }) {
 function PageWrap({ children, maxWidth=720 }) {
   return <div style={{maxWidth, margin:'0 auto', width:'100%'}}>{children}</div>
 }
+function InfoRow({ label, value, last }) {
+  return (
+    <div style={{padding:'11px 0',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:last?'none':`0.5px solid ${C.border}`,fontSize:'13px'}}>
+      <span style={{color:C.textSub}}>{label}</span>
+      <span style={{fontWeight:500}}>{value}</span>
+    </div>
+  )
+}
 
 // Shared doctor directory - single source of truth for name + department,
 // used both at staff login and when filtering/switching doctors elsewhere,
@@ -93,12 +101,14 @@ function StaffLogin({ onLogin }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link')
   .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
 const mapped = (data||[]).map(s => ({
   id: s.medsa_id, name: s.full_name, role: s.role,
   roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
   department: s.department, institutionId: s.institution_id,
+  practitionerPortalEnabled: s.practitioner_portal_enabled, practitionerIdentityId: s.practitioner_identity_id,
+  registrationNumber: s.registration_number, registrationExpiry: s.registration_expiry, hasEpc: !!s.epc_link,
 }))
       setStaff(mapped)
       setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
@@ -227,12 +237,51 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
   const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
 
+  // Which queue this clinic runs, if more than one - lets front desk
+  // route a check-in to the right line (e.g. General vs Chinese
+  // Medicine) instead of everyone sharing one ticket sequence.
+  const [queues,setQueues]=useState([])
+  const [selectedQueueId,setSelectedQueueId]=useState(null)
+  const [institutionNameForTicket,setInstitutionNameForTicket]=useState('')
+  const [printTicket,setPrintTicket]=useState(null)
+
+  useEffect(() => {
+    async function loadQueues() {
+      if (!staffMember?.institutionId) return
+      const [{data:qs},{data:inst}] = await Promise.all([
+        supabase.from('clinic_queues').select('*').eq('institution_id', staffMember.institutionId).eq('active', true).order('created_at'),
+        supabase.from('institutions').select('name').eq('id', staffMember.institutionId).maybeSingle(),
+      ])
+      setQueues(qs||[])
+      if (qs?.length) setSelectedQueueId(qs[0].id)
+      setInstitutionNameForTicket(inst?.name||'')
+    }
+    loadQueues()
+  }, [staffMember?.institutionId])
+
+  // Shared by both scan and search check-in paths - runs the real
+  // check-in, then looks up the ticket that was just created so it can
+  // be offered for printing.
+  async function doCheckIn(p, force) {
+    setCheckingIn(true)
+    const qId = queues.length>1 ? selectedQueueId : undefined
+    const result = await onCheckedIn(p, force, qId)
+    setCheckingIn(false)
+    if (result === true) {
+      setJustCheckedIn(p.full_name)
+      const { data: ticketRow } = await supabase.from('clinic_queue').select('ticket, queue_id')
+        .eq('patient_id', p.id).order('checked_in_at', { ascending: false }).limit(1).maybeSingle()
+      setPrintTicket(ticketRow ? {
+        ticket: ticketRow.ticket, patientName: p.full_name,
+        queueName: queues.find(q=>q.id===ticketRow.queue_id)?.name || null,
+      } : null)
+    }
+    return result
+  }
+
   async function handleCheckInClick(force=false) {
     if (checkingIn) return // guard against rapid repeat clicks
-    setCheckingIn(true)
-    const result = await onCheckedIn(patient, force)
-    setCheckingIn(false)
-    if (result === true) setJustCheckedIn(patient.full_name)
+    await doCheckIn(patient, force)
     // 'already_active' leaves the screen as-is with checkInError shown,
     // plus a "Check in anyway" option below for testing/demo purposes
   }
@@ -304,6 +353,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   }
 
   return (
+    <>
     <PageWrap maxWidth={560}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Check-In / Search</h2>
       {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'\u26a0'} {checkInError}</div>}
@@ -359,14 +409,23 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             </div>
           </div>
           {!justCheckedIn ? <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            {queues.length>1&&<div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Queue</div>
+              <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                {queues.map(q=>(
+                  <div key={q.id} onClick={()=>setSelectedQueueId(q.id)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedQueueId===q.id?C.green:C.card,color:selectedQueueId===q.id?'#fff':C.textSub}}>{q.name}</div>
+                ))}
+              </div>
+            </div>}
             <div style={{display:'flex',gap:'10px'}}>
               <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
             </div>
             {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
-            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully</div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
+            {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
@@ -385,10 +444,18 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           <div style={{fontSize:'17px',fontWeight:700}}>{searchResult.full_name}</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{searchResult.medsa_id} - DOB {new Date(searchResult.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
-            <Btn variant="primary" style={{flex:1}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,false);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
-          {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={async()=>{setCheckingIn(true);const result=await onCheckedIn(searchResult,true);setCheckingIn(false);if(result===true)setJustCheckedIn(searchResult.full_name)}} disabled={checkingIn}>Check in anyway (testing)</Btn>}
+          {queues.length>1&&<div style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Queue</div>
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {queues.map(q=>(
+                <div key={q.id} onClick={()=>setSelectedQueueId(q.id)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedQueueId===q.id?C.green:C.card,color:selectedQueueId===q.id?'#fff':C.textSub}}>{q.name}</div>
+              ))}
+            </div>
+          </div>}
+          {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>doCheckIn(searchResult,true)} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           {!requestSent&&!accessRequestStatus&&<Btn style={{width:'100%'}} onClick={async()=>{
             // Real clinic name, not the fixed 'clinic_ops' app-source
             // literal - that string was showing up as the "requesting
@@ -424,8 +491,9 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
         </Card>}
         {justCheckedIn&&<Card style={{padding:'20px'}}>
           <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
-            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully</div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setSearchResult(null);setSearchTerm('');setSearched(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
+            {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setSearchResult(null);setSearchTerm('');setSearched(false);setPrintTicket(null);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>
         </Card>}
         {searched&&!searchResult&&!justCheckedIn&&<div style={{textAlign:'center',padding:'20px'}}>
@@ -434,6 +502,32 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
         </div>}
       </>}
     </PageWrap>
+
+    {/* Print-only ticket - the rest of the app is hidden via @media
+        print, leaving just this. Works with any printer registered in
+        the browser/OS print dialog, including thermal ticket printers
+        (most ship with a driver that shows up as a normal printer). A
+        genuine ESC/POS receipt printer needing raw USB/serial commands
+        would need model-specific driver code - not something buildable
+        without the actual hardware to test against. */}
+    {printTicket&&<div id="print-ticket-area">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #print-ticket-area, #print-ticket-area * { visibility: visible; }
+          #print-ticket-area { position: fixed; top: 0; left: 0; width: 80mm; padding: 8mm; font-family: monospace; }
+        }
+        @media screen { #print-ticket-area { display: none; } }
+      `}</style>
+      <div style={{textAlign:'center'}}>
+        <div style={{fontSize:'14px',fontWeight:700}}>{institutionNameForTicket || 'Medsa Clinic'}</div>
+        {printTicket.queueName&&<div style={{fontSize:'11px',marginTop:'4px'}}>{printTicket.queueName}</div>}
+        <div style={{fontSize:'42px',fontWeight:700,margin:'14px 0'}}>{printTicket.ticket}</div>
+        <div style={{fontSize:'11px'}}>{printTicket.patientName}</div>
+        <div style={{fontSize:'10px',marginTop:'4px'}}>{new Date().toLocaleString('en-HK')}</div>
+      </div>
+    </div>}
+    </>
   )
 }
 
@@ -679,20 +773,24 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
 function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
   const [callingPatient,setCallingPatient]=useState(null) // {name, medsaId}
+  // Completed/no-show tickets used to sit here all day (the queue only
+  // ever grew, never shrank) - a doctor's active list should only be who
+  // still needs seeing.
+  const activeQueue = queue.filter(q=>q.status!=='done'&&q.status!=='no_show')
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>My Patients</h2>
       {onRefresh&&<div style={{textAlign:'center',marginBottom:'16px'}}><span onClick={onRefresh} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>{'\u21bb'} Refresh</span></div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {queue.length===0&&<div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>No patients checked in yet today.</div>}
-        {queue.map((q,i)=>{
+        {activeQueue.length===0&&<div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted,fontSize:'13px'}}>No patients checked in yet today.</div>}
+        {activeQueue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
           return (
             <Card key={i} onClick={()=>setActionPatient(q)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'14px'}}>
-              <div style={{width:36,height:36,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
+              <div style={{width:36,height:36,borderRadius:'8px',background:q.status==='serving'?C.green:C.greenLight,color:q.status==='serving'?'#fff':C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:600}}>{q.patientName}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>Checked in {new Date(q.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{q.status==='serving'?'Being seen \u00b7 ':''}Checked in {new Date(q.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
               </div>
               <Badge text={hrsLeft>0?`Records ${Math.floor(hrsLeft)}h left`:'Access expired'} type={hrsLeft>0?'ok':'full'}/>
               <span style={{color:C.textMuted,fontSize:'16px'}}>{'\u203a'}</span>
@@ -1155,6 +1253,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           timestamp: Date.now(),
           status: 'pending',
         })
+      }
+      if (queueEntry?.id) {
+        await supabase.from('clinic_queue').update({ status: 'done' }).eq('id', queueEntry.id)
       }
       setSaved(true)
     } catch (e) {
@@ -1676,11 +1777,87 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   )
 }
 
-function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment }) {
-  const inRoom = queue.length
+// A clinic running just one line never has to touch this - check-in and
+// the Overview board silently fall back to a single shared queue when
+// nothing's configured here. Only needed once a clinic wants more than
+// one line at once (e.g. General vs Chinese Medicine, or a dedicated
+// dressing/injection queue).
+function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
+  const [creating,setCreating]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [name,setName]=useState('')
+  const [prefix,setPrefix]=useState('')
+  const [error,setError]=useState(null)
+
+  async function handleCreate() {
+    if (!name.trim() || !prefix.trim()) return
+    setSaving(true)
+    setError(null)
+    const { error: err } = await supabase.from('clinic_queues').insert({
+      institution_id: institutionId, name: name.trim(), ticket_prefix: prefix.trim().toUpperCase().slice(0,2), active: true,
+    })
+    setSaving(false)
+    if (err) { setError(err.message); return }
+    setCreating(false); setName(''); setPrefix('')
+    onRefresh()
+  }
+
+  async function toggleActive(q) {
+    await supabase.from('clinic_queues').update({ active: !q.active }).eq('id', q.id)
+    onRefresh()
+  }
+
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Queues</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',textAlign:'center'}}>With no queues configured, check-in runs one shared line (ticket prefix A). Add named queues here if this clinic runs more than one line at once - each gets its own ticket sequence and its own "now serving" board.</div>
+
+      {queues.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No named queues yet - running the default single shared queue.</div>}
+      {queues.map(q=>(
+        <Card key={q.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{q.name}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>Ticket prefix "{q.ticket_prefix}"</div>
+          </div>
+          <Btn onClick={()=>toggleActive(q)}>{q.active?'Deactivate':'Reactivate'}</Btn>
+        </Card>
+      ))}
+
+      {!creating&&<Btn variant="primary" style={{width:'100%',marginTop:'12px'}} onClick={()=>setCreating(true)}>+ Add a queue</Btn>}
+      {creating&&<Card style={{padding:'16px',marginTop:'12px'}}>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="Queue name (e.g. Chinese Medicine)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <input value={prefix} onChange={e=>setPrefix(e.target.value)} placeholder="Ticket prefix, 1-2 letters (e.g. B)" maxLength={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={()=>{setCreating(false);setName('');setPrefix('')}}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleCreate} disabled={saving||!name.trim()||!prefix.trim()}>{saving?'Saving…':'Add queue'}</Btn>
+        </div>
+      </Card>}
+    </PageWrap>
+  )
+}
+
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus, queues=[] }) {
+  const inRoom = queue.filter(q=>q.status!=='done'&&q.status!=='no_show').length
   const [todaysQueue,setTodaysQueue]=useState([]) // scheduled but not yet checked in
   const [loadingQueue,setLoadingQueue]=useState(true)
   const [activeAction,setActiveAction]=useState(null) // {type:'checkedin'|'scheduled', entry}
+  const [callingId,setCallingId]=useState(null)
+
+  // One shared board when the clinic hasn't set up named queues (the
+  // common case); a separate "now serving" + call-next per queue once
+  // it has, since each queue's line is independent of the others.
+  const queueGroups = queues.length>1
+    ? queues.map(q=>({ id:q.id, name:q.name, entries: queue.filter(e=>e.queueId===q.id) }))
+    : [{ id:null, name:null, entries: queue }]
+
+  async function callNext(waitingList) {
+    const next = waitingList[0]
+    if (!next) return
+    setCallingId(next.id)
+    await onUpdateStatus(next, 'serving')
+    setCallingId(null)
+  }
 
   // Real revenue stat - queries today's actual transactions. This was
   // previously a static "HK$4,820" string that never changed at all, and
@@ -1726,11 +1903,45 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
         <StatCard label="Today's revenue" value={`HK$${todaysRevenue.toFixed(0)}`} sub={`${todaysTransactionCount} transaction${todaysTransactionCount===1?'':'s'}`} color={C.green} bg={C.greenLight}/>
       </div>
+      <SecLabel>Now serving</SecLabel>
+      <div style={{marginBottom:'20px'}}>
+        {queueGroups.map(group=>{
+          const nowServing = group.entries.filter(q=>q.status==='serving')
+          const waitingList = group.entries.filter(q=>q.status==='waiting')
+          return (
+            <div key={group.id||'default'} style={{marginBottom:'14px'}}>
+              {group.name&&<div style={{fontSize:'12px',fontWeight:600,color:C.textSub,marginBottom:'6px'}}>{group.name}</div>}
+              {nowServing.length===0&&<Card style={{padding:'14px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <div style={{fontSize:'12px',color:C.textMuted}}>{waitingList.length===0?'No one waiting.':`${waitingList.length} waiting`}</div>
+                <Btn variant="primary" onClick={()=>callNext(waitingList)} disabled={!!callingId||waitingList.length===0}>{callingId?'Calling…':`Call next${waitingList[0]?' · '+waitingList[0].ticket:''}`}</Btn>
+              </Card>}
+              {nowServing.map(q=>(
+                <Card key={q.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'10px'}}>
+                    <div style={{width:36,height:36,borderRadius:'8px',background:C.green,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
+                      <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
+                    </div>
+                    <Badge text="Serving" type="ok"/>
+                  </div>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1}} onClick={()=>onUpdateStatus(q,'no_show')}>No-show</Btn>
+                    <Btn variant="primary" style={{flex:1}} onClick={()=>onUpdateStatus(q,'done')}>Mark done</Btn>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
+        })}
+      </div>
+
       <SecLabel>Checked-in patients</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
         {queue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No one checked in yet.</div>}
         {queue.map((q,i)=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
+          const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
           return (
             <Card key={i} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:i})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
               <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
@@ -1738,7 +1949,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
                 <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
               </div>
-              <Badge text={hrsLeft>0?`${Math.floor(hrsLeft)}h left`:'Expired'} type={hrsLeft>0?'ok':'full'}/>
+              <Badge text={statusBadge[0]} type={statusBadge[1]}/>
               <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
             </Card>
           )
@@ -1765,6 +1976,11 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAction.entry.patientName}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{activeAction.type==='checkedin'?`${activeAction.entry.ticket} · checked in`:`${activeAction.entry.time} · scheduled`}</div>
+          {activeAction.type==='checkedin'&&activeAction.entry.status==='waiting'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'serving');setActiveAction(null)}}>Call now</Btn>}
+          {activeAction.type==='checkedin'&&activeAction.entry.status==='serving'&&<div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+            <Btn style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'no_show');setActiveAction(null)}}>No-show</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'done');setActiveAction(null)}}>Mark done</Btn>
+          </div>}
           {activeAction.type==='checkedin'
             ? <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onRemoveFromQueue(activeAction.index);setActiveAction(null)}}>↩ Cancel check-in</Btn>
             : <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onCancelAppointment(activeAction.entry.id);setActiveAction(null);loadTodaysQueue()}}>✕ Cancel appointment</Btn>}
@@ -1780,7 +1996,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
@@ -1796,6 +2012,39 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const [allergies,setAllergies]=useState([])
   const [medications,setMedications]=useState([])
   const [records,setRecords]=useState([])
+  const [accessRequestStatus,setAccessRequestStatus]=useState(null) // null | 'pending' | 'approved' | 'denied'
+  const [sendingAccessRequest,setSendingAccessRequest]=useState(false)
+
+  // Same "request record access ahead of visit" feature Check-in/Search
+  // has, offered here too - this is actually the more natural place for
+  // it, since seeing a scheduled patient's history hidden (outside
+  // their consent window) ahead of the visit is exactly when a doctor
+  // would want to ask for early access, not just at walk-in check-in.
+  async function loadAccessRequestStatus(patientId) {
+    if (!patientId || !staffMember?.institutionId) { setAccessRequestStatus(null); return }
+    const { data } = await supabase.from('record_access_requests')
+      .select('status').eq('patient_id', patientId).eq('requesting_institution_id', staffMember.institutionId)
+      .order('created_at',{ascending:false}).limit(1).maybeSingle()
+    setAccessRequestStatus(data?.status || null)
+  }
+
+  async function handleRequestAccess() {
+    if (!fullPatient?.id) return
+    setSendingAccessRequest(true)
+    let clinicName = null
+    if (staffMember?.institutionId) {
+      const { data: inst } = await supabase.from('institutions').select('name').eq('id', staffMember.institutionId).maybeSingle()
+      clinicName = inst?.name || null
+    }
+    const { error } = await supabase.from('record_access_requests').insert({
+      patient_id: fullPatient.id, requesting_staff: staffMember?.name || 'Unknown',
+      requesting_clinic: clinicName, requesting_institution_id: staffMember?.institutionId || null,
+      reason: 'Ahead of scheduled visit', status: 'pending',
+    })
+    setSendingAccessRequest(false)
+    if (error) { alert(`Could not send request: ${error.message}`); return }
+    setAccessRequestStatus('pending')
+  }
 
   // Real working-hours-based slots for rescheduling - replaces the
   // hardcoded ['09:00','09:30',...] list, which never reflected the
@@ -1856,6 +2105,9 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         setAllergies(allergyRes.data||[])
         setMedications(medRes.data||[])
         setRecords(recRes.data||[])
+        loadAccessRequestStatus(data.id)
+      } else {
+        setAccessRequestStatus(null)
       }
       setLoadingPatient(false)
     }
@@ -1929,6 +2181,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             : 'no consent is on file for this patient yet, so clinical details aren\'t shown here.'} Scheduling changes still work below.
         </div>}
         {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&role!=='doctor'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
+        {!loadingPatient&&!withinDataWindow&&fullPatient&&!accessRequestStatus&&<Btn style={{width:'100%',marginBottom:'14px'}} onClick={handleRequestAccess} disabled={sendingAccessRequest}>{sendingAccessRequest?'Sending…':'Request record access ahead of visit'}</Btn>}
+        {!loadingPatient&&accessRequestStatus==='pending'&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>◇ Request sent to patient for approval. Records will be available here once granted.</div>}
+        {!loadingPatient&&accessRequestStatus==='approved'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Patient approved this request.</div>}
+        {!loadingPatient&&accessRequestStatus==='denied'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.red}}>Patient declined this request.</div>}
 
         {mode!=='notes'&&<div onClick={()=>{setNotesDraft(appt.notes||'');setMode('notes')}} style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.textSub,lineHeight:1.5,cursor:'pointer'}}>
           <div style={{fontWeight:600,color:C.text,marginBottom:'2px',display:'flex',justifyContent:'space-between'}}><span>Patient notes</span><span style={{color:C.green,fontSize:'11px'}}>Edit</span></div>{appt.notes||'No notes yet - tap to add'}
@@ -2031,6 +2287,51 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // Deliberately consolidated into one screen with tabs, not five separate
 // screens like the Practitioner-side HR system - a small clinic doesn't need
 // that much structure, just needs the same real underlying jobs done.
+// ── MY CREDENTIALS — real replacement for the shelved /practitioner ────────
+// app's fake "Practitioner ID" screen (hardcoded name, hardcoded license
+// number, two different names shown on its own two tabs). Real fields
+// from this person's actual staff_credentials row, plus the one thing
+// that screen never had: if the same real person (matched by HKID +
+// e-PC at onboarding) also works at another clinic, switching to it
+// here doesn't need a second password - they already proved who they
+// are this session.
+function PractitionerCredentialsScreen({ staffMember, institutionName, affiliatedClinics, onSwitchClinic }) {
+  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>My Credentials</h2>
+      <div style={{margin:'0 0 16px',background:`linear-gradient(135deg,${C.green} 0%,#3f6b4f 100%)`,borderRadius:'16px',padding:'24px',color:'#fff'}}>
+        <div style={{fontSize:'10px',opacity:0.65,letterSpacing:'1.5px',textTransform:'uppercase',marginBottom:'4px'}}>medsa practitioner</div>
+        <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>{staffMember.name}</div>
+        <div style={{fontSize:'13px',opacity:0.85,marginBottom:'16px'}}>{ROLE_LABELS[staffMember.role]||staffMember.role}{staffMember.department&&staffMember.department!=='All departments'?` · ${staffMember.department}`:''}</div>
+        <div style={{display:'flex',gap:'20px'}}>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Registration</div><div style={{fontSize:'13px',fontWeight:600}}>{staffMember.registrationNumber||'Not on file'}</div></div>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Institution</div><div style={{fontSize:'13px',fontWeight:600}}>{institutionName||'—'}</div></div>
+        </div>
+      </div>
+      <Card style={{padding:'0 16px'}}>
+        <InfoRow label="Full name" value={staffMember.name}/>
+        <InfoRow label="Registration no." value={staffMember.registrationNumber||'Not on file'}/>
+        <InfoRow label="Registration expiry" value={staffMember.registrationExpiry||'Not on file'}/>
+        <InfoRow label="e-PC on file" value={staffMember.hasEpc?'Yes':'No'} last/>
+      </Card>
+
+      <SecLabel>Switch clinic</SecLabel>
+      {affiliatedClinics.length===0
+        ? <div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 16px'}}>No other clinics linked to your identity yet. If you also work elsewhere on Medsa, your practice manager there onboards you with the same HKID and e-PC to link it here.</div>
+        : affiliatedClinics.map(c=>(
+          <Card key={c.institutionId} onClick={()=>onSwitchClinic(c)} style={{padding:'14px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{c.institutionName}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{ROLE_LABELS[c.role]||c.role}{c.department&&c.department!=='All departments'?` · ${c.department}`:''}</div>
+            </div>
+            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+          </Card>
+        ))}
+    </PageWrap>
+  )
+}
+
 function HelpScreen({ staffMember }) {
   const [expanded,setExpanded]=useState(null)
   const [submitType,setSubmitType]=useState(null) // 'technical_issue' | 'complaint' | null
@@ -2095,6 +2396,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newSex,setNewSex]=useState('')
   const [newDob,setNewDob]=useState('')
   const [newEpcLink,setNewEpcLink]=useState('')
+  const [newHkid,setNewHkid]=useState('')
   const [newIsNurse,setNewIsNurse]=useState(false)
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
@@ -2153,16 +2455,28 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
       if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
       const rowIsNurse = row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase())
-      // e-PC required per row for doctors and nurse-flagged assistants -
-      // this is the real scan target itself (see epc_link below), not a
-      // separately Medsa-generated code, so it can't be skipped here.
-      if ((row.role==='doctor' || rowIsNurse) && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
+      // e-PC and HKID required per row for doctors and nurse-flagged
+      // assistants - e-PC is the real scan target itself (see epc_link
+      // below), HKID + e-PC together are the real identity match used
+      // to recognise the same person already onboarded at another
+      // clinic, rather than blocking on a repeat e-PC as a "duplicate."
+      const rowNeedsEpc = row.role==='doctor' || rowIsNurse
+      if (rowNeedsEpc && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
+      if (rowNeedsEpc && !row.hkid?.trim()) { skippedRows.push(`${row.full_name} - HKID required for doctors/nurses`); continue }
       const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
-      // Check for an existing person with this same e-PC before creating
-      // a duplicate - the e-PC is the real, durable identity here.
-      if (row.epc_link?.trim()) {
-        const { data: existing } = await supabase.from('staff_credentials').select('id').eq('epc_link', row.epc_link.trim()).maybeSingle()
-        if (existing) { skippedRows.push(`${row.full_name} - e-PC already on file for another staff record`); continue }
+      let practitionerIdentityId = null
+      if (rowNeedsEpc) {
+        const { data: existingIdentity } = await supabase.from('practitioner_identities')
+          .select('id').eq('hkid', row.hkid.trim()).eq('epc_link', row.epc_link.trim()).maybeSingle()
+        if (existingIdentity) {
+          practitionerIdentityId = existingIdentity.id
+        } else {
+          const { data: newIdentity, error: identityErr } = await supabase.from('practitioner_identities').insert({
+            hkid: row.hkid.trim(), epc_link: row.epc_link.trim(), full_name: row.full_name, registration_number: row.registration_number||null,
+          }).select().maybeSingle()
+          if (identityErr) { skippedRows.push(`${row.full_name} - ${identityErr.message}`); continue }
+          practitionerIdentityId = newIdentity?.id || null
+        }
       }
       const { error: insErr } = await supabase.from('staff_credentials').insert({
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
@@ -2172,6 +2486,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         has_epc: !!row.epc_link?.trim(),
         is_nurse: rowIsNurse,
         epc_link: row.epc_link?.trim() || null,
+        hkid: rowNeedsEpc ? row.hkid.trim() : null, practitioner_identity_id: practitionerIdentityId,
         // Deliberately never true via bulk import, regardless of CSV
         // content - this is a personal legal declaration a doctor makes
         // about themselves, not something an admin import can set on
@@ -2204,9 +2519,31 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
-    if ((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)) && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    const needsEpc = newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)
+    if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
     setSaving(true)
     setOnboardError(null)
+
+    // HKID + e-PC together are the real identity match - if this exact
+    // pair already exists (same person onboarded at another clinic),
+    // reuse that identity instead of creating a disconnected new one.
+    let practitionerIdentityId = null
+    if (needsEpc) {
+      const { data: existingIdentity } = await supabase.from('practitioner_identities')
+        .select('id').eq('hkid', newHkid.trim()).eq('epc_link', newEpcLink.trim()).maybeSingle()
+      if (existingIdentity) {
+        practitionerIdentityId = existingIdentity.id
+      } else {
+        const { data: newIdentity, error: identityErr } = await supabase.from('practitioner_identities').insert({
+          hkid: newHkid.trim(), epc_link: newEpcLink.trim(),
+          full_name: `${newFirstName}${newLastName?' '+newLastName:''}`, registration_number: newReg||null,
+        }).select().maybeSingle()
+        if (identityErr) { setSaving(false); setOnboardError(identityErr.message); return }
+        practitionerIdentityId = newIdentity?.id || null
+      }
+    }
+
     const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
     const { error: onboardErr } = await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', institution_id:institutionId, medsa_id:newMedsaId,
@@ -2215,6 +2552,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
       has_epc: !!newEpcLink?.trim(), epc_link: newEpcLink?.trim() || null,
+      hkid: needsEpc ? newHkid.trim() : null, practitioner_identity_id: practitionerIdentityId,
       is_nurse: newRole==='clinic_assistant' ? newIsNurse : false,
       mchk_declaration_agreed: newRole==='doctor' ? newMchkDeclared : false,
       mchk_declaration_timestamp: (newRole==='doctor' && newMchkDeclared) ? new Date().toISOString() : null,
@@ -2232,7 +2570,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
-    setNewSex('');setNewDob('');setNewEpcLink('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
+    setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
     load()
   }
 
@@ -2268,7 +2606,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link - this is the real, scannable e-PC identifier itself, checked against existing records to avoid duplicates. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
@@ -2307,6 +2645,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {(newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real MCHK-issued identifier and the actual scan target itself, not a separate Medsa-generated code.</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>HKID - required. Together with e-PC, this is how Medsa recognises the same real person if they also work at another clinic, so they log in once and switch clinics instead of getting a second, disconnected account.</div>
+            <input value={newHkid} onChange={e=>setNewHkid(e.target.value)} placeholder="HKID" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           {newRole==='clinic_assistant'&&!newIsNurse&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{'\u25c7'} No e-PC required - Medsa will onboard this person separately with their own generated QR code (a paid, Medsa-run process, not urgent).</div>}
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
@@ -2339,7 +2679,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&!newEpcLink?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
@@ -2347,10 +2687,10 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <div>
               <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
               <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
-              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} Practitioner Portal - granted by {s.practitioner_portal_granted_by}</div>}
+              {s.practitioner_portal_enabled&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{'\u2713'} My Credentials access - granted by {s.practitioner_portal_granted_by}</div>}
             </div>
             <div style={{display:'flex',gap:'6px',flexShrink:0}}>
-              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke portal':'Grant portal'}</button>}
+              {(s.role==='doctor'||(s.role==='clinic_assistant'&&s.is_nurse))&&<button onClick={()=>handleTogglePortalAccess(s)} style={{padding:'6px 12px',background:s.practitioner_portal_enabled?C.card:C.greenLight,color:s.practitioner_portal_enabled?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{s.practitioner_portal_enabled?'Revoke My Credentials':'Grant My Credentials'}</button>}
               <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
             </div>
           </div>
@@ -2734,6 +3074,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         onConfirmConsent={handleConfirmConsent}
         onGoToConsultation={onGoToConsultation}
         role={staffMember?.role}
+        staffMember={staffMember}
         onCheckedIn={onCheckedIn}
         onScheduleFollowup={onPreselectPatientForFollowup}
         onCancelCheckIn={async(appt)=>{
@@ -3996,10 +4337,51 @@ export default function ClinicOpsApp() {
     return () => clearInterval(interval)
   }, [])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
-  const [nextTicket,setNextTicket]=useState(1)
   const [institutionId,setInstitutionId]=useState(null)
   const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
+  const [clinicQueues,setClinicQueues]=useState([])
+  const [affiliatedClinics,setAffiliatedClinics]=useState([]) // other institutions this same real practitioner is also onboarded at
+
+  // A doctor/nurse who's the same real person (matched by HKID + e-PC at
+  // onboarding) at more than one clinic shares one practitioner_identity_id
+  // across their separate staff_credentials rows. This looks up their
+  // other clinics so "My Credentials" can offer switching without a
+  // second password - they already proved who they are once this session.
+  useEffect(() => {
+    async function loadAffiliated() {
+      if (!staffMember?.practitionerIdentityId) { setAffiliatedClinics([]); return }
+      const { data } = await supabase.from('staff_credentials')
+        .select('medsa_id, full_name, role, department, institution_id, practitioner_portal_enabled, practitioner_identity_id, registration_number, registration_expiry, epc_link, institutions(name)')
+        .eq('practitioner_identity_id', staffMember.practitionerIdentityId)
+        .eq('status', 'active')
+        .neq('institution_id', staffMember.institutionId)
+      const roleLabels = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+      setAffiliatedClinics((data||[]).map(r => ({
+        id: r.medsa_id, name: r.full_name, role: r.role, roleLabel: roleLabels[r.role]||r.role, department: r.department,
+        institutionId: r.institution_id, institutionName: r.institutions?.name || 'Unknown clinic',
+        practitionerPortalEnabled: r.practitioner_portal_enabled, practitionerIdentityId: r.practitioner_identity_id,
+        registrationNumber: r.registration_number, registrationExpiry: r.registration_expiry, hasEpc: !!r.epc_link,
+      })))
+    }
+    loadAffiliated()
+  }, [staffMember?.practitionerIdentityId, staffMember?.institutionId])
+
+  function switchClinic(clinic) {
+    // clinic already carries this row's own real fields (fetched fresh
+    // above) - portal access, registration details etc. can legitimately
+    // differ per clinic even for the same real person, so this isn't
+    // just merging over the old institution's values.
+    setStaffMember(clinic)
+    setScreen(clinic.role==='doctor' ? 'mypatients' : 'overview')
+  }
+
+  async function loadClinicQueues() {
+    if (!institutionId) { setClinicQueues([]); return }
+    const { data } = await supabase.from('clinic_queues').select('*').eq('institution_id', institutionId).eq('active', true).order('created_at')
+    setClinicQueues(data||[])
+  }
+  useEffect(() => { loadClinicQueues() }, [institutionId])
 
   // Resolve which institution this Medsa Clinic deployment belongs to, and
   // which medicine system it operates under (Western - Pharmacy and
@@ -4025,14 +4407,20 @@ export default function ClinicOpsApp() {
   // meant a doctor already signed in before a check-in happened would
   // never see it without manually logging out and back in.
   async function loadQueueAndPrescriptions() {
+      if (!institutionId) return
       setQueueLoading(true)
+      // Scoped to this clinic - this had no institution filter at all
+      // before, so every clinic on the platform was seeing every other
+      // clinic's checked-in patients mixed into one shared queue.
       const { data: queueRows } = await supabase
         .from('clinic_queue')
         .select('*, patients(medsa_id)')
+        .eq('institution_id', institutionId)
         .order('checked_in_at', { ascending: true })
       setCheckedInQueue((queueRows||[]).map(r => ({
         id: r.id,
         ticket: r.ticket,
+        queueId: r.queue_id,
         patientName: r.patient_name,
         patientMedsaId: r.patients?.medsa_id || null,
         doctor: r.doctor_name || 'Unassigned',
@@ -4041,22 +4429,6 @@ export default function ClinicOpsApp() {
         department: r.department || 'All departments',
         status: r.status,
       })))
-
-      // Real, per-day ticket sequencing - was previously starting from 1
-      // every time this app reloaded, meaning a second reload (or a
-      // second staff member's own session) could easily hand out a ticket
-      // number that already existed earlier the same day. Reads today's
-      // actual highest ticket number from the checked-in queue and
-      // continues from there, so tickets stay unique and roughly ordered
-      // for the whole day regardless of how many times anyone reloads.
-      const dayStart = new Date(); dayStart.setHours(0,0,0,0)
-      const { data: todaysTickets } = await supabase.from('clinic_queue').select('ticket')
-        .gte('checked_in_at', dayStart.toISOString())
-      const highestToday = (todaysTickets||[]).reduce((max, r) => {
-        const n = parseInt((r.ticket||'').replace(/[^0-9]/g,''), 10)
-        return isNaN(n) ? max : Math.max(max, n)
-      }, 0)
-      setNextTicket(highestToday + 1)
 
       const { data: rxRows } = await supabase
         .from('medications')
@@ -4078,7 +4450,7 @@ export default function ClinicOpsApp() {
   useEffect(() => {
     if (!staffMember) return
     loadQueueAndPrescriptions()
-  }, [staffMember])
+  }, [staffMember, institutionId])
 
   // Refresh every time the doctor actually navigates to see their
   // patients - the real, direct fix for check-ins that happened while
@@ -4088,7 +4460,7 @@ export default function ClinicOpsApp() {
     if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
   }, [screen])
 
-  async function handleCheckedIn(patient, force=false) {
+  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined) {
     const alreadyActive = checkedInQueue.some(q =>
       q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
     )
@@ -4109,9 +4481,37 @@ export default function ClinicOpsApp() {
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .maybeSingle()
 
-    const ticket = 'A'+nextTicket
+    // Resolve which queue this ticket belongs to - an explicit choice
+    // from the check-in screen's picker when the clinic runs more than
+    // one queue, otherwise the clinic's one active queue, otherwise
+    // legacy no-queue behaviour (a single shared line, ticket prefix A).
+    let queueId = explicitQueueId
+    if (queueId === undefined) {
+      if (clinicQueues.length === 1) queueId = clinicQueues[0].id
+      else if (clinicQueues.length > 1) {
+        const deptMatch = clinicQueues.find(q=>q.name===(matchingAppt?.department||staffMember?.department))
+        queueId = deptMatch ? deptMatch.id : clinicQueues[0].id
+      } else queueId = null
+    }
+    const prefix = clinicQueues.find(q=>q.id===queueId)?.ticket_prefix || 'A'
+
+    // Fresh per-queue, per-day ticket sequencing computed right before
+    // insert (rather than cached client state) - avoids two staff
+    // members' sessions handing out the same ticket number, and keeps
+    // each queue's numbering independent of every other queue's.
+    let ticketQuery = supabase.from('clinic_queue').select('ticket').gte('checked_in_at', dayStart.toISOString())
+    ticketQuery = queueId ? ticketQuery.eq('queue_id', queueId) : ticketQuery.is('queue_id', null)
+    const { data: todaysTickets } = await ticketQuery
+    const highestToday = (todaysTickets||[]).reduce((max, r) => {
+      const n = parseInt((r.ticket||'').replace(/[^0-9]/g,''), 10)
+      return isNaN(n) ? max : Math.max(max, n)
+    }, 0)
+    const ticket = prefix + (highestToday + 1)
+
     const { data, error } = await supabase.from('clinic_queue').insert({
       ticket,
+      queue_id: queueId,
+      institution_id: staffMember?.institutionId || null,
       patient_id: patient.id,
       patient_name: patient.full_name,
       doctor_name: matchingAppt?.doctor_name || (staffMember?.role==='doctor' ? staffMember.name : 'Unassigned'),
@@ -4143,11 +4543,10 @@ export default function ClinicOpsApp() {
     })
 
     setCheckedInQueue([...checkedInQueue, {
-      id: data.id, ticket: data.ticket, patientName: data.patient_name,
+      id: data.id, ticket: data.ticket, queueId: data.queue_id, patientName: data.patient_name,
       doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
       department: data.department, status: data.status,
     }])
-    setNextTicket(nextTicket+1)
     setCheckInError(null)
 
     if (matchingAppt) {
@@ -4239,6 +4638,16 @@ export default function ClinicOpsApp() {
     return inventoryWarnings
   }
 
+  // Real ticket lifecycle - the queue previously had a `status` column
+  // that was set to 'waiting' at check-in and then never touched again,
+  // so there was no way to actually run a walk-in queue: no "who's being
+  // seen right now," no skip/no-show, nothing. This is the one place
+  // that moves a ticket between waiting/serving/done/no_show.
+  async function updateQueueStatus(entry, newStatus) {
+    setCheckedInQueue(prev => prev.map(q => q.id===entry.id ? {...q, status:newStatus} : q))
+    await supabase.from('clinic_queue').update({ status: newStatus }).eq('id', entry.id)
+  }
+
   async function handleRemoveFromQueue(index) {
     const entry = scopedQueue[index]
     setCheckedInQueue(prev => prev.filter(q => q.id !== entry.id))
@@ -4267,7 +4676,7 @@ export default function ClinicOpsApp() {
   const allNavItems = [
     {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant']},
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
-    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant']},
+    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
     {key:'prescriptions', icon:'\u25c9', label:'Prescriptions', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},
@@ -4275,21 +4684,23 @@ export default function ClinicOpsApp() {
     {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','clinic_assistant']},
     {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','clinic_assistant']},
     {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
+    {key:'queues', icon:'\u25a4', label:'Queues', roles:['admin']},
     {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
     {key:'anomalyflags', icon:'\u2691', label:'Anomaly Review', roles:['admin']},
+    {key:'mycredentials', icon:'\u25c8', label:'My Credentials', roles:['doctor','clinic_assistant'], portalOnly:true},
     {key:'help', icon:'\u25cc', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
 
-  const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role))
+  const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role) && (!item.portalOnly || staffMember.practitionerPortalEnabled))
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
@@ -4328,8 +4739,10 @@ export default function ClinicOpsApp() {
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
+        {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
+        {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
     </div>

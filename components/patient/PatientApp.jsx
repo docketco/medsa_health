@@ -295,6 +295,13 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   const [replyError,setReplyError]=useState(null)
   const [carouselItems,setCarouselItems]=useState([])
   const [openCarouselItem,setOpenCarouselItem]=useState(null)
+  const [carouselIndex,setCarouselIndex]=useState(0)
+  const carouselScrollRef=useRef(null)
+  function handleCarouselScroll(e) {
+    const el = e.target
+    const cardWidth = el.firstChild ? el.firstChild.offsetWidth + 10 : 1
+    setCarouselIndex(Math.round(el.scrollLeft / cardWidth))
+  }
 
   useEffect(() => {
     async function loadCarousel() {
@@ -524,20 +531,33 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
 
-{carouselItems.length>0&&<div style={{margin:'14px 0 0',overflowX:'auto',display:'flex',gap:'10px',padding:'0 16px',scrollSnapType:'x mandatory'}}>
-  {carouselItems.map(item=>(
-    <div key={item.id} onClick={()=>item.link_url?window.open(item.link_url,'_blank'):setOpenCarouselItem(item)}
-      style={{flex:'0 0 auto',width:260,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'14px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
-      {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
-      <div style={{padding:'12px 14px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
-          <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+{carouselItems.length>0&&<div style={{margin:'14px 0 0'}}>
+  <div ref={carouselScrollRef} onScroll={handleCarouselScroll} style={{overflowX:'auto',display:'flex',gap:'10px',padding:'0 16px',scrollSnapType:'x mandatory'}}>
+    {carouselItems.map(item=>(
+      // Tapping always opens the in-app article now - an outbound link
+      // is a call-to-action button inside that article, not something
+      // that yanks you out of the app the instant you tap the card.
+      <div key={item.id} onClick={()=>setOpenCarouselItem(item)}
+        style={{flex:'0 0 82%',maxWidth:280,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'14px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
+        {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+        <div style={{padding:'12px 14px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+          </div>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
+          {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
         </div>
-        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
-        {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
       </div>
-    </div>
-  ))}
+    ))}
+  </div>
+  {/* Scroll-position dots - the card width leaves a deliberate peek of
+      the next card, but a swipeable row with no indicator at all still
+      reads as "only however many fit on screen," not "swipe for more." */}
+  {carouselItems.length>1&&<div style={{display:'flex',justifyContent:'center',gap:'5px',marginTop:'8px'}}>
+    {carouselItems.map((item,i)=>(
+      <div key={item.id} style={{width:6,height:6,borderRadius:'50%',background:i===carouselIndex?C.green:C.border}}/>
+    ))}
+  </div>}
 </div>}
 
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
@@ -556,6 +576,19 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           </div>
         ))}
       </div>
+      {/* Community bubble - pulled out of the list below into its own
+          floating pill so it's not missed the way it was buried as just
+          another row. */}
+      <div style={{padding:'4px 16px 4px'}}>
+        <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${C.green} 0%, #3f6b4f 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(74,124,89,0.28)'}}>
+          <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'19px',color:'#fff',flexShrink:0}}>◈</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'14px',fontWeight:700,color:'#fff'}}>{isEn?'Community':'社群'}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'18px'}}>›</span>
+        </div>
+      </div>
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
@@ -563,7 +596,6 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'◐',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
           {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
-          {key:'forum',icon:'◈',bg:C.greenLight,label:isEn?'Community':'社群',sub:isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
@@ -664,18 +696,93 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       )}
 
       {openCarouselItem&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenCarouselItem(null)}>
-          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-            <div onClick={()=>setOpenCarouselItem(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
-            {openCarouselItem.image_url&&<img src={openCarouselItem.image_url} alt="" style={{width:'100%',borderRadius:'12px',marginBottom:'14px',display:'block'}}/>}
-            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:openCarouselItem.item_type==='ad'?C.amber:C.green}}>{openCarouselItem.item_type==='ad'?(openCarouselItem.sponsor_name?`Sponsored · ${openCarouselItem.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
-            <div style={{fontSize:'17px',fontWeight:700,margin:'6px 0 12px'}}>{openCarouselItem.title}</div>
-            <div style={{fontSize:'14px',color:C.text,lineHeight:1.7,whiteSpace:'pre-wrap'}}>{openCarouselItem.content}</div>
-          </div>
-        </div>
+        <CarouselArticleView item={openCarouselItem} allItems={carouselItems} isEn={isEn}
+          onClose={()=>setOpenCarouselItem(null)} onOpenItem={setOpenCarouselItem}/>
       )}
     </div>
     </PullToRefresh>
+  )
+}
+
+// Real article-style detail page for a carousel card - hero image, body
+// text with images interspersed (content_blocks, one entry per paragraph
+// or image, in the order the sponsor/admin arranged them), other cards
+// woven in as small sponsored slots every couple of paragraphs, a CTA
+// button for the outbound link (never an instant redirect on tap), and
+// related cards by subtitle at the bottom. Falls back to the old flat
+// `content` text field (split on blank lines into paragraphs) for any
+// card created before content_blocks existed.
+function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
+  const blocks = item.content_blocks?.length > 0
+    ? item.content_blocks
+    : (item.content ? item.content.split(/\n\s*\n/).filter(Boolean).map(text=>({type:'paragraph',text})) : [])
+
+  const others = allItems.filter(o=>o.id!==item.id)
+  let paragraphCount = 0
+
+  return (
+    <div style={{position:'fixed',inset:0,background:C.beige,zIndex:300,overflowY:'auto'}}>
+      <div style={{position:'sticky',top:0,background:C.beige,padding:'14px 16px',zIndex:1}}>
+        <div onClick={onClose} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>{isEn?'← Back':'← 返回'}</div>
+      </div>
+      <div style={{maxWidth:520,margin:'0 auto',paddingBottom:'32px'}}>
+        {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:220,objectFit:'cover',display:'block'}}/>}
+        <div style={{padding:'0 16px'}}>
+          <div style={{marginTop:'16px'}}>
+            <span style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+          </div>
+          <div style={{fontSize:'22px',fontWeight:700,margin:'8px 0 4px',lineHeight:1.3}}>{item.title}</div>
+          {item.subtitle&&<div style={{fontSize:'14px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{item.subtitle}</div>}
+
+          {blocks.length===0&&<div style={{fontSize:'13px',color:C.textMuted,marginBottom:'20px'}}>{isEn?'No further content on this one yet.':'暫無更多內容。'}</div>}
+
+          {blocks.map((blk,i)=>{
+            const rendered = blk.type==='image'
+              ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'12px',margin:'16px 0',display:'block'}}/>
+              : <p key={i} style={{fontSize:'15px',color:C.text,lineHeight:1.8,margin:'0 0 16px'}}>{blk.text}</p>
+
+            if (blk.type==='paragraph') paragraphCount++
+            // A small sponsored slot every 2 paragraphs, pulled from
+            // other live cards - swipeable if there's more than one to
+            // show, same "slide to the next one" idea as the home feed.
+            const showAdSlot = blk.type==='paragraph' && paragraphCount>0 && paragraphCount%2===0 && others.length>0
+            const adSlotItems = showAdSlot ? others.slice(0, 3) : []
+
+            return (
+              <div key={i}>
+                {rendered}
+                {showAdSlot&&<div style={{margin:'4px 0 16px',overflowX:'auto',display:'flex',gap:'8px',scrollSnapType:'x mandatory'}}>
+                  {adSlotItems.map(ad=>(
+                    <div key={ad.id} onClick={()=>onOpenItem(ad)} style={{flex:'0 0 auto',width:180,scrollSnapAlign:'start',cursor:'pointer',borderRadius:'10px',overflow:'hidden',background:C.cream,border:`0.5px solid ${C.border}`}}>
+                      {ad.image_url&&<img src={ad.image_url} alt="" style={{width:'100%',height:80,objectFit:'cover',display:'block'}}/>}
+                      <div style={{padding:'8px 10px'}}>
+                        <div style={{fontSize:'9px',fontWeight:700,color:C.amber,textTransform:'uppercase'}}>{ad.item_type==='ad'?'Sponsored':'Newsletter'}</div>
+                        <div style={{fontSize:'12px',fontWeight:600,marginTop:'2px'}}>{ad.title}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            )
+          })}
+
+          {item.link_url&&<a href={item.link_url} target="_blank" rel="noopener noreferrer" style={{display:'block',textAlign:'center',padding:'13px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'14px',fontWeight:600,textDecoration:'none',margin:'8px 0 28px'}}>{item.cta_label || (isEn?'Learn more':'了解更多')} ↗</a>}
+
+          {others.length>0&&<>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'10px'}}>{isEn?'More from Medsa':'更多內容'}</div>
+            {others.map(o=>(
+              <div key={o.id} onClick={()=>onOpenItem(o)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'8px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{o.title}</div>
+                  {o.subtitle&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{o.subtitle}</div>}
+                </div>
+                <span style={{color:C.textMuted,fontSize:'16px',flexShrink:0}}>›</span>
+              </div>
+            ))}
+          </>}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -2014,19 +2121,87 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   const [pickerFilter,setPickerFilter]=useState('')
   const [referrals,setReferrals]=useState([])
   const [attachments,setAttachments]=useState([])
+  const [uploadingKey,setUploadingKey]=useState(null)
+  const [uploadErrorByKey,setUploadErrorByKey]=useState({})
+  const [bundlingPdf,setBundlingPdf]=useState(false)
 
-  useEffect(() => {
+  async function loadClaimDocs() {
     if (!patient?.id) return
-    async function load() {
-      const [{ data: refs }, { data: atts }] = await Promise.all([
-        supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
-        supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
-      ])
-      setReferrals(refs || [])
-      setAttachments(atts || [])
+    const [{ data: refs }, { data: atts }] = await Promise.all([
+      supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
+      supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
+    ])
+    setReferrals(refs || [])
+    setAttachments(atts || [])
+    return atts || []
+  }
+
+  useEffect(() => { loadClaimDocs() }, [patient?.id])
+
+  // Real upload for a manual checklist item (e.g. "Consultation receipt")
+  // - stores it as a real attachment the same way the Records tab does,
+  // then attaches it to this checklist line. Nothing here is a fake
+  // "Upload" pill anymore.
+  async function handleChecklistUpload(key, docName, file) {
+    if (!file || !patient?.id) return
+    setUploadingKey(key)
+    setUploadErrorByKey(prev => ({ ...prev, [key]: null }))
+    const path = `${patient.medsa_id || patient.id}/claim-${Date.now()}-${file.name}`
+    const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (uploadErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: uploadErr.message })); setUploadingKey(null); return }
+    const { data: newAtt, error: insErr } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: `${docName}: ${file.name}`,
+      verification_status: 'unverified',
+    }).select().maybeSingle()
+    if (insErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: insErr.message })); setUploadingKey(null); return }
+    await loadClaimDocs()
+    if (newAtt) {
+      const item = { type:'attachment', id:newAtt.id, label:newAtt.file_name, sublabel:newAtt.category, claimedFor:null }
+      setSelections(prev => ({ ...prev, [key]: [...(prev[key]||[]), item] }))
     }
-    load()
-  }, [patient?.id])
+    setUploadingKey(null)
+  }
+
+  // Real PDF summary of the checklist - what's selected/confirmed for
+  // each item - same jsPDF approach already used for the Records tab's
+  // bundle export. This isn't the source documents themselves (those are
+  // files/attachments, not text), it's a cover sheet listing what's
+  // included, for the patient to submit alongside them.
+  async function downloadClaimBundle() {
+    if (!selectedType) return
+    setBundlingPdf(true)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    let y = 20
+    doc.setFontSize(16)
+    doc.text(`Medsa Claim Checklist — ${selectedType.label}`, 14, y)
+    y += 8
+    doc.setFontSize(10)
+    doc.text(`${patient.full_name || ''} - ${patient.medsa_id || ''} - Generated ${new Date().toLocaleDateString('en-HK')}`, 14, y)
+    y += 4
+    doc.line(14, y, pageWidth-14, y)
+    y += 10
+    selectedType.docs.forEach((d,i) => {
+      const key = getKey(claimType,i)
+      const picked = selections[key]||[]
+      if (y > 260) { doc.addPage(); y = 20 }
+      doc.setFontSize(11)
+      doc.setFont(undefined, 'bold')
+      doc.text(`${i+1}. ${d.name}`, 14, y)
+      y += 6
+      doc.setFont(undefined, 'normal')
+      doc.setFontSize(9)
+      if (picked.length > 0) {
+        picked.forEach(p => { doc.text(`- ${p.label}${p.sublabel?' ('+p.sublabel+')':''}`, 18, y); y += 5 })
+      } else {
+        doc.text('- Confirmed ready (not stored in Medsa)', 18, y); y += 5
+      }
+      y += 4
+    })
+    doc.save(`Medsa-Claim-Checklist-${selectedType.key}-${patient.medsa_id || 'export'}.pdf`)
+    setBundlingPdf(false)
+  }
 
   // One combined, real candidate pool - visits, referrals, and uploaded
   // documents - the patient picks from this for any checklist line
@@ -2087,7 +2262,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   // Medsa docs need at least one real record picked; manual docs need
   // patient confirmation - neither happens automatically.
   const getKey = (type,i) => `${type}_${i}`
-  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : checklist[key]
+  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : (checklist[key] || (selections[key]?.length > 0))
   const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
   const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
   const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
@@ -2181,19 +2356,25 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                    {!doc.medsa&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload or confirm you have this ready</div>}
+                    {!doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload it, select an existing record, or confirm you have this ready</div>}
                     {doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Not selected yet</div>}
-                    {doc.medsa&&picked.map(p=>(
+                    {picked.map(p=>(
                       <div key={`${p.type}_${p.id}`} style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
                         <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{p.label}</div>
                         <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{p.sublabel}{p.claimedFor?' · already used in a previous claim':''}</div>
                       </div>
                     ))}
+                    {uploadErrorByKey[key]&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{uploadErrorByKey[key]}</div>}
                   </div>
-                  {doc.medsa&&<div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>{picked.length>0?'Change':'Select'}</div>}
-                  {!doc.medsa&&<div style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,flexShrink:0,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px'}}>Upload</div>}
+                  <div style={{display:'flex',flexDirection:'column',gap:'6px',flexShrink:0}}>
+                    <div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px',textAlign:'center'}}>{picked.length>0?'Change':'Select'}</div>
+                    {!doc.medsa&&<label style={{fontSize:'12px',color:uploadingKey===key?C.textMuted:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${uploadingKey===key?C.border:C.green}`,borderRadius:'8px',textAlign:'center'}}>
+                      {uploadingKey===key?'Uploading…':'Upload'}
+                      <input type="file" style={{display:'none'}} disabled={uploadingKey===key} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleChecklistUpload(key, doc.name, f)}}/>
+                    </label>}
+                  </div>
                 </div>
-                {doc.medsa&&pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
+                {pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
                   <input value={pickerFilter} onChange={e=>setPickerFilter(e.target.value)} placeholder="Filter your records…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',marginBottom:'8px'}}/>
                   {candidatePool.length===0&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'10px'}}>No records on file yet.</div>}
                   {candidatePool.filter(c=>c.label.toLowerCase().includes(pickerFilter.toLowerCase())).map(c=>{
@@ -2236,7 +2417,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
           {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Your documents have been bundled. Download the package and submit it directly to your insurer, or hold it ready for when direct submission via Medsa is available.</div>
-            <Btn style={{width:'100%',marginBottom:'6px'}}>Download claim package (PDF)</Btn>
+            <Btn style={{width:'100%',marginBottom:'6px'}} disabled={bundlingPdf} onClick={downloadClaimBundle}>{bundlingPdf?'Preparing…':'Download claim checklist (PDF)'}</Btn>
             <div style={{textAlign:'center'}}>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>or</div>
               <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px',textAlign:'center',opacity:0.5}}>
@@ -2288,13 +2469,30 @@ function normalizeProductName(name) {
     .filter(w=>w && !FORUM_FILLER_WORDS.has(w) && !/^\d+$/.test(w)).sort().join(' ')
 }
 
+function levenshtein(a, b) {
+  const dp = Array.from({length:a.length+1},()=>new Array(b.length+1).fill(0))
+  for (let i=0;i<=a.length;i++) dp[i][0]=i
+  for (let j=0;j<=b.length;j++) dp[0][j]=j
+  for (let i=1;i<=a.length;i++) for (let j=1;j<=b.length;j++)
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1])
+  return dp[a.length][b.length]
+}
+
 function nameSimilarity(a, b) {
   const wordsA = new Set(a.split(' ').filter(Boolean))
   const wordsB = new Set(b.split(' ').filter(Boolean))
   if (wordsA.size===0 || wordsB.size===0) return 0
   const intersection = [...wordsA].filter(w=>wordsB.has(w)).length
   const union = new Set([...wordsA,...wordsB]).size
-  return intersection/union
+  const jaccard = intersection/union
+  // Word-overlap alone misses a typo-duplicate like "panadol" vs
+  // "panadoll" - zero shared whole words, but one extra letter. A
+  // character-level distance on the full normalized string catches
+  // this; taking the max with Jaccard means neither check has to carry
+  // cases the other handles better.
+  const dist = levenshtein(a, b)
+  const charSim = 1 - dist / Math.max(a.length, b.length, 1)
+  return Math.max(jaccard, charSim)
 }
 
 async function getOrCreateForumIdentity(patientId) {
@@ -2425,18 +2623,31 @@ function ForumScreen({ isEn, patient={} }) {
       </div>
       <div style={{padding:'0 16px'}}>
         {posts.length===0&&<div style={{textAlign:'center',padding:'30px 0',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first to share.':'尚無貼文 - 成為第一個分享的人。'}</div>}
-        {posts.map(p=>(
-          <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-              <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}</span>
-              <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            </div>
-            {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
-            <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
-            {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
-            {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
-          </Card>
-        ))}
+        {posts.map(p=>{
+          // Pseudonym is already stable per patient (getOrCreateForumIdentity),
+          // so the same person always shows the same name here - this adds
+          // a consistent colour tag so repeat commenters in one thread are
+          // visually obvious at a glance, not just readable if you compare
+          // names yourself. Posts stay in chronological order (already
+          // queried oldest-first) rather than being regrouped by author.
+          const sameAuthor = posts.filter(x=>x.pseudonym===p.pseudonym)
+          const authorIndex = sameAuthor.findIndex(x=>x.id===p.id) + 1
+          let hash = 0
+          for (let i=0;i<p.pseudonym.length;i++) hash = (hash*31 + p.pseudonym.charCodeAt(i)) % 360
+          const tagColor = `hsl(${hash}, 55%, 45%)`
+          return (
+            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px',borderLeft:`3px solid ${tagColor}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                <span style={{fontSize:'12px',fontWeight:700,color:tagColor}}>{p.pseudonym}{sameAuthor.length>1?` · ${authorIndex}/${sameAuthor.length} in this thread`:''}</span>
+                <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+              </div>
+              {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
+              <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
+              {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
+              {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
+            </Card>
+          )
+        })}
       </div>
       <div style={{padding:'12px 16px 24px'}}>
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Rate this product (optional):':'為此產品評分（可選）：'}</div>
@@ -2486,13 +2697,25 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
 
-  // Real save - the button previously only changed local UI state and
-  // claimed the enquiry was "forwarded to the insurer," but nothing was
-  // ever actually written anywhere.
+  // Real save - and a real snapshot, not just two foreign keys. This
+  // claimed "forwarded to the insurer" but plan_inquiries was never
+  // read anywhere else in the app - nobody, human or system, ever saw
+  // an inquiry after it was written. The engine was designed to prefill
+  // the applicant's real details for whoever picks this up (an agent,
+  // or Medsa relaying on the insurer's behalf until they have a live
+  // login) - this is that prefill actually happening, plus giving the
+  // row somewhere real to be seen (Medsa Admin's Insurers tab).
   async function handleInquire(i, plan) {
     if (!patient?.id || !plan.id) return
     setInquiring(i)
-    await supabase.from('plan_inquiries').insert({ patient_id: patient.id, plan_id: plan.id })
+    const { data: fullPatient } = await supabase.from('patients').select('full_name, hkid, date_of_birth, phone, email').eq('id', patient.id).maybeSingle()
+    await supabase.from('plan_inquiries').insert({
+      patient_id: patient.id, plan_id: plan.id,
+      applicant_full_name: fullPatient?.full_name || null, applicant_hkid: fullPatient?.hkid || null,
+      applicant_dob: fullPatient?.date_of_birth || null, applicant_phone: fullPatient?.phone || null,
+      applicant_email: fullPatient?.email || null, consent_given: true, consent_given_at: new Date().toISOString(),
+      status: 'new',
+    })
     setInquiring(null)
     setInquired(i)
   }
@@ -2743,6 +2966,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
+            {inquired!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
               {inquired===i

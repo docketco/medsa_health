@@ -32,12 +32,20 @@ export default function MedsaAdminPage() {
   )
 }
 
+const PLAN_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+
 function PartnersTab() {
   const [companies, setCompanies] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+  const [uploading, setUploading] = useState(false)
+  const [form, setForm] = useState({ name:'', contact_name:'', contact_email:'', contact_phone:'', contractExpiryDate:'' })
+  const [contractDocUrl, setContractDocUrl] = useState(null)
+  const [contractDocName, setContractDocName] = useState(null)
+  const [managingPlansFor, setManagingPlansFor] = useState(null)
+  const [renewingId, setRenewingId] = useState(null)
+  const [renewDate, setRenewDate] = useState('')
 
   async function load() {
     setLoading(true)
@@ -47,6 +55,18 @@ function PartnersTab() {
   }
   useEffect(() => { load() }, [])
 
+  async function handleContractUpload(file) {
+    setUploading(true)
+    setContractDocName(file.name)
+    // Same pattern as staff registration documents - storing the path,
+    // not a public URL, since a signed URL should be generated on
+    // demand when a real "view contract" feature is built.
+    const path = `insurance_companies/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('partner-contracts').upload(path, file)
+    if (!error) setContractDocUrl(path)
+    setUploading(false)
+  }
+
   async function handleSubmit() {
     if (!form.name.trim()) return
     setSaving(true)
@@ -54,10 +74,14 @@ function PartnersTab() {
       name: form.name.trim(), contact_name: form.contact_name.trim()||null,
       contact_email: form.contact_email.trim()||null, contact_phone: form.contact_phone.trim()||null,
       onboarded_by: 'Medsa admin',
+      contract_start_date: new Date().toISOString().slice(0,10),
+      contract_expiry_date: form.contractExpiryDate || null,
+      contract_doc_url: contractDocUrl || null,
     })
     setSaving(false)
     setCreating(false)
-    setForm({ name:'', contact_name:'', contact_email:'', contact_phone:'' })
+    setForm({ name:'', contact_name:'', contact_email:'', contact_phone:'', contractExpiryDate:'' })
+    setContractDocUrl(null); setContractDocName(null)
     load()
   }
 
@@ -66,9 +90,23 @@ function PartnersTab() {
     load()
   }
 
+  async function handleRenew(company) {
+    if (!renewDate) return
+    await supabase.from('insurance_companies').update({ contract_expiry_date: renewDate, contract_start_date: new Date().toISOString().slice(0,10) }).eq('id', company.id)
+    setRenewingId(null); setRenewDate('')
+    load()
+  }
+
+  function daysUntil(dateStr) {
+    if (!dateStr) return null
+    return Math.ceil((new Date(dateStr) - new Date()) / (1000*60*60*24))
+  }
+
+  if (managingPlansFor) return <CompanyPlansManager company={managingPlansFor} onBack={()=>setManagingPlansFor(null)}/>
+
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, use this exact company name in Insurer Plan Management to add their plans.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Onboard an insurance partner - same idea as clinic-signup.jsx, but admin-driven rather than self-serve, and no login yet (that's part of the bigger insurance build). Once onboarded, tap "Manage plans" on their card to add their plans - same place, no separate page. Onboarding here means a real contract - set an expiry date and upload the signed contract, and this flags it for renewal as it approaches, same as clinic onboarding.</div>
 
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Onboard a company</button>}
 
@@ -78,15 +116,27 @@ function PartnersTab() {
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Contract expiry date</div>
+        <input type="date" value={form.contractExpiryDate} onChange={e=>setForm(f=>({...f,contractExpiryDate:e.target.value}))}
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Signed contract (PDF or image)</div>
+        <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',marginBottom:'10px',boxSizing:'border-box'}}>
+          {contractDocName || 'Tap to upload'}
+          <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleContractUpload(e.target.files[0])}/>
+        </label>
+        {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
         <div style={{display:'flex',gap:'8px'}}>
-          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={()=>{setCreating(false);setContractDocUrl(null);setContractDocName(null)}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
         </div>
       </div>}
 
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&companies.map(c => (
-        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+      {!loading&&companies.map(c => {
+        const daysLeft = daysUntil(c.contract_expiry_date)
+        const expiringSoon = daysLeft!=null && daysLeft<=30
+        return (
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${expiringSoon?C.amber:C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
@@ -94,7 +144,215 @@ function PartnersTab() {
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
           </div>
-          <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+          {c.contract_expiry_date
+            ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
+            : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
+          {renewingId===c.id
+            ? <div style={{marginBottom:'8px',display:'flex',gap:'6px'}}>
+                <input type="date" value={renewDate} onChange={e=>setRenewDate(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+                <button onClick={()=>handleRenew(c)} disabled={!renewDate} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+              </div>
+            : <button onClick={()=>{setRenewingId(c.id);setRenewDate(c.contract_expiry_date||'')}} style={{width:'100%',marginBottom:'8px',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Set / renew contract date</button>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>setManagingPlansFor(c)} style={{flex:1,padding:'8px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Manage plans</button>
+          </div>
+        </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Same real plan-management flow that used to live on its own page
+// (/insurer-plans) - folded in here so onboarding a company and setting
+// up its plans is one place, one tool, not two.
+function CompanyPlansManager({ company, onBack }) {
+  const [plans, setPlans] = useState([])
+  const [inquiries, setInquiries] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+  const [tiers, setTiers] = useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name', company.name).order('created_at',{ascending:false})
+    setPlans(data||[])
+    const planIds = (data||[]).map(p=>p.id)
+    if (planIds.length>0) {
+      const { data: inq } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name)').in('plan_id', planIds).order('created_at',{ascending:false})
+      setInquiries(inq||[])
+    } else {
+      setInquiries([])
+    }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.name])
+
+  async function markContacted(inq) {
+    await supabase.from('plan_inquiries').update({ status:'contacted' }).eq('id', inq.id)
+    load()
+  }
+
+  function updateTier(i, field, value) {
+    setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
+  }
+  function addTier() {
+    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  }
+  function removeTier(i) {
+    setTiers(t => t.filter((_,idx)=>idx!==i))
+  }
+  function toggleCategory(cat) {
+    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+  }
+
+  async function handleSubmit() {
+    if (!form.plan_name) return
+    const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
+    if (validTiers.length===0) return
+    setSaving(true)
+    const { data: newPlan } = await supabase.from('insurance_plans').insert({
+      company_name: company.name,
+      plan_name: form.plan_name,
+      plan_type: form.plan_type || null,
+      covered_conditions: form.covered_conditions.split(',').map(s=>s.trim()).filter(Boolean),
+      covered_categories: form.covered_categories,
+      key_benefits: form.key_benefits || null,
+      sponsored: form.sponsored,
+      requires_doctor_referral_for_allied_health: form.requires_doctor_referral_for_allied_health,
+      status: 'active',
+    }).select().maybeSingle()
+
+    if (newPlan) {
+      await supabase.from('insurance_plan_pricing_tiers').insert(
+        validTiers.map(t => ({
+          plan_id: newPlan.id,
+          age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
+          monthly_premium: parseFloat(t.monthly_premium),
+          annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
+        }))
+      )
+    }
+    setSaving(false)
+    setCreating(false)
+    setForm({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    load()
+  }
+
+  async function toggleStatus(plan) {
+    await supabase.from('insurance_plans').update({ status: plan.status==='active'?'inactive':'active' }).eq('id', plan.id)
+    load()
+  }
+
+  async function toggleReferralRequirement(plan) {
+    await supabase.from('insurance_plans').update({ requires_doctor_referral_for_allied_health: !plan.requires_doctor_referral_for_allied_health }).eq('id', plan.id)
+    load()
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} style={{background:'none',border:'none',color:C.textSub,fontSize:'13px',cursor:'pointer',padding:0,marginBottom:'12px'}}>‹ Back to partners</button>
+      <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{company.name} — plans</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Plans added here appear in patient-facing plan matching immediately. Inactive plans stay on file but stop showing to patients.</div>
+
+      {/* Real patient inquiries - "Inquire about plan" on the patient
+          side used to write here and nothing ever read it back out.
+          Medsa relays these to the insurer manually until they have a
+          live login of their own. */}
+      {inquiries.filter(i=>i.status==='new').length>0&&<>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>New inquiries ({inquiries.filter(i=>i.status==='new').length})</div>
+        {inquiries.filter(i=>i.status==='new').map(inq=>(
+          <div key={inq.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{inq.applicant_full_name||'Unknown applicant'} · {inq.insurance_plans?.plan_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>HKID {inq.applicant_hkid||'—'} · DOB {inq.applicant_dob||'—'}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{inq.applicant_phone||'no phone on file'}{inq.applicant_email?` · ${inq.applicant_email}`:''}</div>
+            <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
+          </div>
+        ))}
+      </>}
+
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add new plan</button>}
+
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New plan for {company.name}</div>
+        {[['plan_name','Plan name'],['plan_type','Plan type (e.g. Comprehensive)']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real insurance pricing varies by age, so at least one age-banded tier is required</div>
+        {tiers.map((tier,i) => (
+          <div key={i} style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+            <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+              <input type="number" value={tier.age_min} onChange={e=>updateTier(i,'age_min',e.target.value)} placeholder="Age from"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.age_max} onChange={e=>updateTier(i,'age_max',e.target.value)} placeholder="Age to (use 120 for +)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            </div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="Monthly premium (HK$)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input type="number" value={tier.annual_limit} onChange={e=>updateTier(i,'annual_limit',e.target.value)} placeholder="Annual limit (HK$, optional)"
+                style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              {tiers.length>1&&<button onClick={()=>removeTier(i)} style={{padding:'0 10px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>×</button>}
+            </div>
+          </div>
+        ))}
+        <button onClick={addTier} style={{width:'100%',padding:'8px',background:C.card,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'10px'}}>+ Add another age tier</button>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered conditions (comma-separated) - this drives real patient matching</div>
+        <input value={form.covered_conditions} onChange={e=>setForm(f=>({...f,covered_conditions:e.target.value}))} placeholder="e.g. diabetes, hypertension, asthma"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Coverage categories</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+          {PLAN_CATEGORIES.map(cat => (
+            <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+          ))}
+        </div>
+        <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} rows={2} placeholder="Key benefits summary"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'8px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.sponsored} onChange={e=>setForm(f=>({...f,sponsored:e.target.checked}))}/>
+          Sponsored placement
+        </label>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'14px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.requires_doctor_referral_for_allied_health} onChange={e=>setForm(f=>({...f,requires_doctor_referral_for_allied_health:e.target.checked}))}/>
+          Requires a doctor referral for out-of-network allied health claims
+        </label>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Submit plan'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No plans listed yet for {company.name}.</div>}
+      {!loading&&plans.map(p => (
+        <div key={p.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:p.status==='active'?C.greenLight:C.card,color:p.status==='active'?C.green:C.textMuted,fontWeight:600}}>{p.status}</span>
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Covers: {(p.covered_conditions||[]).join(', ')||'none listed'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
+            {(p.insurance_plan_pricing_tiers||[]).length===0
+              ? <span style={{color:C.red}}>No pricing tiers entered</span>
+              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>
+                  `Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`
+                ).join(' · ')}
+          </div>
+          <div style={{fontSize:'11px',color:p.requires_doctor_referral_for_allied_health?C.amber:C.textMuted,marginBottom:'8px'}}>
+            {p.requires_doctor_referral_for_allied_health ? '⚠ Requires doctor referral for out-of-network allied health' : 'No referral requirement for out-of-network allied health'}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleStatus(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.status==='active'?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>toggleReferralRequirement(p)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{p.requires_doctor_referral_for_allied_health?'Remove referral requirement':'Require referral'}</button>
+          </div>
         </div>
       ))}
     </div>
@@ -232,17 +490,58 @@ function ClinicsTab() {
   )
 }
 
+// Same upload-or-URL choice used on the public sponsor-submit.jsx form -
+// duplicated here rather than shared since one's a page and one's a tab.
+function AdminImagePicker({ label, value, onChange }) {
+  const [mode, setMode] = useState('url')
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFile(file) {
+    setUploading(true)
+    const path = `admin/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('carousel-images').upload(path, file)
+    if (!error) {
+      const { data } = supabase.storage.from('carousel-images').getPublicUrl(path)
+      onChange(data.publicUrl)
+    }
+    setUploading(false)
+  }
+
+  return (
+    <div style={{marginBottom:'10px'}}>
+      {label&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>{label}</div>}
+      <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+        {[['url','Paste a URL'],['upload','Upload a file']].map(([k,l])=>(
+          <div key={k} onClick={()=>setMode(k)} style={{flex:1,padding:'6px',borderRadius:'6px',textAlign:'center',fontSize:'11px',cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub}}>{l}</div>
+        ))}
+      </div>
+      {mode==='url'&&<input value={value||''} onChange={e=>onChange(e.target.value)} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+      {mode==='upload'&&<label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
+        {uploading?'Uploading…':(value?'Uploaded ✓ - tap to replace':'Tap to upload (JPG/PNG)')}
+        <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+      </label>}
+      {value&&<img src={value} alt="" style={{width:'100%',maxHeight:100,objectFit:'cover',borderRadius:'8px',marginTop:'6px'}}/>}
+    </div>
+  )
+}
+
 function CarouselTab() {
   const [items, setItems] = useState([])
+  const [submissions, setSubmissions] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0 })
+  const [approving, setApproving] = useState(null)
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('home_carousel_items').select('*').order('display_order')
-    setItems(data||[])
+    const [{data:i},{data:s}] = await Promise.all([
+      supabase.from('home_carousel_items').select('*').order('display_order'),
+      supabase.from('home_carousel_submissions').select('*').eq('status','pending').order('submitted_at',{ascending:false}),
+    ])
+    setItems(i||[])
+    setSubmissions(s||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -273,11 +572,48 @@ function CarouselTab() {
     load()
   }
 
+  async function handleApprove(sub) {
+    setApproving(sub.id)
+    const maxOrder = items.reduce((m,i)=>Math.max(m,i.display_order||0), 0)
+    await supabase.from('home_carousel_items').insert({
+      item_type: sub.item_type, title: sub.title, subtitle: sub.subtitle,
+      image_url: sub.image_url, sponsor_name: sub.sponsor_name,
+      link_url: sub.link_url, cta_label: sub.cta_label, content_blocks: sub.content_blocks,
+      display_order: maxOrder+1, active: true,
+    })
+    await supabase.from('home_carousel_submissions').update({ status:'approved', reviewed_at:new Date().toISOString() }).eq('id', sub.id)
+    setApproving(null)
+    load()
+  }
+
+  async function handleReject(sub) {
+    await supabase.from('home_carousel_submissions').update({ status:'rejected', reviewed_at:new Date().toISOString() }).eq('id', sub.id)
+    load()
+  }
+
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen. A card with a link opens it externally; a card with content opens it inside the app.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you approve it below.</div>
 
-      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add card</button>}
+      {submissions.length>0&&<>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Pending submissions ({submissions.length})</div>
+        {submissions.map(sub=>(
+          <div key={sub.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+            {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:'8px',marginBottom:'8px'}}/>}
+            <div style={{fontSize:'14px',fontWeight:600}}>{sub.title}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.item_type} · from {sub.sponsor_name} ({sub.sponsor_contact_email})</div>
+            {sub.subtitle&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.subtitle}</div>}
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{(sub.content_blocks||[]).length} content block{(sub.content_blocks||[]).length===1?'':'s'}{sub.link_url?' · has a CTA link':''}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>handleReject(sub)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
+              <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post'}</button>
+            </div>
+          </div>
+        ))}
+      </>}
+
+      <div style={{fontSize:'15px',fontWeight:600,margin:'20px 0 10px'}}>Live cards</div>
+      {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add card yourself</button>}
 
       {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New card</div>
@@ -286,7 +622,12 @@ function CarouselTab() {
             <div key={t} onClick={()=>setForm(f=>({...f,item_type:t}))} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:form.item_type===t?C.green:C.card,color:form.item_type===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
-        {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)'],['image_url','Image URL (optional)'],['link_url','External link (opens outside the app)'],['display_order','Display order (lower shows first)']].map(([field,ph]) => (
+        {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <AdminImagePicker label="Image" value={form.image_url} onChange={v=>setForm(f=>({...f,image_url:v}))}/>
+        {[['link_url','External link (opens outside the app)'],['display_order','Display order (lower shows first)']].map(([field,ph]) => (
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
@@ -318,6 +659,28 @@ function CarouselTab() {
   )
 }
 
+// Same scoring PatientApp.jsx's forum uses for new products - kept in
+// sync manually since these are two separate files. Word-overlap alone
+// misses a typo-duplicate like "panadol" vs "panadoll" (zero shared
+// whole words); character-level distance on the full normalized string
+// catches that case.
+function levenshtein(a, b) {
+  const dp = Array.from({length:a.length+1},()=>new Array(b.length+1).fill(0))
+  for (let i=0;i<=a.length;i++) dp[i][0]=i
+  for (let j=0;j<=b.length;j++) dp[0][j]=j
+  for (let i=1;i<=a.length;i++) for (let j=1;j<=b.length;j++)
+    dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1])
+  return dp[a.length][b.length]
+}
+function nameSimilarity(a, b) {
+  const wordsA = new Set(a.split(' ').filter(Boolean))
+  const wordsB = new Set(b.split(' ').filter(Boolean))
+  const jaccard = wordsA.size && wordsB.size ? [...wordsA].filter(w=>wordsB.has(w)).length / new Set([...wordsA,...wordsB]).size : 0
+  const dist = levenshtein(a, b)
+  const charSim = 1 - dist / Math.max(a.length, b.length, 1)
+  return Math.max(jaccard, charSim)
+}
+
 function ForumModerationTab() {
   const [flags, setFlags] = useState([])
   const [reportedPosts, setReportedPosts] = useState([])
@@ -325,6 +688,43 @@ function ForumModerationTab() {
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [sponsorResults, setSponsorResults] = useState([])
   const [sponsorName, setSponsorName] = useState('')
+  const [rescanning, setRescanning] = useState(false)
+  const [rescanResult, setRescanResult] = useState(null)
+
+  // One-off (and repeatable) catch-up scan across every existing
+  // product pair - needed because the duplicate check only ever ran
+  // once, at the moment the second of a pair was created, using
+  // whatever scoring existed then. A product created before a scoring
+  // improvement (like the typo fix above) never got re-checked against
+  // its actual duplicate.
+  async function handleRescan() {
+    setRescanning(true)
+    setRescanResult(null)
+    const { data: allProducts } = await supabase.from('forum_products').select('id, canonical_name, normalized_name')
+    const { data: existingFlags } = await supabase.from('forum_duplicate_flags').select('product_id_a, product_id_b')
+    const alreadyFlagged = new Set((existingFlags||[]).map(f => [f.product_id_a, f.product_id_b].sort().join('|')))
+    let found = 0
+    const products = allProducts||[]
+    for (let i=0;i<products.length;i++) {
+      for (let j=i+1;j<products.length;j++) {
+        const a = products[i], b = products[j]
+        const pairKey = [a.id, b.id].sort().join('|')
+        if (alreadyFlagged.has(pairKey)) continue
+        const score = nameSimilarity(a.normalized_name||'', b.normalized_name||'')
+        if (score >= 0.5) {
+          await supabase.from('forum_duplicate_flags').insert({
+            product_id_a: a.id, product_id_b: b.id,
+            similarity_reason: `${Math.round(score*100)}% match (re-scan): "${a.canonical_name}" vs "${b.canonical_name}"`,
+          })
+          alreadyFlagged.add(pairKey)
+          found++
+        }
+      }
+    }
+    setRescanning(false)
+    setRescanResult(found)
+    load()
+  }
 
   async function load() {
     setLoading(true)
@@ -380,7 +780,10 @@ function ForumModerationTab() {
   return (
     <div>
       <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Likely-duplicate threads ({flags.length})</div>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>Flagged automatically by name similarity - nothing merges without your confirmation.</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Flagged automatically by name similarity - nothing merges without your confirmation. New products are checked as they're created; use this to catch up existing ones too (e.g. after a scoring improvement, or just to double-check).</div>
+      <button onClick={handleRescan} disabled={rescanning} style={{padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer',marginBottom:'6px'}}>{rescanning?'Scanning…':'Re-scan all products for duplicates'}</button>
+      {rescanResult!==null&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px'}}>Found {rescanResult} new likely-duplicate pair{rescanResult===1?'':'s'}.</div>}
+      {rescanResult===null&&<div style={{marginBottom:'14px'}}/>}
       {loading&&<div style={{textAlign:'center',padding:'16px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&flags.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>Nothing pending.</div>}
       {flags.map(flag=>(
