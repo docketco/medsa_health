@@ -5263,6 +5263,13 @@ export default function ClinicOpsApp() {
     }, 0)
     const ticket = prefix + (highestToday + 1)
 
+    // checkin_note is a recently-added column - if that migration
+    // hasn't been run yet, including it in this insert would fail the
+    // WHOLE check-in with no fallback, breaking the single most
+    // critical action in this screen over a nice-to-have field. Insert
+    // without it first (works on any schema version), then try to
+    // attach the note as a separate, best-effort follow-up that can't
+    // block check-in if it fails.
     const { data, error } = await supabase.from('clinic_queue').insert({
       ticket,
       queue_id: queueId,
@@ -5273,12 +5280,15 @@ export default function ClinicOpsApp() {
       room: '-',
       department: matchingAppt?.department || staffMember?.department || 'All departments',
       status: 'waiting',
-      checkin_note: checkinNote || null,
     }).select().single()
 
     if (error || !data) {
       setCheckInError(`Could not check in ${patient.full_name}: ${error?.message || 'unknown error'}`)
       return false
+    }
+
+    if (checkinNote) {
+      supabase.from('clinic_queue').update({ checkin_note: checkinNote }).eq('id', data.id).then(()=>{})
     }
 
     // Real consent window, created the moment of physical check-in -

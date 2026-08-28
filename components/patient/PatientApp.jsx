@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, isValidElement, cloneElement, Children } from 'react'
+import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -282,7 +282,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[] }) {
+function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -449,7 +449,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   }, [patient?.medsa_id])
 
   return (
-    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus()]) }}>
+    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus(), onRefreshData?.()]) }}>
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
 
       {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
@@ -528,7 +528,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
         <span style={{fontSize:'16px',color:C.textSub}}>{'\u25c7'}</span>
         <div style={{flex:1}}>
           <div style={{fontSize:'12px',fontWeight:600}}>{isEn?'Share for this visit':'為此次診症分享'}</div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'For a clinic that doesn\\u2019t use Medsa - choose what to share':'為未使用Medsa的診所選擇分享內容'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?"For a clinic that doesn't use Medsa - choose what to share":'為未使用Medsa的診所選擇分享內容'}</div>
         </div>
         <span style={{color:C.textMuted,fontSize:'14px'}}>{'\u203a'}</span>
       </div>
@@ -3162,7 +3162,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
 
         <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn\\u2019t rank plans or tell you which is "best" — that\\u2019s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn’t rank plans or tell you which is "best" — that’s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
         </div>
 
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
@@ -4042,30 +4042,37 @@ export default function PatientApp({ liveData={} }) {
   // category too). Vaccinations was missing from this fetch entirely
   // until now, which is why RecordsScreen always fell back to a
   // hardcoded, identical vaccine list for every patient.
+  // Pulled out of the effect below (and wrapped in useCallback) so the
+  // home screen's pull-to-refresh can call the exact same fetch on
+  // demand, instead of only refreshing its own local queue/messages
+  // state and leaving records/appointments/claims/transactions stale -
+  // that mismatch is why pull-to-refresh looked "fake."
+  const loadRealData = useCallback(async () => {
+    if (!signedInPatient?.id) return
+    const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes] = await Promise.all([
+      supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
+      supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
+      supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
+      supabase.from('medical_records').select('*,institutions(name)').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
+      supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
+      supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
+      supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
+      supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
+    ])
+    setRealPatientData({
+      conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
+      // A record shouldn't appear to the patient until the visit is
+      // actually paid for/billed - 'draft' and 'submitted' are still
+      // in progress at the clinic. Anything else (including legacy
+      // rows with no record_status at all) stays visible as before.
+      records: (recRes.data||[]).filter(r => r.record_status !== 'draft' && r.record_status !== 'submitted'),
+      appointments: apptRes.data||[], claims: claimRes.data||[],
+      vaccinations: vaxRes.data||[], transactions: txnRes.data||[],
+    })
+  }, [signedInPatient?.id])
+
   useEffect(() => {
     if (!signedInPatient?.id) { setRealPatientData(null); return }
-    async function loadRealData() {
-      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes] = await Promise.all([
-        supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
-        supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
-        supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
-        supabase.from('medical_records').select('*,institutions(name)').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
-        supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
-        supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
-        supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
-        supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
-      ])
-      setRealPatientData({
-        conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
-        // A record shouldn't appear to the patient until the visit is
-        // actually paid for/billed - 'draft' and 'submitted' are still
-        // in progress at the clinic. Anything else (including legacy
-        // rows with no record_status at all) stays visible as before.
-        records: (recRes.data||[]).filter(r => r.record_status !== 'draft' && r.record_status !== 'submitted'),
-        appointments: apptRes.data||[], claims: claimRes.data||[],
-        vaccinations: vaxRes.data||[], transactions: txnRes.data||[],
-      })
-    }
     loadRealData()
     // This only ever ran once, right after sign-in - a record billed
     // by a clinic minutes later (or any other change made outside this
@@ -4077,7 +4084,7 @@ export default function PatientApp({ liveData={} }) {
     // to remount.
     const interval = setInterval(loadRealData, 15000)
     return () => clearInterval(interval)
-  }, [signedInPatient?.id])
+  }, [signedInPatient?.id, loadRealData])
 
   // Computed and hooked before the early returns below (not after) -
   // every hook in this component must run on every render regardless of
@@ -4137,7 +4144,7 @@ export default function PatientApp({ liveData={} }) {
         </div>
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
