@@ -1001,7 +1001,22 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
   const [weightKg,setWeightKg]=useState('')
+  const [heightCm,setHeightCm]=useState('')
   const [lastVitals,setLastVitals]=useState(null)
+  const [vitalsSaving,setVitalsSaving]=useState(false)
+  const [vitalsSaved,setVitalsSaved]=useState(false)
+
+  async function handleSaveVitalsHere() {
+    if (!weightKg && !heightCm) return
+    setVitalsSaving(true)
+    await supabase.from('patient_vitals').insert({
+      patient_id: patient.id, weight_kg: weightKg?parseFloat(weightKg):null,
+      height_cm: heightCm?parseFloat(heightCm):null,
+      logged_at: new Date().toISOString(), logged_by: staffMember?.name || null,
+    })
+    setVitalsSaving(false)
+    setVitalsSaved(true)
+  }
   const [consentWindow,setConsentWindow]=useState({checked:false,allowed:false})
   const [consultationStartedAt]=useState(() => new Date().toISOString())
   const [safetyChecks,setSafetyChecks]=useState({}) // rxIndex -> {status, orderSet, triggered, checking}
@@ -1119,7 +1134,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
   const [catalogAllTypes,setCatalogAllTypes]=useState([]) // unfiltered, for the "why is this empty" diagnostic below
-  const [catalogClinicType,setCatalogClinicType]=useState(medicineType==='chinese'?'tcm':'western')
+  // Real bug found here: this used to be its own useState, initialized
+  // once from medicineType and never updated again (setCatalogClinicType
+  // was never called anywhere) - because ConsultationScreen isn't
+  // remounted between different consultations (no key on it), whichever
+  // clinic_type happened to be correct (or not) the FIRST time this
+  // component ever mounted in a session stuck for every consultation
+  // after that, regardless of what medicineType actually was. Deriving
+  // it directly every render removes the staleness entirely.
+  const catalogClinicType = medicineType==='chinese' ? 'tcm' : 'western'
 
   // Real service catalog, filtered by clinic type - what the doctor
   // actually picks from to build the itemized list, rather than typing
@@ -1505,7 +1528,17 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>{queueEntry.ticket} - checked in {new Date(queueEntry.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
 
       {queueEntry.checkinNote&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber}}>{'◇'} Front desk note: {queueEntry.checkinNote}</div>}
-      {lastVitals&&(lastVitals.weight_kg||lastVitals.height_cm)&&<div style={{background:C.card,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub}}>Last logged {new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: {lastVitals.weight_kg?`${lastVitals.weight_kg}kg`:''}{lastVitals.height_cm?` ${lastVitals.height_cm}cm`:''}</div>}
+
+      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'6px',textTransform:'uppercase'}}>Weight / Height</div>
+        {lastVitals&&(lastVitals.weight_kg||lastVitals.height_cm)&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Last logged {new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: {lastVitals.weight_kg?`${lastVitals.weight_kg}kg`:''}{lastVitals.height_cm?` ${lastVitals.height_cm}cm`:''}</div>}
+        <div style={{display:'flex',gap:'6px'}}>
+          <input type="number" step="0.1" value={weightKg} onChange={e=>setWeightKg(e.target.value)} placeholder="Weight (kg)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+          <input type="number" step="0.1" value={heightCm} onChange={e=>setHeightCm(e.target.value)} placeholder="Height (cm)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+          <button onClick={handleSaveVitalsHere} disabled={vitalsSaving||(!weightKg&&!heightCm)} style={{padding:'8px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{vitalsSaving?'Saving…':'Save'}</button>
+        </div>
+        {vitalsSaved&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'✓'} Logged with today's date.</div>}
+      </div>
 
       <SecLabel>Medical records{recordsVisible?' - full history open, closes on submit':''}</SecLabel>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
@@ -1556,8 +1589,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       <SecLabel>Diagnosis</SecLabel>
       <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} disabled={saved} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px',background:saved?C.card:'#fff'}}/>
 
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Weight (kg) - optional, used for dose-safety reference ranges below</div>
-      <input value={weightKg} onChange={e=>setWeightKg(e.target.value)} type="number" placeholder="e.g. 68" style={{width:'120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'14px'}}/>
+      {weightKg&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>Using weight {weightKg}kg (set in Weight / Height above) for dose-safety reference ranges below.</div>}
 
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 codes - structured coding, required for direct-billing claims. A visit can have more than one.</div>
       {icd10Codes.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
@@ -5470,7 +5502,7 @@ export default function ClinicOpsApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
-        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
+        {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
