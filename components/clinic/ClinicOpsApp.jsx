@@ -995,7 +995,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [loading,setLoading]=useState(true)
   const [notes,setNotes]=useState('')
   const [diagnosis,setDiagnosis]=useState('')
-  const [icd10Code,setIcd10Code]=useState(null)
+  const [icd10Codes,setIcd10Codes]=useState([])
   const [icd10Search,setIcd10Search]=useState('')
   const [icd10Open,setIcd10Open]=useState(false)
   const [icd10Results,setIcd10Results]=useState([])
@@ -1129,7 +1129,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       const { data } = await supabase.from('service_items').select('*')
         .in('clinic_type', [catalogClinicType, 'general']).eq('active', true).order('category')
       setCatalog(data || [])
-      const { data: allData } = await supabase.from('service_items').select('clinic_type,active')
+      const { data: allData } = await supabase.from('service_items').select('name,clinic_type,active')
       setCatalogAllTypes(allData || [])
       // A visit shouldn't need the doctor to remember to add a base
       // consultation charge every single time - auto-itemize it from
@@ -1366,7 +1366,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     try {
       const { error: recErr } = await supabase.from('medical_records').insert({
         patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Draft consultation note',
-        notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
+        notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
         date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'draft',
       })
       if (recErr) throw recErr
@@ -1403,7 +1403,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         const visitDate = new Date().toISOString().slice(0,10)
         const { error: recErr } = await supabase.from('medical_records').insert({
           patient_id: patient.id, record_type: 'visit', title: visitTitle,
-          notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Code?.code || null,
+          notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
           date_of_record: visitDate, source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
           doctor_name: staffMember?.name || 'Unknown',
@@ -1559,25 +1559,29 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Weight (kg) - optional, used for dose-safety reference ranges below</div>
       <input value={weightKg} onChange={e=>setWeightKg(e.target.value)} type="number" placeholder="e.g. 68" style={{width:'120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'14px'}}/>
 
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 code - structured coding, required for direct-billing claims</div>
-      {icd10Code
-        ? <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 14px',marginBottom:'18px'}}>
-            <div><span style={{fontWeight:700,color:C.green}}>{icd10Code.code}</span> <span style={{fontSize:'13px',color:C.textSub}}>{icd10Code.label}</span></div>
-            <span onClick={()=>{setIcd10Code(null);setIcd10Search('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 codes - structured coding, required for direct-billing claims. A visit can have more than one.</div>
+      {icd10Codes.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {icd10Codes.map(c=>(
+          <div key={c.code} style={{display:'flex',alignItems:'center',gap:'6px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'20px',padding:'6px 10px'}}>
+            <span style={{fontWeight:700,color:C.green,fontSize:'12px'}}>{c.code}</span>
+            <span style={{fontSize:'12px',color:C.textSub}}>{c.label}</span>
+            <span onClick={()=>setIcd10Codes(prev=>prev.filter(x=>x.code!==c.code))} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>
           </div>
-        : <div style={{position:'relative',marginBottom:'18px'}}>
-            <input value={icd10Search} onChange={e=>{setIcd10Search(e.target.value);setIcd10Open(true)}} onFocus={()=>setIcd10Open(true)} placeholder="Search ICD-10 code or condition…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
-            {icd10Open&&icd10Search.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:220,overflowY:'auto',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
-              {icd10Loading&&<div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>Searching…</div>}
-              {!icd10Loading&&icd10Results.map(c=>(
-                <div key={c.code} onClick={()=>{setIcd10Code(c);setIcd10Open(false)}} style={{padding:'10px 14px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px'}}>
-                  <span style={{fontWeight:700,color:C.green}}>{c.code}</span> {c.label}
-                </div>
-              ))}
-              {!icd10Loading&&icd10Results.length===0&&
-                <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the reference set - free-text diagnosis above still saves normally.</div>}
-            </div>}
-          </div>}
+        ))}
+      </div>}
+      <div style={{position:'relative',marginBottom:'18px'}}>
+        <input value={icd10Search} onChange={e=>{setIcd10Search(e.target.value);setIcd10Open(true)}} onFocus={()=>setIcd10Open(true)} placeholder="Search to add another ICD-10 code or condition…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        {icd10Open&&icd10Search.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:220,overflowY:'auto',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
+          {icd10Loading&&<div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>Searching…</div>}
+          {!icd10Loading&&icd10Results.filter(c=>!icd10Codes.some(x=>x.code===c.code)).map(c=>(
+            <div key={c.code} onClick={()=>{setIcd10Codes(prev=>[...prev,c]);setIcd10Search('');setIcd10Open(false)}} style={{padding:'10px 14px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px'}}>
+              <span style={{fontWeight:700,color:C.green}}>{c.code}</span> {c.label}
+            </div>
+          ))}
+          {!icd10Loading&&icd10Results.length===0&&
+            <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the reference set - free-text diagnosis above still saves normally.</div>}
+        </div>}
+      </div>
 
       <SecLabel>Consultation notes</SecLabel>
       <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={saved} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical',background:saved?C.card:'#fff'}}/>
@@ -1607,8 +1611,9 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
             <option key={item.id} value={item.id}>{item.name} - HK${item.default_price}</option>
           ))}
         </select>
-        {catalog.length===0&&catalogAllTypes.length>0&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'8px'}}>
-          This clinic needs clinic_type '{catalogClinicType}' or 'general'. {catalogAllTypes.length} price list item{catalogAllTypes.length===1?'':'s'} exist in total, tagged: {[...new Set(catalogAllTypes.map(i=>`${i.clinic_type}${i.active?'':' (inactive)'}`))].join(', ')}.
+        {catalogAllTypes.length>0&&<div style={{fontSize:'11px',color:catalog.length===0?C.amber:C.textMuted,marginBottom:'8px',lineHeight:1.6}}>
+          This screen shows items tagged '{catalogClinicType}' or 'general' - {catalog.length} of {catalogAllTypes.length} match.
+          {catalogAllTypes.length>0&&<div style={{marginTop:'4px'}}>All price list items: {catalogAllTypes.map((i,idx)=>`${i.name} [${i.clinic_type}${i.active?'':' inactive'}]`).join(', ')}</div>}
         </div>}
         <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
           <div style={{padding:'10px 14px'}}>
