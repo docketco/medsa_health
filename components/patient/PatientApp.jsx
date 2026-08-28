@@ -865,7 +865,16 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
       doc.line(14, y-4, pageWidth-14, y-4)
     }
 
-    doc.save(`Medsa-Record-Bundle-${patient.medsa_id || 'export'}.pdf`)
+    // Explicit blob + anchor download rather than jsPDF's built-in
+    // save() shortcut - some mobile/in-app browsers mishandle that
+    // shortcut's internals and save the file as plain text instead of
+    // a real PDF. This forces the correct MIME type.
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Record-Bundle-${patient.medsa_id || 'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
     setGeneratingPdf(false)
   }
 
@@ -2199,7 +2208,12 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
       }
       y += 4
     })
-    doc.save(`Medsa-Claim-Checklist-${selectedType.key}-${patient.medsa_id || 'export'}.pdf`)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Claim-Checklist-${selectedType.key}-${patient.medsa_id || 'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
     setBundlingPdf(false)
   }
 
