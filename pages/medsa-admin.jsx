@@ -47,23 +47,39 @@ function PartnersTab() {
   const [renewingId, setRenewingId] = useState(null)
   const [renewDate, setRenewDate] = useState('')
 
+  const [uploadError, setUploadError] = useState(null)
+
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('insurance_companies').select('*').order('created_at',{ascending:false})
-    setCompanies(data||[])
+    // New-inquiry counts per company, surfaced right here rather than
+    // only visible after drilling into "Manage plans" - that's where
+    // "Inquire about plan" on the patient side actually lands, and it
+    // was too easy to miss.
+    const { data: plans } = await supabase.from('insurance_plans').select('id, company_name')
+    const { data: inquiries } = await supabase.from('plan_inquiries').select('plan_id').eq('status', 'new')
+    const planToCompany = Object.fromEntries((plans||[]).map(p=>[p.id, p.company_name]))
+    const countsByCompany = {}
+    for (const inq of (inquiries||[])) {
+      const companyName = planToCompany[inq.plan_id]
+      if (companyName) countsByCompany[companyName] = (countsByCompany[companyName]||0) + 1
+    }
+    setCompanies((data||[]).map(c => ({ ...c, newInquiries: countsByCompany[c.name]||0 })))
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
   async function handleContractUpload(file) {
     setUploading(true)
+    setUploadError(null)
     setContractDocName(file.name)
     // Same pattern as staff registration documents - storing the path,
     // not a public URL, since a signed URL should be generated on
     // demand when a real "view contract" feature is built.
     const path = `insurance_companies/${Date.now()}-${file.name}`
     const { error } = await supabase.storage.from('partner-contracts').upload(path, file)
-    if (!error) setContractDocUrl(path)
+    if (error) { setUploadError(error.message); setUploading(false); return }
+    setContractDocUrl(path)
     setUploading(false)
   }
 
@@ -125,6 +141,7 @@ function PartnersTab() {
           <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleContractUpload(e.target.files[0])}/>
         </label>
         {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
+        {uploadError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'10px'}}>Upload failed: {uploadError}</div>}
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>{setCreating(false);setContractDocUrl(null);setContractDocName(null)}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
@@ -142,7 +159,10 @@ function PartnersTab() {
               <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name}{c.contact_email?` · ${c.contact_email}`:''}</div>
             </div>
-            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+              {c.newInquiries>0&&<span onClick={()=>setManagingPlansFor(c)} style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:C.amberLight,color:C.amber,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>{c.newInquiries} new inquir{c.newInquiries===1?'y':'ies'}</span>}
+            </div>
           </div>
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>

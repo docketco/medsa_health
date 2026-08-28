@@ -3,6 +3,28 @@ import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
+// Clean line-style vector icons for the home screen, replacing the
+// placeholder geometric glyphs (◎ ▣ ◈ etc) with something actually
+// legible as records/insurance/prescriptions/etc at a glance. Inherits
+// its colour from the parent via currentColor, so it drops straight
+// into the same coloured icon tiles already in use.
+const ICON_PATHS = {
+  records: <><path d="M6 3.5h9l3 3V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14.5 3.5V7h3.5"/><path d="M8 12h8M8 15h8M8 9h4"/></>,
+  insurance: <path d="M12 3 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3Zm-2.5 8.5 1.8 1.8 3.7-3.7"/>,
+  prescriptions: <><path d="m6.5 17.5 8-8a3 3 0 1 1 4 4l-8 8a3 3 0 0 1-4-4Z"/><path d="m13 7 4 4"/></>,
+  calendar: <><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></>,
+  doctors: <><path d="M9 3v4a3 3 0 0 0 6 0V3"/><path d="M9 5H7a2 2 0 0 0-2 2v3a6 6 0 0 0 12 0V7a2 2 0 0 0-2-2h-2"/><circle cx="18.5" cy="16.5" r="2.5"/><path d="M18.5 13v-1.5"/></>,
+  family: <><circle cx="8.5" cy="8" r="3"/><circle cx="16" cy="9" r="2.4"/><path d="M3 20v-1.5A4.5 4.5 0 0 1 7.5 14h2A4.5 4.5 0 0 1 14 18.5V20"/><path d="M15.7 14.3A4 4 0 0 1 19 18v2"/></>,
+  alert: <><path d="M12 3 3 8v5c0 4.5 3.6 7.6 9 9 5.4-1.4 9-4.5 9-9V8l-9-5Z"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.9" fill="currentColor" stroke="none"/></>,
+  storage: <><path d="M12 4c-4.4 0-7 1.6-7 3s2.6 3 7 3 7-1.6 7-3-2.6-3-7-3Z"/><path d="M5 7v5c0 1.4 2.6 3 7 3s7-1.6 7-3V7"/><path d="M5 12v5c0 1.4 2.6 3 7 3s7-1.6 7-3v-5"/></>,
+  community: <><path d="M12 4c4.4 0 8 2.8 8 6.3S16.4 16.6 12 16.6c-.8 0-1.6-.1-2.3-.3L6 18l1-3.2C5.7 13.5 5 12 5 10.3 5 6.8 7.6 4 12 4Z"/></>,
+}
+function Icon({ name, size=20, style }) {
+  const body = ICON_PATHS[name]
+  if (!body) return null
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>{body}</svg>
+}
+
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
 // Chinese (the correct written register - not spoken Cantonese slang).
@@ -563,13 +585,13 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
-          {key:'records',icon:'▣',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
-          {key:'insurance',icon:'◉',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
-          {key:'prescriptions',icon:'◈',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
-          {key:'calendar',icon:'◇',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
+          {key:'records',icon:'records',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
+          {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
+          {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
+          {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
-            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',marginBottom:'10px',color:C.green}}>{item.icon}</div>
+            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'10px',color:C.green}}><Icon name={item.icon}/></div>
             <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.label}</div>
             <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.sub}</div>
             {item.badge&&<span style={{position:'absolute',top:10,right:10,background:C.red,color:'#fff',fontSize:'10px',width:18,height:18,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>{item.badge}</span>}
@@ -581,7 +603,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
           another row. */}
       <div style={{padding:'4px 16px 4px'}}>
         <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${C.green} 0%, #3f6b4f 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(74,124,89,0.28)'}}>
-          <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'19px',color:'#fff',flexShrink:0}}>◈</div>
+          <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',flexShrink:0}}><Icon name="community"/></div>
           <div style={{flex:1}}>
             <div style={{fontSize:'14px',fontWeight:700,color:'#fff'}}>{isEn?'Community':'社群'}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?'Discuss supplements & products, anonymously':'匿名討論保健品與產品'}</div>
@@ -592,13 +614,13 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
-          {key:'doctors',icon:'◎',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'family',icon:'◇',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
-          {key:'editprofile',icon:'◐',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
-          {key:'storage',icon:'▣',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
+          {key:'doctors',icon:'doctors',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
+          {key:'family',icon:'family',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
+          {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
+          {key:'storage',icon:'storage',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{item.icon}</div>
+            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:C.green,flexShrink:0}}><Icon name={item.icon}/></div>
             <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
             <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
           </div>
