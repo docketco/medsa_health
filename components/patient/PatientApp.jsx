@@ -2565,12 +2565,14 @@ function ForumScreen({ isEn, patient={} }) {
     setView('thread')
     const { data } = await supabase.from('forum_posts').select('*').eq('product_id', product.id).order('created_at')
     setPosts(data||[])
-    // One review per patient per product, like Amazon - if they already
-    // reviewed this, open straight into editing it instead of a blank
-    // form that would just create a second, disconnected post.
-    const mine = (data||[]).find(p=>p.patient_id===patientId)
-    setPostBody(mine?.body || '')
-    setPostRating(mine?.rating || null)
+    // Each entry is its own timestamped note, never overwritten - the
+    // compose box always starts blank for a new note. The star rating
+    // still carries forward as a starting point (most people aren't
+    // changing their rating with every update), but only applies once
+    // they actually submit.
+    const mine = (data||[]).filter(p=>p.patient_id===patientId)
+    setPostBody('')
+    setPostRating(mine.length>0 ? mine[mine.length-1].rating||null : null)
   }
 
   async function handleCreateProduct() {
@@ -2606,34 +2608,32 @@ function ForumScreen({ isEn, patient={} }) {
     if (containsProfanity(postBody)) { setPostError(isEn?'Please remove inappropriate language before posting.':'請移除不當用語後再發佈。'); return }
     setPostError(null)
     setPosting(true)
-    const existing = posts.find(p=>p.patient_id===patientId)
+    // Always a new, timestamped entry - never overwrites a prior one.
+    // If this patient already has entries here, this one is grouped
+    // under their first (thread_root_id), and the rating aggregate
+    // moves by the difference from whatever their most recent rating
+    // was, so their own updates don't get double-counted.
+    const mine = posts.filter(p=>p.patient_id===patientId)
+    const rootId = mine.length>0 ? (mine[0].thread_root_id || mine[0].id) : null
+    const pseudonym = mine.length>0 ? mine[0].pseudonym : await getOrCreateForumIdentity(patientId)
 
-    if (existing) {
-      // Editing their own review, not creating a second one - rating
-      // totals move by the difference, not a flat re-add.
-      await supabase.from('forum_posts').update({ body: postBody.trim(), rating: postRating || null }).eq('id', existing.id)
-      const oldRating = existing.rating || 0, newRating = postRating || 0
-      const ratingCountDelta = (oldRating>0?1:0) !== (newRating>0?1:0) ? (newRating>0?1:-1) : 0
-      const updatedFields = {
-        rating_sum: (activeProduct.rating_sum||0) - oldRating + newRating,
-        rating_count: (activeProduct.rating_count||0) + ratingCountDelta,
-      }
-      await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
-      setActiveProduct(prev=>({...prev, ...updatedFields}))
-    } else {
-      const pseudonym = await getOrCreateForumIdentity(patientId)
-      await supabase.from('forum_posts').insert({
-        product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
-        rating: postRating || null,
-      })
-      const updatedFields = { post_count: (activeProduct.post_count||0)+1 }
-      if (postRating) {
-        updatedFields.rating_sum = (activeProduct.rating_sum||0) + postRating
-        updatedFields.rating_count = (activeProduct.rating_count||0) + 1
-      }
-      await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
-      setActiveProduct(prev=>({...prev, ...updatedFields}))
+    await supabase.from('forum_posts').insert({
+      product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
+      rating: postRating || null, thread_root_id: rootId,
+    })
+
+    const oldRating = mine.length>0 ? (mine[mine.length-1].rating||0) : 0
+    const newRating = postRating || 0
+    const ratingCountDelta = (oldRating>0?1:0) !== (newRating>0?1:0) ? (newRating>0?1:-1) : 0
+    const updatedFields = {
+      post_count: (activeProduct.post_count||0)+1,
+      rating_sum: (activeProduct.rating_sum||0) - oldRating + newRating,
+      rating_count: (activeProduct.rating_count||0) + ratingCountDelta,
     }
+    await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
+    setActiveProduct(prev=>({...prev, ...updatedFields}))
+
+    setPostBody('')
     setPosting(false)
     const { data } = await supabase.from('forum_posts').select('*').eq('product_id', activeProduct.id).order('created_at')
     setPosts(data||[])
@@ -2650,6 +2650,7 @@ function ForumScreen({ isEn, patient={} }) {
         <div onClick={()=>setView('list')} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{isEn?'← All discussions':'← 所有討論'}</div>
       </div>
       <div style={{padding:'0 16px 10px'}}>
+        {activeProduct.image_url&&<img src={activeProduct.image_url} alt="" style={{width:'100%',height:140,objectFit:'cover',borderRadius:'12px',marginBottom:'12px'}}/>}
         <div style={{fontSize:'17px',fontWeight:700}}>{activeProduct.canonical_name}</div>
         {activeProduct.sponsored_by&&<div style={{fontSize:'11px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {activeProduct.sponsored_by}</div>}
         {activeProduct.rating_count>0&&<div style={{fontSize:'12px',color:'#d4a017',marginTop:'4px'}}>{'★'.repeat(Math.round(activeProduct.rating_sum/activeProduct.rating_count))}{'☆'.repeat(5-Math.round(activeProduct.rating_sum/activeProduct.rating_count))} <span style={{color:C.textMuted}}>{(activeProduct.rating_sum/activeProduct.rating_count).toFixed(1)} ({activeProduct.rating_count})</span></div>}
@@ -2657,32 +2658,47 @@ function ForumScreen({ isEn, patient={} }) {
       </div>
       <div style={{padding:'0 16px'}}>
         {posts.length===0&&<div style={{textAlign:'center',padding:'30px 0',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first to share.':'尚無貼文 - 成為第一個分享的人。'}</div>}
-        {posts.map(p=>{
-          const isMine = p.patient_id===patientId
-          return (
-            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-                <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}{isMine?` · ${isEn?'Your review':'您的評論'}`:''}</span>
-                <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-              </div>
-              {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
-              <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
-              {isMine&&<div onClick={()=>{setPostBody(p.body);setPostRating(p.rating||null)}} style={{fontSize:'10px',color:C.green,fontWeight:600,marginTop:'8px',cursor:'pointer'}}>{isEn?'Edit your review':'編輯您的評論'}</div>}
-              {!isMine&&!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
-              {!isMine&&p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
-            </Card>
-          )
-        })}
+        {(() => {
+          // Group into one block per reviewer, in the order each first
+          // posted - every later entry from the same patient is a new,
+          // timestamped note under their own heading, never a silent
+          // overwrite of an earlier one.
+          const seen = new Set(), groups = []
+          for (const p of posts) {
+            if (seen.has(p.patient_id)) continue
+            seen.add(p.patient_id)
+            groups.push({ patientId: p.patient_id, pseudonym: p.pseudonym, entries: posts.filter(x=>x.patient_id===p.patient_id) })
+          }
+          return groups.map(g => {
+            const isMine = g.patientId===patientId
+            return (
+              <Card key={g.patientId} style={{padding:'14px 16px',marginBottom:'8px'}}>
+                <div style={{fontSize:'12px',fontWeight:700,color:C.textSub,marginBottom:'8px'}}>{g.pseudonym}{isMine?` · ${isEn?'You':'您'}`:''}</div>
+                {g.entries.map((p,i) => (
+                  <div key={p.id} style={{marginBottom:i<g.entries.length-1?'12px':0,paddingBottom:i<g.entries.length-1?'12px':0,borderBottom:i<g.entries.length-1?`0.5px solid ${C.border}`:'none'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+                      <span style={{fontSize:'10px',color:C.textMuted}}>{i===0?(isEn?'Original':'原始評論'):(isEn?'Update':'更新')} · {new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</span>
+                    </div>
+                    {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
+                    <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
+                    {!isMine&&!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
+                    {!isMine&&p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'6px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
+                  </div>
+                ))}
+              </Card>
+            )
+          })
+        })()}
       </div>
       <div style={{padding:'12px 16px 24px'}}>
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Rate this product (optional):':'為此產品評分（可選）：'}</div>
         <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
           {[1,2,3,4,5].map(n=><div key={n} onClick={()=>setPostRating(postRating===n?null:n)} style={{fontSize:'22px',cursor:'pointer',opacity:postRating&&postRating>=n?1:0.25}}>★</div>)}
         </div>
-        <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={isEn?'Share your experience, anonymously...':'匿名分享您的經驗...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
+        <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={posts.some(p=>p.patient_id===patientId)?(isEn?'Add an update to your review...':'為您的評論新增更新...'):(isEn?'Share your experience, anonymously...':'匿名分享您的經驗...')} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
         {postError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{postError}</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>
-          {posting?(isEn?'Saving...':'儲存中...'):(posts.some(p=>p.patient_id===patientId)?(isEn?'Update your review':'更新評論'):(isEn?'Post your review':'發佈評論'))}
+          {posting?(isEn?'Posting...':'發佈中...'):(posts.some(p=>p.patient_id===patientId)?(isEn?'Add update':'新增更新'):(isEn?'Post your review':'發佈評論'))}
         </Btn>
       </div>
     </div>
@@ -2693,17 +2709,19 @@ function ForumScreen({ isEn, patient={} }) {
       <div style={{padding:'16px'}}>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>{isEn?'Discuss supplements and healthcare products with other verified Medsa patients - anonymously.':'與其他已驗證的Medsa患者匿名討論保健品和醫療產品。'}</div>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={isEn?'Search a product to discuss...':'搜尋想討論的產品...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        {!loading&&products.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>{isEn?'Nothing here yet - try searching something like "Vitamin C" or "Fish Oil" to start the first discussion.':'暫時未有內容 - 試試搜尋「維他命C」或「魚油」開始第一個討論。'}</div>}
       </div>
       <div style={{padding:'0 16px'}}>
         {loading&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px',padding:'20px'}}>{isEn?'Loading...':'載入中...'}</div>}
         {!loading&&matches.map(p=>(
-          <Card key={p.id} onClick={()=>handleOpenThread(p)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div>
+          <Card key={p.id} onClick={()=>handleOpenThread(p)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px'}}>
+            {p.image_url&&<img src={p.image_url} alt="" style={{width:44,height:44,objectFit:'cover',borderRadius:'8px',flexShrink:0}}/>}
+            <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
               {p.sponsored_by&&<div style={{fontSize:'10px',color:C.amber,fontWeight:600,marginTop:'2px'}}>{'◇'} {isEn?'Sponsored by':'贊助商'} {p.sponsored_by}</div>}
               {p.rating_count>0&&<div style={{fontSize:'11px',color:'#d4a017',marginTop:'2px'}}>{'★'} {(p.rating_sum/p.rating_count).toFixed(1)} <span style={{color:C.textMuted}}>({p.rating_count})</span></div>}
             </div>
-            <span style={{fontSize:'11px',color:C.textMuted}}>{p.post_count||0} {isEn?'posts':'貼文'}</span>
+            <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{p.post_count||0} {isEn?'posts':'貼文'}</span>
           </Card>
         ))}
         {!loading&&search.trim()&&matches.every(p=>p.canonical_name.toLowerCase()!==search.toLowerCase().trim())&&(

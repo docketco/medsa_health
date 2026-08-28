@@ -661,6 +661,25 @@ function CarouselTab() {
   )
 }
 
+function parseCSV(text) {
+  const lines = text.trim().split('\n')
+  const headers = lines[0].split(',').map(h=>h.trim())
+  return lines.slice(1).filter(l=>l.trim()).map(line=>{
+    const values = (line.match(/(".*?"|[^",]+)(?=,|$)/g)||[]).map(v=>v.trim().replace(/^"|"$/g,''))
+    const row = {}
+    headers.forEach((h,i)=>row[h]=values[i]||'')
+    return row
+  })
+}
+
+// Same normalization PatientApp.jsx's forum uses for new products -
+// kept in sync manually since these are two separate files.
+const FORUM_FILLER_WORDS = new Set(['extra','strength','tablets','tablet','capsules','capsule','caps','softgel','softgels','mg','ml','plus','the','a','an'])
+function normalizeProductName(name) {
+  return (name||'').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/)
+    .filter(w=>w && !FORUM_FILLER_WORDS.has(w) && !/^\d+$/.test(w)).sort().join(' ')
+}
+
 // Same scoring PatientApp.jsx's forum uses for new products - kept in
 // sync manually since these are two separate files. Word-overlap alone
 // misses a typo-duplicate like "panadol" vs "panadoll" (zero shared
@@ -692,6 +711,8 @@ function ForumModerationTab() {
   const [sponsorName, setSponsorName] = useState('')
   const [rescanning, setRescanning] = useState(false)
   const [rescanResult, setRescanResult] = useState(null)
+  const [editingPhotoFor, setEditingPhotoFor] = useState(null)
+  const [bulkProductResult, setBulkProductResult] = useState(null)
 
   // One-off (and repeatable) catch-up scan across every existing
   // product pair - needed because the duplicate check only ever ran
@@ -779,6 +800,40 @@ function ForumModerationTab() {
     searchProductsForSponsor()
   }
 
+  // Product photos are admin-set only, never patient-uploaded - same
+  // reasoning as ads: Medsa doesn't want to be responsible for curating
+  // what content ends up representing a product's identity.
+  async function setProductImage(product, url) {
+    await supabase.from('forum_products').update({ image_url: url||null }).eq('id', product.id)
+    setEditingPhotoFor(null)
+    searchProductsForSponsor()
+  }
+
+  // Seeds starter products so the forum isn't empty on day one - real
+  // discussion still only happens when a patient actually posts;
+  // this just gives them something to find and rate instead of a
+  // blank search box with no examples.
+  async function handleBulkProductImport(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported = 0
+    const skipped = []
+    for (const row of rows) {
+      if (!row.canonical_name?.trim()) { skipped.push('(blank row)'); continue }
+      const normalized = normalizeProductName(row.canonical_name)
+      const { data: existing } = await supabase.from('forum_products').select('id').eq('normalized_name', normalized).maybeSingle()
+      if (existing) { skipped.push(`${row.canonical_name} - already exists`); continue }
+      await supabase.from('forum_products').insert({
+        canonical_name: row.canonical_name.trim(), normalized_name: normalized,
+        image_url: row.image_url?.trim() || null, sponsored_by: row.sponsored_by?.trim() || null,
+      })
+      imported++
+    }
+    setBulkProductResult({ imported, skipped, total: rows.length })
+  }
+
   return (
     <div>
       <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Likely-duplicate threads ({flags.length})</div>
@@ -814,19 +869,39 @@ function ForumModerationTab() {
         </div>
       ))}
 
-      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Sponsor a product thread</div>
+      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Sponsor a product thread & set its photo</div>
       <input value={sponsorSearch} onChange={e=>setSponsorSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&searchProductsForSponsor()} placeholder="Search a product…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       <input value={sponsorName} onChange={e=>setSponsorName(e.target.value)} placeholder="Sponsor / brand name (leave blank to remove sponsorship)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       <button onClick={searchProductsForSponsor} style={{width:'100%',padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer',marginBottom:'12px'}}>Search</button>
       {sponsorResults.map(p=>(
-        <div key={p.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:`0.5px solid ${C.border}`}}>
-          <div>
-            <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored_by?`Sponsored by ${p.sponsored_by}`:'Not sponsored'}</div>
+        <div key={p.id} style={{padding:'10px 0',borderBottom:`0.5px solid ${C.border}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'8px',flex:1}}>
+              {p.image_url&&<img src={p.image_url} alt="" style={{width:32,height:32,objectFit:'cover',borderRadius:'6px'}}/>}
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored_by?`Sponsored by ${p.sponsored_by}`:'Not sponsored'}</div>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+              <button onClick={()=>setEditingPhotoFor(editingPhotoFor===p.id?null:p.id)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Photo</button>
+              <button onClick={()=>setSponsor(p)} style={{padding:'6px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Set sponsor</button>
+            </div>
           </div>
-          <button onClick={()=>setSponsor(p)} style={{padding:'6px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Set</button>
+          {editingPhotoFor===p.id&&<div style={{marginTop:'10px'}}><AdminImagePicker label="" value={p.image_url} onChange={url=>setProductImage(p, url)}/></div>}
         </div>
       ))}
+
+      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Bulk-seed starter products</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>CSV with canonical_name (required), image_url and sponsored_by (both optional) - gives patients something to find and rate instead of an empty search box on day one. Skips anything that already exists.</div>
+      <label style={{display:'inline-block',fontSize:'12px',fontWeight:600,padding:'9px 16px',borderRadius:'10px',cursor:'pointer',background:C.card,color:C.textSub,marginBottom:'12px'}}>
+        {'↑'} Bulk import products CSV
+        <input type="file" accept=".csv" onChange={handleBulkProductImport} style={{display:'none'}}/>
+      </label>
+      {bulkProductResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
+        Imported {bulkProductResult.imported} of {bulkProductResult.total} rows.
+        {bulkProductResult.skipped.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkProductResult.skipped.join(', ')}</div>}
+      </div>}
     </div>
   )
 }
