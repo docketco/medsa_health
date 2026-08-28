@@ -4004,6 +4004,16 @@ export default function PatientApp({ liveData={} }) {
       })
     }
     loadRealData()
+    // This only ever ran once, right after sign-in - a record billed
+    // by a clinic minutes later (or any other change made outside this
+    // session) never appeared anywhere in the app until a full
+    // sign-out/sign-in, since nothing here was watching for it. Same
+    // periodic-refresh pattern already used for the active policy and
+    // external share requests below, just applied to everything this
+    // fetch covers, on every screen - not just whichever one happened
+    // to remount.
+    const interval = setInterval(loadRealData, 15000)
+    return () => clearInterval(interval)
   }, [signedInPatient?.id])
 
   // Computed and hooked before the early returns below (not after) -
