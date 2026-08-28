@@ -169,6 +169,7 @@ function PartnersTab() {
 // up its plans is one place, one tool, not two.
 function CompanyPlansManager({ company, onBack }) {
   const [plans, setPlans] = useState([])
+  const [inquiries, setInquiries] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -179,9 +180,21 @@ function CompanyPlansManager({ company, onBack }) {
     setLoading(true)
     const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name', company.name).order('created_at',{ascending:false})
     setPlans(data||[])
+    const planIds = (data||[]).map(p=>p.id)
+    if (planIds.length>0) {
+      const { data: inq } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name)').in('plan_id', planIds).order('created_at',{ascending:false})
+      setInquiries(inq||[])
+    } else {
+      setInquiries([])
+    }
     setLoading(false)
   }
   useEffect(() => { load() }, [company.name])
+
+  async function markContacted(inq) {
+    await supabase.from('plan_inquiries').update({ status:'contacted' }).eq('id', inq.id)
+    load()
+  }
 
   function updateTier(i, field, value) {
     setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
@@ -245,6 +258,22 @@ function CompanyPlansManager({ company, onBack }) {
       <button onClick={onBack} style={{background:'none',border:'none',color:C.textSub,fontSize:'13px',cursor:'pointer',padding:0,marginBottom:'12px'}}>‹ Back to partners</button>
       <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{company.name} — plans</div>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Plans added here appear in patient-facing plan matching immediately. Inactive plans stay on file but stop showing to patients.</div>
+
+      {/* Real patient inquiries - "Inquire about plan" on the patient
+          side used to write here and nothing ever read it back out.
+          Medsa relays these to the insurer manually until they have a
+          live login of their own. */}
+      {inquiries.filter(i=>i.status==='new').length>0&&<>
+        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>New inquiries ({inquiries.filter(i=>i.status==='new').length})</div>
+        {inquiries.filter(i=>i.status==='new').map(inq=>(
+          <div key={inq.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{inq.applicant_full_name||'Unknown applicant'} · {inq.insurance_plans?.plan_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>HKID {inq.applicant_hkid||'—'} · DOB {inq.applicant_dob||'—'}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{inq.applicant_phone||'no phone on file'}{inq.applicant_email?` · ${inq.applicant_email}`:''}</div>
+            <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
+          </div>
+        ))}
+      </>}
 
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add new plan</button>}
 

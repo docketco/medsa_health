@@ -2697,13 +2697,25 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
 
-  // Real save - the button previously only changed local UI state and
-  // claimed the enquiry was "forwarded to the insurer," but nothing was
-  // ever actually written anywhere.
+  // Real save - and a real snapshot, not just two foreign keys. This
+  // claimed "forwarded to the insurer" but plan_inquiries was never
+  // read anywhere else in the app - nobody, human or system, ever saw
+  // an inquiry after it was written. The engine was designed to prefill
+  // the applicant's real details for whoever picks this up (an agent,
+  // or Medsa relaying on the insurer's behalf until they have a live
+  // login) - this is that prefill actually happening, plus giving the
+  // row somewhere real to be seen (Medsa Admin's Insurers tab).
   async function handleInquire(i, plan) {
     if (!patient?.id || !plan.id) return
     setInquiring(i)
-    await supabase.from('plan_inquiries').insert({ patient_id: patient.id, plan_id: plan.id })
+    const { data: fullPatient } = await supabase.from('patients').select('full_name, hkid, date_of_birth, phone, email').eq('id', patient.id).maybeSingle()
+    await supabase.from('plan_inquiries').insert({
+      patient_id: patient.id, plan_id: plan.id,
+      applicant_full_name: fullPatient?.full_name || null, applicant_hkid: fullPatient?.hkid || null,
+      applicant_dob: fullPatient?.date_of_birth || null, applicant_phone: fullPatient?.phone || null,
+      applicant_email: fullPatient?.email || null, consent_given: true, consent_given_at: new Date().toISOString(),
+      status: 'new',
+    })
     setInquiring(null)
     setInquired(i)
   }
@@ -2954,6 +2966,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
+            {inquired!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
               {inquired===i
