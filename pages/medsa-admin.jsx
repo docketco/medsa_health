@@ -13,6 +13,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
+import Icon from '../components/shared/Icon'
 
 export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
@@ -20,8 +21,11 @@ export default function MedsaAdminPage() {
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','Carousel'],['forum','Forum'],['partners','Insurers'],['clinics','Clinics']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text}}>{l}</div>
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics']].map(([k,ic,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
+            <Icon name={ic} size={18}/>
+            {l}
+          </div>
         ))}
       </div>
       {tab==='carousel' && <CarouselTab/>}
@@ -108,8 +112,11 @@ function PartnersTab() {
 
   async function handleRenew(company) {
     if (!renewDate) return
-    await supabase.from('insurance_companies').update({ contract_expiry_date: renewDate, contract_start_date: new Date().toISOString().slice(0,10) }).eq('id', company.id)
-    setRenewingId(null); setRenewDate('')
+    await supabase.from('insurance_companies').update({
+      contract_expiry_date: renewDate, contract_start_date: new Date().toISOString().slice(0,10),
+      ...(contractDocUrl ? { contract_doc_url: contractDocUrl } : {}),
+    }).eq('id', company.id)
+    setRenewingId(null); setRenewDate(''); setContractDocUrl(null); setContractDocName(null)
     load()
   }
 
@@ -168,11 +175,19 @@ function PartnersTab() {
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
             : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
           {renewingId===c.id
-            ? <div style={{marginBottom:'8px',display:'flex',gap:'6px'}}>
-                <input type="date" value={renewDate} onChange={e=>setRenewDate(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-                <button onClick={()=>handleRenew(c)} disabled={!renewDate} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+            ? <div style={{marginBottom:'8px'}}>
+                <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+                  <input type="date" value={renewDate} onChange={e=>setRenewDate(e.target.value)} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+                  <button onClick={()=>handleRenew(c)} disabled={!renewDate} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+                </div>
+                <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
+                  {contractDocName || (c.contract_doc_url ? 'Replace signed contract' : 'Upload signed contract (optional)')}
+                  <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleContractUpload(e.target.files[0])}/>
+                </label>
+                {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Uploading…</div>}
+                {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {uploadError}</div>}
               </div>
-            : <button onClick={()=>{setRenewingId(c.id);setRenewDate(c.contract_expiry_date||'')}} style={{width:'100%',marginBottom:'8px',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Set / renew contract date</button>}
+            : <button onClick={()=>{setRenewingId(c.id);setRenewDate(c.contract_expiry_date||'')}} style={{width:'100%',marginBottom:'8px',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Set / renew contract date, or upload a contract</button>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Deactivate':'Reactivate'}</button>
             <button onClick={()=>setManagingPlansFor(c)} style={{flex:1,padding:'8px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Manage plans</button>
@@ -188,6 +203,7 @@ function PartnersTab() {
 // (/insurer-plans) - folded in here so onboarding a company and setting
 // up its plans is one place, one tool, not two.
 function CompanyPlansManager({ company, onBack }) {
+  const [subTab, setSubTab] = useState('plans')
   const [plans, setPlans] = useState([])
   const [inquiries, setInquiries] = useState([])
   const [loading, setLoading] = useState(true)
@@ -276,24 +292,34 @@ function CompanyPlansManager({ company, onBack }) {
   return (
     <div>
       <button onClick={onBack} style={{background:'none',border:'none',color:C.textSub,fontSize:'13px',cursor:'pointer',padding:0,marginBottom:'12px'}}>‹ Back to partners</button>
-      <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>{company.name} — plans</div>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Plans added here appear in patient-facing plan matching immediately. Inactive plans stay on file but stop showing to patients.</div>
+      <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>{company.name}</div>
 
-      {/* Real patient inquiries - "Inquire about plan" on the patient
-          side used to write here and nothing ever read it back out.
-          Medsa relays these to the insurer manually until they have a
-          live login of their own. */}
-      {inquiries.filter(i=>i.status==='new').length>0&&<>
-        <div style={{fontSize:'14px',fontWeight:600,marginBottom:'10px'}}>New inquiries ({inquiries.filter(i=>i.status==='new').length})</div>
-        {inquiries.filter(i=>i.status==='new').map(inq=>(
-          <div key={inq.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 16px',marginBottom:'8px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+        {[['plans','Plans'],['inquiries',`Inquiries${inquiries.filter(i=>i.status==='new').length>0?` (${inquiries.filter(i=>i.status==='new').length})`:''}`]].map(([k,l])=>(
+          <div key={k} onClick={()=>setSubTab(k)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:subTab===k?C.green:C.card,color:subTab===k?'#fff':C.text}}>{l}</div>
+        ))}
+      </div>
+
+      {subTab==='inquiries'&&<>
+        {/* Real patient inquiries - "Inquire about plan" on the patient
+            side used to write here and nothing ever read it back out.
+            Medsa relays these to the insurer manually until they have a
+            live login of their own. */}
+        {inquiries.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No inquiries yet.</div>}
+        {inquiries.map(inq=>(
+          <div key={inq.id} style={{background:C.cream,border:`0.5px solid ${inq.status==='new'?C.amber:C.border}`,borderRadius:'12px',padding:'12px 16px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600}}>{inq.applicant_full_name||'Unknown applicant'} · {inq.insurance_plans?.plan_name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>HKID {inq.applicant_hkid||'—'} · DOB {inq.applicant_dob||'—'}</div>
             <div style={{fontSize:'12px',color:C.textSub}}>{inq.applicant_phone||'no phone on file'}{inq.applicant_email?` · ${inq.applicant_email}`:''}</div>
-            <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
+            {inq.status==='new'
+              ? <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
+              : <div style={{marginTop:'6px',fontSize:'11px',color:C.green}}>✓ Contacted</div>}
           </div>
         ))}
       </>}
+
+      {subTab==='plans'&&<>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Plans added here appear in patient-facing plan matching immediately. Inactive plans stay on file but stop showing to patients.</div>
 
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add new plan</button>}
 
@@ -375,6 +401,7 @@ function CompanyPlansManager({ company, onBack }) {
           </div>
         </div>
       ))}
+      </>}
     </div>
   )
 }

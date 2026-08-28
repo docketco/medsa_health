@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
+import Icon from '../shared/Icon'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -270,7 +271,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
       <div style={{flex:1,padding:'12px 10px',overflowY:'auto'}}>
         {navItems.map(item=>(
           <div key={item.key} onClick={()=>setScreen(item.key)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',borderRadius:'8px',cursor:'pointer',marginBottom:'2px',background:screen===item.key?C.green:'transparent',color:screen===item.key?'#fff':C.text,position:'relative'}}>
-            <span style={{fontSize:'16px'}}>{item.icon}</span>
+            <Icon name={item.icon} size={17}/>
             <span style={{fontSize:'13px',fontWeight:500,flex:1}}>{item.label}</span>
             {item.badge>0&&<span style={{background:screen===item.key?'#fff':C.red,color:screen===item.key?C.green:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',padding:'2px 7px',minWidth:18,textAlign:'center'}}>{item.badge}</span>}
           </div>
@@ -2487,6 +2488,105 @@ function HelpScreen({ staffMember }) {
         </div>
       ))}
     </div>
+  )
+}
+
+// ── PRICE LIST — the service catalog ConsultationScreen's "Add treatment
+// or charge" picker draws from. Never had any admin UI at all before this -
+// bulk CSV upload is the real way a practice manager gets their actual
+// price list in, one row per service, rather than typing each in by hand.
+function PriceListScreen({ medicineType }) {
+  const [items,setItems]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [bulkResult,setBulkResult]=useState(null)
+  const [adding,setAdding]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [form,setForm]=useState({ name:'', category:'', default_price:'' })
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('service_items').select('*').order('category').order('name')
+    setItems(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleBulkFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const text = await file.text()
+    const rows = parseCSV(text)
+    let imported = 0
+    const skipped = []
+    for (const row of rows) {
+      if (!row.name?.trim() || !row.default_price?.trim()) { skipped.push(`${row.name||'(no name)'} - name and default_price required`); continue }
+      await supabase.from('service_items').insert({
+        name: row.name.trim(), name_tc: row.name_tc?.trim()||null,
+        category: row.category?.trim()||'General', default_price: parseFloat(row.default_price)||0,
+        clinic_type: row.clinic_type?.trim() || medicineType || 'general',
+        active: true,
+      })
+      imported++
+    }
+    setBulkResult({ imported, skipped, total: rows.length })
+    load()
+  }
+
+  async function handleAdd() {
+    if (!form.name.trim() || !form.default_price) return
+    setSaving(true)
+    await supabase.from('service_items').insert({
+      name: form.name.trim(), category: form.category.trim()||'General',
+      default_price: parseFloat(form.default_price)||0, clinic_type: medicineType||'general', active: true,
+    })
+    setSaving(false)
+    setAdding(false)
+    setForm({ name:'', category:'', default_price:'' })
+    load()
+  }
+
+  async function toggleActive(item) {
+    await supabase.from('service_items').update({ active: !item.active }).eq('id', item.id)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={560}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Price List</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',textAlign:'center'}}>The service catalog doctors pick from when adding a treatment or charge to a consultation. CSV needs name and default_price per row (category and clinic_type optional - clinic_type defaults to this clinic's own medicine type if left blank).</div>
+
+      <label style={{display:'inline-block',fontSize:'12px',fontWeight:600,padding:'9px 16px',borderRadius:'10px',cursor:'pointer',background:C.card,color:C.textSub,marginBottom:'12px'}}>
+        {'↑'} Bulk import price list CSV
+        <input type="file" accept=".csv" onChange={handleBulkFile} style={{display:'none'}}/>
+      </label>
+      {bulkResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
+        Imported {bulkResult.imported} of {bulkResult.total} rows.
+        {bulkResult.skipped.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkResult.skipped.join(', ')}</div>}
+      </div>}
+
+      {!adding&&<Btn variant="primary" style={{width:'100%',marginBottom:'16px'}} onClick={()=>setAdding(true)}>+ Add one item</Btn>}
+      {adding&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+        <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Service name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} placeholder="Category (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input type="number" step="0.01" value={form.default_price} onChange={e=>setForm(f=>({...f,default_price:e.target.value}))} placeholder="Price (HK$)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={()=>setAdding(false)}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleAdd} disabled={saving||!form.name.trim()||!form.default_price}>{saving?'Saving…':'Add'}</Btn>
+        </div>
+      </Card>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&items.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No items yet - bulk import a CSV or add one above.</div>}
+      {!loading&&items.map(item=>(
+        <div key={item.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{item.category} · {item.clinic_type} · HK${item.default_price}</div>
+          </div>
+          <button onClick={()=>toggleActive(item)} style={{padding:'6px 12px',background:item.active?C.card:C.greenLight,color:item.active?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.active?'Deactivate':'Reactivate'}</button>
+        </div>
+      ))}
+    </PageWrap>
   )
 }
 
@@ -4808,21 +4908,22 @@ export default function ClinicOpsApp() {
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
 
   const allNavItems = [
-    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant','doctor']},
-    {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
-    {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
-    {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
-    {key:'prescriptions', icon:'\u25c9', label:'Consultations & Charges', roles:['admin','clinic_assistant'], badge: pendingCount},
-    {key:'inventory', icon:'\u25a4', label:'Inventory', roles:['admin','clinic_assistant']},
-    {key:'ordersets', icon:'\u25c9', label:'Order Sets', roles:['admin','doctor']},
-    {key:'payment', icon:'\u25c8', label:'Payment', roles:['admin','clinic_assistant']},
-    {key:'claims', icon:'\u25c9', label:'Claims', roles:['admin','clinic_assistant']},
-    {key:'workinghours', icon:'\u25f7', label:'Working Hours', roles:['admin']},
-    {key:'queues', icon:'\u25a4', label:'Queues', roles:['admin']},
-    {key:'staff', icon:'\u25c6', label:'Staff', roles:['admin']},
-    {key:'anomalyflags', icon:'\u2691', label:'Anomaly Review', roles:['admin']},
-    {key:'mycredentials', icon:'\u25c8', label:'My Credentials', roles:['doctor','clinic_assistant'], portalOnly:true},
-    {key:'help', icon:'\u25cc', label:'Help', roles:['admin','clinic_assistant','doctor']},
+    {key:'overview', icon:'dashboard', label:'Overview', roles:['admin','clinic_assistant','doctor']},
+    {key:'mypatients', icon:'patients', label:'My Patients', roles:['doctor']},
+    {key:'checkin', icon:'scan', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
+    {key:'schedule', icon:'calendar', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
+    {key:'prescriptions', icon:'prescriptions', label:'Consultations & Charges', roles:['admin','clinic_assistant'], badge: pendingCount},
+    {key:'inventory', icon:'inventory', label:'Inventory', roles:['admin','clinic_assistant']},
+    {key:'ordersets', icon:'orderset', label:'Order Sets', roles:['admin','doctor']},
+    {key:'payment', icon:'payment', label:'Payment', roles:['admin','clinic_assistant']},
+    {key:'claims', icon:'claims', label:'Claims', roles:['admin','clinic_assistant']},
+    {key:'workinghours', icon:'clock', label:'Working Hours', roles:['admin']},
+    {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
+    {key:'staff', icon:'family', label:'Staff', roles:['admin']},
+    {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
+    {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
+    {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant'], portalOnly:true},
+    {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
   if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
@@ -4875,6 +4976,7 @@ export default function ClinicOpsApp() {
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
+        {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
         {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}

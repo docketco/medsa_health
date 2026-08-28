@@ -2,28 +2,7 @@ import { useState, useEffect, useRef, isValidElement, cloneElement, Children } f
 import { supabase } from '../../lib/supabase'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
-
-// Clean line-style vector icons for the home screen, replacing the
-// placeholder geometric glyphs (◎ ▣ ◈ etc) with something actually
-// legible as records/insurance/prescriptions/etc at a glance. Inherits
-// its colour from the parent via currentColor, so it drops straight
-// into the same coloured icon tiles already in use.
-const ICON_PATHS = {
-  records: <><path d="M6 3.5h9l3 3V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14.5 3.5V7h3.5"/><path d="M8 12h8M8 15h8M8 9h4"/></>,
-  insurance: <path d="M12 3 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3Zm-2.5 8.5 1.8 1.8 3.7-3.7"/>,
-  prescriptions: <><path d="m6.5 17.5 8-8a3 3 0 1 1 4 4l-8 8a3 3 0 0 1-4-4Z"/><path d="m13 7 4 4"/></>,
-  calendar: <><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></>,
-  doctors: <><path d="M9 3v4a3 3 0 0 0 6 0V3"/><path d="M9 5H7a2 2 0 0 0-2 2v3a6 6 0 0 0 12 0V7a2 2 0 0 0-2-2h-2"/><circle cx="18.5" cy="16.5" r="2.5"/><path d="M18.5 13v-1.5"/></>,
-  family: <><circle cx="8.5" cy="8" r="3"/><circle cx="16" cy="9" r="2.4"/><path d="M3 20v-1.5A4.5 4.5 0 0 1 7.5 14h2A4.5 4.5 0 0 1 14 18.5V20"/><path d="M15.7 14.3A4 4 0 0 1 19 18v2"/></>,
-  alert: <><path d="M12 3 3 8v5c0 4.5 3.6 7.6 9 9 5.4-1.4 9-4.5 9-9V8l-9-5Z"/><path d="M12 8v5"/><circle cx="12" cy="16" r="0.9" fill="currentColor" stroke="none"/></>,
-  storage: <><path d="M12 4c-4.4 0-7 1.6-7 3s2.6 3 7 3 7-1.6 7-3-2.6-3-7-3Z"/><path d="M5 7v5c0 1.4 2.6 3 7 3s7-1.6 7-3V7"/><path d="M5 12v5c0 1.4 2.6 3 7 3s7-1.6 7-3v-5"/></>,
-  community: <><path d="M12 4c4.4 0 8 2.8 8 6.3S16.4 16.6 12 16.6c-.8 0-1.6-.1-2.3-.3L6 18l1-3.2C5.7 13.5 5 12 5 10.3 5 6.8 7.6 4 12 4Z"/></>,
-}
-function Icon({ name, size=20, style }) {
-  const body = ICON_PATHS[name]
-  if (!body) return null
-  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>{body}</svg>
-}
+import Icon from '../shared/Icon'
 
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
@@ -3905,7 +3884,7 @@ export default function PatientApp({ liveData={} }) {
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群'}
-  const navItems=[{key:'home',icon:'◎',en:'Home',zh:'主頁'},{key:'records',icon:'▣',en:'Records',zh:'記錄'},{key:'doctors',icon:'◈',en:'Find care',zh:'尋找'},{key:'calendar',icon:'◇',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'◉',en:'Insurance',zh:'保險'}]
+  const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
@@ -3941,7 +3920,7 @@ export default function PatientApp({ liveData={} }) {
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
           <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
-            <span style={{fontSize:'20px',lineHeight:1}}>{item.icon}</span>
+            <Icon name={item.icon} size={20}/>
             <span>{isEn?item.en:item.zh}</span>
           </div>
         ))}
