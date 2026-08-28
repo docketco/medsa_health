@@ -88,8 +88,43 @@ function StaffLogin({ onLogin }) {
   const [pinError,setPinError]=useState(false)
   const [checkingPin,setCheckingPin]=useState(false)
   const [selected,setSelected]=useState(null)
-  const [stage,setStage]=useState('pick') // pick | pin | department
+  const [stage,setStage]=useState('pick') // pick | pin | department | forgot | forgot_otp
   const [chosenDept,setChosenDept]=useState(null)
+  const [forgotSending,setForgotSending]=useState(false)
+  const [forgotError,setForgotError]=useState(null)
+  const [forgotMaskedEmail,setForgotMaskedEmail]=useState(null)
+  const [forgotDevCode,setForgotDevCode]=useState(null)
+  const [otpCode,setOtpCode]=useState('')
+  const [newPassword,setNewPassword]=useState('')
+  const [resetting,setResetting]=useState(false)
+  const [resetDone,setResetDone]=useState(false)
+
+  async function handleForgotPassword() {
+    setForgotSending(true)
+    setForgotError(null)
+    const res = await fetch('/api/staff/send_password_reset_otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ medsaId: selected.id }),
+    })
+    const data = await res.json()
+    setForgotSending(false)
+    if (data.status === 'NO_EMAIL_ON_FILE') { setForgotError(data.message); return }
+    if (data.status !== 'SENT') { setForgotError(data.message || 'Could not send a reset code.'); return }
+    setForgotMaskedEmail(data.email)
+    setForgotDevCode(data.devOnlyCode) // no live email provider yet - see API route
+    setStage('forgot_otp')
+  }
+
+  async function handleResetPassword() {
+    setResetting(true)
+    setForgotError(null)
+    const res = await fetch('/api/staff/reset_password', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ medsaId: selected.id, code: otpCode, newPassword }),
+    })
+    const data = await res.json()
+    setResetting(false)
+    if (data.status !== 'OK') { setForgotError(data.message || 'Could not reset password.'); return }
+    setResetDone(true)
+  }
 
   const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
   const ROLE_COLORS = { doctor:C.green, clinic_assistant:C.blue, admin:C.purple }
@@ -142,6 +177,7 @@ const mapped = (data||[]).map(s => ({
           <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>
             {stage==='pick'&&'Select your account to sign in'}
             {stage==='pin'&&'Enter your PIN'}
+            {(stage==='forgot'||stage==='forgot_otp')&&'Reset your password'}
             {stage==='department'&&'Which department are you working in today?'}
           </div>
         </div>
@@ -171,10 +207,41 @@ const mapped = (data||[]).map(s => ({
             <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="Password"
               style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
             {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect password</div>}
-            <div style={{display:'flex',gap:'8px'}}>
+            <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
               <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('');setPinError(false);setStage('pick')}}>Back</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm} disabled={checkingPin||!pin}>{checkingPin?'Checking...':'Sign in'}</Btn>
             </div>
+            <div onClick={()=>{setForgotError(null);setStage('forgot')}} style={{fontSize:'12px',color:C.green,textAlign:'center',cursor:'pointer'}}>Forgot password?</div>
+          </div>
+        )}
+        {stage==='forgot'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>Reset {selected.name}'s password</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center',lineHeight:1.5}}>We'll send a one-time code to the email on file for this account.</div>
+            {forgotError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>{forgotError}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setStage('pin');setForgotError(null)}}>Back</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={handleForgotPassword} disabled={forgotSending}>{forgotSending?'Sending…':'Send code'}</Btn>
+            </div>
+          </div>
+        )}
+        {stage==='forgot_otp'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            {!resetDone?<>
+              <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>Enter the code sent to {forgotMaskedEmail}</div>
+              {forgotDevCode&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'14px',lineHeight:1.5}}>◇ No live email provider is connected yet, so here's the code directly: <strong>{forgotDevCode}</strong></div>}
+              <input value={otpCode} onChange={e=>setOtpCode(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'10px',boxSizing:'border-box'}}/>
+              <input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="New password (8+ chars, 1 number, 1 capital, 1 special)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'14px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+              {forgotError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>{forgotError}</div>}
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1}} onClick={()=>{setStage('pin');setOtpCode('');setNewPassword('');setForgotError(null)}}>Cancel</Btn>
+                <Btn variant="primary" style={{flex:1}} onClick={handleResetPassword} disabled={resetting||!otpCode||!newPassword}>{resetting?'Resetting…':'Reset password'}</Btn>
+              </div>
+            </>:<>
+              <div style={{fontSize:'14px',fontWeight:600,marginBottom:'8px',textAlign:'center',color:C.green}}>✓ Password reset</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center'}}>Sign in with your new password.</div>
+              <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setStage('pin');setOtpCode('');setNewPassword('');setPin('');setResetDone(false)}}>Continue</Btn>
+            </>}
           </div>
         )}
         {stage==='department'&&(
@@ -2180,7 +2247,12 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             ? "outside this patient's consent window, so clinical details aren't shown here."
             : 'no consent is on file for this patient yet, so clinical details aren\'t shown here.'} Scheduling changes still work below.
         </div>}
-        {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&role!=='doctor'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
+        {/* Was front-desk-only - a doctor sitting across from the
+            patient during the actual visit can just as legitimately
+            log verbal consent themselves, and gating this to front
+            desk meant a doctor was stuck waiting on someone else for
+            an appointment that was scheduled for right now. */}
+        {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
         {!loadingPatient&&!withinDataWindow&&fullPatient&&!accessRequestStatus&&<Btn style={{width:'100%',marginBottom:'14px'}} onClick={handleRequestAccess} disabled={sendingAccessRequest}>{sendingAccessRequest?'Sending…':'Request record access ahead of visit'}</Btn>}
         {!loadingPatient&&accessRequestStatus==='pending'&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>◇ Request sent to patient for approval. Records will be available here once granted.</div>}
         {!loadingPatient&&accessRequestStatus==='approved'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Patient approved this request.</div>}
@@ -2397,6 +2469,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newDob,setNewDob]=useState('')
   const [newEpcLink,setNewEpcLink]=useState('')
   const [newHkid,setNewHkid]=useState('')
+  const [newEmail,setNewEmail]=useState('')
   const [newIsNurse,setNewIsNurse]=useState(false)
   const [newMchkDeclared,setNewMchkDeclared]=useState(false)
   const [newSchemes,setNewSchemes]=useState([])
@@ -2453,6 +2526,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     const skippedRows = []
     for (const row of rows) {
       if (!row.full_name || !row.role || !row.department) { skippedRows.push(`${row.full_name||'(no name)'} - missing full_name/role/department`); continue }
+      if (!row.email?.trim()) { skippedRows.push(`${row.full_name} - email required (used for password reset)`); continue }
       if (row.role==='doctor' && !row.date_of_birth) { skippedRows.push(`${row.full_name} - doctors require date_of_birth`); continue }
       const rowIsNurse = row.role==='clinic_assistant' && ['true','yes','1'].includes((row.is_nurse||'').toLowerCase())
       // e-PC and HKID required per row for doctors and nurse-flagged
@@ -2480,7 +2554,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       }
       const { error: insErr } = await supabase.from('staff_credentials').insert({
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
-        full_name:row.full_name, role:row.role, department:row.department,
+        full_name:row.full_name, email:row.email.trim(), role:row.role, department:row.department,
         registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
         sex:row.sex||null, date_of_birth:row.date_of_birth||null,
         has_epc: !!row.epc_link?.trim(),
@@ -2514,6 +2588,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
 
   async function handleOnboard() {
     if (!newFirstName || !newDept || !newPin) return
+    if (!newEmail?.trim()) { setOnboardError('Email is required - it\'s how this person resets their own password later.'); return }
     if (newPin.length < 8) { setOnboardError('Password must be at least 8 characters.'); return }
     if (!/[0-9]/.test(newPin)) { setOnboardError('Password must contain at least one number.'); return }
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
@@ -2547,7 +2622,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     const newMedsaId = `MED-${Date.now().toString(36).toUpperCase()}`
     const { error: onboardErr } = await supabase.from('staff_credentials').insert({
       institution_source:'clinic_ops', institution_id:institutionId, medsa_id:newMedsaId,
-      full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, role:newRole, department:newDept,
+      full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, email:newEmail.trim(), role:newRole, department:newDept,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
       sex:newSex||null, date_of_birth:newDob||null,
@@ -2569,7 +2644,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     setSaving(false)
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
-    setNewFirstName('');setNewLastName('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
+    setNewFirstName('');setNewLastName('');setNewEmail('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
     setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
     load()
   }
@@ -2606,7 +2681,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {'\u2191'} Bulk import staff CSV
         <input type="file" accept=".csv" onChange={handleStaffBulkFile} style={{display:'none'}}/>
       </label>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Requires full_name, email (used for password reset), role (doctor / clinic_assistant / admin), department per row (doctors also require date_of_birth). Doctors and nurse-flagged clinic assistants also require epc_link and hkid - together these are the real identity match: if the same HKID + e-PC is already on file from another clinic, this links to that same practitioner instead of creating a disconnected new one, so they log in once and switch clinics. Add is_nurse (true/false) for a clinic_assistant who's also a credentialed nurse. Everyone imported gets a real, hashed temporary password (TempPass2026!) - each person changes it themselves once they can log in. Doctors still confirm their own MCHK declaration individually; this is never set on their behalf. Staff without an e-PC (not a doctor or nurse) are onboarded separately by Medsa directly with their own generated QR code.</div>
       {bulkImportResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Staff import: {bulkImportResult.imported} of {bulkImportResult.total} rows imported{bulkImportResult.skipped>0?`, ${bulkImportResult.skipped} skipped`:''}.
         {bulkImportResult.skippedRows?.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkImportResult.skippedRows.join(', ')}</div>}
@@ -2619,6 +2694,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         {showOnboard&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',maxWidth:420}}>
           <input value={newFirstName} onChange={e=>setNewFirstName(e.target.value)} placeholder="First name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={newLastName} onChange={e=>setNewLastName(e.target.value)} placeholder="Last name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newEmail} onChange={e=>setNewEmail(e.target.value)} placeholder="Email (required - used for password reset)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
             <option value="doctor">Doctor</option>
             <option value="clinic_assistant">Clinic Assistant</option>
@@ -2679,7 +2755,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(

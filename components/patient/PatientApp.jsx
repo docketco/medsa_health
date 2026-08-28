@@ -2551,6 +2551,12 @@ function ForumScreen({ isEn, patient={} }) {
     setView('thread')
     const { data } = await supabase.from('forum_posts').select('*').eq('product_id', product.id).order('created_at')
     setPosts(data||[])
+    // One review per patient per product, like Amazon - if they already
+    // reviewed this, open straight into editing it instead of a blank
+    // form that would just create a second, disconnected post.
+    const mine = (data||[]).find(p=>p.patient_id===patientId)
+    setPostBody(mine?.body || '')
+    setPostRating(mine?.rating || null)
   }
 
   async function handleCreateProduct() {
@@ -2586,20 +2592,34 @@ function ForumScreen({ isEn, patient={} }) {
     if (containsProfanity(postBody)) { setPostError(isEn?'Please remove inappropriate language before posting.':'請移除不當用語後再發佈。'); return }
     setPostError(null)
     setPosting(true)
-    const pseudonym = await getOrCreateForumIdentity(patientId)
-    await supabase.from('forum_posts').insert({
-      product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
-      rating: postRating || null,
-    })
-    const updatedFields = { post_count: (activeProduct.post_count||0)+1 }
-    if (postRating) {
-      updatedFields.rating_sum = (activeProduct.rating_sum||0) + postRating
-      updatedFields.rating_count = (activeProduct.rating_count||0) + 1
+    const existing = posts.find(p=>p.patient_id===patientId)
+
+    if (existing) {
+      // Editing their own review, not creating a second one - rating
+      // totals move by the difference, not a flat re-add.
+      await supabase.from('forum_posts').update({ body: postBody.trim(), rating: postRating || null }).eq('id', existing.id)
+      const oldRating = existing.rating || 0, newRating = postRating || 0
+      const ratingCountDelta = (oldRating>0?1:0) !== (newRating>0?1:0) ? (newRating>0?1:-1) : 0
+      const updatedFields = {
+        rating_sum: (activeProduct.rating_sum||0) - oldRating + newRating,
+        rating_count: (activeProduct.rating_count||0) + ratingCountDelta,
+      }
+      await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
+      setActiveProduct(prev=>({...prev, ...updatedFields}))
+    } else {
+      const pseudonym = await getOrCreateForumIdentity(patientId)
+      await supabase.from('forum_posts').insert({
+        product_id: activeProduct.id, patient_id: patientId, pseudonym, body: postBody.trim(),
+        rating: postRating || null,
+      })
+      const updatedFields = { post_count: (activeProduct.post_count||0)+1 }
+      if (postRating) {
+        updatedFields.rating_sum = (activeProduct.rating_sum||0) + postRating
+        updatedFields.rating_count = (activeProduct.rating_count||0) + 1
+      }
+      await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
+      setActiveProduct(prev=>({...prev, ...updatedFields}))
     }
-    await supabase.from('forum_products').update(updatedFields).eq('id', activeProduct.id)
-    setActiveProduct(prev=>({...prev, ...updatedFields}))
-    setPostBody('')
-    setPostRating(null)
     setPosting(false)
     const { data } = await supabase.from('forum_posts').select('*').eq('product_id', activeProduct.id).order('created_at')
     setPosts(data||[])
@@ -2624,27 +2644,18 @@ function ForumScreen({ isEn, patient={} }) {
       <div style={{padding:'0 16px'}}>
         {posts.length===0&&<div style={{textAlign:'center',padding:'30px 0',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first to share.':'尚無貼文 - 成為第一個分享的人。'}</div>}
         {posts.map(p=>{
-          // Pseudonym is already stable per patient (getOrCreateForumIdentity),
-          // so the same person always shows the same name here - this adds
-          // a consistent colour tag so repeat commenters in one thread are
-          // visually obvious at a glance, not just readable if you compare
-          // names yourself. Posts stay in chronological order (already
-          // queried oldest-first) rather than being regrouped by author.
-          const sameAuthor = posts.filter(x=>x.pseudonym===p.pseudonym)
-          const authorIndex = sameAuthor.findIndex(x=>x.id===p.id) + 1
-          let hash = 0
-          for (let i=0;i<p.pseudonym.length;i++) hash = (hash*31 + p.pseudonym.charCodeAt(i)) % 360
-          const tagColor = `hsl(${hash}, 55%, 45%)`
+          const isMine = p.patient_id===patientId
           return (
-            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px',borderLeft:`3px solid ${tagColor}`}}>
+            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
-                <span style={{fontSize:'12px',fontWeight:700,color:tagColor}}>{p.pseudonym}{sameAuthor.length>1?` · ${authorIndex}/${sameAuthor.length} in this thread`:''}</span>
+                <span style={{fontSize:'12px',fontWeight:700,color:C.textSub}}>{p.pseudonym}{isMine?` · ${isEn?'Your review':'您的評論'}`:''}</span>
                 <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
               </div>
               {p.rating&&<div style={{fontSize:'12px',color:'#d4a017',marginBottom:'4px'}}>{'★'.repeat(p.rating)}{'☆'.repeat(5-p.rating)}</div>}
               <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{p.body}</div>
-              {!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
-              {p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
+              {isMine&&<div onClick={()=>{setPostBody(p.body);setPostRating(p.rating||null)}} style={{fontSize:'10px',color:C.green,fontWeight:600,marginTop:'8px',cursor:'pointer'}}>{isEn?'Edit your review':'編輯您的評論'}</div>}
+              {!isMine&&!p.flagged_for_review&&<div onClick={()=>handleReport(p)} style={{fontSize:'10px',color:C.textMuted,marginTop:'8px',cursor:'pointer'}}>{isEn?'Report':'檢舉'}</div>}
+              {!isMine&&p.flagged_for_review&&<div style={{fontSize:'10px',color:C.amber,marginTop:'8px'}}>{isEn?'Reported - under review':'已檢舉 - 審核中'}</div>}
             </Card>
           )
         })}
@@ -2656,7 +2667,9 @@ function ForumScreen({ isEn, patient={} }) {
         </div>
         <textarea value={postBody} onChange={e=>setPostBody(e.target.value)} rows={3} placeholder={isEn?'Share your experience, anonymously...':'匿名分享您的經驗...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',fontFamily:'inherit',resize:'none'}}/>
         {postError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{postError}</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>{posting?(isEn?'Posting...':'發佈中...'):(isEn?'Post anonymously':'匿名發佈')}</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handlePost} disabled={posting||!postBody.trim()}>
+          {posting?(isEn?'Saving...':'儲存中...'):(posts.some(p=>p.patient_id===patientId)?(isEn?'Update your review':'更新評論'):(isEn?'Post your review':'發佈評論'))}
+        </Btn>
       </div>
     </div>
   )
