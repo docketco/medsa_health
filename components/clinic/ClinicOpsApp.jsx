@@ -4750,7 +4750,7 @@ export default function ClinicOpsApp() {
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
 
   const allNavItems = [
-    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant']},
+    {key:'overview', icon:'\u25a3', label:'Overview', roles:['admin','clinic_assistant','doctor']},
     {key:'mypatients', icon:'\u25ce', label:'My Patients', roles:['doctor']},
     {key:'checkin', icon:'\u2b21', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'\u25c7', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
