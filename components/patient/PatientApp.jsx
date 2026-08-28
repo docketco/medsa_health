@@ -787,7 +787,7 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
   )
 }
 
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, onShareBundle }) {
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle }) {
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
@@ -860,6 +860,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         const lines = doc.splitTextToSize(`Notes: ${r.notes}`, pageWidth-28)
         doc.text(lines, 14, y)
         y += lines.length * 5
+      }
+      const receipt = transactions.find(t => t.medical_record_id === r.id)
+      if (receipt) {
+        doc.text(`Receipt: HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK')}`, 14, y)
+        y += 6
       }
       y += 8
       doc.setDrawColor(220,220,220)
@@ -1093,7 +1098,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           </Card>}
         </div>}
         {!hasLiveData&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No records yet - these appear once a clinic logs a visit.':'暫無記錄 - 診所記錄就診後將顯示於此。'}</div>}
-        {hasLiveData&&records.map(r=>({
+        {hasLiveData&&records.map(r=>{
+          const receipt = transactions.find(t => t.medical_record_id === r.id)
+          return {
           id: r.id,
           icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
           bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:C.greenLight,
@@ -1101,8 +1108,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
           date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
           src: r.source==='synced'?'Synced':'Manual',
-          details: [['Diagnosis',r.diagnosis||'—'],['Notes',r.notes||'—'],['Department',r.department||'—']],
-        })).map(r=>(
+          details: [
+            ['Diagnosis',r.diagnosis||'—'], ['Notes',r.notes||'—'], ['Department',r.department||'—'],
+            ...(receipt ? [['Receipt', `HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`]] : []),
+          ],
+        }}).map(r=>(
           <Card key={r.id} onClick={()=>bundleMode?toggleSelect(r.id):setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
               {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(r.id)?C.green:C.border}`,background:selectedIds.has(r.id)?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(r.id)?'\u2713':''}</div>}
@@ -1118,13 +1128,29 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   if (navigator.share) navigator.share({title:r.title, text})
                   else { navigator.clipboard.writeText(text); alert(isEn?'Copied to clipboard':'已複製到剪貼簿') }
                 }}>Share</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>{
-                  const text = `${r.title}\n${r.date}\n${r.details.map(([l,v])=>`${l}: ${v}`).join('\n')}`
-                  const blob = new Blob([text], {type:'text/plain'})
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={async ()=>{
+                  const { jsPDF } = await import('jspdf')
+                  const doc = new jsPDF()
+                  const pageWidth = doc.internal.pageSize.getWidth()
+                  let y = 20
+                  doc.setFontSize(14)
+                  doc.setFont(undefined, 'bold')
+                  doc.text(r.title || 'Consultation', 14, y)
+                  y += 8
+                  doc.setFont(undefined, 'normal')
+                  doc.setFontSize(10)
+                  doc.text(r.date || '', 14, y)
+                  y += 8
+                  for (const [l,v] of r.details) {
+                    const lines = doc.splitTextToSize(`${l}: ${v}`, pageWidth-28)
+                    doc.text(lines, 14, y)
+                    y += lines.length * 6
+                  }
+                  const blob = doc.output('blob')
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
-                  a.href = url; a.download = `${r.title.replace(/[^a-z0-9]/gi,'_')}.txt`
-                  a.click()
+                  a.href = url; a.download = `${r.title.replace(/[^a-z0-9]/gi,'_')}.pdf`
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a)
                   URL.revokeObjectURL(url)
                 }}>Download</Btn>
               </div>
@@ -2113,6 +2139,133 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
   )
 }
 
+// ── MY INQUIRIES TAB ─────────────────────────────────────────────────────────
+// Same inquiry_messages thread the agent side (AgentApp.jsx) reads and
+// writes - not a separate system. If the patient wants a different
+// agent, this just releases the claim (clears claimed_by_agent_id) so
+// the inquiry re-enters the same first-come-first-served pool for
+// another agent to pick up, rather than routing through Medsa Admin.
+function PatientInquiryThread({ inquiry, patientName }) {
+  const [messages,setMessages]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [body,setBody]=useState('')
+  const [sending,setSending]=useState(false)
+  const [attachment,setAttachment]=useState(null)
+  const [uploading,setUploading]=useState(false)
+  const [uploadError,setUploadError]=useState(null)
+
+  async function load() {
+    const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
+    setMessages(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [inquiry.id])
+
+  async function handleFile(file) {
+    setUploading(true)
+    setUploadError(null)
+    const path = `${inquiry.id}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('inquiry-attachments').upload(path, file)
+    if (error) { setUploadError(error.message); setUploading(false); return }
+    const { data } = supabase.storage.from('inquiry-attachments').getPublicUrl(path)
+    setAttachment({ url: data.publicUrl, name: file.name })
+    setUploading(false)
+  }
+
+  async function handleSend() {
+    if (!body.trim() && !attachment) return
+    setSending(true)
+    await supabase.from('inquiry_messages').insert({
+      inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patientName,
+      body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+    })
+    setBody(''); setAttachment(null); setSending(false)
+    load()
+  }
+
+  return (
+    <div style={{marginTop:'10px',borderTop:`0.5px solid ${C.border}`,paddingTop:'10px'}}>
+      {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading messages…</div>}
+      {!loading&&messages.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>No messages yet.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px',maxHeight:260,overflowY:'auto'}}>
+        {messages.map(m=>(
+          <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+            {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
+            {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
+          </div>
+        ))}
+      </div>
+      <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Message your agent..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
+      <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+        <label style={{fontSize:'11px',color:C.textSub,cursor:'pointer',padding:'8px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}>
+          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Attach file')}
+          <input type="file" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+        </label>
+        <Btn style={{flex:1}} onClick={handleSend} disabled={sending||uploading}>{sending?'Sending…':'Send'}</Btn>
+      </div>
+      {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Attachment failed: {uploadError}</div>}
+    </div>
+  )
+}
+
+function MyInquiriesTab({ isEn, patient={} }) {
+  const [inquiries,setInquiries]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [expandedId,setExpandedId]=useState(null)
+  const [switching,setSwitching]=useState(null)
+
+  async function load() {
+    if (!patient?.id) { setLoading(false); return }
+    const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(name)')
+      .eq('patient_id', patient.id).order('created_at',{ascending:false})
+    setInquiries(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [patient?.id])
+
+  async function handleRequestSwitch(i) {
+    setSwitching(i.id)
+    await supabase.from('plan_inquiries').update({
+      claimed_by_agent_id: null, claimed_at: null, switch_requested_at: new Date().toISOString(),
+    }).eq('id', i.id)
+    setSwitching(null)
+    load()
+  }
+
+  return (
+    <div style={{padding:'16px'}}>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
+      {!loading&&inquiries.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No plan inquiries yet - ask about a plan from Compare plans.':'暫無計劃查詢 - 請於「比較計劃」查詢。'}</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+        {inquiries.map(i=>(
+          <Card key={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
+            <div style={{padding:'14px 16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:'14px',fontWeight:500}}>{i.insurance_plans?.plan_name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
+                </div>
+                {i.agents?.name
+                  ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.name}</span>
+                  : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>}
+              </div>
+              {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}>
+                {i.agents?.name
+                  ? <>
+                    <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
+                    <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
+                  </>
+                  : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>}
+              </div>}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
 // The "auto-attach" version of this tab used to be a stub (MEDSA_RECORDS
 // was always {}) - matching a real record to a generic checklist line
@@ -2959,7 +3112,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Compare plans':'比較計劃'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
@@ -3044,6 +3197,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           </div>
         </div>
       </>}
+
+      {/* ── MY INQUIRIES ── */}
+      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient}/>}
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records}/>}
@@ -3824,7 +3980,7 @@ export default function PatientApp({ liveData={} }) {
   useEffect(() => {
     if (!signedInPatient?.id) { setRealPatientData(null); return }
     async function loadRealData() {
-      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes] = await Promise.all([
+      const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes] = await Promise.all([
         supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
         supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
         supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
@@ -3832,11 +3988,17 @@ export default function PatientApp({ liveData={} }) {
         supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
         supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
         supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
+        supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
       ])
       setRealPatientData({
         conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
-        records: recRes.data||[], appointments: apptRes.data||[], claims: claimRes.data||[],
-        vaccinations: vaxRes.data||[],
+        // A record shouldn't appear to the patient until the visit is
+        // actually paid for/billed - 'draft' and 'submitted' are still
+        // in progress at the clinic. Anything else (including legacy
+        // rows with no record_status at all) stays visible as before.
+        records: (recRes.data||[]).filter(r => r.record_status !== 'draft' && r.record_status !== 'submitted'),
+        appointments: apptRes.data||[], claims: claimRes.data||[],
+        vaccinations: vaxRes.data||[], transactions: txnRes.data||[],
       })
     }
     loadRealData()
@@ -3872,6 +4034,7 @@ export default function PatientApp({ liveData={} }) {
   }
 
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
+  const liveTransactions = signedInPatient ? (realPatientData?.transactions||[]) : []
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
   const liveMedications = signedInPatient ? (realPatientData?.medications||[]) : (liveData.medications || [])
@@ -3900,7 +4063,7 @@ export default function PatientApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}

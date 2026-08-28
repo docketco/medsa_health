@@ -511,6 +511,159 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
   )
 }
 
+// New plan inquiries (someone shopping for a policy, not an existing
+// policyholder) - first-come-first-served claiming, then a direct
+// message thread with the applicant once claimed. If the patient asks
+// to switch agents, the inquiry is simply released back into the
+// unclaimed pool for the next agent to claim, rather than routing
+// through Medsa Admin.
+function InquiryMessageThread({ inquiry, agentName }) {
+  const [messages,setMessages]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [body,setBody]=useState('')
+  const [sending,setSending]=useState(false)
+  const [attachment,setAttachment]=useState(null)
+  const [uploading,setUploading]=useState(false)
+  const [uploadError,setUploadError]=useState(null)
+
+  async function load() {
+    const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
+    setMessages(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [inquiry.id])
+
+  async function handleFile(file) {
+    setUploading(true)
+    setUploadError(null)
+    const path = `${inquiry.id}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('inquiry-attachments').upload(path, file)
+    if (error) { setUploadError(error.message); setUploading(false); return }
+    const { data } = supabase.storage.from('inquiry-attachments').getPublicUrl(path)
+    setAttachment({ url: data.publicUrl, name: file.name })
+    setUploading(false)
+  }
+
+  async function handleSend() {
+    if (!body.trim() && !attachment) return
+    setSending(true)
+    await supabase.from('inquiry_messages').insert({
+      inquiry_id: inquiry.id, sender_type: 'agent', sender_name: agentName,
+      body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+    })
+    setBody(''); setAttachment(null); setSending(false)
+    load()
+  }
+
+  return (
+    <div style={{marginTop:'10px',borderTop:`0.5px solid ${C.border}`,paddingTop:'10px'}}>
+      {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading messages…</div>}
+      {!loading&&messages.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>No messages yet - say hello.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px',maxHeight:260,overflowY:'auto'}}>
+        {messages.map(m=>(
+          <div key={m.id} style={{alignSelf:m.sender_type==='agent'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='agent'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='agent'?'You':'Patient')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+            {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
+            {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
+          </div>
+        ))}
+      </div>
+      <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Message the applicant, propose a meeting time, ..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
+      <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+        <label style={{fontSize:'11px',color:C.textSub,cursor:'pointer',padding:'8px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}>
+          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Attach file')}
+          <input type="file" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
+        </label>
+        <Btn variant="primary" style={{flex:1}} onClick={handleSend} disabled={sending||uploading}>{sending?'Sending…':'Send'}</Btn>
+      </div>
+      {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Attachment failed: {uploadError}</div>}
+    </div>
+  )
+}
+
+function PlanInquiriesScreen({ agent }) {
+  const [unclaimed,setUnclaimed]=useState([])
+  const [mine,setMine]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [claimingId,setClaimingId]=useState(null)
+  const [claimNotice,setClaimNotice]=useState(null)
+  const [expandedId,setExpandedId]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data: unclaimedRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
+      .is('claimed_by_agent_id', null).order('created_at',{ascending:false})
+    setUnclaimed(unclaimedRows||[])
+    const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
+      .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
+    setMine(mineRows||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [agent.id])
+
+  // Atomic first-come-first-served claim - the .is('claimed_by_agent_id', null)
+  // filter means this UPDATE only affects the row if nobody has claimed
+  // it yet. If another agent's claim beat this one, the row simply
+  // doesn't match anymore and .select() comes back empty - that's how
+  // we know to tell this agent they lost the race, instead of two
+  // agents both believing they got the same lead.
+  async function handleClaim(inquiry) {
+    setClaimingId(inquiry.id)
+    setClaimNotice(null)
+    const { data } = await supabase.from('plan_inquiries')
+      .update({ claimed_by_agent_id: agent.id, claimed_at: new Date().toISOString() })
+      .eq('id', inquiry.id).is('claimed_by_agent_id', null).select()
+    if (!data || data.length === 0) {
+      setClaimNotice('Someone else claimed this inquiry first.')
+    }
+    setClaimingId(null)
+    load()
+  }
+
+  return (
+    <PageWrap>
+      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>New Plan Inquiries</div>
+      {claimNotice&&<div style={{background:C.amberLight,color:C.amber,borderRadius:'8px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px'}}>{claimNotice}</div>}
+
+      <SecLabel>Unclaimed - first to claim gets the lead</SecLabel>
+      {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
+      {!loading&&unclaimed.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries right now.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'24px'}}>
+        {unclaimed.map(i=>(
+          <Card key={i.id} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+              </div>
+              <Btn variant="primary" onClick={()=>handleClaim(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Claiming…':'Claim'}</Btn>
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      <SecLabel>Your claimed inquiries</SecLabel>
+      {!loading&&mine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>None claimed yet.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+        {mine.map(i=>(
+          <Card key={i.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
+              </div>
+              {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
+            </div>
+            {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
+          </Card>
+        ))}
+      </div>
+    </PageWrap>
+  )
+}
+
 function RenewalsScreen({ agent, policies, onRenewed }) {
   const [renewingPolicy,setRenewingPolicy]=useState(null)
   const withRenewal = policies.filter(p=>p.renewal_date).map(p=>({...p, d:daysUntil(p.renewal_date)})).sort((a,b)=>a.d-b.d)
@@ -686,6 +839,7 @@ export default function AgentApp() {
   const [screen,setScreen]=useState('overview')
   const [policies,setPolicies]=useState([])
   const [inquiries,setInquiries]=useState([])
+  const [newInquiryCount,setNewInquiryCount]=useState(0)
   const [loading,setLoading]=useState(true)
 
   async function loadData(a) {
@@ -699,6 +853,9 @@ export default function AgentApp() {
 
     const { data: inquiryRows } = await supabase.from('agent_claim_inquiries').select('*').eq('agent_id', a.id).order('created_at',{ascending:false})
     setInquiries(inquiryRows||[])
+
+    const { count } = await supabase.from('plan_inquiries').select('id', {count:'exact', head:true}).is('claimed_by_agent_id', null)
+    setNewInquiryCount(count||0)
     setLoading(false)
   }
 
@@ -718,6 +875,7 @@ export default function AgentApp() {
     {key:'overview', icon:'\u25a3', label:'Overview'},
     {key:'policies', icon:'\u25c7', label:'Policies'},
     {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
+    {key:'planinquiries', icon:'\u25c6', label:'New Plan Inquiries', badge: newInquiryCount},
     {key:'claimsreview', icon:'\u26a0', label:'Pending Claims'},
     {key:'referrals', icon:'\u25c8', label:'Referrals'},
     {key:'renewals', icon:'\u25ce', label:'Renewals', badge: renewalsSoonCount},
@@ -734,6 +892,7 @@ export default function AgentApp() {
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>setScreen('newpolicy')}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} onBack={()=>setScreen('policies')} onSaved={()=>{loadData(agent);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
+        {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent}/>}
         {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
         {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
