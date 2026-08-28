@@ -3,9 +3,14 @@ import crypto from 'crypto'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
-// Verifies the OTP from send_password_reset_otp.js, then calls the
-// existing set_staff_password RPC (the same one onboarding uses) so
-// the actual hashing logic stays in exactly one place.
+// Verifies the OTP from send_password_reset_otp.js, then calls
+// admin_reset_staff_password - NOT set_staff_password, which turned
+// out to only ever write a password when pin_hash was still null (a
+// one-time onboarding guard), silently doing nothing for an actual
+// reset of an already-provisioned account. admin_reset_staff_password
+// always overwrites, and is locked to service_role only (this route
+// runs with SUPABASE_SERVICE_ROLE_KEY) so it can't be called from a
+// browser to take over an arbitrary account.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const { medsaId, code, newPassword } = req.body
@@ -24,7 +29,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'INVALID', message: 'Incorrect code.' })
   }
 
-  const { error: pwErr } = await supabase.rpc('set_staff_password', { p_medsa_id: medsaId, p_new_password: newPassword })
+  const { error: pwErr } = await supabase.rpc('admin_reset_staff_password', { p_medsa_id: medsaId, p_new_password: newPassword })
   if (pwErr) return res.status(500).json({ status: 'ERROR', message: pwErr.message })
 
   await supabase.from('staff_credentials').update({
