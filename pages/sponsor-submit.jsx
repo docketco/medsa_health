@@ -85,6 +85,12 @@ export default function SponsorSubmitPage() {
     })
     if (insErr) { setError(insErr.message); setStage('form'); return }
     setStage('done')
+    // Best-effort - a missing/failed email never blocks the submission
+    // itself, which already succeeded above.
+    fetch('/api/sponsor/notify_submission', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sponsorEmail: sponsorEmail.trim(), sponsorName: sponsorName.trim(), title: title.trim() }),
+    }).catch(()=>{})
   }
 
   if (stage==='done') return (

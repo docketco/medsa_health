@@ -8,12 +8,14 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "jspdf": "^2.5.1",
+    "jsqr": "^1.4.0",
     "next": "14.2.3",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "@supabase/supabase-js": "^2.39.0",
-    "jspdf": "^2.5.1",
-    "jsqr": "^1.4.0"
+    "resend": "^6.24.0",
+    "stripe": "^22.6.0"
   },
   "devDependencies": {
     "vitest": "^2.1.0"
