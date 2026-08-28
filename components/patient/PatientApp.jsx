@@ -288,6 +288,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   // desk checks the patient in, and clears once their status is no longer
   // waiting/in_room.
   const [queueStatus,setQueueStatus]=useState({ checkedIn:false })
+  const [manualRefreshing,setManualRefreshing]=useState(false)
   const [doctorMessages,setDoctorMessages]=useState([])
   const [messagesLoading,setMessagesLoading]=useState(true)
   const [openThread,setOpenThread]=useState(null) // array of messages in one conversation, shown in a modal
@@ -451,6 +452,17 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   return (
     <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus(), onRefreshData?.()]) }}>
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
+
+      {/* A real, always-visible, clickable refresh - pull-to-refresh is
+          a drag gesture that's unreliable on desktop/mouse and easy to
+          miss even on touch. This works the same way every time,
+          regardless of device. */}
+      <div style={{display:'flex',justifyContent:'flex-end',padding:'10px 16px 0'}}>
+        <div onClick={async()=>{ if(manualRefreshing) return; setManualRefreshing(true); await Promise.all([loadDoctorMessages(), loadQueueStatus(), onRefreshData?.()]); setManualRefreshing(false) }} style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:C.textSub,cursor:'pointer'}}>
+          <span style={{display:'inline-block',transition:'transform 0.5s',transform:manualRefreshing?'rotate(360deg)':'none'}}>{'⟳'}</span>
+          {manualRefreshing?(isEn?'Refreshing…':'刷新中…'):(isEn?'Refresh':'刷新')}
+        </div>
+      </div>
 
       {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
       {urgentMessages.length>0&&(
@@ -1763,7 +1775,8 @@ function DoctorsScreen({ isEn, patient={} }) {
         consult_type: consultType,
         status: 'confirmed',
         reason_for_visit: reasonForVisit || null,
-        patient_pays: 80,
+        // No fabricated fee - real billing happens at the clinic after
+        // the visit (Payment screen), not a guessed amount at booking.
       })
       if (apptErr) throw apptErr
       setBooked(true)
@@ -1966,10 +1979,15 @@ function DoctorsScreen({ isEn, patient={} }) {
           </div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm & pay':'確認與付款'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm appointment':'確認預約'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+            {/* No fee/payment breakdown here - it was a fabricated fixed
+                HK$380/AIA-covers-$300/you-pay-$80 line shown to every
+                patient regardless of their real doctor's fee or their
+                actual insurer, if any. Billing happens for real at the
+                clinic after the visit, not here. */}
             <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
-              {[[isEn?'Doctor':'醫生',activeDoctor.name],[isEn?'Type':'診症方式',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],[isEn?'Date':'日期',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[isEn?'Language':'語言',selLang],[isEn?'Consultation fee':'診金','HK$380'],[isEn?'AIA covers':'AIA承保','HK$300'],[isEn?'You pay':'您需支付','HK$80']].map(([l,v],i,arr)=>(
+              {[[isEn?'Doctor':'醫生',activeDoctor.name],[isEn?'Type':'診症方式',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],[isEn?'Date':'日期',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[isEn?'Language':'語言',selLang]].map(([l,v],i,arr)=>(
                 <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>

@@ -319,6 +319,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
   const [justCheckedIn,setJustCheckedIn]=useState(null) // holds the patient name once confirmed, for a real success message
 
+  // Whether the found/searched patient is already sitting in today's
+  // queue - checked proactively so the button reads "Already checked
+  // in" up front, instead of only finding out after clicking "Check in"
+  // and getting an error back.
+  const [alreadyInQueue,setAlreadyInQueue]=useState(false)
+  async function checkAlreadyInQueue(patientId) {
+    const { data } = await supabase.from('clinic_queue').select('status')
+      .eq('patient_id', patientId).in('status', ['waiting','serving']).limit(1).maybeSingle()
+    setAlreadyInQueue(!!data)
+  }
+
   // Asked live at check-in (scan or search) rather than buried in a
   // separate screen - default on, staff taps it off if the patient
   // says no when asked. Never blocks the check-in itself either way,
@@ -397,6 +408,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setCheckingIn(false)
     if (result === true) {
       setJustCheckedIn(p.full_name)
+      setAlreadyInQueue(true)
       const { data: ticketRow } = await supabase.from('clinic_queue').select('ticket, queue_id')
         .eq('patient_id', p.id).order('checked_in_at', { ascending: false }).limit(1).maybeSingle()
       setPrintTicket(ticketRow ? {
@@ -426,6 +438,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setWalkInConsent(true)
     setCheckinNote(''); setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
     loadLastVitals(chosenPatient.id)
+    checkAlreadyInQueue(chosenPatient.id)
     // Real scan hardware isn't wired up yet - this simulates it by letting
     // you pick which patient's card is being "scanned," pulled from real
     // Supabase data, rather than always fetching one fixed demo patient.
@@ -452,7 +465,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     setRevealedClaimCode(null)
     setWalkInConsent(true)
     setCheckinNote(''); setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
-    if (data) loadLastVitals(data.id)
+    if (data) { loadLastVitals(data.id); checkAlreadyInQueue(data.id) } else { setAlreadyInQueue(false) }
     // Real status, not just "did I click the button this session" - a
     // fresh search should show whether the patient already approved or
     // denied a request from an earlier visit, not just "not sent yet."
@@ -574,13 +587,14 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             </div>}
             <div style={{display:'flex',gap:'10px'}}>
               <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in patient'}</Btn>
+              <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn||alreadyInQueue}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in patient'}</Btn>
             </div>
+            {alreadyInQueue&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in again (testing)</Btn>}
             {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in anyway (testing)</Btn>}
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
             <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
             {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);setCheckinNote('');setVitalsWeight('');setVitalsHeight('');setVitalsSaved(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);setCheckinNote('');setVitalsWeight('');setVitalsHeight('');setVitalsSaved(false);setAlreadyInQueue(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
@@ -620,9 +634,10 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
           </div>
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn}>{checkingIn?'Checking in...':'Check in now'}</Btn>
+            <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn||alreadyInQueue}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
+          {alreadyInQueue&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>doCheckIn(searchResult,true)} disabled={checkingIn}>Check in again (testing)</Btn>}
           {queues.length>1&&<div style={{marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Queue</div>
             <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
