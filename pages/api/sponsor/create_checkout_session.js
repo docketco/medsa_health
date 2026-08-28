@@ -8,6 +8,7 @@
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { sendEmail } from '../../../lib/email'
+import { grossUpForStripeFee } from '../../../lib/paymentFees'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -27,6 +28,11 @@ export default async function handler(req, res) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
 
+  // amountHKD is the amount Medsa wants to actually receive - the
+  // sponsor's card is charged the grossed-up amount so Stripe's cut
+  // comes out of that, not out of Medsa's quoted price.
+  const { grossAmountHKD, estimatedFeeHKD } = grossUpForStripeFee(amountHKD)
+
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
     payment_method_types: ['card'],
@@ -34,7 +40,7 @@ export default async function handler(req, res) {
       price_data: {
         currency: 'hkd',
         product_data: { name: `Medsa Health sponsored ${sub.item_type}: ${sub.title}` },
-        unit_amount: Math.round(amountHKD * 100),
+        unit_amount: Math.round(grossAmountHKD * 100),
       },
       quantity: 1,
     }],
@@ -45,7 +51,8 @@ export default async function handler(req, res) {
   })
 
   await supabase.from('home_carousel_submissions').update({
-    price_hkd: amountHKD, payment_status: 'pending',
+    price_hkd: amountHKD, gross_amount_hkd: grossAmountHKD, processing_fee_hkd: estimatedFeeHKD,
+    payment_status: 'pending',
     stripe_checkout_session_id: session.id, stripe_payment_link: session.url,
   }).eq('id', submissionId)
 
@@ -54,9 +61,9 @@ export default async function handler(req, res) {
     emailResult = await sendEmail({
       to: sub.sponsor_contact_email,
       subject: 'Medsa Health - complete payment for your sponsored post',
-      html: `<p>Hi ${sub.sponsor_name || 'there'},</p><p>Your submission "${sub.title}" has been approved. Complete payment (HK$${amountHKD}) to publish it:</p><p><a href="${session.url}">${session.url}</a></p>`,
+      html: `<p>Hi ${sub.sponsor_name || 'there'},</p><p>Your submission "${sub.title}" has been approved. Complete payment (HK$${grossAmountHKD.toFixed(2)}, includes card processing) to publish it:</p><p><a href="${session.url}">${session.url}</a></p>`,
     })
   }
 
-  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, emailSent: emailResult.sent, emailReason: emailResult.reason })
+  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, grossAmountHKD, estimatedFeeHKD, emailSent: emailResult.sent, emailReason: emailResult.reason })
 }

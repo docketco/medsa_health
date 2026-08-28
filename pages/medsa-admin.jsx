@@ -680,14 +680,14 @@ function CarouselTab() {
               <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>
             </div>
             <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or charge the sponsor before it goes live:</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or charge the sponsor before it goes live - the amount below is what Medsa receives; the sponsor's card is charged slightly more to cover Stripe's processing fee (est. ~3.4% + HK$2.35), so Medsa's cut isn't reduced by it:</div>
               <div style={{display:'flex',gap:'6px'}}>
-                <input type="number" step="0.01" value={priceInputs[sub.id]||''} onChange={e=>setPriceInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="Price (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <input type="number" step="0.01" value={priceInputs[sub.id]||''} onChange={e=>setPriceInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="Amount Medsa receives (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
                 <button onClick={()=>handleRequestPayment(sub)} disabled={requestingPaymentId===sub.id||!priceInputs[sub.id]} style={{padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{requestingPaymentId===sub.id?'Requesting…':'Request payment'}</button>
               </div>
               {paymentResults[sub.id]?.status==='NOT_CONFIGURED'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
               {paymentResults[sub.id]?.status==='CREATED'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
-                Payment link {paymentResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + paymentResults[sub.id].emailReason + ')'}: <a href={paymentResults[sub.id].paymentUrl} target="_blank" rel="noreferrer">{paymentResults[sub.id].paymentUrl}</a>
+                Sponsor will be charged HK${paymentResults[sub.id].grossAmountHKD?.toFixed(2)} (includes est. HK${paymentResults[sub.id].estimatedFeeHKD?.toFixed(2)} processing fee) so Medsa nets the full amount. Payment link {paymentResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + paymentResults[sub.id].emailReason + ')'}: <a href={paymentResults[sub.id].paymentUrl} target="_blank" rel="noreferrer">{paymentResults[sub.id].paymentUrl}</a>
               </div>}
               {paymentResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
             </div>

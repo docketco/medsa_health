@@ -2314,8 +2314,11 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             patient during the actual visit can just as legitimately
             log verbal consent themselves, and gating this to front
             desk meant a doctor was stuck waiting on someone else for
-            an appointment that was scheduled for right now. */}
-        {!loadingPatient&&!withinDataWindow&&consentReason==='no_consent'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) at check-in</Btn>}
+            an appointment that was scheduled for right now. Requires
+            isCheckedIn - this only unlocks viewing the medical history
+            summary above, it never substitutes for check-in itself,
+            which canLogDiagnosis still requires separately. */}
+        {!loadingPatient&&!withinDataWindow&&isCheckedIn&&consentReason==='no_consent'&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} onClick={()=>onConfirmConsent?.(appt)}>Confirm patient consented (verbal/paper) - now checked in</Btn>}
         {!loadingPatient&&!withinDataWindow&&fullPatient&&!accessRequestStatus&&<Btn style={{width:'100%',marginBottom:'14px'}} onClick={handleRequestAccess} disabled={sendingAccessRequest}>{sendingAccessRequest?'Sending…':'Request record access ahead of visit'}</Btn>}
         {!loadingPatient&&accessRequestStatus==='pending'&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>◇ Request sent to patient for approval. Records will be available here once granted.</div>}
         {!loadingPatient&&accessRequestStatus==='approved'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.green}}>✓ Patient approved this request.</div>}
