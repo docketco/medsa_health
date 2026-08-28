@@ -2286,7 +2286,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
@@ -2304,6 +2304,32 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const [records,setRecords]=useState([])
   const [accessRequestStatus,setAccessRequestStatus]=useState(null) // null | 'pending' | 'approved' | 'denied'
   const [sendingAccessRequest,setSendingAccessRequest]=useState(false)
+
+  // Same weight/height logging as Check-in/Search and the consultation
+  // screen (patient_vitals) - added here too since this appointment-
+  // bubble modal turned out to be where front desk actually looks for
+  // it, not just the separate Check-in/Search screen.
+  const [vitalsWeight,setVitalsWeight]=useState('')
+  const [vitalsHeight,setVitalsHeight]=useState('')
+  const [vitalsSaving,setVitalsSaving]=useState(false)
+  const [vitalsSaved,setVitalsSaved]=useState(false)
+  const [lastVitals,setLastVitals]=useState(null)
+  async function loadLastVitals(patientId) {
+    const { data } = await supabase.from('patient_vitals').select('*').eq('patient_id', patientId).order('logged_at',{ascending:false}).limit(1).maybeSingle()
+    setLastVitals(data||null)
+  }
+  async function handleSaveVitals(patientId) {
+    if (!vitalsWeight && !vitalsHeight) return
+    setVitalsSaving(true)
+    await supabase.from('patient_vitals').insert({
+      patient_id: patientId, weight_kg: vitalsWeight?parseFloat(vitalsWeight):null,
+      height_cm: vitalsHeight?parseFloat(vitalsHeight):null,
+      logged_at: new Date().toISOString(), logged_by: staffMember?.name || null,
+    })
+    setVitalsSaving(false)
+    setVitalsSaved(true)
+    loadLastVitals(patientId)
+  }
 
   // Same "request record access ahead of visit" feature Check-in/Search
   // has, offered here too - this is actually the more natural place for
@@ -2396,9 +2422,11 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         setMedications(medRes.data||[])
         setRecords(recRes.data||[])
         loadAccessRequestStatus(data.id)
+        loadLastVitals(data.id)
       } else {
         setAccessRequestStatus(null)
       }
+      setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
       setLoadingPatient(false)
     }
     loadPatient()
@@ -2438,6 +2466,23 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
               <div style={{fontSize:'12px',fontWeight:600}}>{appt.time} · {appt.type}</div>
             </div>
           </div>
+        </div>}
+
+        {/* Deliberately NOT inside the withinDataWindow-gated card above -
+            weight/height is a front-desk/administrative task, not a
+            clinical record, so it shouldn't need consent to log. This is
+            what "front desk can't access that" was about: it was only
+            ever inside the same block as Blood type, which is hidden
+            entirely outside the consent window. */}
+        {!loadingPatient&&fullPatient&&<div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px'}}>
+          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'6px',textTransform:'uppercase'}}>Weight / Height</div>
+          {lastVitals&&(lastVitals.weight_kg||lastVitals.height_cm)&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Last logged {new Date(lastVitals.logged_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}: {lastVitals.weight_kg?`${lastVitals.weight_kg}kg`:''}{lastVitals.height_cm?` ${lastVitals.height_cm}cm`:''}</div>}
+          <div style={{display:'flex',gap:'6px'}}>
+            <input type="number" step="0.1" value={vitalsWeight} onChange={e=>setVitalsWeight(e.target.value)} placeholder="Weight (kg)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+            <input type="number" step="0.1" value={vitalsHeight} onChange={e=>setVitalsHeight(e.target.value)} placeholder="Height (cm)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
+            <button onClick={()=>handleSaveVitals(fullPatient.id)} disabled={vitalsSaving||(!vitalsWeight&&!vitalsHeight)} style={{padding:'8px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{vitalsSaving?'Saving…':'Save'}</button>
+          </div>
+          {vitalsSaved&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>{'✓'} Logged with today's date.</div>}
         </div>}
 
         {!loadingPatient&&withinDataWindow&&fullPatient&&role==='doctor'&&<div style={{marginBottom:'14px'}}>
@@ -2502,7 +2547,13 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             setCheckingIn(true)
             const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient })
             setCheckingIn(false)
-            if (result === true) onClose()
+            // Closing without refreshing the underlying appointments list
+            // (unlike onCancelCheckIn just below, which already does this)
+            // left the Schedule page showing the old "Pending"/"Confirmed"
+            // badge and the modal's own isCheckedIn stuck on stale data -
+            // check-in was actually succeeding, it just never looked like
+            // it did anything without a manual page reload.
+            if (result === true) { onRefreshAppointments?.(); onClose() }
           }}>{checkingIn?'Checking in...':'✓ Check in'}</Btn>}
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
@@ -3625,7 +3676,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
               <div style={{fontSize:'12px',color:C.textSub}}>{a.doctor} - {a.type}</div>
             </div>
             {a.status!=='open'&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
-            {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<><Badge text={a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
+            {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<><Badge text={a.status==='checked_in'?'✓ Checked in':a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='checked_in'?'ok':a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
           </Card>
         ))}
       </div>
@@ -3640,6 +3691,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         role={staffMember?.role}
         staffMember={staffMember}
         onCheckedIn={onCheckedIn}
+        onRefreshAppointments={()=>loadRealAppointments(selectedDay)}
         onScheduleFollowup={onPreselectPatientForFollowup}
         onCancelCheckIn={async(appt)=>{
           await onCancelCheckIn(appt)
