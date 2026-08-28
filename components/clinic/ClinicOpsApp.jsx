@@ -2545,7 +2545,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {!isCheckedIn&&onCheckedIn&&<Btn variant="primary" style={{width:'100%'}} disabled={checkingIn} onClick={async()=>{
             setCheckingIn(true)
-            const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient })
+            const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient }, false, undefined, true, null, appt.id)
             setCheckingIn(false)
             // Closing without refreshing the underlying appointments list
             // (unlike onCancelCheckIn just below, which already does this)
@@ -3557,6 +3557,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       .order('scheduled_at', {ascending:true})
 
     const realRows = (data||[]).map(a => ({
+      id: a.id,
       time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
       scheduledAt: a.scheduled_at,
       patient: a.patients?.full_name || 'Unknown patient',
@@ -3630,12 +3631,19 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   async function handleSaveAppt(updated) {
     if (updated.cancelled && updated.isReal && updated.medsaId) {
       // Real booking (not demo data) - actually cancel it in Supabase,
-      // not just remove it from the local list.
-      const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', updated.medsaId).maybeSingle()
-      if (pRow) {
-        const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
-        const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
-        await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+      // not just remove it from the local list. Scoped to this exact
+      // appointment id when we have one - the old day-range lookup
+      // (no id filter) meant cancelling one of a patient's two same-day
+      // appointments cancelled both.
+      if (updated.id) {
+        await supabase.from('appointments').update({status:'cancelled'}).eq('id', updated.id)
+      } else {
+        const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', updated.medsaId).maybeSingle()
+        if (pRow) {
+          const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
+          const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+          await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+        }
       }
     }
     setAppointments(prev => {
@@ -5314,9 +5322,16 @@ export default function ClinicOpsApp() {
     if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
   }, [screen])
 
-  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null) {
+  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null) {
+    // If we know exactly which appointment is being checked in (the
+    // Schedule page always knows this), only treat THAT appointment as
+    // active - otherwise a patient with two appointments the same day
+    // (a follow-up, or two different doctors) would look "already
+    // checked in" the moment either one was, and checking in the second
+    // one would silently do nothing.
     const alreadyActive = checkedInQueue.some(q =>
-      q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0
+      q.patientName === patient.full_name && hoursRemaining(q.checkedInAt) > 0 &&
+      (targetAppointmentId ? q.appointmentId === targetAppointmentId : true)
     )
     if (alreadyActive && !force) {
       setCheckInError(`${patient.full_name} is already checked in and still active.`)
@@ -5328,12 +5343,26 @@ export default function ClinicOpsApp() {
     // staff member's own department, which is almost never the actual
     // treating doctor. This is the real reason a patient checked in by
     // reception never appeared under a doctor's own patients.
+    //
+    // When the caller knows which specific appointment this is (the
+    // Schedule page's patient bubble), match on its id directly. This
+    // used to always look up "this patient's appointment today" with no
+    // id filter, so a patient with two same-day appointments matched
+    // both rows - .maybeSingle() then errored out silently, the whole
+    // check-in was treated as a walk-in, and neither appointment's
+    // status ever updated (or, when the search screen's own check-in
+    // path picked one row arbitrarily, checking in one appointment could
+    // end up marking the wrong one - or both, once the search screen's
+    // "already in queue" check treated them as the same visit).
     const dayStart = new Date(); dayStart.setHours(0,0,0,0)
     const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
-    const { data: matchingAppt } = await supabase.from('appointments').select('*')
-      .eq('patient_id', patient.id).eq('institution_source', 'clinic_ops')
-      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
-      .maybeSingle()
+    const { data: matchingAppt } = targetAppointmentId
+      ? await supabase.from('appointments').select('*').eq('id', targetAppointmentId).maybeSingle()
+      : await supabase.from('appointments').select('*')
+          .eq('patient_id', patient.id).eq('institution_source', 'clinic_ops')
+          .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+          .neq('status', 'checked_in')
+          .order('scheduled_at', { ascending: true }).limit(1).maybeSingle()
 
     // Resolve which queue this ticket belongs to - an explicit choice
     // from the check-in screen's picker when the clinic runs more than
@@ -5412,6 +5441,7 @@ export default function ClinicOpsApp() {
       id: data.id, ticket: data.ticket, queueId: data.queue_id, patientName: data.patient_name,
       doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
       department: data.department, status: data.status, checkinNote: data.checkin_note || null,
+      appointmentId: matchingAppt?.id || null,
     }])
     setCheckInError(null)
 
@@ -5522,8 +5552,13 @@ export default function ClinicOpsApp() {
     }
     // Also revert their real appointment back to "confirmed" - undoing a
     // check-in from here should undo both places, same as the Schedule
-    // screen's own "Cancel check-in" action.
-    if (entry?.patientName) {
+    // screen's own "Cancel check-in" action. Scoped to the specific
+    // appointment this queue entry was created for when known - a
+    // patient-name+day lookup would revert a second, unrelated same-day
+    // appointment too.
+    if (entry?.appointmentId) {
+      await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('id', entry.appointmentId)
+    } else if (entry?.patientName) {
       const { data: pRow } = await supabase.from('patients').select('id').eq('full_name', entry.patientName).maybeSingle()
       if (pRow) {
         const dayStart=new Date(); dayStart.setHours(0,0,0,0)
@@ -5586,15 +5621,25 @@ export default function ClinicOpsApp() {
           onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now(), patientMedsaId: appt.medsaId});setScreen('consultation')}}
           onCancelCheckIn={async(appt)=>{
             if (!appt?.medsaId) return
-            const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
-            if (!pRow) return
-            const dayStart=new Date(); dayStart.setHours(0,0,0,0)
-            const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
-            await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+            // Scoped to this exact appointment id when we have one - the
+            // old day-range lookup (no id filter) meant undoing check-in
+            // on one of a patient's two same-day appointments undid both.
+            if (appt.id) {
+              await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('id', appt.id)
+            } else {
+              const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
+              if (!pRow) return
+              const dayStart=new Date(); dayStart.setHours(0,0,0,0)
+              const dayEnd=new Date(); dayEnd.setHours(23,59,59,999)
+              await supabase.from('appointments').update({status:'confirmed', checked_in_at:null}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
+            }
             // Also remove them from today's active clinic_queue, since
             // ClinicOps check-in writes there too - undoing check-in should
-            // undo both, not just the appointment status.
-            const matching = checkedInQueue.find(q=>q.patientName===appt.patient && hoursRemaining(q.checkedInAt)>0)
+            // undo both, not just the appointment status. Prefer matching
+            // by the specific appointment id so the other same-day visit's
+            // queue entry is left alone.
+            const matching = checkedInQueue.find(q=>hoursRemaining(q.checkedInAt)>0 &&
+              (appt.id ? q.appointmentId===appt.id : q.patientName===appt.patient))
             if (matching) {
               await supabase.from('clinic_queue').delete().eq('id', matching.id)
               setCheckedInQueue(prev=>prev.filter(q=>q.id!==matching.id))
