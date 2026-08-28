@@ -1738,6 +1738,18 @@ function DoctorsScreen({ isEn, patient={} }) {
       // correct for whichever doctor this booking is actually for.
       const { data: practitionerRow } = await supabase.from('practitioners').select('id').ilike('full_name', `%${activeDoctor.name.replace('Dr ','')}%`).maybeSingle()
 
+      // Real conflict check - nothing stopped two different patients (or
+      // the same patient twice) from booking the identical doctor at the
+      // identical time before this. Cancelled slots don't block a rebook.
+      const { data: clash } = await supabase.from('appointments').select('id')
+        .eq('doctor_name', activeDoctor.name).eq('scheduled_at', apptDate.toISOString())
+        .neq('status', 'cancelled').limit(1).maybeSingle()
+      if (clash) {
+        setIntakeError('That slot was just taken by another booking - please pick a different time.')
+        setIntakeSaving(false)
+        return
+      }
+
       const { error: apptErr } = await supabase.from('appointments').insert({
         patient_id: patientRow.id,
         practitioner_id: practitionerRow?.id || null,
@@ -1755,7 +1767,11 @@ function DoctorsScreen({ isEn, patient={} }) {
       if (apptErr) throw apptErr
       setBooked(true)
     } catch (e) {
-      setIntakeError(e.message)
+      // 23505 = unique_violation - the rare case where two bookings for
+      // the same slot both passed the earlier check before either
+      // insert landed. The database-level constraint is the real
+      // guarantee; this just keeps the message a patient can act on.
+      setIntakeError(e.code === '23505' ? 'That slot was just taken by another booking - please pick a different time.' : e.message)
     } finally {
       setIntakeSaving(false)
     }
