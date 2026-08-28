@@ -1,14 +1,16 @@
 import { createClient } from '@supabase/supabase-js'
 import crypto from 'crypto'
+import { sendEmail } from '../../../lib/email'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 // "Forgot password" for ClinicOps staff logins - same hash/expiry OTP
 // pattern already used for clinic contact verification
-// (verified_clinics.contact_otp_*). No live email provider is
-// connected yet, so the code is returned on-screen for now, same
-// honest gap as everywhere else in this app that needs OTP delivery -
-// this is real generation/hashing/expiry, just not real sending yet.
+// (verified_clinics.contact_otp_*). Sends a real email once
+// RESEND_API_KEY is configured; until then, falls back to showing the
+// code on-screen (devOnlyCode) same as every other OTP flow in this
+// app - this is real generation/hashing/expiry either way, just not
+// real delivery until email is wired up.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -29,9 +31,18 @@ export default async function handler(req, res) {
     password_reset_otp_sent_at: now.toISOString(), password_reset_otp_expires_at: expiresAt.toISOString(),
   }).eq('id', staff.id)
 
+  const emailResult = await sendEmail({
+    to: staff.email,
+    subject: 'Medsa Health - your password reset code',
+    html: `<p>Your Medsa Health password reset code is:</p><p style="font-size:24px;font-weight:700;letter-spacing:2px">${code}</p><p>It expires in 10 minutes. If you didn't request this, you can ignore this email.</p>`,
+  })
+
   const maskedEmail = staff.email.replace(/^(.{2}).*(@.*)$/, '$1***$2')
   return res.status(200).json({
     status: 'SENT', email: maskedEmail, expiresInMinutes: 10,
-    devOnlyCode: code,
+    // Only shown on-screen when real email sending isn't configured
+    // yet (or the send failed) - once RESEND_API_KEY is live, this
+    // stays server-side and the code only ever reaches the real inbox.
+    ...(emailResult.sent ? {} : { devOnlyCode: code, emailNotSentReason: emailResult.reason }),
   })
 }

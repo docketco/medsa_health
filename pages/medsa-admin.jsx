@@ -583,6 +583,9 @@ function CarouselTab() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0 })
   const [approving, setApproving] = useState(null)
+  const [priceInputs, setPriceInputs] = useState({}) // submissionId -> string
+  const [requestingPaymentId, setRequestingPaymentId] = useState(null)
+  const [paymentResults, setPaymentResults] = useState({}) // submissionId -> {paymentUrl, emailSent, ...} | {error}
 
   async function load() {
     setLoading(true)
@@ -641,6 +644,24 @@ function CarouselTab() {
     load()
   }
 
+  // Sponsor payment - the submission is NOT posted here. This just
+  // requests payment (real Stripe Checkout once STRIPE_SECRET_KEY is
+  // set in Vercel); the item only goes live once Stripe confirms the
+  // charge via the webhook, which is the only thing that actually
+  // inserts into home_carousel_items for a paid slot.
+  async function handleRequestPayment(sub) {
+    const amount = parseFloat(priceInputs[sub.id])
+    if (!amount || amount <= 0) return
+    setRequestingPaymentId(sub.id)
+    const res = await fetch('/api/sponsor/create_checkout_session', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ submissionId: sub.id, amountHKD: amount }),
+    })
+    const data = await res.json()
+    setPaymentResults(prev => ({...prev, [sub.id]: data}))
+    setRequestingPaymentId(null)
+  }
+
   return (
     <div>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you approve it below.</div>
@@ -654,9 +675,21 @@ function CarouselTab() {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.item_type} · from {sub.sponsor_name} ({sub.sponsor_contact_email})</div>
             {sub.subtitle&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.subtitle}</div>}
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{(sub.content_blocks||[]).length} content block{(sub.content_blocks||[]).length===1?'':'s'}{sub.link_url?' · has a CTA link':''}</div>
-            <div style={{display:'flex',gap:'8px'}}>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
               <button onClick={()=>handleReject(sub)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
-              <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post'}</button>
+              <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>
+            </div>
+            <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or charge the sponsor before it goes live:</div>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input type="number" step="0.01" value={priceInputs[sub.id]||''} onChange={e=>setPriceInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="Price (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <button onClick={()=>handleRequestPayment(sub)} disabled={requestingPaymentId===sub.id||!priceInputs[sub.id]} style={{padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{requestingPaymentId===sub.id?'Requesting…':'Request payment'}</button>
+              </div>
+              {paymentResults[sub.id]?.status==='NOT_CONFIGURED'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
+              {paymentResults[sub.id]?.status==='CREATED'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
+                Payment link {paymentResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + paymentResults[sub.id].emailReason + ')'}: <a href={paymentResults[sub.id].paymentUrl} target="_blank" rel="noreferrer">{paymentResults[sub.id].paymentUrl}</a>
+              </div>}
+              {paymentResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
             </div>
           </div>
         ))}
