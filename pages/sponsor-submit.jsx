@@ -15,15 +15,16 @@ import C from '../components/shared/colours'
 function ImagePicker({ label, value, onChange }) {
   const [mode, setMode] = useState('url')
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState(null)
 
   async function handleFile(file) {
     setUploading(true)
+    setUploadError(null)
     const path = `submissions/${Date.now()}-${file.name}`
     const { error } = await supabase.storage.from('carousel-images').upload(path, file)
-    if (!error) {
-      const { data } = supabase.storage.from('carousel-images').getPublicUrl(path)
-      onChange(data.publicUrl)
-    }
+    if (error) { setUploadError(error.message); setUploading(false); return }
+    const { data } = supabase.storage.from('carousel-images').getPublicUrl(path)
+    onChange(data.publicUrl)
     setUploading(false)
   }
 
@@ -40,6 +41,7 @@ function ImagePicker({ label, value, onChange }) {
         {uploading?'Uploading…':(value?'Uploaded ✓ - tap to replace':'Tap to upload (JPG/PNG)')}
         <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
       </label>}
+      {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {uploadError}</div>}
       {value&&<img src={value} alt="" style={{width:'100%',maxHeight:140,objectFit:'cover',borderRadius:'8px',marginTop:'8px'}}/>}
     </div>
   )
