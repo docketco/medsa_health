@@ -898,7 +898,7 @@ function DoctorVideoCallModal({ patientName, roomId, onClose }) {
 }
 
 // ── PATIENT ACTION MODAL — quick actions before entering full consultation ──
-function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStartCall, doctorLabel, requireQueueCall, onCallNow, callingNow }) {
+function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStartCall, doctorLabel }) {
   const [mode,setMode]=useState(null) // null | 'message'
   const [msgBody,setMsgBody]=useState('')
   const [msgUrgent,setMsgUrgent]=useState(false)
@@ -939,12 +939,7 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName, patient.patientMedsaId)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
-          {/* Only gated when the practice manager has switched "require
-              calling from the queue" on (off by default) - otherwise any
-              checked-in patient can be opened straight away, in any order. */}
-          {requireQueueCall && patient.status==='waiting'
-            ? <Btn variant="primary" style={{width:'100%'}} onClick={onCallNow} disabled={callingNow}>{callingNow?'Calling…':'📣 Call patient from queue'}</Btn>
-            : <Btn variant="primary" style={{width:'100%'}} onClick={onGoToConsultation}>📋 Go to full consultation</Btn>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={onGoToConsultation}>📋 Go to full consultation</Btn>
         </div>}
 
         {mode==='message'&&<>
@@ -966,10 +961,9 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
   )
 }
 
-function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh, requireQueueCall, onUpdateStatus }) {
+function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
   const [callingPatient,setCallingPatient]=useState(null) // {name, medsaId}
-  const [callingNow,setCallingNow]=useState(false)
   // Completed/no-show tickets used to sit here all day (the queue only
   // ever grew, never shrank) - a doctor's active list should only be who
   // still needs seeing.
@@ -1001,15 +995,6 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh, requ
         doctorLabel={staffMember?.name || 'Doctor'}
         onStartCall={(name, medsaId)=>{setCallingPatient({name, medsaId});setActionPatient(null)}}
         onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
-        requireQueueCall={requireQueueCall}
-        callingNow={callingNow}
-        onCallNow={async()=>{
-          if (!onUpdateStatus || !actionPatient) return
-          setCallingNow(true)
-          const ok = await onUpdateStatus(actionPatient, 'serving')
-          setCallingNow(false)
-          if (ok) setActionPatient(prev=>prev?{...prev,status:'serving'}:prev)
-        }}
       />
       <DoctorVideoCallModal patientName={callingPatient?.name} roomId={callingPatient?.medsaId} onClose={()=>setCallingPatient(null)}/>
     </PageWrap>
@@ -2087,7 +2072,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
 // nothing's configured here. Only needed once a clinic wants more than
 // one line at once (e.g. General vs Chinese Medicine, or a dedicated
 // dressing/injection queue).
-function QueueSettingsScreen({ institutionId, queues, onRefresh, requireQueueCall, onToggleRequireQueueCall }) {
+function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [name,setName]=useState('')
@@ -2115,15 +2100,7 @@ function QueueSettingsScreen({ institutionId, queues, onRefresh, requireQueueCal
   return (
     <PageWrap maxWidth={520}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Queues</h2>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',textAlign:'center'}}>With no queues configured, check-in runs one shared line (ticket prefix A). Add named queues here if this clinic runs more than one line at once - each gets its own ticket sequence and its own "now serving" board.</div>
-
-      <Card style={{padding:'14px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px'}}>
-        <div>
-          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>Require calling patients from the queue</div>
-          <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>Off by default - every checked-in patient shows up under a doctor's own patients immediately, and can be seen in any order. Turn this on for a busier clinic that wants doctors to only see who's actually been called next.</div>
-        </div>
-        <Toggle checked={!!requireQueueCall} onChange={onToggleRequireQueueCall}/>
-      </Card>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',textAlign:'center'}}>With no queues configured, check-in runs one shared line (ticket prefix A). Add named queues here if this clinic runs more than one line at once - each gets its own ticket sequence and its own "now serving" board. This is a front-desk tool for managing the physical waiting room - checked-in patients show up under a doctor's own patients right away regardless of queue order.</div>
 
       {queues.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No named queues yet - running the default single shared queue.</div>}
       {queues.map(q=>(
@@ -5233,12 +5210,6 @@ export default function ClinicOpsApp() {
   const [institutionId,setInstitutionId]=useState(null)
   const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
-  // Optional, off by default - most clinics can just call patients in
-  // order without a formal queue. A practice manager running a busier
-  // clinic can switch this on so doctors are required to call a patient
-  // from the queue before opening their consultation, instead of picking
-  // freely off the checked-in list.
-  const [requireQueueCall,setRequireQueueCall]=useState(false)
   const [clinicQueues,setClinicQueues]=useState([])
   const [affiliatedClinics,setAffiliatedClinics]=useState([]) // other institutions this same real practitioner is also onboarded at
 
@@ -5295,17 +5266,11 @@ export default function ClinicOpsApp() {
     // onboarding a second clinic would have silently mixed their data
     // into the first one's institution.
     if (!staffMember?.institutionId) return
-    const { data } = await supabase.from('institutions').select('id, name, medicine_type, require_queue_call').eq('id', staffMember.institutionId).maybeSingle()
-    if (data) { setInstitutionId(data.id); setInstitutionName(data.name || ''); setMedicineType(data.medicine_type || 'western'); setRequireQueueCall(!!data.require_queue_call) }
+    const { data } = await supabase.from('institutions').select('id, name, medicine_type').eq('id', staffMember.institutionId).maybeSingle()
+    if (data) { setInstitutionId(data.id); setInstitutionName(data.name || ''); setMedicineType(data.medicine_type || 'western') }
   }
   loadInstitution()
 }, [staffMember])
-
-  async function handleToggleRequireQueueCall() {
-    const next = !requireQueueCall
-    setRequireQueueCall(next) // optimistic - this is a low-stakes preference toggle
-    await supabase.from('institutions').update({ require_queue_call: next }).eq('id', institutionId)
-  }
 
   // Load today's queue and pending prescriptions from Supabase - now
   // reusable (see effects below), since loading this only once at login
@@ -5527,6 +5492,15 @@ export default function ClinicOpsApp() {
     ? checkedInQueue
     : checkedInQueue.filter(q=>!q.department || q.department===staffMember.department)
 
+  // My Patients is specifically THIS doctor's own bookings, not "anyone
+  // checked in in my department" - department scoping (scopedQueue) is
+  // right for the front-desk/admin Overview board, but on a doctor's own
+  // patient list it was showing every other doctor sharing a department
+  // too. A genuine walk-in with no doctor assigned yet won't appear
+  // under any specific doctor until front desk assigns one - there's no
+  // "my patient" to route it to otherwise.
+  const myDoctorQueue = checkedInQueue.filter(q=>q.doctor===staffMember?.name)
+
   async function handlePrescribed(rx) {
     // The real record is already written to Supabase inside
     // ConsultationScreen's handleSave, and loadTaskBoard's poll would pick
@@ -5679,7 +5653,7 @@ export default function ClinicOpsApp() {
       <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={scopedQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions} requireQueueCall={requireQueueCall} onUpdateStatus={updateQueueStatus}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
@@ -5729,7 +5703,7 @@ export default function ClinicOpsApp() {
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
-        {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues} requireQueueCall={requireQueueCall} onToggleRequireQueueCall={handleToggleRequireQueueCall}/>}
+        {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
