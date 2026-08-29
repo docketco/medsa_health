@@ -97,14 +97,12 @@ function generateTempPassword() {
 
 function StaffLogin({ onLogin }) {
   const [staff,setStaff]=useState([])
-  const [departments,setDepartments]=useState([])
   const [loading,setLoading]=useState(true)
   const [pin,setPin]=useState('')
   const [pinError,setPinError]=useState(false)
   const [checkingPin,setCheckingPin]=useState(false)
   const [selected,setSelected]=useState(null)
-  const [stage,setStage]=useState('pick') // pick | pin | department | forgot | forgot_otp
-  const [chosenDept,setChosenDept]=useState(null)
+  const [stage,setStage]=useState('pick') // pick | pin | forgot | forgot_otp
   const [forgotSending,setForgotSending]=useState(false)
   const [forgotError,setForgotError]=useState(null)
   const [forgotMaskedEmail,setForgotMaskedEmail]=useState(null)
@@ -151,17 +149,16 @@ function StaffLogin({ onLogin }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,is_nurse,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link')
   .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
 const mapped = (data||[]).map(s => ({
   id: s.medsa_id, name: s.full_name, role: s.role,
   roleLabel: ROLE_LABELS[s.role]||s.role, color: ROLE_COLORS[s.role]||C.textMuted,
-  department: s.department, institutionId: s.institution_id,
+  department: s.department, isNurse: !!s.is_nurse, institutionId: s.institution_id,
   practitionerPortalEnabled: s.practitioner_portal_enabled, practitionerIdentityId: s.practitioner_identity_id,
   registrationNumber: s.registration_number, registrationExpiry: s.registration_expiry, hasEpc: !!s.epc_link,
 }))
       setStaff(mapped)
-      setDepartments([...new Set(mapped.map(s=>s.department).filter(Boolean))])
       setLoading(false)
     }
     load()
@@ -177,10 +174,17 @@ const mapped = (data||[]).map(s => ({
     setCheckingPin(false)
     if (!ok) { setPinError(true); return }
     setPinError(false)
-    if (selected.role==='admin') {
+    // Doctors and nurses are clinically tied to the speciality they were
+    // onboarded under (set once by the practice manager in Staff) - that's
+    // fixed, not something to pick again at every login. A practice
+    // manager oversees the whole clinic, and general front desk (a
+    // clinic_assistant who isn't a nurse) handles check-ins for every
+    // doctor regardless of speciality, so both go straight in unscoped.
+    const isGeneralFrontDesk = selected.role==='clinic_assistant' && !selected.isNurse
+    if (selected.role==='admin' || isGeneralFrontDesk) {
       onLogin({ ...selected, department: 'All departments' })
     } else {
-      setStage('department')
+      onLogin(selected)
     }
   }
 
@@ -193,7 +197,6 @@ const mapped = (data||[]).map(s => ({
             {stage==='pick'&&'Select your account to sign in'}
             {stage==='pin'&&'Enter your PIN'}
             {(stage==='forgot'||stage==='forgot_otp')&&'Reset your password'}
-            {stage==='department'&&'Which speciality are you working in today?'}
           </div>
         </div>
         {loading&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
@@ -257,17 +260,6 @@ const mapped = (data||[]).map(s => ({
               <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center'}}>Sign in with your new password.</div>
               <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setStage('pin');setOtpCode('');setNewPassword('');setPin('');setResetDone(false)}}>Continue</Btn>
             </>}
-          </div>
-        )}
-        {stage==='department'&&(
-          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
-            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
-              {departments.map(d=>(
-                <div key={d} onClick={()=>setChosenDept(d)} style={{padding:'12px 14px',borderRadius:'10px',cursor:'pointer',background:chosenDept===d?C.green:C.card,color:chosenDept===d?'#fff':C.text,fontSize:'13px',fontWeight:500}}>{d}</div>
-              ))}
-            </div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{'\u25c7'} A solo-speciality clinic can skip this by treating the whole clinic as one speciality. This only matters once Medsa runs across multiple specialities.</div>
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>onLogin({...selected, department: chosenDept || selected.department})}>Continue</Btn>
           </div>
         )}
       </div>
