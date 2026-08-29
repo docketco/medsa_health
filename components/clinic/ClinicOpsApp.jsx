@@ -2286,7 +2286,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [newTime,setNewTime]=useState('')
@@ -2541,6 +2541,13 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,notes:notesDraft});setMode(null)}}>Save notes</Btn>
           </div>
         </>}
+
+        {/* Previously this state existed at the top level (ClinicOpsApp)
+            but was only ever rendered inside the Check-in/Search screen -
+            a failed check-in triggered from here set the error but the
+            modal just closed as if nothing happened, with zero feedback
+            for whoever clicked it. */}
+        {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} {checkInError}</div>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {!isCheckedIn&&onCheckedIn&&<Btn variant="primary" style={{width:'100%'}} disabled={checkingIn} onClick={async()=>{
@@ -3435,7 +3442,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -3699,6 +3706,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         role={staffMember?.role}
         staffMember={staffMember}
         onCheckedIn={onCheckedIn}
+        checkInError={checkInError}
         onRefreshAppointments={()=>loadRealAppointments(selectedDay)}
         onScheduleFollowup={onPreselectPatientForFollowup}
         onCancelCheckIn={async(appt)=>{
@@ -5446,8 +5454,20 @@ export default function ClinicOpsApp() {
     setCheckInError(null)
 
     if (matchingAppt) {
-      await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
-        .eq('id', matchingAppt.id)
+      // Separate write from the clinic_queue insert above - this one can
+      // fail silently on its own (e.g. an RLS policy on `appointments`
+      // blocking the update) without throwing, which is exactly what
+      // would leave the Schedule page stuck showing "Confirmed" with the
+      // Check-in button still there even though the patient was added to
+      // the queue. .select() here so a blocked write comes back as
+      // 0 rows instead of looking identical to a successful one.
+      const { data: updatedAppt, error: apptUpdateErr } = await supabase.from('appointments')
+        .update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
+        .eq('id', matchingAppt.id).select().maybeSingle()
+      if (apptUpdateErr || !updatedAppt) {
+        setCheckInError(`${patient.full_name} was added to the queue, but the appointment couldn't be marked checked in${apptUpdateErr?.message ? ' (' + apptUpdateErr.message + ')' : ''} - it may still show as Confirmed on the Schedule page. This usually means a database permission is blocking staff from updating appointments.`)
+        return true
+      }
     } else {
       setCheckInError(`${patient.full_name} was checked in, but has no appointment scheduled today - they won't appear on any doctor's patient list until one is booked.`)
     }
@@ -5614,6 +5634,7 @@ export default function ClinicOpsApp() {
         {screen==='schedule'&&<ScheduleScreen
           staffMember={staffMember}
           onCheckedIn={handleCheckedIn}
+          checkInError={checkInError}
           preselectPatient={schedulePreselectPatient}
           onConsumedPreselect={()=>setSchedulePreselectPatient(null)}
           onPreselectPatientForFollowup={setSchedulePreselectPatient}
