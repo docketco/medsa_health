@@ -193,7 +193,7 @@ const mapped = (data||[]).map(s => ({
             {stage==='pick'&&'Select your account to sign in'}
             {stage==='pin'&&'Enter your PIN'}
             {(stage==='forgot'||stage==='forgot_otp')&&'Reset your password'}
-            {stage==='department'&&'Which department are you working in today?'}
+            {stage==='department'&&'Which speciality are you working in today?'}
           </div>
         </div>
         {loading&&<div style={{textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
@@ -266,7 +266,7 @@ const mapped = (data||[]).map(s => ({
                 <div key={d} onClick={()=>setChosenDept(d)} style={{padding:'12px 14px',borderRadius:'10px',cursor:'pointer',background:chosenDept===d?C.green:C.card,color:chosenDept===d?'#fff':C.text,fontSize:'13px',fontWeight:500}}>{d}</div>
               ))}
             </div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{'\u25c7'} A solo clinic can skip this by treating the whole clinic as one department. This only matters once Medsa runs across multiple departments or wards.</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{'\u25c7'} A solo-speciality clinic can skip this by treating the whole clinic as one speciality. This only matters once Medsa runs across multiple specialities.</div>
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>onLogin({...selected, department: chosenDept || selected.department})}>Continue</Btn>
           </div>
         )}
@@ -370,6 +370,21 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     loadLastVitals(patientId)
   }
 
+  // Front desk assigns the doctor right here, grouped by speciality -
+  // this is the actual routing decision for a walk-in with no existing
+  // booking (a booked appointment already carries its own doctor and
+  // takes priority server-side; this only matters when there isn't one).
+  // Without this, a walk-in checked in by front desk had no doctor
+  // attached at all and never showed up under anyone's My Patients.
+  const [checkInDoctors,setCheckInDoctors]=useState([])
+  const [selectedCheckInDoctor,setSelectedCheckInDoctor]=useState('')
+  useEffect(() => { loadClinicDoctors().then(setCheckInDoctors) }, [])
+  const checkInDoctorsBySpeciality = checkInDoctors.reduce((acc,d)=>{
+    const key = d.department || 'General'
+    ;(acc[key] = acc[key]||[]).push(d)
+    return acc
+  }, {})
+
   // Which queue this clinic runs, if more than one - lets front desk
   // route a check-in to the right line (e.g. General vs Chinese
   // Medicine) instead of everyone sharing one ticket sequence.
@@ -404,7 +419,8 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   async function doCheckIn(p, force) {
     setCheckingIn(true)
     const qId = queues.length>1 ? selectedQueueId : undefined
-    const result = await onCheckedIn(p, force, qId, walkInConsent, checkinNote.trim()||null)
+    const explicitDoctor = checkInDoctors.find(d=>d.name===selectedCheckInDoctor) || null
+    const result = await onCheckedIn(p, force, qId, walkInConsent, checkinNote.trim()||null, undefined, explicitDoctor)
     setCheckingIn(false)
     if (result === true) {
       setJustCheckedIn(p.full_name)
@@ -573,6 +589,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               </div>
               {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
             </div>
+            {Object.keys(checkInDoctorsBySpeciality).length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
+              {Object.entries(checkInDoctorsBySpeciality).map(([speciality,docs])=>(
+                <div key={speciality} style={{marginBottom:'6px'}}>
+                  <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>{speciality}</div>
+                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                    {docs.map(d=>(
+                      <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}</div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>}
             <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
               <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
@@ -594,7 +623,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
           </div> : <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'14px',textAlign:'center'}}>
             <div style={{fontSize:'14px',color:C.green,fontWeight:600,marginBottom:'10px'}}>{'\u2713'} {justCheckedIn} checked in successfully{printTicket?` \u00b7 ticket ${printTicket.ticket}`:''}</div>
             {printTicket&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={()=>window.print()}>{'\u2399'} Print ticket</Btn>}
-            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);setCheckinNote('');setVitalsWeight('');setVitalsHeight('');setVitalsSaved(false);setAlreadyInQueue(false);onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setJustCheckedIn(null);setStage('idle');setPatient(null);setPrintTicket(null);setWalkInConsent(true);setCheckinNote('');setVitalsWeight('');setVitalsHeight('');setVitalsSaved(false);setAlreadyInQueue(false);setSelectedCheckInDoctor('');onDoneCheckIn&&onDoneCheckIn()}}>Done</Btn>
           </div>}
         </div>}
         {stage==='error'&&<div style={{textAlign:'center',padding:'40px 24px'}}>
@@ -629,6 +658,19 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             </div>
             {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
           </div>
+          {Object.keys(checkInDoctorsBySpeciality).length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
+            {Object.entries(checkInDoctorsBySpeciality).map(([speciality,docs])=>(
+              <div key={speciality} style={{marginBottom:'6px'}}>
+                <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>{speciality}</div>
+                <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                  {docs.map(d=>(
+                    <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}</div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>}
           <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
             <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
@@ -2134,6 +2176,21 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
   const [activeAction,setActiveAction]=useState(null) // {type:'checkedin'|'scheduled', entry}
   const [callingId,setCallingId]=useState(null)
 
+  // How the checked-in list below is organized - by speciality (grouped
+  // under each doctor's own speciality, still time-ordered within the
+  // group) or flat by time only, across every doctor. Front desk picks
+  // whichever fits how busy the day is; doesn't affect who can be seen,
+  // purely a display grouping.
+  const [checkedInView,setCheckedInView]=useState('speciality')
+  // Keep each entry's real position in `queue` (used by onRemoveFromQueue)
+  // even after sorting/grouping for display.
+  const checkedInSortedByTime = queue.map((q,i)=>({...q,_idx:i})).sort((a,b)=>a.checkedInAt-b.checkedInAt)
+  const checkedInBySpeciality = checkedInSortedByTime.reduce((acc,q)=>{
+    const key = q.department || 'General'
+    ;(acc[key] = acc[key]||[]).push(q)
+    return acc
+  }, {})
+
   // One shared board when the clinic hasn't set up named queues (the
   // common case); a separate "now serving" + call-next per queue once
   // it has, since each queue's line is independent of the others.
@@ -2227,14 +2284,20 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         })}
       </div>
 
-      <SecLabel>Checked-in patients</SecLabel>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:'-4px'}}>
+        <SecLabel>Checked-in patients</SecLabel>
+        <div style={{display:'flex',gap:'4px',background:C.card,borderRadius:'8px',padding:'2px',marginBottom:'10px'}}>
+          <div onClick={()=>setCheckedInView('speciality')} style={{padding:'5px 10px',borderRadius:'6px',fontSize:'11px',fontWeight:600,cursor:'pointer',background:checkedInView==='speciality'?'#fff':'transparent',color:checkedInView==='speciality'?C.text:C.textMuted}}>By speciality</div>
+          <div onClick={()=>setCheckedInView('time')} style={{padding:'5px 10px',borderRadius:'6px',fontSize:'11px',fontWeight:600,cursor:'pointer',background:checkedInView==='time'?'#fff':'transparent',color:checkedInView==='time'?C.text:C.textMuted}}>By time</div>
+        </div>
+      </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
         {queue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No one checked in yet.</div>}
-        {queue.map((q,i)=>{
+        {checkedInView==='time'&&checkedInSortedByTime.map(q=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
           const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
           return (
-            <Card key={i} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:i})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+            <Card key={q._idx} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:q._idx})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
               <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
@@ -2245,6 +2308,26 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
             </Card>
           )
         })}
+        {checkedInView==='speciality'&&Object.entries(checkedInBySpeciality).map(([speciality,entries])=>(
+          <div key={speciality} style={{marginBottom:'6px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.textSub,marginBottom:'6px'}}>{speciality}</div>
+            {entries.map(q=>{
+              const hrsLeft = hoursRemaining(q.checkedInAt)
+              const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
+              return (
+                <Card key={q._idx} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:q._idx})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer',marginBottom:'8px'}}>
+                  <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
+                    <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
+                  </div>
+                  <Badge text={statusBadge[0]} type={statusBadge[1]}/>
+                  <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+                </Card>
+              )
+            })}
+          </div>
+        ))}
       </div>
 
       <SecLabel>Today's queue - not yet checked in</SecLabel>
@@ -2599,7 +2682,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.patient}</div>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department} only</div>
-          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
+          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this speciality yet.</div>}
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
             {DOCTORS.map(d=>(
               <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
@@ -3240,7 +3323,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <option value="clinic_assistant">Clinic Assistant</option>
             <option value="admin">Practice Manager</option>
           </select>
-          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Department" list="dept-suggestions" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Speciality (e.g. General, Chinese Medicine, Physio)" list="dept-suggestions" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <datalist id="dept-suggestions">
             {[...new Set(staff.map(s=>s.department).filter(Boolean))].map(d=><option key={d} value={d}/>)}
           </datalist>
@@ -5331,7 +5414,7 @@ export default function ClinicOpsApp() {
     if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
   }, [screen])
 
-  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null) {
+  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null, explicitDoctor=null) {
     // If we know exactly which appointment is being checked in (the
     // Schedule page always knows this), only treat THAT appointment as
     // active - otherwise a patient with two appointments the same day
@@ -5413,18 +5496,14 @@ export default function ClinicOpsApp() {
       institution_id: staffMember?.institutionId || null,
       patient_id: patient.id,
       patient_name: patient.full_name,
-      doctor_name: matchingAppt?.doctor_name || (staffMember?.role==='doctor' ? staffMember.name : 'Unassigned'),
+      // For a genuine walk-in (no booked appointment), front desk picks
+      // the doctor by speciality right at check-in (explicitDoctor) -
+      // that's the real assignment, not a guess. Falls back further only
+      // when nobody picked one (a doctor checking themself in, or the
+      // picker was skipped).
+      doctor_name: matchingAppt?.doctor_name || explicitDoctor?.name || (staffMember?.role==='doctor' ? staffMember.name : 'Unassigned'),
       room: '-',
-      // Only fall back to the CHECKING-IN staff member's own department
-      // when they're a doctor checking in their own walk-in - front desk
-      // checking someone in has no bearing on which doctor should see
-      // this patient. Defaulting a front-desk walk-in to the front
-      // desk's own department (instead of 'All departments', visible to
-      // everyone) meant it silently never showed up on My Patients for
-      // any doctor in a different department - this was the real reason
-      // checked-in patients weren't appearing there, nothing to do with
-      // whether they'd been called into the queue.
-      department: matchingAppt?.department || (staffMember?.role==='doctor' ? staffMember.department : null) || 'All departments',
+      department: matchingAppt?.department || explicitDoctor?.department || (staffMember?.role==='doctor' ? staffMember.department : null) || 'All departments',
       status: 'waiting',
     }).select().single()
 
