@@ -95,7 +95,7 @@ function generateTempPassword() {
   return `${word}${digits}${symbol}`
 }
 
-function StaffLogin({ onLogin }) {
+function StaffLogin({ onLogin, kickedOutMessage }) {
   const [staff,setStaff]=useState([])
   const [loading,setLoading]=useState(true)
   const [pin,setPin]=useState('')
@@ -172,8 +172,28 @@ const mapped = (data||[]).map(s => ({
     // ever returns true/false, never the hash itself.
     const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: selected.id, p_password: pin })
     setCheckingPin(false)
+    const deviceLabel = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0,160) : null
+    // Login audit log - both outcomes, for breach investigation. Never
+    // awaited into the pass/fail decision itself and errors are ignored
+    // (e.g. the table not existing yet) - a logging failure must never
+    // be the reason someone can't sign in.
+    supabase.from('staff_login_log').insert({
+      medsa_id: selected.id, full_name: selected.name, role: selected.role,
+      event: ok ? 'login_success' : 'login_failed', device_label: deviceLabel,
+    }).then(()=>{}).catch(()=>{})
     if (!ok) { setPinError(true); return }
     setPinError(false)
+    // Single device at a time - this login's session token overwrites
+    // whatever was there before, which is what the previously-signed-in
+    // device's polling loop (see ClinicOpsApp) notices to sign itself
+    // out. Best-effort: if this write fails (e.g. migration not run
+    // yet), login still proceeds - it just won't enforce single-device
+    // until the table exists.
+    const sessionToken = (typeof crypto!=='undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+    const { error: sessionErr } = await supabase.from('staff_sessions').upsert({
+      medsa_id: selected.id, session_token: sessionToken, device_label: deviceLabel, created_at: new Date().toISOString(),
+    }, { onConflict: 'medsa_id' })
+    const withSession = { ...selected, sessionToken: sessionErr ? null : sessionToken }
     // Doctors and nurses are clinically tied to the speciality they were
     // onboarded under (set once by the practice manager in Staff) - that's
     // fixed, not something to pick again at every login. A practice
@@ -182,15 +202,16 @@ const mapped = (data||[]).map(s => ({
     // doctor regardless of speciality, so both go straight in unscoped.
     const isGeneralFrontDesk = selected.role==='clinic_assistant' && !selected.isNurse
     if (selected.role==='admin' || isGeneralFrontDesk) {
-      onLogin({ ...selected, department: 'All departments' })
+      onLogin({ ...withSession, department: 'All departments' })
     } else {
-      onLogin(selected)
+      onLogin(withSession)
     }
   }
 
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:420}}>
+        {kickedOutMessage&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} {kickedOutMessage}</div>}
         <div style={{textAlign:'center',marginBottom:'28px'}}>
           <div style={{fontSize:'22px',fontWeight:700,color:C.text}}>Medsa Clinic</div>
           <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>
@@ -5239,6 +5260,27 @@ function ClaimsScreen({ onNavPayment }) {
 
 export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
+  const [kickedOutMessage,setKickedOutMessage]=useState(null)
+
+  // Single device at a time per staff account - if another device signs
+  // in on this same account, staff_sessions gets overwritten with its
+  // token, and this poll notices the mismatch and signs this device out.
+  // Fails open on purpose: any error here (most likely the migration not
+  // having been run yet) just skips this check rather than locking
+  // anyone out.
+  useEffect(() => {
+    if (!staffMember?.id || !staffMember?.sessionToken) return
+    const interval = setInterval(async () => {
+      const { data, error } = await supabase.from('staff_sessions').select('session_token').eq('medsa_id', staffMember.id).maybeSingle()
+      if (!error && data && data.session_token !== staffMember.sessionToken) {
+        setKickedOutMessage('You were signed out because this account was signed in on another device.')
+        setStaffMember(null)
+        setScreen('overview')
+      }
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [staffMember?.id, staffMember?.sessionToken])
+
   const [checkInError,setCheckInError]=useState(null)
   const [screen,setScreen]=useState('overview')
   const [newPatientOrigin,setNewPatientOrigin]=useState('checkin') // 'checkin' | 'schedule'
@@ -5715,13 +5757,20 @@ export default function ClinicOpsApp() {
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
 
-  if (!staffMember) return <StaffLogin onLogin={(s)=>{setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
+  if (!staffMember) return <StaffLogin kickedOutMessage={kickedOutMessage} onLogin={(s)=>{setKickedOutMessage(null);setStaffMember(s);setScreen(s.role==='doctor'?'mypatients':s.role==='clinic_assistant'?'checkin':'overview')}}/>
 
   const navItems = allNavItems.filter(item=>item.roles.includes(staffMember.role) && (!item.portalOnly || staffMember.practitionerPortalEnabled))
 
   return (
     <div style={{display:'flex',minHeight:'100vh',background:C.beige,fontFamily:'system-ui, -apple-system, sans-serif'}}>
-      <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{setStaffMember(null);setScreen('overview')}}/>
+      <Sidebar screen={screen} setScreen={setScreen} staffMember={staffMember} navItems={navItems} onLogout={()=>{
+        // Best-effort - clears this device's session row so it doesn't
+        // linger as "the active device" for this account after a real
+        // logout. Not awaited into the logout itself; a failure here
+        // shouldn't stop someone from signing out.
+        if (staffMember?.id) supabase.from('staff_sessions').delete().eq('medsa_id', staffMember.id).eq('session_token', staffMember.sessionToken||'').then(()=>{})
+        setStaffMember(null);setScreen('overview')
+      }}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
