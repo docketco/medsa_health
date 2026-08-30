@@ -21,7 +21,7 @@ export default function MedsaAdminPage() {
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -33,6 +33,7 @@ export default function MedsaAdminPage() {
       {tab==='partners' && <PartnersTab/>}
       {tab==='clinics' && <ClinicsTab/>}
       {tab==='tpa' && <TpaClinicsTab/>}
+      {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
     </div>
   )
@@ -171,6 +172,98 @@ function TpaClinicsTab() {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// Infrastructure-as-a-service ("Uber Direct" side of the insurance work) -
+// an insurer with no relationship to Medsa's consumer apps or ClinicOps
+// pays to call the adjudication engine directly via API. Different
+// customer and different pricing from TPA clinics (that's a clinic
+// paying indirectly per claim Medsa routes for them); this is an
+// insurer paying for the engine itself. See lib/apiAuth.js and
+// pages/api/v1/*.
+function ApiClientsTab() {
+  const [clients, setClients] = useState([])
+  const [usage, setUsage] = useState({}) // clientId -> call count
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ name:'', contactEmail:'' })
+  const [result, setResult] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('api_clients').select('*').order('created_at',{ascending:false})
+    setClients(data||[])
+    const { data: logs } = await supabase.from('api_usage_log').select('api_client_id')
+    const counts = {}
+    for (const l of (logs||[])) counts[l.api_client_id] = (counts[l.api_client_id]||0) + 1
+    setUsage(counts)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleSubmit() {
+    if (!form.name.trim()) return
+    setSaving(true)
+    setResult(null)
+    const res = await fetch('/api/admin/create_api_client', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: form.name.trim(), contactEmail: form.contactEmail.trim() }),
+    })
+    const data = await res.json()
+    setSaving(false)
+    if (data.status !== 'OK') { setResult({ error: data.message||'Could not create API client.' }); return }
+    setResult({ name: data.apiClient.name, apiKey: data.apiKey })
+    setCreating(false)
+    setForm({ name:'', contactEmail:'' })
+    load()
+  }
+
+  async function toggleStatus(client) {
+    await supabase.from('api_clients').update({ status: client.status==='active'?'suspended':'active' }).eq('id', client.id)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
+        Insurers who pay to call the adjudication engine (POST /api/v1/eligibility, /api/v1/adjudicate) directly with their own API key - no clinic or patient app involved at all. Real HTTP endpoints, real usage logging, same engine as ClinicOps and the TPA portal.
+      </div>
+
+      {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ API key issued for {result.name}</div>
+        <div style={{fontSize:'12px',color:C.textSub,wordBreak:'break-all'}}>{result.apiKey}</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Only the hash is stored - this is the only time it's ever shown. Relay it to the insurer directly.</div>
+      </div>}
+      {result?.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'16px'}}>{result.error}</div>}
+
+      {!creating&&<button onClick={()=>{setCreating(true);setResult(null)}} style={{width:'100%',padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'16px'}}>+ Issue an API key</button>}
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Insurer/company name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <input value={form.contactEmail} onChange={e=>setForm(f=>({...f,contactEmail:e.target.value}))} placeholder="Contact email (optional)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Issuing…':'Issue key'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&clients.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No API clients issued yet.</div>}
+      {!loading&&clients.map(c => (
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_email||'—'}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+          </div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{usage[c.id]||0} API call{(usage[c.id]||0)===1?'':'s'} total</div>
+          <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Suspend':'Reactivate'}</button>
+        </div>
+      ))}
     </div>
   )
 }
