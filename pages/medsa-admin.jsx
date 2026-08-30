@@ -21,7 +21,7 @@ export default function MedsaAdminPage() {
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -32,6 +32,7 @@ export default function MedsaAdminPage() {
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
       {tab==='clinics' && <ClinicsTab/>}
+      {tab==='tpa' && <TpaClinicsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
     </div>
   )
@@ -42,6 +43,138 @@ export default function MedsaAdminPage() {
 // PatientApp.jsx). Manual review for now (verification_method stays
 // 'manual' either way); a real ID-verification provider can slot in
 // ahead of this queue later without changing the table shape.
+// Out-of-network claim intake ("Uber Eats" side of the insurance work) -
+// a clinic that never adopts ClinicOps as its EMR can still submit
+// claims through Medsa's adjudication engine (lib/insuranceAdapter.js),
+// same real eligibility/deductible/copay math as a native clinic, for
+// the same per-claim fee. Medsa is purely the claim's biller/router
+// here, never this clinic's EMR. Onboarding is admin-provisioned (not
+// self-serve), same as insurer partners - a real relationship, not an
+// open signup form.
+function TpaClinicsTab() {
+  const [clinics, setClinics] = useState([])
+  const [claimStats, setClaimStats] = useState({}) // clinicId -> {count, feesEarned}
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({ clinicName:'', contactName:'', contactEmail:'', contactPhone:'', brNumber:'' })
+  const [result, setResult] = useState(null)
+  const [resettingId, setResettingId] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('external_clinics').select('*').order('created_at',{ascending:false})
+    setClinics(data||[])
+    // Real claim volume + fees earned per clinic - this is the actual
+    // monetization visibility for the TPA side, not just a client list.
+    const { data: claims } = await supabase.from('insurance_claims')
+      .select('external_clinic_id, platform_claim_fee').eq('source_type','external_clinic')
+    const stats = {}
+    for (const c of (claims||[])) {
+      if (!c.external_clinic_id) continue
+      if (!stats[c.external_clinic_id]) stats[c.external_clinic_id] = { count: 0, feesEarned: 0 }
+      stats[c.external_clinic_id].count += 1
+      stats[c.external_clinic_id].feesEarned += c.platform_claim_fee || 0
+    }
+    setClaimStats(stats)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function handleSubmit() {
+    if (!form.clinicName.trim() || !form.contactEmail.trim()) return
+    setSaving(true)
+    setResult(null)
+    const { data: clinic, error: insErr } = await supabase.from('external_clinics').insert({
+      clinic_name: form.clinicName.trim(), contact_name: form.contactName.trim()||null,
+      contact_email: form.contactEmail.trim(), contact_phone: form.contactPhone.trim()||null,
+      business_registration_number: form.brNumber.trim()||null,
+      onboarded_by: 'medsa-admin', status: 'active',
+    }).select().maybeSingle()
+    if (insErr) { setResult({ error: insErr.message }); setSaving(false); return }
+
+    const tempPassword = `Temp${Math.floor(1000+Math.random()*9000)}!`
+    const res = await fetch('/api/admin/set_external_clinic_password', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clinicId: clinic.id, newPassword: tempPassword }),
+    })
+    const data = await res.json()
+    if (data.status !== 'OK') { setResult({ error: data.message || 'Clinic created but password could not be set.' }); setSaving(false); load(); return }
+
+    setResult({ clinicName: clinic.clinic_name, tempPassword })
+    setSaving(false)
+    setCreating(false)
+    setForm({ clinicName:'', contactName:'', contactEmail:'', contactPhone:'', brNumber:'' })
+    load()
+  }
+
+  async function handleResetPassword(clinic) {
+    setResettingId(clinic.id)
+    const tempPassword = `Temp${Math.floor(1000+Math.random()*9000)}!`
+    const res = await fetch('/api/admin/set_external_clinic_password', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clinicId: clinic.id, newPassword: tempPassword }),
+    })
+    const data = await res.json()
+    setResettingId(null)
+    if (data.status === 'OK') setResult({ clinicName: clinic.clinic_name, tempPassword })
+  }
+
+  async function toggleStatus(clinic) {
+    await supabase.from('external_clinics').update({ status: clinic.status==='active'?'suspended':'active' }).eq('id', clinic.id)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
+        Clinics that submit claims through Medsa's claim portal without ever adopting ClinicOps as their EMR. Same adjudication engine, same per-claim fee as a native clinic - Medsa is just the biller here. Onboarding is a real relationship you set up on their behalf, same as an insurer partner - not a public signup.
+      </div>
+
+      {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Credentials set for {result.clinicName}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{result.tempPassword}</strong></div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this to the clinic directly - not shown again.</div>
+      </div>}
+      {result?.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'16px'}}>{result.error}</div>}
+
+      {!creating&&<button onClick={()=>{setCreating(true);setResult(null)}} style={{width:'100%',padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'16px'}}>+ Onboard a TPA clinic</button>}
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        {[['clinicName','Clinic name'],['contactName','Contact name'],['contactEmail','Contact email'],['contactPhone','Contact phone'],['brNumber','Business registration number (optional)']].map(([field,ph]) => (
+          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
+            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        ))}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.clinicName.trim()||!form.contactEmail.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Create & issue password'}</button>
+        </div>
+      </div>}
+
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&clinics.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No TPA clinics onboarded yet.</div>}
+      {!loading&&clinics.map(c => {
+        const stats = claimStats[c.id] || { count: 0, feesEarned: 0 }
+        return (
+          <div key={c.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div>
+                <div style={{fontSize:'14px',fontWeight:600}}>{c.clinic_name}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name||'—'} · {c.contact_email}</div>
+              </div>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+            </div>
+            <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{stats.count} claim{stats.count===1?'':'s'} submitted · <strong>HK${stats.feesEarned.toFixed(0)}</strong> in platform fees earned</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Suspend':'Reactivate'}</button>
+              <button onClick={()=>handleResetPassword(c)} disabled={resettingId===c.id} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{resettingId===c.id?'…':'Reset password'}</button>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function AccountRecoveryTab() {
   const [requests, setRequests] = useState([])
   const [loading, setLoading] = useState(true)

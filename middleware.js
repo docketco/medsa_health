@@ -4,6 +4,12 @@
 // database with no login screen of their own, so anyone with the URL could
 // otherwise use them. Requires ADMIN_GATE_PASSWORD to be set in Vercel; if
 // it isn't set, these pages are locked out entirely rather than left open.
+// Also covers /api/admin/* - server-side routes that use the service-role
+// key on medsa-admin's behalf (e.g. setting an external clinic's
+// password) and would otherwise be reachable by anyone who found the URL,
+// unlike medsa-admin's own page-level gate. The browser already has these
+// credentials cached from loading /medsa-admin itself, so fetches from
+// that page attach them automatically - nothing extra to wire up client-side.
 // ─────────────────────────────────────────────────────────────────────────────
 import { NextResponse } from 'next/server'
 
@@ -27,5 +33,5 @@ export function middleware(req) {
 }
 
 export const config = {
-  matcher: ['/csv-import', '/import-doctors-csv', '/directory-import', '/seed-osm-clinics', '/medsa-admin', '/insurer-plans', '/institution'],
+  matcher: ['/csv-import', '/import-doctors-csv', '/directory-import', '/seed-osm-clinics', '/medsa-admin', '/insurer-plans', '/institution', '/api/admin/:path*'],
 }
