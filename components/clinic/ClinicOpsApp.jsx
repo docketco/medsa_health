@@ -102,7 +102,7 @@ function StaffLogin({ onLogin, kickedOutMessage }) {
   const [pinError,setPinError]=useState(false)
   const [checkingPin,setCheckingPin]=useState(false)
   const [selected,setSelected]=useState(null)
-  const [stage,setStage]=useState('pick') // pick | pin | forgot | forgot_otp
+  const [stage,setStage]=useState('pick') // pick | pin | device_otp | forgot | forgot_otp
   const [forgotSending,setForgotSending]=useState(false)
   const [forgotError,setForgotError]=useState(null)
   const [forgotMaskedEmail,setForgotMaskedEmail]=useState(null)
@@ -164,6 +164,90 @@ const mapped = (data||[]).map(s => ({
     load()
   }, [])
 
+  // A random id this browser keeps in localStorage so the app can tell
+  // "have I seen this device before for this account" apart from
+  // whether the password was right - not a secret, not a security
+  // boundary by itself, just a marker. If localStorage isn't available
+  // (private browsing etc.) this returns null and the device check is
+  // skipped entirely rather than blocking login.
+  function getOrCreateDeviceId() {
+    try {
+      let id = localStorage.getItem('medsa_clinicops_device_id')
+      if (!id) {
+        id = (typeof crypto!=='undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+        localStorage.setItem('medsa_clinicops_device_id', id)
+      }
+      return id
+    } catch { return null }
+  }
+
+  const [deviceOtpCode,setDeviceOtpCode]=useState('')
+  const [deviceOtpSending,setDeviceOtpSending]=useState(false)
+  const [deviceOtpVerifying,setDeviceOtpVerifying]=useState(false)
+  const [deviceOtpError,setDeviceOtpError]=useState(null)
+  const [deviceMaskedEmail,setDeviceMaskedEmail]=useState(null)
+  const [deviceDevCode,setDeviceDevCode]=useState(null)
+
+  // Finishes what used to be the whole of handlePinConfirm - split out
+  // so a new, unrecognized device can run the OTP challenge in between
+  // "password was right" and "actually let them in."
+  function finishLogin() {
+    const deviceLabel = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0,160) : null
+    // Single device at a time - this login's session token overwrites
+    // whatever was there before, which is what the previously-signed-in
+    // device's polling loop (see ClinicOpsApp) notices to sign itself
+    // out. Best-effort: if this write fails (e.g. migration not run
+    // yet), login still proceeds - it just won't enforce single-device
+    // until the table exists.
+    const sessionToken = (typeof crypto!=='undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+    supabase.from('staff_sessions').upsert({
+      medsa_id: selected.id, session_token: sessionToken, device_label: deviceLabel, created_at: new Date().toISOString(),
+    }, { onConflict: 'medsa_id' }).then(({ error: sessionErr }) => {
+      const withSession = { ...selected, sessionToken: sessionErr ? null : sessionToken }
+      // Doctors and nurses are clinically tied to the speciality they were
+      // onboarded under (set once by the practice manager in Staff) - that's
+      // fixed, not something to pick again at every login. A practice
+      // manager oversees the whole clinic, and general front desk (a
+      // clinic_assistant who isn't a nurse) handles check-ins for every
+      // doctor regardless of speciality, so both go straight in unscoped.
+      const isGeneralFrontDesk = selected.role==='clinic_assistant' && !selected.isNurse
+      if (selected.role==='admin' || isGeneralFrontDesk) {
+        onLogin({ ...withSession, department: 'All departments' })
+      } else {
+        onLogin(withSession)
+      }
+    })
+  }
+
+  async function handleSendDeviceOtp() {
+    setDeviceOtpSending(true)
+    setDeviceOtpError(null)
+    const res = await fetch('/api/staff/send_device_otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ medsaId: selected.id }),
+    })
+    const data = await res.json()
+    setDeviceOtpSending(false)
+    if (data.status === 'NO_EMAIL_ON_FILE') { setDeviceOtpError(data.message); return }
+    if (data.status !== 'SENT') { setDeviceOtpError(data.message || 'Could not send a verification code.'); return }
+    setDeviceMaskedEmail(data.email)
+    setDeviceDevCode(data.devOnlyCode) // no live email provider yet - see API route
+  }
+
+  async function handleVerifyDeviceOtp() {
+    setDeviceOtpVerifying(true)
+    setDeviceOtpError(null)
+    const deviceId = getOrCreateDeviceId()
+    const deviceLabel = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0,160) : null
+    const res = await fetch('/api/staff/verify_device_otp', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ medsaId: selected.id, code: deviceOtpCode, deviceId, deviceLabel }),
+    })
+    const data = await res.json()
+    setDeviceOtpVerifying(false)
+    if (data.status !== 'OK') { setDeviceOtpError(data.message || 'Could not verify this device.'); return }
+    finishLogin()
+  }
+
   async function handlePinConfirm() {
     setCheckingPin(true)
     // Real verification against a hashed password, server-side inside
@@ -183,29 +267,22 @@ const mapped = (data||[]).map(s => ({
     }).then(()=>{}).catch(()=>{})
     if (!ok) { setPinError(true); return }
     setPinError(false)
-    // Single device at a time - this login's session token overwrites
-    // whatever was there before, which is what the previously-signed-in
-    // device's polling loop (see ClinicOpsApp) notices to sign itself
-    // out. Best-effort: if this write fails (e.g. migration not run
-    // yet), login still proceeds - it just won't enforce single-device
-    // until the table exists.
-    const sessionToken = (typeof crypto!=='undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
-    const { error: sessionErr } = await supabase.from('staff_sessions').upsert({
-      medsa_id: selected.id, session_token: sessionToken, device_label: deviceLabel, created_at: new Date().toISOString(),
-    }, { onConflict: 'medsa_id' })
-    const withSession = { ...selected, sessionToken: sessionErr ? null : sessionToken }
-    // Doctors and nurses are clinically tied to the speciality they were
-    // onboarded under (set once by the practice manager in Staff) - that's
-    // fixed, not something to pick again at every login. A practice
-    // manager oversees the whole clinic, and general front desk (a
-    // clinic_assistant who isn't a nurse) handles check-ins for every
-    // doctor regardless of speciality, so both go straight in unscoped.
-    const isGeneralFrontDesk = selected.role==='clinic_assistant' && !selected.isNurse
-    if (selected.role==='admin' || isGeneralFrontDesk) {
-      onLogin({ ...withSession, department: 'All departments' })
-    } else {
-      onLogin(withSession)
+
+    // New-device check - fails OPEN: if the table doesn't exist yet, or
+    // localStorage isn't available, this device is treated as trusted
+    // and login proceeds normally rather than getting stuck on a
+    // challenge that can't be completed.
+    const deviceId = getOrCreateDeviceId()
+    if (deviceId) {
+      const { data: trustRow, error: trustErr } = await supabase.from('staff_device_trust')
+        .select('id').eq('medsa_id', selected.id).eq('device_id', deviceId).maybeSingle()
+      if (!trustErr && !trustRow) {
+        setStage('device_otp')
+        handleSendDeviceOtp()
+        return
+      }
     }
+    finishLogin()
   }
 
   return (
@@ -217,6 +294,7 @@ const mapped = (data||[]).map(s => ({
           <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>
             {stage==='pick'&&'Select your account to sign in'}
             {stage==='pin'&&'Enter your PIN'}
+            {stage==='device_otp'&&'Verify this device'}
             {(stage==='forgot'||stage==='forgot_otp')&&'Reset your password'}
           </div>
         </div>
@@ -251,6 +329,20 @@ const mapped = (data||[]).map(s => ({
               <Btn variant="primary" style={{flex:1}} onClick={handlePinConfirm} disabled={checkingPin||!pin}>{checkingPin?'Checking...':'Sign in'}</Btn>
             </div>
             <div onClick={()=>{setForgotError(null);setStage('forgot')}} style={{fontSize:'12px',color:C.green,textAlign:'center',cursor:'pointer'}}>Forgot password?</div>
+          </div>
+        )}
+        {stage==='device_otp'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>New device for {selected.name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center',lineHeight:1.5}}>{deviceMaskedEmail?`We sent a code to ${deviceMaskedEmail}.`:'Sending a verification code…'}</div>
+            {deviceDevCode&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'14px',lineHeight:1.5}}>◇ No live email provider is connected yet, so here's the code directly: <strong>{deviceDevCode}</strong></div>}
+            <input value={deviceOtpCode} onChange={e=>setDeviceOtpCode(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+            {deviceOtpError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>{deviceOtpError}</div>}
+            <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setStage('pin');setDeviceOtpCode('');setDeviceOtpError(null);setDeviceMaskedEmail(null);setDeviceDevCode(null)}}>Back</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={handleVerifyDeviceOtp} disabled={deviceOtpVerifying||!deviceOtpCode}>{deviceOtpVerifying?'Verifying...':'Verify'}</Btn>
+            </div>
+            <div onClick={handleSendDeviceOtp} style={{fontSize:'12px',color:C.green,textAlign:'center',cursor:'pointer'}}>{deviceOtpSending?'Sending…':'Resend code'}</div>
           </div>
         )}
         {stage==='forgot'&&(
