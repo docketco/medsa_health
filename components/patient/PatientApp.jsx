@@ -3784,6 +3784,22 @@ function SelfRegisterFlow({ onBack, onComplete }) {
     setSaving(true)
     setError(null)
     try {
+      // One real HKID, one real Medsa account - without this, "I'm new
+      // to Medsa" would happily create a second (or third) account for
+      // someone who already has one, which is exactly how someone would
+      // dodge a per-person limit on a paid tier. Only blocks against a
+      // REAL account (already claimed, or already self-registered) - an
+      // unclaimed clinic-created record under the same HKID is expected
+      // and gets merged in automatically when they do claim it.
+      const { data: existing } = await supabase.from('patients').select('id')
+        .eq('hkid', form.hkid.trim())
+        .or('claimed_at.not.is.null,registration_path.eq.self_registered')
+        .limit(1).maybeSingle()
+      if (existing) {
+        setError('You already have a Medsa account under this HKID. Go back and log in, or claim your profile if a clinic registered you.')
+        setSaving(false)
+        return
+      }
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       let idPath = null, selfiePath = null
       if (idFile) {
@@ -3804,6 +3820,10 @@ function SelfRegisterFlow({ onBack, onComplete }) {
         id_document_path: idPath,
         selfie_verification_path: selfiePath,
       }).select().single()
+      // 23505 is the backstop database constraint (see migration) catching
+      // a race the check above can't - two signups for the same HKID at
+      // the exact same moment.
+      if (insErr?.code === '23505') { setError('You already have a Medsa account under this HKID. Go back and log in, or claim your profile if a clinic registered you.'); setSaving(false); return }
       if (insErr) throw insErr
       setStep('pending')
       setTimeout(()=>onComplete(data), 2500) // demo only - real flow waits for actual verification result
