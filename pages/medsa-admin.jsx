@@ -21,7 +21,7 @@ export default function MedsaAdminPage() {
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -32,6 +32,92 @@ export default function MedsaAdminPage() {
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
       {tab==='clinics' && <ClinicsTab/>}
+      {tab==='recovery' && <AccountRecoveryTab/>}
+    </div>
+  )
+}
+
+// Reviews account_recovery_requests - someone resigning up with an HKID
+// that already has a real Medsa account (see SelfRegisterFlow in
+// PatientApp.jsx). Manual review for now (verification_method stays
+// 'manual' either way); a real ID-verification provider can slot in
+// ahead of this queue later without changing the table shape.
+function AccountRecoveryTab() {
+  const [requests, setRequests] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [reviewerName, setReviewerName] = useState('')
+  const [busyId, setBusyId] = useState(null)
+  const [imageUrls, setImageUrls] = useState({})
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('account_recovery_requests')
+      .select('*, patients(id, full_name, medsa_id, phone, id_document_path, selfie_verification_path)')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+    setRequests(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function viewImage(path) {
+    if (!path) return
+    if (imageUrls[path]) { window.open(imageUrls[path], '_blank'); return }
+    const { data } = await supabase.storage.from('id-verification').createSignedUrl(path, 300)
+    if (data?.signedUrl) {
+      setImageUrls(prev => ({ ...prev, [path]: data.signedUrl }))
+      window.open(data.signedUrl, '_blank')
+    }
+  }
+
+  async function handleApprove(req) {
+    if (!reviewerName.trim()) { alert('Enter your name before reviewing.'); return }
+    setBusyId(req.id)
+    // Updates the EXISTING account's phone number - this is the whole
+    // point, recovery never creates a second account.
+    await supabase.from('patients').update({ phone: req.new_phone }).eq('id', req.patient_id)
+    await supabase.from('account_recovery_requests').update({
+      status: 'approved', reviewed_by: reviewerName.trim(), reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id)
+    setBusyId(null)
+    load()
+  }
+
+  async function handleReject(req) {
+    if (!reviewerName.trim()) { alert('Enter your name before reviewing.'); return }
+    setBusyId(req.id)
+    await supabase.from('account_recovery_requests').update({
+      status: 'rejected', reviewed_by: reviewerName.trim(), reviewed_at: new Date().toISOString(),
+    }).eq('id', req.id)
+    setBusyId(null)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>
+        Someone tried to register with an HKID that already has a Medsa account. Compare the new ID/selfie against what's on file, then approve (updates the phone number on the existing account) or reject.
+      </div>
+      <input value={reviewerName} onChange={e=>setReviewerName(e.target.value)} placeholder="Your name (recorded as reviewer)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'16px',border:`1px solid ${C.border}`,borderRadius:'8px',boxSizing:'border-box'}}/>
+      {loading && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Loading…</div>}
+      {!loading && requests.length===0 && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No pending recovery requests.</div>}
+      {requests.map(req => (
+        <div key={req.id} style={{background:C.card,borderRadius:'10px',padding:'16px',marginBottom:'12px'}}>
+          <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{req.patients?.full_name || 'Unknown'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{req.patients?.medsa_id} · HKID {req.hkid}</div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>Phone on file: <strong>{req.patients?.phone || '(none)'}</strong> → requesting: <strong>{req.new_phone}</strong></div>
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'12px'}}>
+            <button onClick={()=>viewImage(req.patients?.id_document_path)} disabled={!req.patients?.id_document_path} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.border}`,borderRadius:'6px',background:'#fff',cursor:'pointer'}}>View original ID</button>
+            <button onClick={()=>viewImage(req.patients?.selfie_verification_path)} disabled={!req.patients?.selfie_verification_path} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.border}`,borderRadius:'6px',background:'#fff',cursor:'pointer'}}>View original selfie</button>
+            <button onClick={()=>viewImage(req.id_document_path)} disabled={!req.id_document_path} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.green}`,borderRadius:'6px',background:'#fff',color:C.green,cursor:'pointer'}}>View new ID</button>
+            <button onClick={()=>viewImage(req.selfie_verification_path)} disabled={!req.selfie_verification_path} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.green}`,borderRadius:'6px',background:'#fff',color:C.green,cursor:'pointer'}}>View new selfie</button>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>handleReject(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Reject'}</button>
+            <button onClick={()=>handleApprove(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Approve'}</button>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

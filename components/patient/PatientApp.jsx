@@ -3636,10 +3636,16 @@ function LoginFlow({ onBack, onComplete }) {
   async function handleLogin() {
     setChecking(true)
     setError(null)
+    // A real account is either claimed (came from a clinic record) or
+    // self-registered - self-registered accounts never set claimed_at,
+    // so filtering on that alone (as this used to) meant someone who
+    // registered directly could never log back in at all.
     const { data, error: qErr } = await supabase.from('patients').select('*')
-      .eq('hkid', hkid).eq('phone', phone).not('claimed_at', 'is', null).maybeSingle()
+      .eq('hkid', hkid).eq('phone', phone)
+      .or('claimed_at.not.is.null,registration_path.eq.self_registered')
+      .maybeSingle()
     setChecking(false)
-    if (qErr || !data) { setError('No claimed profile matches that HKID and phone number.'); return }
+    if (qErr || !data) { setError('No account matches that HKID and phone number.'); return }
     onComplete(data)
   }
 
@@ -3774,55 +3780,74 @@ function ClaimProfileFlow({ onBack, onComplete }) {
 
 function SelfRegisterFlow({ onBack, onComplete }) {
   const [step,setStep]=useState('form') // form | id_upload | selfie | pending
-  const [form,setForm]=useState({fullName:'',dob:'',hkid:''})
+  const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
   const [idFile,setIdFile]=useState(null)
   const [selfieFile,setSelfieFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+  const [checkingHkid,setCheckingHkid]=useState(false)
+  // Set once the HKID entered matches a real account that already
+  // exists - the rest of the flow (ID + selfie) is identical either
+  // way, but submitting goes to a recovery request tied to that
+  // account instead of creating a new one.
+  const [recovery,setRecovery]=useState(null) // null | {patientId}
+
+  async function handleContinueFromForm() {
+    setCheckingHkid(true)
+    setError(null)
+    const { data: existing } = await supabase.from('patients').select('id')
+      .eq('hkid', form.hkid.trim())
+      .or('claimed_at.not.is.null,registration_path.eq.self_registered')
+      .limit(1).maybeSingle()
+    setCheckingHkid(false)
+    setRecovery(existing ? { patientId: existing.id } : null)
+    setStep('id_upload')
+  }
 
   async function handleSubmit() {
     setSaving(true)
     setError(null)
     try {
-      // One real HKID, one real Medsa account - without this, "I'm new
-      // to Medsa" would happily create a second (or third) account for
-      // someone who already has one, which is exactly how someone would
-      // dodge a per-person limit on a paid tier. Only blocks against a
-      // REAL account (already claimed, or already self-registered) - an
-      // unclaimed clinic-created record under the same HKID is expected
-      // and gets merged in automatically when they do claim it.
-      const { data: existing } = await supabase.from('patients').select('id')
-        .eq('hkid', form.hkid.trim())
-        .or('claimed_at.not.is.null,registration_path.eq.self_registered')
-        .limit(1).maybeSingle()
-      if (existing) {
-        setError('You already have a Medsa account under this HKID. Go back and log in, or claim your profile if a clinic registered you.')
-        setSaving(false)
-        return
-      }
-      const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      const idFolder = recovery ? `recovery-${recovery.patientId}` : ('MDS-' + Math.floor(10000+Math.random()*89999) + '-HK')
       let idPath = null, selfiePath = null
       if (idFile) {
-        idPath = `${medsaId}/id-${Date.now()}-${idFile.name}`
+        idPath = `${idFolder}/id-${Date.now()}-${idFile.name}`
         await supabase.storage.from('id-verification').upload(idPath, idFile)
       }
       if (selfieFile) {
-        selfiePath = `${medsaId}/selfie-${Date.now()}-${selfieFile.name}`
+        selfiePath = `${idFolder}/selfie-${Date.now()}-${selfieFile.name}`
         await supabase.storage.from('id-verification').upload(selfiePath, selfieFile)
       }
+
+      if (recovery) {
+        // Doesn't touch the existing account at all yet - a human has to
+        // actually compare this against what's on file and approve it
+        // first (see medsa-admin's Account Recovery tab). Never signs
+        // them into the existing account here.
+        const { error: recErr } = await supabase.from('account_recovery_requests').insert({
+          patient_id: recovery.patientId, hkid: form.hkid.trim(), new_phone: form.phone,
+          id_document_path: idPath, selfie_verification_path: selfiePath, status: 'pending',
+        })
+        if (recErr) throw recErr
+        setStep('pending')
+        return
+      }
+
+      const medsaId = idFolder
       const { data, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId,
         full_name: form.fullName,
         date_of_birth: form.dob,
         hkid: form.hkid,
+        phone: form.phone,
         registration_path: 'self_registered',
         id_verification_status: 'pending',
         id_document_path: idPath,
         selfie_verification_path: selfiePath,
       }).select().single()
       // 23505 is the backstop database constraint (see migration) catching
-      // a race the check above can't - two signups for the same HKID at
-      // the exact same moment.
+      // a race the check in handleContinueFromForm can't - two signups
+      // for the same HKID at the exact same moment.
       if (insErr?.code === '23505') { setError('You already have a Medsa account under this HKID. Go back and log in, or claim your profile if a clinic registered you.'); setSaving(false); return }
       if (insErr) throw insErr
       setStep('pending')
@@ -3846,12 +3871,15 @@ function SelfRegisterFlow({ onBack, onComplete }) {
             <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name (as on ID)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+            <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
           </div>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('id_upload')} disabled={!form.fullName||!form.dob||!form.hkid}>Continue</Btn>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleContinueFromForm} disabled={checkingHkid||!form.fullName||!form.dob||!form.hkid||!form.phone}>{checkingHkid?'Checking…':'Continue'}</Btn>
         </>}
 
         {step==='id_upload'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Upload your ID</div>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>{recovery?'Verify identity':'Upload your ID'}</div>
+          {recovery&&<div style={{background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>This HKID already has a Medsa account. We'll compare your ID/selfie against what's on file and, once approved, update the phone number on that account to the one you entered - you won't get a new account.</div>}
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>A clear photo of your HKID card, both sides if possible.</div>
           <input type="file" accept="image/*" onChange={e=>setIdFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('selfie')} disabled={!idFile}>Continue</Btn>
@@ -3859,16 +3887,22 @@ function SelfRegisterFlow({ onBack, onComplete }) {
 
         {step==='selfie'&&<>
           <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Take a selfie</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person registering matches the ID provided.</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person {recovery?'recovering this account':'registering'} matches the ID provided.</div>
           <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-            {'\u25c7'} Demo note: real liveness/anti-spoofing verification (confirming a live person, not a photo of a photo) requires a dedicated identity verification provider - this step captures the photo but the matching logic isn't live yet.
+            {'\u25c7'} Demo note: real liveness/anti-spoofing verification (confirming a live person, not a photo of a photo) requires a dedicated identity verification provider - this step captures the photo, and {recovery?'a Medsa staff member reviews it against the original':"the matching logic isn't live yet"}.
           </div>
           <input type="file" accept="image/*" capture="user" onChange={e=>setSelfieFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!selfieFile}>{saving?'Submitting...':'Submit for verification'}</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!selfieFile}>{saving?'Submitting...':recovery?'Submit for review':'Submit for verification'}</Btn>
         </>}
 
-        {step==='pending'&&<div style={{textAlign:'center'}}>
+        {step==='pending'&&recovery&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Recovery request submitted</div>
+          <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6,marginBottom:'20px'}}>A Medsa staff member will compare this against your account's original ID and selfie. Once approved, you'll be able to log in with your new phone number.</div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={onBack}>Back to start</Btn>
+        </div>}
+        {step==='pending'&&!recovery&&<div style={{textAlign:'center'}}>
           <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Verification submitted</div>
           <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Your documents are being reviewed. This usually takes a short while - continuing to your account now for this demo.</div>
