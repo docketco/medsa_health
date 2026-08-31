@@ -188,6 +188,7 @@ const mapped = (data||[]).map(s => ({
   const [deviceOtpError,setDeviceOtpError]=useState(null)
   const [deviceMaskedEmail,setDeviceMaskedEmail]=useState(null)
   const [deviceDevCode,setDeviceDevCode]=useState(null)
+  const [deviceNoEmailMessage,setDeviceNoEmailMessage]=useState(null)
 
   // Finishes what used to be the whole of handlePinConfirm - split out
   // so a new, unrecognized device can run the OTP challenge in between
@@ -228,10 +229,14 @@ const mapped = (data||[]).map(s => ({
     })
     const data = await res.json()
     setDeviceOtpSending(false)
-    if (data.status === 'NO_EMAIL_ON_FILE') { setDeviceOtpError(data.message); return }
-    if (data.status !== 'SENT') { setDeviceOtpError(data.message || 'Could not send a verification code.'); return }
+    // Returns the raw status too, so handlePinConfirm can decide which
+    // screen to show BEFORE committing to the "enter your code" stage -
+    // an account with no email never actually had a code sent to it.
+    if (data.status === 'NO_EMAIL_ON_FILE') { setDeviceNoEmailMessage(data.message); return data }
+    if (data.status !== 'SENT') { setDeviceOtpError(data.message || 'Could not send a verification code.'); return data }
     setDeviceMaskedEmail(data.email)
     setDeviceDevCode(data.devOnlyCode) // no live email provider yet - see API route
+    return data
   }
 
   async function handleVerifyDeviceOtp() {
@@ -278,8 +283,14 @@ const mapped = (data||[]).map(s => ({
       const { data: trustRow, error: trustErr } = await supabase.from('staff_device_trust')
         .select('id').eq('medsa_id', selected.id).eq('device_id', deviceId).maybeSingle()
       if (!trustErr && !trustRow) {
-        setStage('device_otp')
-        handleSendDeviceOtp()
+        // Check whether this account even has an email on file BEFORE
+        // committing to the "enter your code" screen - previously both
+        // happened together, so an account with no email still saw a
+        // code input box with nothing actually sent, and the real
+        // NO_EMAIL_ON_FILE error was tucked underneath it instead of
+        // being the whole story.
+        const sent = await handleSendDeviceOtp()
+        setStage(sent?.status === 'NO_EMAIL_ON_FILE' ? 'device_no_email' : 'device_otp')
         return
       }
     }
@@ -344,6 +355,13 @@ const mapped = (data||[]).map(s => ({
               <Btn variant="primary" style={{flex:1}} onClick={handleVerifyDeviceOtp} disabled={deviceOtpVerifying||!deviceOtpCode}>{deviceOtpVerifying?'Verifying...':'Verify'}</Btn>
             </div>
             <div onClick={handleSendDeviceOtp} style={{fontSize:'12px',color:C.green,textAlign:'center',cursor:'pointer'}}>{deviceOtpSending?'Sending…':'Resend code'}</div>
+          </div>
+        )}
+        {stage==='device_no_email'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>New device for {selected.name}</div>
+            <div style={{fontSize:'12px',color:C.amber,textAlign:'center',marginBottom:'18px',lineHeight:1.5}}>{'⚠'} {deviceNoEmailMessage}</div>
+            <Btn style={{width:'100%'}} onClick={()=>{setStage('pin');setDeviceNoEmailMessage(null)}}>Back</Btn>
           </div>
         )}
         {stage==='forgot'&&(
