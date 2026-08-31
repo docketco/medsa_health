@@ -261,7 +261,6 @@ const mapped = (data||[]).map(s => ({
     // database at all, only its one-way hash, and this function only
     // ever returns true/false, never the hash itself.
     const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: selected.id, p_password: pin })
-    setCheckingPin(false)
     const deviceLabel = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0,160) : null
     // Login audit log - both outcomes, for breach investigation. Never
     // awaited into the pass/fail decision itself and errors are ignored
@@ -271,13 +270,18 @@ const mapped = (data||[]).map(s => ({
       medsa_id: selected.id, full_name: selected.name, role: selected.role,
       event: ok ? 'login_success' : 'login_failed', device_label: deviceLabel,
     }).then(()=>{}).catch(()=>{})
-    if (!ok) { setPinError(true); return }
+    if (!ok) { setCheckingPin(false); setPinError(true); return }
     setPinError(false)
 
     // New-device check - fails OPEN: if the table doesn't exist yet, or
     // localStorage isn't available, this device is treated as trusted
     // and login proceeds normally rather than getting stuck on a
-    // challenge that can't be completed.
+    // challenge that can't be completed. checkingPin deliberately stays
+    // true (keeping Sign In disabled) all the way through this and the
+    // OTP send below - it used to reset right after the password check,
+    // so a second click while this was still running fired a second
+    // send_device_otp, silently overwriting the code already shown with
+    // a new one and invalidating whatever the first click's code was.
     const deviceId = getOrCreateDeviceId()
     if (deviceId) {
       const { data: trustRow, error: trustErr } = await supabase.from('staff_device_trust')
@@ -290,10 +294,12 @@ const mapped = (data||[]).map(s => ({
         // NO_EMAIL_ON_FILE error was tucked underneath it instead of
         // being the whole story.
         const sent = await handleSendDeviceOtp()
+        setCheckingPin(false)
         setStage(sent?.status === 'NO_EMAIL_ON_FILE' ? 'device_no_email' : 'device_otp')
         return
       }
     }
+    setCheckingPin(false)
     finishLogin()
   }
 
@@ -334,6 +340,7 @@ const mapped = (data||[]).map(s => ({
               <div style={{fontSize:'12px',color:C.textSub}}>{selected.roleLabel}</div>
             </div>
             <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="Password"
+              onKeyDown={e=>e.key==='Enter'&&!checkingPin&&pin&&handlePinConfirm()}
               style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
             {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect password</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
@@ -348,7 +355,9 @@ const mapped = (data||[]).map(s => ({
             <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>New device for {selected.name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center',lineHeight:1.5}}>{deviceMaskedEmail?`We sent a code to ${deviceMaskedEmail}.`:'Sending a verification code…'}</div>
             {deviceDevCode&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'14px',lineHeight:1.5}}>◇ No live email provider is connected yet, so here's the code directly: <strong>{deviceDevCode}</strong></div>}
-            <input value={deviceOtpCode} onChange={e=>setDeviceOtpCode(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+            <input value={deviceOtpCode} onChange={e=>setDeviceOtpCode(e.target.value)} placeholder="6-digit code"
+              onKeyDown={e=>e.key==='Enter'&&!deviceOtpVerifying&&deviceOtpCode&&handleVerifyDeviceOtp()}
+              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
             {deviceOtpError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>{deviceOtpError}</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
               <Btn style={{flex:1}} onClick={()=>{setStage('pin');setDeviceOtpCode('');setDeviceOtpError(null);setDeviceMaskedEmail(null);setDeviceDevCode(null)}}>Back</Btn>
