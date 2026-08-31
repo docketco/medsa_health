@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -3232,7 +3233,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   async function load() {
     setLoading(true)
     const [{data:s},{data:l}] = await Promise.all([
-      supabase.from('staff_credentials').select('*').eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
+      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
       supabase.from('clinic_leave_requests').select('*').eq('institution_source','clinic_ops').eq('status','pending'),
     ])
     setStaff(s||[])

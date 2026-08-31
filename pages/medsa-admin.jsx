@@ -64,10 +64,12 @@ function TpaClinicsTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('external_clinics').select('*').order('created_at',{ascending:false})
-    setClinics(data||[])
+    const clinicsRes = await fetch('/api/admin/list_tpa_clinics', { method: 'POST' }).then(r=>r.json())
+    setClinics(clinicsRes.clinics||[])
     // Real claim volume + fees earned per clinic - this is the actual
     // monetization visibility for the TPA side, not just a client list.
+    // insurance_claims is still directly readable by the browser (unlike
+    // external_clinics, it holds no credential material).
     const { data: claims } = await supabase.from('insurance_claims')
       .select('external_clinic_id, platform_claim_fee').eq('source_type','external_clinic')
     const stats = {}
@@ -86,23 +88,18 @@ function TpaClinicsTab() {
     if (!form.clinicName.trim() || !form.contactEmail.trim()) return
     setSaving(true)
     setResult(null)
-    const { data: clinic, error: insErr } = await supabase.from('external_clinics').insert({
-      clinic_name: form.clinicName.trim(), contact_name: form.contactName.trim()||null,
-      contact_email: form.contactEmail.trim(), contact_phone: form.contactPhone.trim()||null,
-      business_registration_number: form.brNumber.trim()||null,
-      onboarded_by: 'medsa-admin', status: 'active',
-    }).select().maybeSingle()
-    if (insErr) { setResult({ error: insErr.message }); setSaving(false); return }
-
-    const tempPassword = `Temp${Math.floor(1000+Math.random()*9000)}!`
-    const res = await fetch('/api/admin/set_external_clinic_password', {
+    const res = await fetch('/api/admin/create_tpa_clinic', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ clinicId: clinic.id, newPassword: tempPassword }),
+      body: JSON.stringify({
+        clinicName: form.clinicName.trim(), contactName: form.contactName.trim()||null,
+        contactEmail: form.contactEmail.trim(), contactPhone: form.contactPhone.trim()||null,
+        brNumber: form.brNumber.trim()||null,
+      }),
     })
     const data = await res.json()
-    if (data.status !== 'OK') { setResult({ error: data.message || 'Clinic created but password could not be set.' }); setSaving(false); load(); return }
+    if (data.status !== 'OK') { setResult({ error: data.message || 'Could not onboard this clinic.' }); setSaving(false); return }
 
-    setResult({ clinicName: clinic.clinic_name, tempPassword })
+    setResult({ clinicName: data.clinicName, tempPassword: data.tempPassword })
     setSaving(false)
     setCreating(false)
     setForm({ clinicName:'', contactName:'', contactEmail:'', contactPhone:'', brNumber:'' })
@@ -122,7 +119,10 @@ function TpaClinicsTab() {
   }
 
   async function toggleStatus(clinic) {
-    await supabase.from('external_clinics').update({ status: clinic.status==='active'?'suspended':'active' }).eq('id', clinic.id)
+    await fetch('/api/admin/toggle_tpa_clinic_status', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clinicId: clinic.id, newStatus: clinic.status==='active'?'suspended':'active' }),
+    })
     load()
   }
 
@@ -194,12 +194,9 @@ function ApiClientsTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('api_clients').select('*').order('created_at',{ascending:false})
-    setClients(data||[])
-    const { data: logs } = await supabase.from('api_usage_log').select('api_client_id')
-    const counts = {}
-    for (const l of (logs||[])) counts[l.api_client_id] = (counts[l.api_client_id]||0) + 1
-    setUsage(counts)
+    const res = await fetch('/api/admin/list_api_clients', { method: 'POST' }).then(r=>r.json())
+    setClients(res.clients||[])
+    setUsage(res.usage||{})
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -222,7 +219,10 @@ function ApiClientsTab() {
   }
 
   async function toggleStatus(client) {
-    await supabase.from('api_clients').update({ status: client.status==='active'?'suspended':'active' }).eq('id', client.id)
+    await fetch('/api/admin/toggle_api_client_status', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clientId: client.id, newStatus: client.status==='active'?'suspended':'active' }),
+    })
     load()
   }
 
@@ -277,11 +277,8 @@ function AccountRecoveryTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('account_recovery_requests')
-      .select('*, patients(id, full_name, medsa_id, phone, id_document_path, selfie_verification_path)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true })
-    setRequests(data || [])
+    const res = await fetch('/api/admin/list_recovery_requests', { method: 'POST' }).then(r=>r.json())
+    setRequests(res.requests || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -301,10 +298,10 @@ function AccountRecoveryTab() {
     setBusyId(req.id)
     // Updates the EXISTING account's phone number - this is the whole
     // point, recovery never creates a second account.
-    await supabase.from('patients').update({ phone: req.new_phone }).eq('id', req.patient_id)
-    await supabase.from('account_recovery_requests').update({
-      status: 'approved', reviewed_by: reviewerName.trim(), reviewed_at: new Date().toISOString(),
-    }).eq('id', req.id)
+    await fetch('/api/admin/review_recovery_request', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ requestId: req.id, decision: 'approved', reviewerName: reviewerName.trim(), patientId: req.patient_id, newPhone: req.new_phone }),
+    })
     setBusyId(null)
     load()
   }
@@ -312,9 +309,10 @@ function AccountRecoveryTab() {
   async function handleReject(req) {
     if (!reviewerName.trim()) { alert('Enter your name before reviewing.'); return }
     setBusyId(req.id)
-    await supabase.from('account_recovery_requests').update({
-      status: 'rejected', reviewed_by: reviewerName.trim(), reviewed_at: new Date().toISOString(),
-    }).eq('id', req.id)
+    await fetch('/api/admin/review_recovery_request', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ requestId: req.id, decision: 'rejected', reviewerName: reviewerName.trim() }),
+    })
     setBusyId(null)
     load()
   }

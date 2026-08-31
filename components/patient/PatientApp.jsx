@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
+import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -1478,7 +1479,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         return all
       }
       const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
-        supabase.from('staff_credentials').select('*, institutions(name, name_tc)').eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+        supabase.from('staff_credentials').select(`${STAFF_CREDENTIALS_SAFE_COLUMNS}, institutions(name, name_tc)`).eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
         fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
         fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
         filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
