@@ -38,6 +38,16 @@ function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) 
 function Card({ children, style:sx={}, onClick }) {
   return <div onClick={onClick} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden',cursor:onClick?'pointer':'default',...sx}}>{children}</div>
 }
+// No card/Octopus terminal is actually integrated yet - this just lets
+// staff record the reference/approval number their real standalone
+// terminal already prints, for their own reconciliation. Optional,
+// never shown for cash (which has no such number).
+function TxnRefField({ method, value, onChange }) {
+  if (method === 'cash') return null
+  return (
+    <input value={value} onChange={e=>onChange(e.target.value)} placeholder={`${method==='octopus'?'Octopus':'Card'} terminal reference # (optional)`} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+  )
+}
 function SecLabel({ children }) {
   return <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,marginBottom:'10px'}}>{children}</div>
 }
@@ -4394,6 +4404,14 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
 function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect, preselectRecordId, onConsumedRecordPreselect }) {
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
+  // No card/Octopus terminal is actually integrated yet (calculatePaymentProcessingFee
+  // is a flat-rate estimate, not a real processor call) - staff on a real
+  // standalone terminal today already gets a reference/approval number
+  // printed on its receipt slip, so this lets them record that number now
+  // for reconciliation. It's optional and never auto-generated - a real
+  // terminal integration later would populate the same field from its own
+  // response instead of manual entry, no schema change needed.
+  const [txnRef,setTxnRef]=useState('')
   const [paid,setPaid]=useState(false)
   const [paidRecord,setPaidRecord]=useState(null)
   const [paidTransaction,setPaidTransaction]=useState(null)
@@ -4407,6 +4425,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [eligibleTreatmentPlansLoading,setEligibleTreatmentPlansLoading]=useState(false)
   const [selectedTreatmentPlan,setSelectedTreatmentPlan]=useState(null)
   const [treatmentPlanShortfallMethod,setTreatmentPlanShortfallMethod]=useState('card')
+  const [shortfallTxnRef,setShortfallTxnRef]=useState('')
   const [eligiblePlans,setEligiblePlans]=useState(null)
   const [eligiblePlansLoading,setEligiblePlansLoading]=useState(false)
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
@@ -4415,6 +4434,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [billingTxnError,setBillingTxnError]=useState(null)
   const [claimAdjudication,setClaimAdjudication]=useState(null) // the raw adjudicateClaim result, kept separate from billingResult so we know whether a copay still needs collecting
   const [copayMethod,setCopayMethod]=useState('card')
+  const [copayTxnRef,setCopayTxnRef]=useState('')
   const [collectingCopay,setCollectingCopay]=useState(false)
   const [addPlanOpen,setAddPlanOpen]=useState(false)
   const [allPlans,setAllPlans]=useState([])
@@ -4457,6 +4477,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [planPrice,setPlanPrice]=useState('')
   const [planExpiry,setPlanExpiry]=useState('')
   const [planMethod,setPlanMethod]=useState('card')
+  const [planTxnRef,setPlanTxnRef]=useState('')
   const [planSaving,setPlanSaving]=useState(false)
   const [newPlanReceipt,setNewPlanReceipt]=useState(null)
 
@@ -4517,6 +4538,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       claim_ref: selectedPayment.claim_ref,
       medical_record_id: linkedRecord?.id || null, patient_id: selectedPayment.patient_id || null,
       staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: txnRef.trim() || null,
     }).select().maybeSingle()
     setPaidTransaction(txn || null)
     setPaidRecord(linkedRecord || null)
@@ -4676,6 +4698,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       treatment_plan_id: selectedTreatmentPlan.id,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: shortfall > 0 ? (shortfallTxnRef.trim() || null) : null,
     }).select().maybeSingle()
     if (txnErr) setBillingTxnError(txnErr.message)
     setBillingTransaction(txn || null)
@@ -4772,6 +4795,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       claim_ref: claimAdjudication.claimId,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: copayTxnRef.trim() || null,
     }).select().maybeSingle()
     setBillingTransaction(txn || null)
     setBillingResult(claimAdjudication)
@@ -4791,6 +4815,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       payment_method: paymentMethod, card_processing_fee: fees.paymentProcessingFee,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: txnRef.trim() || null,
     }).select().maybeSingle()
     // A failed insert here (e.g. a column this code expects hasn't
     // been added to the database yet) used to be silently swallowed -
@@ -4816,7 +4841,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining{billingResult.shortfallCollected>0?` · HK$${billingResult.shortfallCollected.toFixed(2)} collected for the difference not covered by the plan`:''}</div>}
           {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.red,textAlign:'left'}}>{'⚠'} The visit is marked billed, but recording it failed: {billingTxnError}. It won't appear in Financial Records - let Medsa support know.</div>}
           {billingTransaction&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>handleDownloadReceipt(billingTransaction)}>Download receipt (PDF)</Btn>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null);setTreatmentPlanShortfallMethod('card')}}>Done</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setCopayTxnRef('');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null);setTreatmentPlanShortfallMethod('card');setShortfallTxnRef('');setTxnRef('')}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -4866,6 +4891,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div key={k} onClick={()=>setTreatmentPlanShortfallMethod(k)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:treatmentPlanShortfallMethod===k?C.green:'#fff',color:treatmentPlanShortfallMethod===k?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{l}</div>
               ))}
             </div>
+            <TxnRefField method={treatmentPlanShortfallMethod} value={shortfallTxnRef} onChange={setShortfallTxnRef}/>
           </div>}
           {selectedTreatmentPlan&&<Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={handleBillToTreatmentPlan} disabled={submittingClaim}>{submittingClaim?'Processing...':treatmentPlanShortfall>0?`Collect HK$${treatmentPlanShortfall.toFixed(2)} and use 1 session`:'Use 1 session from this plan'}</Btn>}
         </>}
@@ -4880,6 +4906,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               </div>
             ))}
           </div>
+          <TxnRefField method={method} value={txnRef} onChange={setTxnRef}/>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleDirectPaymentSubmit(method)} disabled={submittingClaim}>{submittingClaim?'Processing...':`Collect HK$${(billingRecord.total_fee||0).toFixed(2)}`}</Btn>
         </>}
 
@@ -4930,6 +4957,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 </div>
               ))}
             </div>
+            <TxnRefField method={copayMethod} value={copayTxnRef} onChange={setCopayTxnRef}/>
             <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectRemainingCopay} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.patientPayableTotal.toFixed(2)}`}</Btn>
           </div>}
         </>}
@@ -4965,6 +4993,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
             <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted,marginBottom:t.medical_record_id?'8px':0}}>
               <span>Method: {t.payment_method}</span>
+              {t.transaction_ref&&<span>Ref: {t.transaction_ref}</span>}
               {t.card_processing_fee>0&&<span>Processing fee (Medsa): HK${t.card_processing_fee}</span>}
               {t.clearinghouse_fee>0&&<span>Clearinghouse fee (Medsa): HK${t.clearinghouse_fee}</span>}
             </div>
@@ -5004,6 +5033,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       consultation_fee: parseFloat(planPrice)||0, insurer_covers: 0, patient_pays: parseFloat(planPrice)||0,
       payment_method: planMethod, card_processing_fee: fee, treatment_plan_id: newPlan?.id,
       staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: planTxnRef.trim() || null,
     }).select().maybeSingle()
     setNewPlanReceipt(newPlan && txn ? { plan: newPlan, txn } : null)
     setPlanSaving(false)
@@ -5016,6 +5046,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null); setPlanNotFound(false)
     setPlanScanOpen(false); setPlanScanChoices([])
     setPlanName(''); setPlanSessions(''); setPlanSessionValue(''); setPlanPrice(''); setPlanExpiry(''); setPlanMethod('card')
+    setPlanTxnRef('')
     setNewPlanReceipt(null)
   }
 
@@ -5087,6 +5118,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
           ))}
         </div>
+        <TxnRefField method={planMethod} value={planTxnRef} onChange={setPlanTxnRef}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleChargePlan} disabled={planSaving}>{planSaving?'Processing…':`Charge HK$${planPrice}`}</Btn>
       </Card>}
 
@@ -5157,7 +5189,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <Btn disabled={!paidTransaction} onClick={()=>{handleDownloadReceipt(paidTransaction);setPrinted(true)}}>{!paidTransaction?'Receipt unavailable':printed?'Downloaded - download again':'Download receipt (PDF)'}</Btn>
         </div>
         {receiptSent&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{'\u25c7'} Receipt, consultation notes, and prescription are now synced to the patient's Medsa cloud record.</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null);setPaidTransaction(null)}}>New payment</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null);setPaidTransaction(null);setTxnRef('')}}>New payment</Btn>
       </div>
     </PageWrap>
   )
@@ -5216,6 +5248,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           </div>
         ))}
       </div>
+      <TxnRefField method={method} value={txnRef} onChange={setTxnRef}/>
       <Btn variant="primary" style={{width:'100%',padding:'14px'}} onClick={handleCharge} disabled={saving}>{saving?'Processing...':`Charge HK$${(selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)}`}</Btn>
       </>}
     </PageWrap>
