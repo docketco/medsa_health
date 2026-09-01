@@ -1456,6 +1456,11 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   // whenever the prescriptions list changes, replacing only the
   // prescription-derived lines (category:'prescription') so it never
   // touches the consultation fee or anything the doctor added by hand.
+  // Billed qty is the real total quantity being dispensed - the same
+  // `quantity` field (auto-computed from days x times/day, or typed
+  // directly) that medications.quantity is saved with and that stock
+  // gets deducted by at dispense time - not a flat 1 regardless of how
+  // much is actually being given.
   useEffect(() => {
     setLineItems(prev => {
       const withoutRx = prev.filter(i => i.category !== 'prescription')
@@ -1467,7 +1472,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         const price = drugPrices[name.toLowerCase()]
         if (price == null) continue
         seen.add(name.toLowerCase())
-        rxItems.push({ service_item_id: `rx-${name.toLowerCase()}`, description: name, category: 'prescription', fee: price, qty: 1 })
+        const qty = parseInt(p.quantity) || 1
+        rxItems.push({ service_item_id: `rx-${name.toLowerCase()}`, description: name, category: 'prescription', fee: price, qty })
       }
       return [...withoutRx, ...rxItems]
     })
@@ -1946,7 +1952,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                 without this, whether the auto-itemize actually fired was
                 invisible unless you scrolled up to the bill yourself. */}
             {rx.drug.trim()&&(drugPrices[rx.drug.trim().toLowerCase()]!=null
-              ? <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{'✓'} HK${drugPrices[rx.drug.trim().toLowerCase()].toFixed(2)} added to bill (matched "{rx.drug.trim()}" in inventory)</div>
+              ? (()=>{ const unitPrice = drugPrices[rx.drug.trim().toLowerCase()]; const qty = parseInt(rx.quantity)||1
+                return <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{'✓'} HK${(unitPrice*qty).toFixed(2)} added to bill ({qty} x HK${unitPrice.toFixed(2)} - matched "{rx.drug.trim()}" in inventory{!rx.quantity&&', set days/times per day or quantity above for the real total'})</div> })()
               : <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>No priced inventory item matches "{rx.drug.trim()}" - pick a suggestion above, or add a price for it in Inventory {'→'} Stock, to have it auto-added to the bill.</div>)}
 
             {safetyChecks[i]&&safetyChecks[i].status==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Checking safety data...</div>}
