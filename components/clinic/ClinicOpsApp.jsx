@@ -4405,6 +4405,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [eligibleTreatmentPlans,setEligibleTreatmentPlans]=useState(null)
   const [eligibleTreatmentPlansLoading,setEligibleTreatmentPlansLoading]=useState(false)
   const [selectedTreatmentPlan,setSelectedTreatmentPlan]=useState(null)
+  const [treatmentPlanShortfallMethod,setTreatmentPlanShortfallMethod]=useState('card')
   const [eligiblePlans,setEligiblePlans]=useState(null)
   const [eligiblePlansLoading,setEligiblePlansLoading]=useState(false)
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
@@ -4771,9 +4772,23 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadEligiblePlans()
   }, [billingChoice, billingRecord])
 
+  // A treatment plan session has a real value (price_total / sessions_paid),
+  // and a visit doesn't always cost exactly that - extra services or a
+  // pricier consultation than the package assumed. This used to mark
+  // patient_pays:0 unconditionally just because a plan was picked, billing
+  // the whole visit as "covered" even when the session's real value fell
+  // short of what was actually charged. Now computes the real shortfall
+  // and requires it to be collected before the visit counts as billed.
+  const planPerSessionValue = selectedTreatmentPlan?.price_total!=null && selectedTreatmentPlan?.sessions_paid
+    ? selectedTreatmentPlan.price_total / selectedTreatmentPlan.sessions_paid : null
+  const treatmentPlanShortfall = planPerSessionValue!=null && billingRecord
+    ? Math.max(0, (billingRecord.total_fee||0) - planPerSessionValue) : 0
+
   async function handleBillToTreatmentPlan() {
     if (!selectedTreatmentPlan || !billingRecord) return
     setSubmittingClaim(true)
+    const shortfall = treatmentPlanShortfall
+    const fees = shortfall > 0 ? buildFeeBreakdown(shortfall, 0, shortfall, treatmentPlanShortfallMethod) : { paymentProcessingFee: 0 }
     const newUsed = selectedTreatmentPlan.sessions_used + 1
     const { data: planUpdateRows, error: planUpdateErr } = await supabase.from('treatment_plans').update({
       sessions_used: newUsed,
@@ -4786,15 +4801,15 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
-      insurer_covers: 0, patient_pays: 0,
-      payment_method: 'treatment_plan', card_processing_fee: 0,
+      insurer_covers: 0, patient_pays: shortfall,
+      payment_method: shortfall > 0 ? treatmentPlanShortfallMethod : 'treatment_plan', card_processing_fee: fees.paymentProcessingFee,
       treatment_plan_id: selectedTreatmentPlan.id,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
     }).select().maybeSingle()
     if (txnErr) setBillingTxnError(txnErr.message)
     setBillingTransaction(txn || null)
-    setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed })
+    setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed, shortfallCollected: shortfall })
     setSubmittingClaim(false)
     // The Treatment Plans tab only ever loaded once, on mount - without
     // this, the "X of Y used" count stayed frozen at whatever it was
@@ -4928,10 +4943,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>Billing complete</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{billingRecord.patients?.full_name} - HK${(billingRecord.total_fee||0).toFixed(2)}</div>
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
-          {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining</div>}
+          {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining{billingResult.shortfallCollected>0?` · HK$${billingResult.shortfallCollected.toFixed(2)} collected for the difference not covered by the plan`:''}</div>}
           {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.red,textAlign:'left'}}>{'⚠'} The visit is marked billed, but recording it failed: {billingTxnError}. It won't appear in Financial Records - let Medsa support know.</div>}
           {billingTransaction&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>handleDownloadReceipt(billingTransaction)}>Download receipt (PDF)</Btn>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null)}}>Done</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null);setTreatmentPlanShortfallMethod('card')}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -4971,10 +4986,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.map(p=>(
             <div key={p.id} onClick={()=>setSelectedTreatmentPlan(p)} style={{padding:'12px 14px',borderRadius:'8px',border:`1.5px solid ${selectedTreatmentPlan?.id===p.id?C.green:C.border}`,marginBottom:'8px',cursor:'pointer'}}>
               <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
-              <div style={{fontSize:'11px',color:C.textSub}}>{p.sessions_paid - p.sessions_used} of {p.sessions_paid} sessions remaining{p.expiry_date?` - expires ${new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+              <div style={{fontSize:'11px',color:C.textSub}}>{p.sessions_paid - p.sessions_used} of {p.sessions_paid} sessions remaining{p.expiry_date?` - expires ${new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}{p.price_total!=null?` · HK$${(p.price_total/p.sessions_paid).toFixed(2)}/session`:''}</div>
             </div>
           ))}
-          {selectedTreatmentPlan&&<Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={handleBillToTreatmentPlan} disabled={submittingClaim}>{submittingClaim?'Processing...':'Use 1 session from this plan'}</Btn>}
+          {selectedTreatmentPlan&&treatmentPlanShortfall>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginTop:'8px',marginBottom:'8px'}}>
+            <div style={{fontSize:'12px',color:C.amber,fontWeight:600,marginBottom:'8px'}}>{'⚠'} This visit costs HK${(billingRecord.total_fee||0).toFixed(2)}, but a session on this plan only covers HK${planPerSessionValue.toFixed(2)} - HK${treatmentPlanShortfall.toFixed(2)} still needs collecting.</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              {[['card','Card'],['octopus','Octopus'],['cash','Cash']].map(([k,l])=>(
+                <div key={k} onClick={()=>setTreatmentPlanShortfallMethod(k)} style={{flex:1,padding:'8px',borderRadius:'6px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:treatmentPlanShortfallMethod===k?C.green:'#fff',color:treatmentPlanShortfallMethod===k?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{l}</div>
+              ))}
+            </div>
+          </div>}
+          {selectedTreatmentPlan&&<Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={handleBillToTreatmentPlan} disabled={submittingClaim}>{submittingClaim?'Processing...':treatmentPlanShortfall>0?`Collect HK$${treatmentPlanShortfall.toFixed(2)} and use 1 session`:'Use 1 session from this plan'}</Btn>}
         </>}
 
         {billingChoice==='direct_payment'&&<>
