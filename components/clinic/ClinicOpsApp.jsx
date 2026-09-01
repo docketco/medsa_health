@@ -172,7 +172,7 @@ function StaffLogin({ onLogin, kickedOutMessage }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,is_nurse,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,is_nurse,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link,registering_body')
   .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
 const mapped = (data||[]).map(s => ({
   id: s.medsa_id, name: s.full_name, role: s.role,
@@ -1374,7 +1374,13 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       // including for a visit with no prescription at all.
       setLineItems(prev => {
         if (prev.length > 0) return prev
-        const consultItem = (data||[]).find(i => i.name?.toLowerCase().includes('consult'))
+        // The practice manager's explicit pick (Price List > Set as
+        // default) wins if there is one - falling back to a name match
+        // only when nobody's set one, so it's never left to a guess that
+        // can land on the wrong clinic type's item (this is how "Chinese
+        // Consultation" used to end up as a western clinic's default -
+        // it was just the first 'consult'-named row the query returned).
+        const consultItem = (data||[]).find(i => i.is_default) || (data||[]).find(i => i.name?.toLowerCase().includes('consult'))
         return [{
           service_item_id: consultItem?.id || 'custom-consultation',
           description: consultItem?.name || 'Consultation fee',
@@ -1437,6 +1443,43 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     return () => clearTimeout(timeout)
   }, [icd10Search])
   const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}])
+
+  // Real drug prices, from the same clinic_inventory list Inventory
+  // manages stock against - so a prescribed drug's price can be looked
+  // up by name instead of the doctor having to type it into billing
+  // separately (or, in practice, never remembering to).
+  const [drugPrices,setDrugPrices]=useState({}) // lowercased item_name -> price
+  useEffect(() => {
+    async function loadDrugPrices() {
+      if (!institutionId) return
+      const { data } = await supabase.from('clinic_inventory').select('item_name, price').eq('institution_id', institutionId)
+      const map = {}
+      ;(data||[]).forEach(r => { if (r.item_name && r.price != null) map[r.item_name.trim().toLowerCase()] = parseFloat(r.price) })
+      setDrugPrices(map)
+    }
+    loadDrugPrices()
+  }, [institutionId])
+
+  // Auto-itemize prescribed drugs that have a known price - re-synced
+  // whenever the prescriptions list changes, replacing only the
+  // prescription-derived lines (category:'prescription') so it never
+  // touches the consultation fee or anything the doctor added by hand.
+  useEffect(() => {
+    setLineItems(prev => {
+      const withoutRx = prev.filter(i => i.category !== 'prescription')
+      const seen = new Set()
+      const rxItems = []
+      for (const p of prescriptions) {
+        const name = p.drug?.trim()
+        if (!name || seen.has(name.toLowerCase())) continue
+        const price = drugPrices[name.toLowerCase()]
+        if (price == null) continue
+        seen.add(name.toLowerCase())
+        rxItems.push({ service_item_id: `rx-${name.toLowerCase()}`, description: name, category: 'prescription', fee: price, qty: 1 })
+      }
+      return [...withoutRx, ...rxItems]
+    })
+  }, [prescriptions, drugPrices])
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState(null)
@@ -2325,7 +2368,12 @@ function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
   )
 }
 
-function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus, queues=[], checkInError }) {
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus, queues=[], checkInError, staffMember, onNavCredentials }) {
+  // Same 120-day check as My Credentials - surfaced here too, since a
+  // warning that only ever showed on a sub-page nobody was told to visit
+  // wasn't a real alert, just something that happened to exist if you
+  // already knew to go look for it.
+  const ownRegExpiringSoon = staffMember?.registrationExpiry && new Date(staffMember.registrationExpiry) <= new Date(Date.now()+120*24*60*60*1000)
   const inRoom = queue.filter(q=>q.status!=='done'&&q.status!=='no_show').length
   const [todaysQueue,setTodaysQueue]=useState([]) // scheduled but not yet checked in
   const [loadingQueue,setLoadingQueue]=useState(true)
@@ -2402,6 +2450,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
     <PageWrap maxWidth={720}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Overview</h2>
       {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} {checkInError}</div>}
+      {ownRegExpiringSoon&&<div onClick={onNavCredentials} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5,cursor:'pointer'}}>{'⚠'} Your registration expires {staffMember.registrationExpiry} - tap to renew and update it in My Credentials before it lapses.</div>}
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Checked in today" value={inRoom} sub="patients" color={C.blue} bg={C.blueLight}/>
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
@@ -3121,6 +3170,17 @@ function PriceListScreen({ medicineType }) {
     load()
   }
 
+  // The one item ConsultationScreen auto-adds as the first line item on
+  // every new consultation, for this clinic_type - explicit, instead of
+  // the screen guessing by name match (which could land on any clinic's
+  // "...consult..."-named item, not necessarily this one). Only one
+  // default per clinic_type, so setting a new one clears the old.
+  async function setAsDefault(item) {
+    await supabase.from('service_items').update({ is_default: false }).eq('clinic_type', item.clinic_type).eq('is_default', true)
+    await supabase.from('service_items').update({ is_default: true }).eq('id', item.id)
+    load()
+  }
+
   function startEdit(item) {
     setEditingId(item.id)
     setEditForm({ name: item.name||'', category: item.category||'', default_price: String(item.default_price ?? '') })
@@ -3182,11 +3242,12 @@ function PriceListScreen({ medicineType }) {
           ) : (
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
               <div>
-                <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{item.name}{item.is_default&&<span style={{marginLeft:'6px',fontSize:'10px',fontWeight:700,color:C.green,background:C.greenXLight,borderRadius:'4px',padding:'2px 6px'}}>DEFAULT</span>}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{item.category} · {item.clinic_type} · HK${item.default_price}</div>
               </div>
               <div style={{display:'flex',gap:'6px',flexShrink:0}}>
                 <button onClick={()=>startEdit(item)} style={{padding:'6px 12px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Edit</button>
+                {!item.is_default&&<button onClick={()=>setAsDefault(item)} style={{padding:'6px 12px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>Set as default</button>}
                 <button onClick={()=>toggleActive(item)} style={{padding:'6px 12px',background:item.active?C.card:C.greenLight,color:item.active?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.active?'Deactivate':'Reactivate'}</button>
               </div>
             </div>
@@ -3591,8 +3652,13 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           <input value={newFirstName} onChange={e=>setNewFirstName(e.target.value)} placeholder="First name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={newLastName} onChange={e=>setNewLastName(e.target.value)} placeholder="Last name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={newEmail} onChange={e=>setNewEmail(e.target.value)} placeholder="Email (required - used for password reset)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
-          <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
+          <select value={newRole==='clinic_assistant'&&newIsNurse ? 'nurse' : newRole} onChange={e=>{
+            const v = e.target.value
+            if (v==='nurse') { setNewRole('clinic_assistant'); setNewIsNurse(true) }
+            else { setNewRole(v); setNewIsNurse(false) }
+          }} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px'}}>
             <option value="doctor">Doctor</option>
+            <option value="nurse">Nurse</option>
             <option value="clinic_assistant">Clinic Assistant</option>
             <option value="admin">Practice Manager</option>
             <optgroup label="Allied health - statutory board (e-PC)">
@@ -3626,10 +3692,6 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registering body - required. This profession has no government e-PC; their credential is a live status on their own society's voluntary register (e.g. "HKASLT" for a speech therapist).</div>
             <input value={newRegisteringBody} onChange={e=>setNewRegisteringBody(e.target.value)} placeholder="Registering body / society" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
-          {newRole==='clinic_assistant'&&<label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'10px',cursor:'pointer'}}>
-            <input type="checkbox" checked={newIsNurse} onChange={e=>setNewIsNurse(e.target.checked)}/>
-            Also a credentialed nurse (unlocks e-PC requirement and portal eligibility)
-          </label>}
           {(EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real government-issued identifier and the actual scan target itself (MCHK for doctors, the Allied Health Practitioners Council for the 5 statutory-board allied health professions) - not a separate Medsa-generated code.</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
@@ -3675,7 +3737,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',marginBottom:'8px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{s.full_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
               </div>
               <div style={{display:'flex',gap:'6px',flexShrink:0}}>
                 <button onClick={()=>startEditCredentials(s)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Edit credentials</button>
@@ -3984,8 +4046,8 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   // on the schedule now, not just whether they're physically checked in.
   const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked, reason}
 
-  async function checkDataWindow(medsaId) {
-    if (!medsaId || dataWindows[medsaId]?.checked) return
+  async function checkDataWindow(medsaId, force=false) {
+    if (!medsaId || (dataWindows[medsaId]?.checked && !force)) return
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
     const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
@@ -4023,9 +4085,14 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       access_window_start: windowStart.toISOString(), access_window_end: windowEnd.toISOString(),
     })
     // Force a fresh check - the cached "checked:true" result was based on
-    // there being no consent at all, which is no longer true.
+    // there being no consent at all, which is no longer true. force=true
+    // because the setDataWindows clear above hasn't landed in state yet
+    // by the time checkDataWindow reads it in this same tick (React
+    // batches the update) - without force, checkDataWindow would just
+    // see the stale checked:true and silently no-op, leaving the button
+    // looking like it did nothing even though the insert above succeeded.
     setDataWindows(prev=>{ const next={...prev}; delete next[appt.medsaId]; return next })
-    checkDataWindow(appt.medsaId)
+    checkDataWindow(appt.medsaId, true)
   }
 
   async function handleSaveAppt(updated) {
@@ -4997,8 +5064,12 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   const [newItemUnit,setNewItemUnit]=useState('units')
   const [newItemReorder,setNewItemReorder]=useState('10')
   const [newItemSupplier,setNewItemSupplier]=useState('')
+  const [newItemPrice,setNewItemPrice]=useState('')
   const [addingItem,setAddingItem]=useState(false)
   const [addItemError,setAddItemError]=useState(null)
+  const [editingPriceId,setEditingPriceId]=useState(null)
+  const [editingPriceValue,setEditingPriceValue]=useState('')
+  const [savingPrice,setSavingPrice]=useState(false)
 
   async function handleOrderSetFile(e) {
     const file = e.target.files[0]
@@ -5033,23 +5104,25 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
         .from('clinic_inventory').select('id')
         .eq('item_name', row.item_name).eq('institution_id', institutionId).maybeSingle()
 
+      const rowPrice = row.price?.trim() ? parseFloat(row.price) : undefined
       if (existing) {
         await supabase.from('clinic_inventory').update({
           stock: parseInt(row.stock)||0, unit: row.unit||'units',
           reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
           updated_at: new Date().toISOString(),
+          ...(rowPrice !== undefined ? { price: rowPrice } : {}),
         }).eq('id', existing.id)
       } else {
         await supabase.from('clinic_inventory').insert({
           item_name: row.item_name, institution_id: institutionId, stock: parseInt(row.stock)||0, unit: row.unit||'units',
-          reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null,
+          reorder_at: parseInt(row.reorder_at)||10, supplier: row.supplier||null, price: rowPrice ?? null,
         })
       }
       imported++
     }
     setImportResult({ type:'stock', imported, skipped, total: rows.length })
     const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name',{ascending:true})
-    setItems((data||[]).map(r=>({ id:r.id, name:r.item_name, stock:r.stock, unit:r.unit, reorderAt:r.reorder_at, supplier:r.supplier })))
+    setItems((data||[]).map(r=>({ id:r.id, name:r.item_name, stock:r.stock, unit:r.unit, reorderAt:r.reorder_at, supplier:r.supplier, price:r.price })))
   }
 
   async function handleReferenceFile(e) {
@@ -5086,13 +5159,27 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       item_name: newItemName.trim(), institution_id: institutionId,
       stock: parseInt(newItemStock)||0, unit: newItemUnit||'units',
       reorder_at: parseInt(newItemReorder)||10, supplier: newItemSupplier||null,
+      price: newItemPrice.trim() ? parseFloat(newItemPrice)||0 : null,
     })
     if (error) { setAddItemError(error.message); setAddingItem(false); return }
     const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name', { ascending: true })
-    setItems((data||[]).map(r => ({ id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier })))
+    setItems((data||[]).map(r => ({ id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier, price: r.price })))
     setAddItemOpen(false)
-    setNewItemName(''); setNewItemStock(''); setNewItemUnit('units'); setNewItemReorder('10'); setNewItemSupplier('')
+    setNewItemName(''); setNewItemStock(''); setNewItemUnit('units'); setNewItemReorder('10'); setNewItemSupplier(''); setNewItemPrice('')
     setAddingItem(false)
+  }
+
+  // Save the price typed into an item's inline editor - this is the
+  // real link ConsultationScreen's prescription auto-itemization reads
+  // from (matched by drug name against this same clinic_inventory list),
+  // so a drug with no price here just never gets auto-added to a bill.
+  async function savePrice(item) {
+    setSavingPrice(true)
+    const price = editingPriceValue.trim() ? parseFloat(editingPriceValue)||0 : null
+    await supabase.from('clinic_inventory').update({ price }).eq('id', item.id)
+    setItems(prev=>prev.map(i=>i.id===item.id?{...i,price}:i))
+    setEditingPriceId(null)
+    setSavingPrice(false)
   }
 
   useEffect(() => {
@@ -5101,7 +5188,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       setLoading(true)
       const { data } = await supabase.from('clinic_inventory').select('*').eq('institution_id', institutionId).order('item_name', { ascending: true })
       setItems((data||[]).map(r => ({
-        id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier,
+        id: r.id, name: r.item_name, stock: r.stock, unit: r.unit, reorderAt: r.reorder_at, supplier: r.supplier, price: r.price,
       })))
       setLoading(false)
     }
@@ -5159,7 +5246,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
         {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
-        Stock CSV columns: item_name, stock, unit, reorder_at, supplier · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
+        Stock CSV columns: item_name, stock, unit, reorder_at, supplier, price (optional - a drug with a price here is auto-added to the itemized bill when prescribed) · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
       </div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {lowStockCount>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px'}}>
@@ -5181,6 +5268,18 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
                 <div style={{flex:1}}>
                   <div style={{fontSize:'13px',fontWeight:600}}>{item.name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{item.supplier} - reorder at {item.reorderAt} {item.unit}</div>
+                  {editingPriceId===item.id ? (
+                    <div style={{display:'flex',alignItems:'center',gap:'6px',marginTop:'6px'}}>
+                      <span style={{fontSize:'12px',color:C.textSub}}>HK$</span>
+                      <input type="number" step="0.01" autoFocus value={editingPriceValue} onChange={e=>setEditingPriceValue(e.target.value)} style={{width:80,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'4px 6px',fontSize:'12px'}}/>
+                      <button onClick={()=>savePrice(item)} disabled={savingPrice} style={{padding:'4px 8px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>{savingPrice?'...':'Save'}</button>
+                      <button onClick={()=>setEditingPriceId(null)} style={{padding:'4px 8px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div onClick={()=>{setEditingPriceId(item.id);setEditingPriceValue(item.price!=null?String(item.price):'')}} style={{fontSize:'12px',color:item.price!=null?C.green:C.textMuted,marginTop:'4px',cursor:'pointer'}}>
+                      {item.price!=null?`HK$${item.price}`:'No price set'} <span style={{textDecoration:'underline'}}>edit</span>
+                    </div>
+                  )}
                 </div>
                 {low&&!delta&&<Badge text="Reorder" type="due"/>}
                 <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
@@ -5215,6 +5314,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           <input value={newItemReorder} onChange={e=>setNewItemReorder(e.target.value)} type="number" placeholder="Reorder at" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
           <input value={newItemSupplier} onChange={e=>setNewItemSupplier(e.target.value)} placeholder="Supplier (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         </div>
+        <input value={newItemPrice} onChange={e=>setNewItemPrice(e.target.value)} type="number" step="0.01" placeholder="Price (HK$, optional - leave blank if not charged directly)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
         {addItemError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{addItemError}</div>}
         <div style={{display:'flex',gap:'8px'}}>
           <Btn style={{flex:1}} onClick={()=>{setAddItemOpen(false);setAddItemError(null)}}>Cancel</Btn>
@@ -5695,10 +5795,22 @@ export default function ClinicOpsApp() {
       // Scoped to this clinic - this had no institution filter at all
       // before, so every clinic on the platform was seeing every other
       // clinic's checked-in patients mixed into one shared queue.
+      //
+      // Also scoped to TODAY. There was no date bound at all here before -
+      // a patient checked in on any past day, never explicitly marked
+      // done/no_show, stayed in this list forever and kept showing up
+      // mixed into "today's" queue on every later day, indefinitely. The
+      // real, physical walk-in queue resets every day (same as the ticket
+      // numbering already does); a leftover 'waiting' row from weeks ago
+      // isn't still waiting.
+      const queueDayStart = new Date(); queueDayStart.setHours(0,0,0,0)
+      const queueDayEnd = new Date(); queueDayEnd.setHours(23,59,59,999)
       const { data: queueRows } = await supabase
         .from('clinic_queue')
         .select('*, patients(medsa_id)')
         .eq('institution_id', institutionId)
+        .gte('checked_in_at', queueDayStart.toISOString())
+        .lte('checked_in_at', queueDayEnd.toISOString())
         .order('checked_in_at', { ascending: true })
       setCheckedInQueue((queueRows||[]).map(r => ({
         id: r.id,
@@ -5800,18 +5912,23 @@ export default function ClinicOpsApp() {
     }
     const prefix = clinicQueues.find(q=>q.id===queueId)?.ticket_prefix || 'A'
 
-    // Fresh per-queue, per-day ticket sequencing computed right before
-    // insert (rather than cached client state) - avoids two staff
-    // members' sessions handing out the same ticket number, and keeps
-    // each queue's numbering independent of every other queue's.
-    let ticketQuery = supabase.from('clinic_queue').select('ticket').gte('checked_in_at', dayStart.toISOString())
-    ticketQuery = queueId ? ticketQuery.eq('queue_id', queueId) : ticketQuery.is('queue_id', null)
-    const { data: todaysTickets } = await ticketQuery
-    const highestToday = (todaysTickets||[]).reduce((max, r) => {
-      const n = parseInt((r.ticket||'').replace(/[^0-9]/g,''), 10)
-      return isNaN(n) ? max : Math.max(max, n)
-    }, 0)
-    const ticket = prefix + (highestToday + 1)
+    // Per-queue, per-day ticket sequencing via a real atomic counter
+    // (next_queue_ticket RPC) - this used to SELECT today's highest
+    // ticket, compute +1 in JS, then INSERT as a separate step, which let
+    // two check-ins happening close together both read the same
+    // "highest so far" and both get handed the same ticket number
+    // (confirmed happening in production data). The RPC does the
+    // read-increment as one atomic UPSERT under Postgres's own row lock,
+    // so two concurrent calls can never come back with the same number.
+    const todayKey = dayStart.toISOString().slice(0,10)
+    const { data: nextNumber, error: ticketErr } = await supabase.rpc('next_queue_ticket', {
+      p_queue_key: queueId || 'none', p_day: todayKey,
+    })
+    if (ticketErr || !nextNumber) {
+      setCheckInError(`Could not check in ${patient.full_name}: ${ticketErr?.message || 'could not assign a ticket number'}`)
+      return false
+    }
+    const ticket = prefix + nextNumber
 
     // checkin_note is a recently-added column - if that migration
     // hasn't been run yet, including it in this insert would fail the
@@ -5820,6 +5937,13 @@ export default function ClinicOpsApp() {
     // without it first (works on any schema version), then try to
     // attach the note as a separate, best-effort follow-up that can't
     // block check-in if it fails.
+    // Extracted once so the "no appointment scheduled" warning below can
+    // check the same real assignment the row was written with, rather
+    // than re-deriving it from `matchingAppt` alone - a walk-in with no
+    // matchingAppt but an explicitly picked doctor (or a doctor checking
+    // themselves in) DOES have a real doctor and WILL show up on that
+    // doctor's patient list, so the warning shouldn't fire for it.
+    const resolvedDoctorName = matchingAppt?.doctor_name || explicitDoctor?.name || (staffMember?.role==='doctor' ? staffMember.name : null)
     const { data, error } = await supabase.from('clinic_queue').insert({
       ticket,
       queue_id: queueId,
@@ -5831,7 +5955,7 @@ export default function ClinicOpsApp() {
       // that's the real assignment, not a guess. Falls back further only
       // when nobody picked one (a doctor checking themself in, or the
       // picker was skipped).
-      doctor_name: matchingAppt?.doctor_name || explicitDoctor?.name || (staffMember?.role==='doctor' ? staffMember.name : 'Unassigned'),
+      doctor_name: resolvedDoctorName || 'Unassigned',
       room: '-',
       department: matchingAppt?.department || explicitDoctor?.department || (staffMember?.role==='doctor' ? staffMember.department : null) || 'All departments',
       status: 'waiting',
@@ -5887,7 +6011,11 @@ export default function ClinicOpsApp() {
         setCheckInError(`${patient.full_name} was added to the queue, but the appointment couldn't be marked checked in${apptUpdateErr?.message ? ' (' + apptUpdateErr.message + ')' : ''} - it may still show as Confirmed on the Schedule page. This usually means a database permission is blocking staff from updating appointments.`)
         return true
       }
-    } else {
+    } else if (!resolvedDoctorName) {
+      // Only warn when nobody was actually assigned - a walk-in with an
+      // explicitly picked doctor (or a doctor checking themselves in)
+      // does have a real doctor_name on the queue row and WILL show up
+      // on that doctor's patient list, so the warning would be false.
       setCheckInError(`${patient.full_name} was checked in, but has no appointment scheduled today - they won't appear on any doctor's patient list until one is booked.`)
     }
 
@@ -6068,7 +6196,7 @@ export default function ClinicOpsApp() {
         setStaffMember(null);setScreen('overview')
       }}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} onNavCredentials={()=>setScreen('mycredentials')}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
