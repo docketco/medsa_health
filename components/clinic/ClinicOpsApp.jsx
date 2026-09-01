@@ -2981,6 +2981,38 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
   const [docFile,setDocFile]=useState(null)
   const [uploading,setUploading]=useState(false)
 
+  // Change own password - previously only ever settable at onboarding
+  // (by the practice manager) or via the forgot-password email OTP flow;
+  // no way to just change it directly while already logged in. Verifies
+  // the current password first via the same verify_staff_password RPC
+  // login uses, rather than trusting whoever's sitting at this session.
+  const [changingPw,setChangingPw]=useState(false)
+  const [currentPw,setCurrentPw]=useState('')
+  const [newPw,setNewPw]=useState('')
+  const [newPwConfirm,setNewPwConfirm]=useState('')
+  const [pwSaving,setPwSaving]=useState(false)
+  const [pwError,setPwError]=useState(null)
+  const [pwSuccess,setPwSuccess]=useState(false)
+
+  async function handleChangePassword() {
+    setPwError(null)
+    if (!currentPw) { setPwError('Enter your current password.'); return }
+    if (newPw.length < 8) { setPwError('New password must be at least 8 characters.'); return }
+    if (!/[0-9]/.test(newPw)) { setPwError('New password must contain at least one number.'); return }
+    if (!/[A-Z]/.test(newPw)) { setPwError('New password must contain at least one capital letter.'); return }
+    if (!/[^A-Za-z0-9]/.test(newPw)) { setPwError('New password must contain at least one special character.'); return }
+    if (newPw !== newPwConfirm) { setPwError('New password and confirmation don\'t match.'); return }
+    setPwSaving(true)
+    const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: staffMember.id, p_password: currentPw })
+    if (!ok) { setPwError('Current password is incorrect.'); setPwSaving(false); return }
+    const { error: pwErr } = await supabase.rpc('set_staff_password', { p_medsa_id: staffMember.id, p_new_password: newPw })
+    setPwSaving(false)
+    if (pwErr) { setPwError(pwErr.message); return }
+    setCurrentPw(''); setNewPw(''); setNewPwConfirm('')
+    setChangingPw(false)
+    setPwSuccess(true)
+  }
+
   const current = saved || { registrationNumber: staffMember.registrationNumber, registrationExpiry: staffMember.registrationExpiry, registeringBody: staffMember.registeringBody, hasEpc: staffMember.hasEpc }
   const expiringSoon = current.registrationExpiry && new Date(current.registrationExpiry) <= new Date(Date.now()+120*24*60*60*1000)
 
@@ -3054,6 +3086,23 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setEditing(false)} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSave} disabled={saving||uploading} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,fontSize:'13px',cursor:'pointer'}}>{uploading?'Uploading…':saving?'Saving…':'Save'}</button>
+        </div>
+      </Card>}
+
+      <SecLabel>Password</SecLabel>
+      {pwSuccess&&!changingPw&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'12px',color:C.green}}>{'✓'} Password changed.</div>}
+      {!changingPw&&<button onClick={()=>{setPwError(null);setPwSuccess(false);setChangingPw(true)}} style={{width:'100%',padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer',marginBottom:'16px'}}>Change password</button>}
+      {changingPw&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Current password</div>
+        <input type="password" value={currentPw} onChange={e=>setCurrentPw(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>New password (8+ chars, 1 number, 1 capital, 1 special)</div>
+        <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Confirm new password</div>
+        <input type="password" value={newPwConfirm} onChange={e=>setNewPwConfirm(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${newPwConfirm&&newPwConfirm!==newPw?C.red:C.border}`,borderRadius:'8px'}}/>
+        {pwError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{pwError}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>{setChangingPw(false);setCurrentPw('');setNewPw('');setNewPwConfirm('');setPwError(null)}} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleChangePassword} disabled={pwSaving} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,fontSize:'13px',cursor:'pointer'}}>{pwSaving?'Saving…':'Save new password'}</button>
         </div>
       </Card>}
 
@@ -3472,6 +3521,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [onboardError,setOnboardError]=useState(null)
   const [bulkImportResult,setBulkImportResult]=useState(null)
   const [newPin,setNewPin]=useState('')
+  const [newPinConfirm,setNewPinConfirm]=useState('')
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
   const [uploading,setUploading]=useState(false)
@@ -3593,6 +3643,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[0-9]/.test(newPin)) { setOnboardError('Password must contain at least one number.'); return }
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
+    if (newPin !== newPinConfirm) { setOnboardError('Password and confirmation don\'t match.'); return }
     if (newRole==='doctor' && !newDob) return
     const needsEpc = EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse)
     if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
@@ -3646,7 +3697,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     setSaving(false)
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
-    setNewFirstName('');setNewLastName('');setNewEmail('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
+    setNewFirstName('');setNewLastName('');setNewEmail('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setNewPinConfirm('');setUploadedDocUrl(null);setUploadedDocName(null)
     setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([]);setNewRegisteringBody('')
     load()
   }
@@ -3751,6 +3802,8 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           </label>
           {uploading&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Uploading…</div>}
           <input type="password" value={newPin} onChange={e=>setNewPin(e.target.value)} placeholder="Password (8+ chars, 1 number, 1 capital, 1 special)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={newPinConfirm} onChange={e=>setNewPinConfirm(e.target.value)} placeholder="Confirm password" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:newPinConfirm&&newPinConfirm!==newPin?`1px solid ${C.red}`:undefined}}/>
+          {newPinConfirm&&newPinConfirm!==newPin&&<div style={{fontSize:'11px',color:C.red,marginTop:'-6px',marginBottom:'10px'}}>Passwords don't match.</div>}
           <select value={newDisciplinary} onChange={e=>setNewDisciplinary(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px'}}>
             <option value="clear">Disciplinary: Clear</option>
             <option value="flagged">Disciplinary: Flagged</option>
@@ -3771,7 +3824,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))||(ACCREDITED_REGISTER_ROLES.includes(newRole)&&!newRegisteringBody?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||newPin!==newPinConfirm||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))||(ACCREDITED_REGISTER_ROLES.includes(newRole)&&!newRegisteringBody?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
@@ -4765,9 +4818,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         </>}
 
         {billingChoice==='treatment_plan'&&<>
+          <div onClick={()=>{setBillingChoice(null);setSelectedTreatmentPlan(null);setEligibleTreatmentPlans(null)}} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{'←'} Choose a different payment method</div>
           <SecLabel>Patient's treatment plans</SecLabel>
           {eligibleTreatmentPlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking plans...</div>}
-          {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No active treatment plan with sessions remaining for this patient.</div>}
+          {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>
+            No active treatment plan with sessions remaining for this patient.
+            <div onClick={()=>{setBillingChoice('direct_payment');setEligibleTreatmentPlans(null)}} style={{marginTop:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>Bill directly instead (Cash / Card / Octopus) {'→'}</div>
+          </div>}
           {!eligibleTreatmentPlansLoading&&eligibleTreatmentPlans&&eligibleTreatmentPlans.map(p=>(
             <div key={p.id} onClick={()=>setSelectedTreatmentPlan(p)} style={{padding:'12px 14px',borderRadius:'8px',border:`1.5px solid ${selectedTreatmentPlan?.id===p.id?C.green:C.border}`,marginBottom:'8px',cursor:'pointer'}}>
               <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
@@ -4778,6 +4835,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         </>}
 
         {billingChoice==='direct_payment'&&<>
+          <div onClick={()=>setBillingChoice(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{'←'} Choose a different payment method</div>
           <SecLabel>Payment method</SecLabel>
           <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
             {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
@@ -4790,9 +4848,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         </>}
 
         {billingChoice==='insurance'&&<>
+          <div onClick={()=>{setBillingChoice(null);setSelectedEligiblePlan(null);setEligiblePlans(null);setAddPlanOpen(false);setAddPlanSearch('')}} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{'←'} Choose a different payment method</div>
           <SecLabel>Eligible plans</SecLabel>
           {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
-          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No held plan covers any item in this visit yet.</div>}
+          {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>
+            No held plan covers any item in this visit yet.
+            <div onClick={()=>{setBillingChoice('direct_payment');setEligiblePlans(null)}} style={{marginTop:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>Bill directly instead (Cash / Card / Octopus) {'→'}</div>
+          </div>}
 
           {!addPlanOpen&&<div onClick={()=>setAddPlanOpen(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'10px 0',textAlign:'center'}}>{'+'} Patient has a plan not on file - add it</div>}
           {addPlanOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px',marginBottom:'12px'}}>
