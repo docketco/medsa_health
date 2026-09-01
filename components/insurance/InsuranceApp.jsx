@@ -30,19 +30,6 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
   )
 }
 
-const PLANS=[
-  {name:'AIA Prime Care',price:'HK$1,200/mo',limit:'HK$1.2M annual',type:'Comprehensive',sponsored:true,rating:4.8,clients:12400},
-  {name:'AIA Prime Care+',price:'HK$2,800/mo',limit:'HK$3M annual',type:'Premium',sponsored:false,rating:4.9,clients:3200},
-  {name:'AIA Critical Rider',price:'HK$450/mo',limit:'HK$500K lump sum',type:'Critical illness',sponsored:true,rating:4.7,clients:8800},
-]
-
-const CLAIMS=[
-  {id:'CLM-44823',patient:'Wong Mei-ling',agent:'Mr Cheung Ho-fai',plan:'AIA Prime Care',amount:'HK$1,200',status:'Pending',submitted:'22 Jun 2025',decision:null,reason:null},
-  {id:'CLM-44810',patient:'Chan Wai-man',agent:'Ms Lee Mei-kwan',plan:'AIA Prime Care',amount:'HK$4,800',status:'Pending',submitted:'21 Jun 2025',decision:null,reason:null},
-  {id:'CLM-44801',patient:'Ng Ka-wai',agent:'Mr Cheung Ho-fai',plan:'AIA Prime Care+',amount:'HK$12,400',status:'Approved',submitted:'18 Jun 2025',decision:'Mr Cheung Ho-fai · 20 Jun',reason:null},
-  {id:'CLM-44788',patient:'Lam Yee-ting',agent:'Ms Lee Mei-kwan',plan:'AIA Prime Care',amount:'HK$680',status:'Rejected',submitted:'15 Jun 2025',decision:'Ms Lee Mei-kwan · 17 Jun',reason:'Pre-existing condition exclusion'},
-]
-
 // ── INSURANCE DASHBOARD ───────────────────────────────────────────────────────
 function InsuranceDashboard({ onNav }) {
   return (
@@ -194,18 +181,58 @@ function PlanManager() {
   )
 }
 
-// ── CLAIMS LOG (admin view — cannot approve/reject directly) ──────────────────
-function InsuranceAdminClaimsLog() {
+// ── CLAIMS LOG (admin view - real claims, tap one to approve/reject) ──────────
+// Was a hardcoded sample array (fake patients, fake "Admin override" buttons
+// that did nothing) - now the real insurance_claims table, same rows an
+// agent sees via their emailed /claim-review link. Tapping a card opens
+// that same real AgentClaimView right here instead of only being reachable
+// via a link, so this dashboard isn't a second, disconnected surface.
+function InsuranceAdminClaimsLog({ onOpenClaim }) {
   const [filter,setFilter]=useState('All')
-  const filtered=filter==='All'?CLAIMS:CLAIMS.filter(c=>c.status===filter)
-  const statusStyle={Pending:[C.amberLight,C.amber],Approved:[C.greenLight,C.green],Rejected:[C.redLight,C.red]}
+  const [claims,setClaims]=useState([])
+  const [loading,setLoading]=useState(true)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      // AIA-scoped, matching PlanManager's own company_name filter above -
+      // this dashboard is a single insurer's view, not a cross-insurer one.
+      const { data } = await supabase.from('insurance_claims')
+        .select('*, patients(full_name), insurance_plans!inner(plan_name, company_name)')
+        .eq('insurance_plans.company_name', 'AIA')
+        .order('submitted_at', { ascending: false })
+        .limit(50)
+      setClaims(data||[])
+      setLoading(false)
+    }
+    load()
+  }, [])
+
+  const statusMeta = {
+    approved: {label:'Approved', type:'ok'},
+    partially_approved: {label:'Partially approved', type:'due'},
+    rejected: {label:'Rejected', type:'full'},
+    pending_review: {label:'Pending review', type:'due'},
+    settled: {label:'Settled', type:'ok'},
+  }
+  const sourceLabel = { clinic_ops:'ClinicOps', external_clinic:'TPA portal', api_client:'Insurer API' }
+  const filtered = filter==='All' ? claims
+    : filter==='Pending' ? claims.filter(c=>c.status==='pending_review')
+    : filter==='Approved' ? claims.filter(c=>['approved','partially_approved','settled'].includes(c.status))
+    : claims.filter(c=>c.status==='rejected')
+  const counts = {
+    Pending: claims.filter(c=>c.status==='pending_review').length,
+    Approved: claims.filter(c=>['approved','partially_approved','settled'].includes(c.status)).length,
+    Rejected: claims.filter(c=>c.status==='rejected').length,
+  }
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
-        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}><strong>Claims flow:</strong> Patient submits → agent notified via link → agent approves or rejects with reason → outcome logged here. Admin can view all and override if needed.</div>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}><strong>Claims flow:</strong> Submitted via ClinicOps, the TPA portal, or the direct API - all land here. Tap a claim to approve or reject it, same decision an agent makes from their emailed link.</div>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',padding:'16px 16px 0'}}>
-        {[{label:'Pending',value:CLAIMS.filter(c=>c.status==='Pending').length,color:C.amber,bg:C.amberLight},{label:'Approved',value:CLAIMS.filter(c=>c.status==='Approved').length,color:C.green,bg:C.greenLight},{label:'Rejected',value:CLAIMS.filter(c=>c.status==='Rejected').length,color:C.red,bg:C.redLight}].map(s=>(
+        {[{label:'Pending',value:counts.Pending,color:C.amber,bg:C.amberLight},{label:'Approved',value:counts.Approved,color:C.green,bg:C.greenLight},{label:'Rejected',value:counts.Rejected,color:C.red,bg:C.redLight}].map(s=>(
           <div key={s.label} style={{background:s.bg,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px',textAlign:'center'}}>
             <div style={{fontSize:'22px',fontWeight:700,color:s.color}}>{s.value}</div>
             <div style={{fontSize:'11px',color:C.textSub}}>{s.label}</div>
@@ -217,40 +244,25 @@ function InsuranceAdminClaimsLog() {
           <div key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:'5px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:filter===f?C.green:C.card,color:filter===f?'#fff':C.textSub,border:`0.5px solid ${filter===f?C.green:C.border}`}}>{f}</div>
         ))}
       </div>
-      {filtered.map((c,i)=>{
-        const [bg,fg]=statusStyle[c.status]||statusStyle.Pending
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No claims here yet.</div>}
+      {filtered.map((c)=>{
+        const meta = statusMeta[c.status] || {label:c.status, type:'due'}
         return (
-          <Card key={i} style={{padding:'14px 16px'}}>
+          <Card key={c.id} onClick={()=>onOpenClaim(c.claim_ref)} style={{padding:'14px 16px',cursor:'pointer'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
-                <div style={{fontSize:'13px',fontWeight:600}}>{c.patient}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{c.plan}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>Agent: {c.agent}</div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{c.patients?.full_name||'Unknown patient'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name}</div>
               </div>
               <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>{c.amount}</div>
-                <span style={{fontSize:'10px',background:bg,color:fg,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>{c.status}</span>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>HK${c.amount}</div>
+                <Badge text={meta.label} type={meta.type}/>
               </div>
             </div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Submitted {c.submitted} · {c.id}</div>
-            {c.decision&&(
-              <div style={{background:c.status==='Approved'?C.greenXLight:C.redLight,borderRadius:'8px',padding:'8px 12px',fontSize:'12px',color:c.status==='Approved'?C.green:C.red,marginBottom:'8px'}}>
-                {c.status==='Approved'?'✓':'✗'} Decision by {c.decision}
-                {c.reason&&<div style={{marginTop:'2px',fontWeight:500}}>Reason: {c.reason}</div>}
-              </div>
-            )}
-            {c.status==='Pending'&&(
-              <div style={{display:'flex',gap:'8px'}}>
-                <Btn style={{flex:1,fontSize:'11px',padding:'7px'}}>Send reminder to agent</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'7px'}}>Admin override</Btn>
-              </div>
-            )}
-            {c.status==='Rejected'&&(
-              <div style={{display:'flex',gap:'8px'}}>
-                <Btn style={{flex:1,fontSize:'11px',padding:'7px'}}>View full claim</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'7px'}}>Override rejection</Btn>
-              </div>
-            )}
+            <div style={{fontSize:'11px',color:C.textMuted}}>
+              Submitted {c.submitted_at?new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'} · {c.claim_ref} · via {sourceLabel[c.source_type]||'ClinicOps'}
+            </div>
           </Card>
         )
       })}
@@ -425,12 +437,16 @@ function SponsoredListings() {
 // ── ROOT ─────────────────────────────────────────────────────────────────────
 export default function InsuranceApp() {
   const [screen,setScreen]=useState('dashboard')
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log',ads:'Sponsored listings',analytics:'Analytics'}
+  const [openClaimRef,setOpenClaimRef]=useState(null)
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics'}
   const navItems=[{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+
+  function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
+
   return (
     <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <div style={{background:C.navy,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
-        {screen!=='dashboard'&&<button onClick={()=>setScreen('dashboard')} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>}
+        {screen!=='dashboard'&&<button onClick={()=>setScreen(screen==='claim-detail'?'claims':'dashboard')} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>}
         <MedsaLogo height={20}/>
         <span style={{flex:1,fontSize:'13px',color:'rgba(255,255,255,0.7)',fontWeight:500}}>{titles[screen]}</span>
         <span style={{fontSize:'10px',background:C.navyLight,color:C.navy,padding:'3px 9px',borderRadius:'20px',fontWeight:600}}>⬡ AIA</span>
@@ -438,13 +454,14 @@ export default function InsuranceApp() {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen}/>}
         {screen==='plans'&&<PlanManager/>}
-        {screen==='claims'&&<InsuranceAdminClaimsLog/>}
+        {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim}/>}
+        {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
         {screen==='ads'&&<SponsoredListings/>}
         {screen==='analytics'&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
         {navItems.map(item=>(
-          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.navy:C.textMuted,fontSize:'10px'}}>
+          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key||(screen==='claim-detail'&&item.key==='claims')?C.navy:C.textMuted,fontSize:'10px'}}>
             <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
             <span>{item.label}</span>
           </div>
