@@ -801,6 +801,66 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
   )
 }
 
+// Shared PDF layout for a patient-downloaded record (single record or a
+// bundle) - both the single "Download" button and "Download PDF" bundle
+// export used to just stack plain doc.text() calls with no color, no
+// header, no visual hierarchy at all (literally just "Label: value" on
+// every line). One real design, reused by both, instead of two different
+// bare-text layouts.
+function drawPdfHeader(doc, pageWidth, subtitle) {
+  const GREEN = [0,98,65]
+  doc.setFillColor(...GREEN)
+  doc.rect(0, 0, pageWidth, 28, 'F')
+  doc.setTextColor(255,255,255)
+  doc.setFontSize(17); doc.setFont(undefined,'bold')
+  doc.text('Medsa Health', 16, 14)
+  doc.setFontSize(9); doc.setFont(undefined,'normal')
+  doc.text(subtitle, 16, 21)
+  doc.setTextColor(20,20,20)
+}
+function drawPdfFooter(doc, pageWidth, pageHeight) {
+  const BORDER = [222,220,214], GRAY = [130,130,130]
+  doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+  doc.line(16, pageHeight-14, pageWidth-16, pageHeight-14)
+  doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+  doc.text('Medsa Health · Patient-generated record', 16, pageHeight-9)
+  doc.text(new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), pageWidth-16, pageHeight-9, {align:'right'})
+}
+// Draws one record's card (title, institution/date, each detail field,
+// and a highlighted receipt line if paid) starting at y, returning the
+// y position just after it. Adds a page (with header/footer) if the
+// card wouldn't fit.
+function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstitution, details, receiptText, subtitle }) {
+  const GREEN = [0,98,65], GRAY = [120,120,120], INK = [26,26,26], BORDER = [224,222,216]
+  const left = 16, right = pageWidth-16
+  if (y > pageHeight - 40) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle); y = 40 }
+  doc.setFontSize(13); doc.setFont(undefined,'bold'); doc.setTextColor(...GREEN)
+  doc.text(title || 'Consultation', left, y); y += 6
+  doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+  doc.text(dateInstitution, left, y); y += 6
+  doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+  doc.line(left, y, right, y); y += 7
+  for (const [label, value] of details) {
+    if (y > pageHeight - 30) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle); y = 40 }
+    doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(...GRAY)
+    doc.text(label.toUpperCase(), left, y); y += 4.5
+    doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(...INK)
+    const lines = doc.splitTextToSize(String(value||'—'), pageWidth-32)
+    doc.text(lines, left, y); y += lines.length*5 + 3
+  }
+  if (receiptText) {
+    doc.setFillColor(234,243,239)
+    doc.roundedRect(left, y-4, right-left, 9, 1.5, 1.5, 'F')
+    doc.setFontSize(9.5); doc.setFont(undefined,'bold'); doc.setTextColor(...GREEN)
+    doc.text(receiptText, left+3, y+1.5)
+    y += 12
+  }
+  y += 4
+  doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+  doc.line(left, y, right, y)
+  return y + 10
+}
+
 function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle }) {
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
@@ -847,43 +907,27 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
-    let y = 20
-
-    doc.setFontSize(16)
-    doc.text('Medsa Health Record Bundle', 14, y)
-    y += 8
-    doc.setFontSize(10)
-    doc.text(`${patient.full_name || ''} - ${patient.medsa_id || ''} - Generated ${new Date().toLocaleDateString('en-HK')}`, 14, y)
-    y += 4
-    doc.line(14, y, pageWidth-14, y)
-    y += 10
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Record Bundle`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
 
     for (const r of selected) {
-      if (y > 260) { doc.addPage(); y = 20 }
-      doc.setFontSize(12)
-      doc.setFont(undefined, 'bold')
-      doc.text(r.title || 'Consultation', 14, y)
-      y += 6
-      doc.setFont(undefined, 'normal')
-      doc.setFontSize(10)
-      doc.text(`${r.date_of_record || ''} - ${r.institutions?.name || 'Medsa'}`, 14, y)
-      y += 6
-      if (r.diagnosis) { doc.text(`Diagnosis: ${r.diagnosis}`, 14, y); y += 6 }
-      if (r.icd10_code) { doc.text(`ICD-10: ${r.icd10_code}`, 14, y); y += 6 }
-      if (r.notes) {
-        const lines = doc.splitTextToSize(`Notes: ${r.notes}`, pageWidth-28)
-        doc.text(lines, 14, y)
-        y += lines.length * 5
-      }
       const receipt = transactions.find(t => t.medical_record_id === r.id)
-      if (receipt) {
-        doc.text(`Receipt: HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK')}`, 14, y)
-        y += 6
-      }
-      y += 8
-      doc.setDrawColor(220,220,220)
-      doc.line(14, y-4, pageWidth-14, y-4)
+      const details = [
+        ...(r.diagnosis ? [['Diagnosis', r.diagnosis]] : []),
+        ...(r.icd10_code ? [['ICD-10', r.icd10_code]] : []),
+        ...(r.notes ? [['Notes', r.notes]] : []),
+      ]
+      y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+        title: r.title || 'Consultation',
+        dateInstitution: `${r.date_of_record ? new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : ''} · ${r.institutions?.name || 'Medsa'}`,
+        details,
+        receiptText: receipt ? `Paid HK$${(receipt.patient_pays||0).toFixed(2)} via ${receipt.payment_method?.replace(/_/g,' ')} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}` : null,
+        subtitle,
+      })
     }
+    drawPdfFooter(doc, pageWidth, pageHeight)
 
     // Explicit blob + anchor download rather than jsPDF's built-in
     // save() shortcut - some mobile/in-app browsers mishandle that
@@ -1164,20 +1208,18 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   const { jsPDF } = await import('jspdf')
                   const doc = new jsPDF()
                   const pageWidth = doc.internal.pageSize.getWidth()
-                  let y = 20
-                  doc.setFontSize(14)
-                  doc.setFont(undefined, 'bold')
-                  doc.text(r.title || 'Consultation', 14, y)
-                  y += 8
-                  doc.setFont(undefined, 'normal')
-                  doc.setFontSize(10)
-                  doc.text(r.date || '', 14, y)
-                  y += 8
-                  for (const [l,v] of r.details) {
-                    const lines = doc.splitTextToSize(`${l}: ${v}`, pageWidth-28)
-                    doc.text(lines, 14, y)
-                    y += lines.length * 6
-                  }
+                  const pageHeight = doc.internal.pageSize.getHeight()
+                  const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Patient Record`
+                  drawPdfHeader(doc, pageWidth, subtitle)
+                  const receiptRow = r.details.find(([l])=>l==='Receipt')
+                  drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
+                    title: r.title || 'Consultation',
+                    dateInstitution: `${r.date || ''}${r.sub?` · ${r.sub}`:''}`,
+                    details: r.details.filter(([l])=>l!=='Receipt'),
+                    receiptText: receiptRow ? receiptRow[1] : null,
+                    subtitle,
+                  })
+                  drawPdfFooter(doc, pageWidth, pageHeight)
                   const blob = doc.output('blob')
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
