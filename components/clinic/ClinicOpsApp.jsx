@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -187,6 +188,7 @@ const mapped = (data||[]).map(s => ({
   const [deviceOtpError,setDeviceOtpError]=useState(null)
   const [deviceMaskedEmail,setDeviceMaskedEmail]=useState(null)
   const [deviceDevCode,setDeviceDevCode]=useState(null)
+  const [deviceNoEmailMessage,setDeviceNoEmailMessage]=useState(null)
 
   // Finishes what used to be the whole of handlePinConfirm - split out
   // so a new, unrecognized device can run the OTP challenge in between
@@ -227,10 +229,14 @@ const mapped = (data||[]).map(s => ({
     })
     const data = await res.json()
     setDeviceOtpSending(false)
-    if (data.status === 'NO_EMAIL_ON_FILE') { setDeviceOtpError(data.message); return }
-    if (data.status !== 'SENT') { setDeviceOtpError(data.message || 'Could not send a verification code.'); return }
+    // Returns the raw status too, so handlePinConfirm can decide which
+    // screen to show BEFORE committing to the "enter your code" stage -
+    // an account with no email never actually had a code sent to it.
+    if (data.status === 'NO_EMAIL_ON_FILE') { setDeviceNoEmailMessage(data.message); return data }
+    if (data.status !== 'SENT') { setDeviceOtpError(data.message || 'Could not send a verification code.'); return data }
     setDeviceMaskedEmail(data.email)
     setDeviceDevCode(data.devOnlyCode) // no live email provider yet - see API route
+    return data
   }
 
   async function handleVerifyDeviceOtp() {
@@ -255,7 +261,6 @@ const mapped = (data||[]).map(s => ({
     // database at all, only its one-way hash, and this function only
     // ever returns true/false, never the hash itself.
     const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: selected.id, p_password: pin })
-    setCheckingPin(false)
     const deviceLabel = typeof navigator !== 'undefined' ? navigator.userAgent.slice(0,160) : null
     // Login audit log - both outcomes, for breach investigation. Never
     // awaited into the pass/fail decision itself and errors are ignored
@@ -265,23 +270,36 @@ const mapped = (data||[]).map(s => ({
       medsa_id: selected.id, full_name: selected.name, role: selected.role,
       event: ok ? 'login_success' : 'login_failed', device_label: deviceLabel,
     }).then(()=>{}).catch(()=>{})
-    if (!ok) { setPinError(true); return }
+    if (!ok) { setCheckingPin(false); setPinError(true); return }
     setPinError(false)
 
     // New-device check - fails OPEN: if the table doesn't exist yet, or
     // localStorage isn't available, this device is treated as trusted
     // and login proceeds normally rather than getting stuck on a
-    // challenge that can't be completed.
+    // challenge that can't be completed. checkingPin deliberately stays
+    // true (keeping Sign In disabled) all the way through this and the
+    // OTP send below - it used to reset right after the password check,
+    // so a second click while this was still running fired a second
+    // send_device_otp, silently overwriting the code already shown with
+    // a new one and invalidating whatever the first click's code was.
     const deviceId = getOrCreateDeviceId()
     if (deviceId) {
       const { data: trustRow, error: trustErr } = await supabase.from('staff_device_trust')
         .select('id').eq('medsa_id', selected.id).eq('device_id', deviceId).maybeSingle()
       if (!trustErr && !trustRow) {
-        setStage('device_otp')
-        handleSendDeviceOtp()
+        // Check whether this account even has an email on file BEFORE
+        // committing to the "enter your code" screen - previously both
+        // happened together, so an account with no email still saw a
+        // code input box with nothing actually sent, and the real
+        // NO_EMAIL_ON_FILE error was tucked underneath it instead of
+        // being the whole story.
+        const sent = await handleSendDeviceOtp()
+        setCheckingPin(false)
+        setStage(sent?.status === 'NO_EMAIL_ON_FILE' ? 'device_no_email' : 'device_otp')
         return
       }
     }
+    setCheckingPin(false)
     finishLogin()
   }
 
@@ -322,6 +340,7 @@ const mapped = (data||[]).map(s => ({
               <div style={{fontSize:'12px',color:C.textSub}}>{selected.roleLabel}</div>
             </div>
             <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setPinError(false)}} placeholder="Password"
+              onKeyDown={e=>e.key==='Enter'&&!checkingPin&&pin&&handlePinConfirm()}
               style={{width:'100%',border:`0.5px solid ${pinError?C.red:C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:pinError?'6px':'14px',boxSizing:'border-box'}}/>
             {pinError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>Incorrect password</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
@@ -336,13 +355,22 @@ const mapped = (data||[]).map(s => ({
             <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>New device for {selected.name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',textAlign:'center',lineHeight:1.5}}>{deviceMaskedEmail?`We sent a code to ${deviceMaskedEmail}.`:'Sending a verification code…'}</div>
             {deviceDevCode&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'14px',lineHeight:1.5}}>◇ No live email provider is connected yet, so here's the code directly: <strong>{deviceDevCode}</strong></div>}
-            <input value={deviceOtpCode} onChange={e=>setDeviceOtpCode(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+            <input value={deviceOtpCode} onChange={e=>setDeviceOtpCode(e.target.value)} placeholder="6-digit code"
+              onKeyDown={e=>e.key==='Enter'&&!deviceOtpVerifying&&deviceOtpCode&&handleVerifyDeviceOtp()}
+              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'16px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
             {deviceOtpError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'14px'}}>{deviceOtpError}</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
               <Btn style={{flex:1}} onClick={()=>{setStage('pin');setDeviceOtpCode('');setDeviceOtpError(null);setDeviceMaskedEmail(null);setDeviceDevCode(null)}}>Back</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={handleVerifyDeviceOtp} disabled={deviceOtpVerifying||!deviceOtpCode}>{deviceOtpVerifying?'Verifying...':'Verify'}</Btn>
             </div>
             <div onClick={handleSendDeviceOtp} style={{fontSize:'12px',color:C.green,textAlign:'center',cursor:'pointer'}}>{deviceOtpSending?'Sending…':'Resend code'}</div>
+          </div>
+        )}
+        {stage==='device_no_email'&&(
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px',textAlign:'center'}}>New device for {selected.name}</div>
+            <div style={{fontSize:'12px',color:C.amber,textAlign:'center',marginBottom:'18px',lineHeight:1.5}}>{'⚠'} {deviceNoEmailMessage}</div>
+            <Btn style={{width:'100%'}} onClick={()=>{setStage('pin');setDeviceNoEmailMessage(null)}}>Back</Btn>
           </div>
         )}
         {stage==='forgot'&&(
@@ -3232,7 +3260,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   async function load() {
     setLoading(true)
     const [{data:s},{data:l}] = await Promise.all([
-      supabase.from('staff_credentials').select('*').eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
+      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
       supabase.from('clinic_leave_requests').select('*').eq('institution_source','clinic_ops').eq('status','pending'),
     ])
     setStaff(s||[])

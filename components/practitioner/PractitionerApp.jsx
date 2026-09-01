@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
+import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -1706,8 +1707,8 @@ function TaskBoardScreen({ role, staffMedsaId, onNavOnboard, onNavCoverage }) {
     setLoading(true)
     const inst = 'practitioner'
     const [ob, exp, lv, pc] = await Promise.all([
-      supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','pending_onboarding'),
-      supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','active').not('registration_expiry','is',null).lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10)),
+      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source',inst).eq('status','pending_onboarding'),
+      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source',inst).eq('status','active').not('registration_expiry','is',null).lte('registration_expiry', new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10)),
       supabase.from('leave_requests').select('*').eq('institution_source',inst).eq('status','pending'),
       supabase.from('permanent_change_requests').select('*').eq('institution_source',inst).in('status',['pending','hr_confirmed']),
     ])
@@ -1720,7 +1721,7 @@ function TaskBoardScreen({ role, staffMedsaId, onNavOnboard, onNavCoverage }) {
     setPermChanges(pc.data||[])
     // Staff-submitted updates: verification_status flipped back to 'pending' on an
     // otherwise-active record signals a self-submitted credential update awaiting review
-    const { data: upd } = await supabase.from('staff_credentials').select('*').eq('institution_source',inst).eq('status','active').eq('verification_status','pending')
+    const { data: upd } = await supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source',inst).eq('status','active').eq('verification_status','pending')
     setUpdates(upd||[])
     setLoading(false)
   }
@@ -2220,7 +2221,7 @@ function StaffProfileModal({ medsaId, viewerRole, onClose, onChanged }) {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      const { data } = await supabase.from('staff_credentials').select('*').eq('medsa_id',medsaId).maybeSingle()
+      const { data } = await supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('medsa_id',medsaId).maybeSingle()
       setStaff(data)
       setLoading(false)
     }
@@ -2292,7 +2293,7 @@ function EmployeeSearchScreen({ role }) {
 
   async function runSearch() {
     setLoading(true)
-    let q = supabase.from('staff_credentials').select('*').eq('institution_source','practitioner').eq('status','active')
+    let q = supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','practitioner').eq('status','active')
     if (query.trim()) q = q.or(`full_name.ilike.%${query}%,registration_number.ilike.%${query}%,medsa_id.ilike.%${query}%`)
     if (deptFilter) q = q.eq('department', deptFilter)
     if (roleFilter) q = q.eq('role', roleFilter)
