@@ -729,7 +729,7 @@ function ClinicsTab() {
   const [saving, setSaving] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [result, setResult] = useState(null)
-  const [form, setForm] = useState({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'' })
+  const [form, setForm] = useState({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'', schemes:[] })
   const [renewingId, setRenewingId] = useState(null)
   const [renewDate, setRenewDate] = useState('')
 
@@ -763,6 +763,7 @@ function ClinicsTab() {
       verification_status: verification.overall_status || verification.status || 'unchecked',
       contract_start_date: new Date().toISOString().slice(0,10),
       contract_expiry_date: form.contractExpiryDate || null,
+      government_schemes: form.schemes.length ? form.schemes : null,
     }).select().maybeSingle()
     if (instErr) { setResult({ error: instErr.message }); setSaving(false); return }
 
@@ -778,7 +779,7 @@ function ClinicsTab() {
     setResult({ medsaId, tempPassword, verified: verification.overall_status==='verified' })
     setSaving(false)
     setCreating(false)
-    setForm({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'' })
+    setForm({ name:'', medicineType:'western', businessRegNumber:'', orphfCode:'', phone:'', address:'', adminName:'', adminEmail:'', contractExpiryDate:'', schemes:[] })
     load()
   }
 
@@ -817,6 +818,15 @@ function ClinicsTab() {
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Contract expiry date</div>
         <input type="date" value={form.contractExpiryDate} onChange={e=>setForm(f=>({...f,contractExpiryDate:e.target.value}))}
           style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Government schemes participated in (self-declared)</div>
+        <div style={{marginBottom:'10px'}}>
+          {[['cdcc','Chronic Disease Co-Care (CDCC)'],['dhc_network','District Health Centre Network'],['ehcv','Elderly Health Care Voucher (EHCV)'],['vaccination_subsidy','Vaccination Subsidy Scheme']].map(([key,label])=>(
+            <label key={key} style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',color:C.textSub,marginBottom:'6px',cursor:'pointer'}}>
+              <input type="checkbox" checked={form.schemes.includes(key)} onChange={e=>setForm(f=>({...f,schemes:e.target.checked?[...f.schemes,key]:f.schemes.filter(x=>x!==key)}))}/>
+              {label}
+            </label>
+          ))}
+        </div>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleSubmit} disabled={saving||!form.name.trim()||!form.adminName.trim()||!form.adminEmail.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?(verifying?'Verifying…':'Creating…'):'Onboard'}</button>

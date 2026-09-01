@@ -25,6 +25,7 @@ export default function ClinicSignupPage() {
   const [orphfCode, setOrphfCode] = useState('')
   const [phone, setPhone] = useState('')
   const [address, setAddress] = useState('')
+  const [schemes, setSchemes] = useState([])
   const [adminFirstName, setAdminFirstName] = useState('')
   const [adminLastName, setAdminLastName] = useState('')
   const [adminEmail, setAdminEmail] = useState('')
@@ -65,6 +66,7 @@ export default function ClinicSignupPage() {
         business_registration_number: businessRegNumber.trim() || null,
         orphf_code: orphfCode.trim() || null, phone: phone.trim() || null, address: address.trim() || null,
         verification_status: verification.overall_status || verification.status || 'unchecked',
+        government_schemes: schemes.length ? schemes : null,
       }).select().maybeSingle()
       if (instErr) throw instErr
 
@@ -122,7 +124,17 @@ export default function ClinicSignupPage() {
         <input value={businessRegNumber} onChange={e=>setBusinessRegNumber(e.target.value)} placeholder="Business Registration Number (e.g. C1572528)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
         <input value={orphfCode} onChange={e=>setOrphfCode(e.target.value)} placeholder="ORPHF licence/exemption code (e.g. CE000001)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
         <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Clinic phone number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
-        <input value={address} onChange={e=>setAddress(e.target.value)} placeholder="Clinic address" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px'}}/>
+        <input value={address} onChange={e=>setAddress(e.target.value)} placeholder="Clinic address" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Government schemes participated in (self-declared)</div>
+        <div style={{marginBottom:'18px'}}>
+          {[['cdcc','Chronic Disease Co-Care (CDCC)'],['dhc_network','District Health Centre Network'],['ehcv','Elderly Health Care Voucher (EHCV)'],['vaccination_subsidy','Vaccination Subsidy Scheme']].map(([key,label])=>(
+            <label key={key} style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'6px',cursor:'pointer'}}>
+              <input type="checkbox" checked={schemes.includes(key)} onChange={e=>setSchemes(s=>e.target.checked?[...s,key]:s.filter(x=>x!==key))}/>
+              {label}
+            </label>
+          ))}
+        </div>
 
         <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>Your account (Practice Manager)</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
