@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
+import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -943,40 +944,12 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   }
 
   // A separate receipt from any consultation record - this one is for the
-  // treatment plan PURCHASE itself (the prepaid session package), reusing
-  // the same header/footer/record-card design as the rest of this screen's
-  // PDFs so it doesn't look like a different app generated it.
+  // treatment plan PURCHASE itself (the prepaid session package). Shared
+  // with the clinic app (lib/receiptPdf.js) so this is the exact same
+  // document a clinic staff member would download for the same plan, not
+  // a simplified look-alike.
   async function handleDownloadPlanReceipt(p) {
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const pageHeight = doc.internal.pageSize.getHeight()
-    const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Treatment Plan Receipt`
-    drawPdfHeader(doc, pageWidth, subtitle)
-    const remaining = (p.sessions_paid||0) - (p.sessions_used||0)
-    const hasSessionValue = p.session_value != null
-    const normalTotal = hasSessionValue ? p.session_value * (p.sessions_paid||0) : null
-    const discount = hasSessionValue ? Math.max(0, normalTotal - (p.price_total||0)) : 0
-    const details = [
-      ['Sessions included', `${p.sessions_paid||0} sessions (${remaining} remaining)`],
-      ...(p.expiry_date ? [['Valid until', new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
-      ...(hasSessionValue ? [['Normal price', `HK$${p.session_value.toFixed(2)} per session × ${p.sessions_paid||0} = HK$${normalTotal.toFixed(2)}`]] : []),
-    ]
-    drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
-      title: p.plan_name || 'Treatment plan',
-      dateInstitution: `${p.created_at ? new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : ''} · ${p.institutions?.name || 'Medsa'}`,
-      details,
-      receiptText: `Paid HK$${(p.price_total||0).toFixed(2)}${discount>0 ? ` (includes a HK$${discount.toFixed(2)} package discount)` : ''}`,
-      subtitle,
-    })
-    drawPdfFooter(doc, pageWidth, pageHeight)
-
-    const blob = doc.output('blob')
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `Medsa-TreatmentPlan-${(p.plan_name||'plan').replace(/[^a-z0-9]/gi,'_')}.pdf`
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    URL.revokeObjectURL(url)
+    await fetchAndDownloadTreatmentPlanReceipt(supabase, p.id)
   }
 
   const [myUploads,setMyUploads]=useState([])
@@ -1225,6 +1198,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             ['Diagnosis',r.diagnosis||'—'], ['Notes',r.notes||'—'], ['Department',r.department||'—'],
             ...(receipt ? [['Receipt', `HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`]] : []),
           ],
+          receiptTxn: receipt,
         }}).map(r=>(
           <Card key={r.id} onClick={()=>bundleMode?toggleSelect(r.id):setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
@@ -1242,18 +1216,29 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   else { navigator.clipboard.writeText(text); alert(isEn?'Copied to clipboard':'已複製到剪貼簿') }
                 }}>Share</Btn>
                 <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={async ()=>{
+                  // A visit that was actually billed gets the exact same
+                  // receipt design the clinic downloads for it (shared
+                  // lib/receiptPdf.js) - medications, itemized charges,
+                  // treatment plan usage banner, clinic branding, all of
+                  // it. Only a record with no linked transaction (never
+                  // billed - e.g. a manually-added record) falls back to
+                  // the simpler record-only PDF, since there's no payment
+                  // data to build a real receipt from.
+                  if (r.receiptTxn) {
+                    await fetchAndDownloadConsultationReceipt(supabase, r.receiptTxn)
+                    return
+                  }
                   const { jsPDF } = await import('jspdf')
                   const doc = new jsPDF()
                   const pageWidth = doc.internal.pageSize.getWidth()
                   const pageHeight = doc.internal.pageSize.getHeight()
                   const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Patient Record`
                   drawPdfHeader(doc, pageWidth, subtitle)
-                  const receiptRow = r.details.find(([l])=>l==='Receipt')
                   drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
                     title: r.title || 'Consultation',
                     dateInstitution: `${r.date || ''}${r.sub?` · ${r.sub}`:''}`,
                     details: r.details.filter(([l])=>l!=='Receipt'),
-                    receiptText: receiptRow ? receiptRow[1] : null,
+                    receiptText: null,
                     subtitle,
                   })
                   drawPdfFooter(doc, pageWidth, pageHeight)
