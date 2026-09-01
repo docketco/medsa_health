@@ -902,6 +902,24 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [uploading,setUploading]=useState(false)
   const [uploadError,setUploadError]=useState(null)
 
+  // Treatment plans (prepaid session packages, e.g. a physio course) were
+  // creatable and billable entirely on the clinic side (Payment >
+  // Treatment plans) but never surfaced to the patient anywhere at all -
+  // no way to see what they'd paid for or how many sessions were left.
+  const [treatmentPlans,setTreatmentPlans]=useState([])
+  const [treatmentPlansLoading,setTreatmentPlansLoading]=useState(true)
+  useEffect(() => {
+    if (!patient?.id) { setTreatmentPlansLoading(false); return }
+    async function loadTreatmentPlans() {
+      setTreatmentPlansLoading(true)
+      const { data } = await supabase.from('treatment_plans').select('*, institutions(name)')
+        .eq('patient_id', patient.id).order('created_at', { ascending: false })
+      setTreatmentPlans(data || [])
+      setTreatmentPlansLoading(false)
+    }
+    loadTreatmentPlans()
+  }, [patient?.id])
+
   useEffect(() => {
     if (!patient?.id) return
     async function loadUploads() {
@@ -1090,7 +1108,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         <span style={{fontSize:'12px',color:C.green}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,overflowX:'auto'}}>
-        {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
+        {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['plans',isEn?'Treatment plans':'療程計劃'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
         ))}
       </div>
@@ -1190,6 +1208,33 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           </Card>
         ))}
         {vaccineGroups.length>0&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}}>📅 {isEn?'Book overdue vaccinations':'預約逾期疫苗'}</Btn></div>}
+      </>}
+      {tab==='plans'&&<>
+        <SecLabel>{isEn?'Treatment plans':'療程計劃'}</SecLabel>
+        {treatmentPlansLoading&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
+        {!treatmentPlansLoading&&treatmentPlans.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No treatment plans yet - these appear once a clinic sets one up for you.':'暫無療程計劃 - 診所為您設立後將顯示於此。'}</div>}
+        {treatmentPlans.map(p=>{
+          const remaining = (p.sessions_paid||0) - (p.sessions_used||0)
+          const expired = p.expiry_date && new Date(p.expiry_date) < new Date()
+          const badgeType = p.status==='completed' ? 'full' : expired ? 'due' : 'ok'
+          const badgeLabel = p.status==='completed' ? (isEn?'Completed':'已完成') : expired ? (isEn?'Expired':'已過期') : (isEn?'Active':'使用中')
+          return (
+            <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+                <div>
+                  <div style={{fontSize:'14px',fontWeight:600}}>{mt(p.plan_name)}</div>
+                  <div style={{fontSize:'11px',color:C.textSub}}>{p.institutions?.name||'Medsa'}</div>
+                </div>
+                <Badge text={badgeLabel} type={badgeType}/>
+              </div>
+              <div style={{display:'flex',gap:'16px',marginBottom:'6px'}}>
+                <div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Sessions remaining':'剩餘節數'}</div><div style={{fontSize:'15px',fontWeight:700,color:remaining>0?C.green:C.amber}}>{remaining} / {p.sessions_paid||0}</div></div>
+                {p.price_total!=null&&<div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Total paid':'總付款'}</div><div style={{fontSize:'13px',fontWeight:600}}>HK${(p.price_total||0).toFixed(2)}</div></div>}
+              </div>
+              {p.expiry_date&&<div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Expires':'到期日'} {new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
+            </Card>
+          )
+        })}
       </>}
       {tab==='sharing'&&<>
         {!accessRequestsLoading&&accessRequests.length>0&&<>
