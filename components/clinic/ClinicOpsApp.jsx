@@ -3444,6 +3444,13 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [tab,setTab]=useState('roster')
   const [staff,setStaff]=useState([])
   const [leaves,setLeaves]=useState([])
+  const [showAddLeave,setShowAddLeave]=useState(false)
+  const [newLeaveStaffName,setNewLeaveStaffName]=useState('')
+  const [newLeaveType,setNewLeaveType]=useState('Annual Leave')
+  const [newLeaveStart,setNewLeaveStart]=useState('')
+  const [newLeaveEnd,setNewLeaveEnd]=useState('')
+  const [newLeaveReason,setNewLeaveReason]=useState('')
+  const [addingLeave,setAddingLeave]=useState(false)
   const [loading,setLoading]=useState(true)
   const [showOnboard,setShowOnboard]=useState(false)
   const [newFirstName,setNewFirstName]=useState('')
@@ -3548,9 +3555,18 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
 
   async function load() {
     setLoading(true)
+    // Real bug found here: this queried a table (clinic_leave_requests)
+    // that was never actually created - the real table is leave_requests
+    // (same one the shelved PractitionerApp uses). The query was failing
+    // silently every time (setLeaves(l||[]) just became an empty array
+    // on error), so this tab always showed "No pending leave requests"
+    // regardless of what was actually on file. Also no longer filters to
+    // status='pending' only - an approved leave needs to stay visible
+    // somewhere so anyone can see who's actually out, not disappear the
+    // moment it's approved.
     const [{data:s},{data:l}] = await Promise.all([
       supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
-      supabase.from('clinic_leave_requests').select('*').eq('institution_source','clinic_ops').eq('status','pending'),
+      supabase.from('leave_requests').select('*').eq('institution_source','clinic_ops').order('start_date'),
     ])
     setStaff(s||[])
     setLeaves(l||[])
@@ -3559,6 +3575,9 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   useEffect(() => { load() }, [])
 
   const expiringSoon = staff.filter(s => s.registration_expiry && new Date(s.registration_expiry) <= new Date(Date.now()+120*24*60*60*1000))
+  const pendingLeaves = leaves.filter(l => l.status==='pending')
+  const today = new Date().toISOString().slice(0,10)
+  const upcomingLeaves = leaves.filter(l => l.status==='approved' && l.end_date >= today)
 
   async function handleStaffBulkFile(e) {
     const file = e.target.files[0]
@@ -3709,14 +3728,35 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   }
 
   async function handleLeaveDecision(leave, approve) {
-    await supabase.from('clinic_leave_requests').update({ status: approve?'approved':'denied', decided_by:staffMember?.name }).eq('id', leave.id)
+    await supabase.from('leave_requests').update({ status: approve?'approved':'denied', reviewed_by:staffMember?.name }).eq('id', leave.id)
+    load()
+  }
+
+  // Direct way to put someone on leave - there was no way to create a
+  // leave entry anywhere in the app at all (only this approve/deny
+  // queue existed, with nothing that ever fed it a request). A practice
+  // manager creating one directly is its own approval, so it's saved
+  // already-approved under their own name rather than needing a second
+  // person to approve themselves.
+  async function handleAddLeave() {
+    if (!newLeaveStaffName || !newLeaveStart || !newLeaveEnd) return
+    const person = staff.find(s => s.full_name === newLeaveStaffName)
+    setAddingLeave(true)
+    await supabase.from('leave_requests').insert({
+      institution_source: 'clinic_ops', staff_name: newLeaveStaffName, department: person?.department || 'All departments',
+      leave_type: newLeaveType, start_date: newLeaveStart, end_date: newLeaveEnd, reason: newLeaveReason.trim()||null,
+      status: 'approved', reviewed_by: staffMember?.name, is_discretionary: true,
+    })
+    setAddingLeave(false)
+    setShowAddLeave(false)
+    setNewLeaveStaffName(''); setNewLeaveType('Annual Leave'); setNewLeaveStart(''); setNewLeaveEnd(''); setNewLeaveReason('')
     load()
   }
 
   return (
     <div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
-        {[['roster','Staff'],['expiring',`Expiring${expiringSoon.length?` (${expiringSoon.length})`:''}`],['leave',`Leave${leaves.length?` (${leaves.length})`:''}`]].map(([k,l])=>(
+        {[['roster','Staff'],['expiring',`Expiring${expiringSoon.length?` (${expiringSoon.length})`:''}`],['leave',`Leave${pendingLeaves.length?` (${pendingLeaves.length})`:''}`]].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{padding:'8px 16px',borderRadius:'8px',fontSize:'13px',fontWeight:500,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub}}>{l}</div>
         ))}
       </div>
@@ -3880,8 +3920,39 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       </>}
 
       {!loading&&tab==='leave'&&<>
-        {leaves.length===0&&<div style={{color:C.textMuted,fontSize:'13px'}}>No pending leave requests.</div>}
-        {leaves.map(l=>(
+        {!showAddLeave&&<Btn variant="primary" style={{marginBottom:'16px'}} onClick={()=>setShowAddLeave(true)}>+ Put staff on leave</Btn>}
+        {showAddLeave&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+          <select value={newLeaveStaffName} onChange={e=>setNewLeaveStaffName(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px'}}>
+            <option value="">Select staff member</option>
+            {staff.map(s=><option key={s.medsa_id} value={s.full_name}>{s.full_name}</option>)}
+          </select>
+          <select value={newLeaveType} onChange={e=>setNewLeaveType(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px'}}>
+            <option>Annual Leave</option>
+            <option>Sick Leave</option>
+            <option>Maternity/Paternity Leave</option>
+            <option>Unpaid Leave</option>
+            <option>Other</option>
+          </select>
+          <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Start date</div>
+              <input type="date" value={newLeaveStart} onChange={e=>setNewLeaveStart(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>End date</div>
+              <input type="date" value={newLeaveEnd} onChange={e=>setNewLeaveEnd(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+            </div>
+          </div>
+          <input value={newLeaveReason} onChange={e=>setNewLeaveReason(e.target.value)} placeholder="Reason (optional)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>setShowAddLeave(false)} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
+            <button onClick={handleAddLeave} disabled={addingLeave||!newLeaveStaffName||!newLeaveStart||!newLeaveEnd} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{addingLeave?'Saving…':'Save'}</button>
+          </div>
+        </Card>}
+
+        <SecLabel>Pending requests</SecLabel>
+        {pendingLeaves.length===0&&<div style={{color:C.textMuted,fontSize:'13px',marginBottom:'16px'}}>No pending leave requests.</div>}
+        {pendingLeaves.map(l=>(
           <div key={l.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600}}>{l.staff_name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{l.leave_type} · {l.start_date} to {l.end_date}{l.reason?` · ${l.reason}`:''}</div>
@@ -3889,6 +3960,15 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
               <button onClick={()=>handleLeaveDecision(l,false)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'6px',cursor:'pointer'}}>Deny</button>
               <button onClick={()=>handleLeaveDecision(l,true)} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontWeight:600,cursor:'pointer'}}>Approve</button>
             </div>
+          </div>
+        ))}
+
+        <SecLabel>Upcoming / current leave</SecLabel>
+        {upcomingLeaves.length===0&&<div style={{color:C.textMuted,fontSize:'13px'}}>Nobody has approved leave coming up.</div>}
+        {upcomingLeaves.map(l=>(
+          <div key={l.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{l.staff_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{l.leave_type} · {l.start_date} to {l.end_date}{l.reason?` · ${l.reason}`:''}{l.start_date<=today&&l.end_date>=today?<span style={{color:C.amber,fontWeight:600}}> · currently out</span>:''}</div>
           </div>
         ))}
       </>}
@@ -4407,86 +4487,137 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
-    const left = 16, right = pageWidth - 16
-    let y = 18
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const left = 18, right = pageWidth - 18
+    const contentWidth = right - left
+    const GREEN = [0,98,65], GREEN_LIGHT = [234,243,239], GRAY = [110,110,110], GRAY_LIGHT = [246,246,244], INK = [26,26,26], BORDER = [222,220,214]
+    const receiptNo = `RCPT-${t.id ? String(t.id).slice(0,8).toUpperCase() : new Date(t.created_at).getTime().toString(36).toUpperCase()}`
+    const footerY = pageHeight - 16
 
-    // Header
-    doc.setFontSize(18); doc.setFont(undefined,'bold'); doc.setTextColor(30,110,70)
-    doc.text('Medsa Health', left, y)
-    doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(120,120,120)
-    doc.text('Official Receipt', right, y, {align:'right'})
-    y += 6
-    doc.setDrawColor(30,110,70); doc.setLineWidth(0.6)
+    function drawFooter() {
+      doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+      doc.line(left, footerY-6, right, footerY-6)
+      doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text('Medsa Health · System-generated receipt · No signature required', left, footerY)
+      doc.text(`Printed ${new Date().toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}`, right, footerY, {align:'right'})
+    }
+    // Keeps content off the footer band, adding a fresh page (with its
+    // own footer) if what's about to be drawn wouldn't fit.
+    function ensureSpace(doc_y, needed) {
+      if (doc_y + needed > footerY - 10) { drawFooter(); doc.addPage(); return 24 }
+      return doc_y
+    }
+
+    // ── Header band ──
+    doc.setFillColor(...GREEN)
+    doc.rect(0, 0, pageWidth, 34, 'F')
+    doc.setTextColor(255,255,255)
+    doc.setFontSize(19); doc.setFont(undefined,'bold')
+    doc.text('Medsa Health', left, 16)
+    doc.setFontSize(9); doc.setFont(undefined,'normal')
+    doc.text('Digital health platform · medsa.health', left, 23)
+    doc.setFontSize(13); doc.setFont(undefined,'bold')
+    doc.text('OFFICIAL RECEIPT', right, 15, {align:'right'})
+    doc.setFontSize(9); doc.setFont(undefined,'normal')
+    doc.text(receiptNo, right, 21, {align:'right'})
+    doc.text(new Date(t.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), right, 27, {align:'right'})
+
+    let y = 46
+
+    // ── Patient / visit summary card ──
+    const cardH = record?.diagnosis || record?.doctor_name ? 34 : 26
+    doc.setFillColor(...GRAY_LIGHT)
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+    doc.roundedRect(left, y, contentWidth, cardH, 2, 2, 'FD')
+    const colGap = left + contentWidth/2
+    function fieldPair(label, value, x, fy) {
+      doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text(label.toUpperCase(), x, fy)
+      doc.setFontSize(10.5); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
+      doc.text(String(value||'—'), x, fy+5)
+    }
+    fieldPair('Patient', t.patient_name, left+8, y+11)
+    fieldPair('Payment method', (t.payment_method||'').replace(/_/g,' '), colGap, y+11)
+    fieldPair('Attended by', t.staff_name, left+8, y+24)
+    fieldPair('Doctor', record?.doctor_name || '—', colGap, y+24)
+    if (record?.diagnosis) fieldPair('Diagnosis', record.diagnosis, left+8, y+31)
+    y += cardH + 12
+
+    // ── Itemized charges table ──
+    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
+    doc.text('Itemized Charges', left, y)
+    y += 7
+    const qtyX = right-58, priceX = right-32, amtX = right
+    function tableHeader() {
+      doc.setFillColor(...GREEN)
+      doc.rect(left, y-5.5, contentWidth, 8, 'F')
+      doc.setFontSize(8.5); doc.setFont(undefined,'bold'); doc.setTextColor(255,255,255)
+      doc.text('DESCRIPTION', left+3, y)
+      doc.text('QTY', qtyX, y, {align:'right'})
+      doc.text('UNIT PRICE', priceX, y, {align:'right'})
+      doc.text('AMOUNT', amtX, y, {align:'right'})
+      y += 8
+    }
+    tableHeader()
+    doc.setTextColor(...INK)
+    const items = record?.line_items || []
+    if (items.length === 0) {
+      doc.setFontSize(9.5); doc.setFont(undefined,'italic'); doc.setTextColor(...GRAY)
+      doc.text('No itemized charges are on file for this visit.', left+3, y+1)
+      doc.setTextColor(...INK)
+      y += 9
+    } else {
+      items.forEach((item,idx) => {
+        const descLines = doc.splitTextToSize(item.description||'—', contentWidth-70)
+        const rowH = Math.max(descLines.length,1)*5 + 4
+        y = ensureSpace(y, rowH)
+        if (idx%2===1) { doc.setFillColor(...GRAY_LIGHT); doc.rect(left, y-4.5, contentWidth, rowH, 'F') }
+        doc.setFontSize(9.5); doc.setFont(undefined,'normal')
+        doc.text(descLines, left+3, y)
+        doc.text(String(item.qty||1), qtyX, y, {align:'right'})
+        doc.text(`HK$${(item.fee||0).toFixed(2)}`, priceX, y, {align:'right'})
+        doc.setFont(undefined,'bold')
+        doc.text(`HK$${((item.fee||0)*(item.qty||1)).toFixed(2)}`, amtX, y, {align:'right'})
+        y += rowH
+      })
+    }
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
     doc.line(left, y, right, y)
     y += 10
 
-    // Patient / visit info box
-    doc.setTextColor(20,20,20); doc.setFontSize(10)
-    doc.text(`Patient: ${t.patient_name}`, left, y)
-    doc.text(`Date: ${new Date(t.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`, right, y, {align:'right'})
-    y += 6
-    doc.text(`Staff: ${t.staff_name}`, left, y)
-    doc.text(`Method: ${t.payment_method}`, right, y, {align:'right'})
-    y += 6
-    if (record?.diagnosis) { doc.text(`Diagnosis: ${record.diagnosis}`, left, y); y += 6 }
-    if (record?.doctor_name) { doc.text(`Doctor: ${record.doctor_name}`, left, y); y += 6 }
-    y += 4
-
-    // Itemized table
-    doc.setFontSize(11); doc.setFont(undefined,'bold')
-    doc.text('Itemized charges', left, y); y += 2
-    y += 6
-    doc.setFillColor(240,244,240)
-    doc.rect(left, y-5, right-left, 8, 'F')
-    doc.setFontSize(9)
-    doc.text('Description', left+2, y)
-    doc.text('Qty', right-70, y, {align:'right'})
-    doc.text('Unit price', right-35, y, {align:'right'})
-    doc.text('Amount', right, y, {align:'right'})
-    y += 8
-    doc.setFont(undefined,'normal')
-    const items = record?.line_items || []
-    if (items.length === 0) {
-      doc.setTextColor(140,140,140)
-      doc.text('No itemized charges are on file for this visit.', left+2, y)
-      doc.setTextColor(20,20,20)
-      y += 8
-    } else {
-      for (const item of items) {
-        const descLines = doc.splitTextToSize(item.description, 90)
-        doc.text(descLines, left+2, y)
-        doc.text(String(item.qty||1), right-70, y, {align:'right'})
-        doc.text(`HK$${(item.fee||0).toFixed(2)}`, right-35, y, {align:'right'})
-        doc.text(`HK$${((item.fee||0)*(item.qty||1)).toFixed(2)}`, right, y, {align:'right'})
-        y += Math.max(descLines.length,1)*5 + 2
-        doc.setDrawColor(225,225,225); doc.setLineWidth(0.2)
-        doc.line(left, y-2, right, y-2)
-      }
-    }
-    y += 4
-
-    // Totals
+    // ── Totals block ──
     const consultFee = record?.total_fee ?? t.consultation_fee ?? 0
-    doc.setFontSize(10)
-    doc.text('Total charged', left, y); doc.text(`HK$${(consultFee||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
-    if (t.insurer_covers>0) { doc.text('Covered by insurer', left, y); doc.text(`HK$${(t.insurer_covers||0).toFixed(2)}`, right, y, {align:'right'}); y += 6 }
-    if (t.payment_method==='treatment_plan') { doc.text('Covered by treatment plan session', left, y); doc.text(`HK$${(consultFee||0).toFixed(2)}`, right, y, {align:'right'}); y += 6 }
-    doc.setDrawColor(30,110,70); doc.setLineWidth(0.4)
-    doc.line(left, y, right, y); y += 6
-    doc.setFont(undefined,'bold'); doc.setFontSize(12)
-    doc.text('Amount paid by patient', left, y); doc.text(`HK$${(t.patient_pays||0).toFixed(2)}`, right, y, {align:'right'})
-    y += 12
+    y = ensureSpace(y, 50)
+    const totalsW = 78, totalsX = right-totalsW
+    doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+    doc.text('Total charged', totalsX, y); doc.setTextColor(...INK); doc.text(`HK$${(consultFee||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
+    if (t.insurer_covers>0) {
+      doc.setTextColor(...GRAY); doc.text('Covered by insurer', totalsX, y)
+      doc.setTextColor(...INK); doc.text(`-HK$${(t.insurer_covers||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
+    }
+    if (t.payment_method==='treatment_plan') {
+      doc.setTextColor(...GRAY); doc.text('Covered by treatment plan', totalsX, y)
+      doc.setTextColor(...INK); doc.text(`-HK$${(consultFee||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
+    }
+    y += 2
+    doc.setFillColor(...GREEN_LIGHT)
+    doc.roundedRect(totalsX-6, y-6, totalsW+6, 14, 2, 2, 'F')
+    doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(...GREEN)
+    doc.text('Amount Paid', totalsX, y+2)
+    doc.text(`HK$${(t.patient_pays||0).toFixed(2)}`, right, y+2, {align:'right'})
+    y += 20
 
     if (record?.notes) {
-      doc.setFont(undefined,'bold'); doc.setFontSize(10)
+      y = ensureSpace(y, 20)
+      doc.setFont(undefined,'bold'); doc.setFontSize(9.5); doc.setTextColor(...INK)
       doc.text('Consultation notes', left, y); y += 6
-      doc.setFont(undefined,'normal')
-      const noteLines = doc.splitTextToSize(record.notes, right-left)
+      doc.setFont(undefined,'normal'); doc.setFontSize(9); doc.setTextColor(...GRAY)
+      const noteLines = doc.splitTextToSize(record.notes, contentWidth)
+      y = ensureSpace(y, noteLines.length*5)
       doc.text(noteLines, left, y); y += noteLines.length*5
     }
 
-    doc.setFontSize(8); doc.setTextColor(150,150,150)
-    doc.text('Generated by Medsa Health - this is a system-generated receipt.', left, 285)
+    drawFooter()
 
     const blob = doc.output('blob')
     const url = URL.createObjectURL(blob)
