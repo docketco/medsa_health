@@ -5,6 +5,30 @@ import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcess
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
 
+// Doctors, nurses, and the 5 Core Statutory Board allied health
+// professions (Allied Health Professions Ordinance) get a real,
+// government-issued e-PC with a secured e-signature and encrypted QR -
+// that's what epc_link/hkid actually verify against. Everyone else here
+// (Accredited Register Scheme professions) has no such government cert -
+// their credential is a live status on their own society's voluntary
+// register instead, so they use registering_body + registration_number +
+// an uploaded document rather than an e-PC link.
+const EPC_TRACK_ROLES = ['doctor', 'physiotherapist', 'occupational_therapist', 'optometrist', 'radiographer', 'medical_lab_technologist']
+const ACCREDITED_REGISTER_ROLES = ['speech_therapist', 'dietitian', 'clinical_psychologist']
+
+const ROLE_LABELS = {
+  doctor: 'Doctor', clinic_assistant: 'Clinic Assistant', admin: 'Practice Manager',
+  physiotherapist: 'Physiotherapist', occupational_therapist: 'Occupational Therapist',
+  optometrist: 'Optometrist', radiographer: 'Radiographer', medical_lab_technologist: 'Medical Laboratory Technologist',
+  speech_therapist: 'Speech Therapist', dietitian: 'Dietitian', clinical_psychologist: 'Clinical Psychologist',
+}
+const ROLE_COLORS = {
+  doctor: C.green, clinic_assistant: C.blue, admin: C.purple,
+  physiotherapist: C.green, occupational_therapist: C.green, optometrist: C.green,
+  radiographer: C.green, medical_lab_technologist: C.green,
+  speech_therapist: C.navy, dietitian: C.navy, clinical_psychologist: C.navy,
+}
+
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
   const V={primary:{background:C.green,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'}}
@@ -140,8 +164,6 @@ function StaffLogin({ onLogin, kickedOutMessage }) {
     setResetDone(true)
   }
 
-  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
-  const ROLE_COLORS = { doctor:C.green, clinic_assistant:C.blue, admin:C.purple }
 
   useEffect(() => {
     async function load() {
@@ -158,6 +180,7 @@ const mapped = (data||[]).map(s => ({
   department: s.department, isNurse: !!s.is_nurse, institutionId: s.institution_id,
   practitionerPortalEnabled: s.practitioner_portal_enabled, practitionerIdentityId: s.practitioner_identity_id,
   registrationNumber: s.registration_number, registrationExpiry: s.registration_expiry, hasEpc: !!s.epc_link,
+  registeringBody: s.registering_body,
 }))
       setStaff(mapped)
       setLoading(false)
@@ -2869,7 +2892,49 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
 // here doesn't need a second password - they already proved who they
 // are this session.
 function PractitionerCredentialsScreen({ staffMember, institutionName, affiliatedClinics, onSwitchClinic }) {
-  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
+  const [editing,setEditing]=useState(false)
+  const [form,setForm]=useState({
+    registrationNumber: staffMember.registrationNumber||'', registrationExpiry: staffMember.registrationExpiry||'',
+    registeringBody: staffMember.registeringBody||'',
+  })
+  // Local override of what's displayed, since a self-edit doesn't refresh
+  // the staffMember prop this whole app was logged in with - avoids the
+  // edited fields silently reverting to look untouched until next login.
+  const [saved,setSaved] = useState(null)
+  const [saving,setSaving]=useState(false)
+  const [docFile,setDocFile]=useState(null)
+  const [uploading,setUploading]=useState(false)
+
+  const current = saved || { registrationNumber: staffMember.registrationNumber, registrationExpiry: staffMember.registrationExpiry, registeringBody: staffMember.registeringBody, hasEpc: staffMember.hasEpc }
+  const expiringSoon = current.registrationExpiry && new Date(current.registrationExpiry) <= new Date(Date.now()+120*24*60*60*1000)
+
+  async function handleSave() {
+    setSaving(true)
+    let registration_doc_url = undefined
+    if (docFile) {
+      setUploading(true)
+      const path = `clinic_ops/${Date.now()}-${docFile.name}`
+      const { error: upErr } = await supabase.storage.from('staff-documents').upload(path, docFile)
+      if (!upErr) registration_doc_url = path
+      setUploading(false)
+    }
+    // Self-submitted - flips verification_status back to 'pending' so it
+    // shows up for the practice manager to confirm (Staff tab), rather
+    // than silently becoming the record of truth with no second look.
+    // status itself stays 'active' - this doesn't lock anyone out.
+    await supabase.from('staff_credentials').update({
+      registration_number: form.registrationNumber.trim()||null,
+      registration_expiry: form.registrationExpiry||null,
+      registering_body: form.registeringBody.trim()||null,
+      verification_status: 'pending',
+      ...(registration_doc_url !== undefined ? { registration_doc_url } : {}),
+    }).eq('medsa_id', staffMember.id)
+    setSaved({ registrationNumber: form.registrationNumber, registrationExpiry: form.registrationExpiry, registeringBody: form.registeringBody, hasEpc: staffMember.hasEpc })
+    setSaving(false)
+    setEditing(false)
+    setDocFile(null)
+  }
+
   return (
     <PageWrap maxWidth={520}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>My Credentials</h2>
@@ -2878,16 +2943,43 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
         <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>{staffMember.name}</div>
         <div style={{fontSize:'13px',opacity:0.85,marginBottom:'16px'}}>{ROLE_LABELS[staffMember.role]||staffMember.role}{staffMember.department&&staffMember.department!=='All departments'?` · ${staffMember.department}`:''}</div>
         <div style={{display:'flex',gap:'20px'}}>
-          <div><div style={{fontSize:'10px',opacity:0.6}}>Registration</div><div style={{fontSize:'13px',fontWeight:600}}>{staffMember.registrationNumber||'Not on file'}</div></div>
+          <div><div style={{fontSize:'10px',opacity:0.6}}>Registration</div><div style={{fontSize:'13px',fontWeight:600}}>{current.registrationNumber||'Not on file'}</div></div>
           <div><div style={{fontSize:'10px',opacity:0.6}}>Institution</div><div style={{fontSize:'13px',fontWeight:600}}>{institutionName||'—'}</div></div>
         </div>
       </div>
-      <Card style={{padding:'0 16px'}}>
+
+      {saved&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} Saved - pending your practice manager's confirmation before it counts as verified again.</div>}
+      {expiringSoon&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} Registration expires {current.registrationExpiry} - renew and update this before it lapses.</div>}
+
+      {!editing&&<Card style={{padding:'0 16px'}}>
         <InfoRow label="Full name" value={staffMember.name}/>
-        <InfoRow label="Registration no." value={staffMember.registrationNumber||'Not on file'}/>
-        <InfoRow label="Registration expiry" value={staffMember.registrationExpiry||'Not on file'}/>
-        <InfoRow label="e-PC on file" value={staffMember.hasEpc?'Yes':'No'} last/>
-      </Card>
+        <InfoRow label="Registration no." value={current.registrationNumber||'Not on file'}/>
+        <InfoRow label="Registration expiry" value={current.registrationExpiry||'Not on file'}/>
+        {ACCREDITED_REGISTER_ROLES.includes(staffMember.role)&&<InfoRow label="Registering body" value={current.registeringBody||'Not on file'}/>}
+        <InfoRow label="e-PC on file" value={current.hasEpc?'Yes':'No'} last/>
+      </Card>}
+      {!editing&&<button onClick={()=>{setForm({registrationNumber:current.registrationNumber||'',registrationExpiry:current.registrationExpiry||'',registeringBody:current.registeringBody||''});setEditing(true)}} style={{width:'100%',padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer',marginTop:'12px',marginBottom:'12px'}}>Edit registration details</button>}
+
+      {editing&&<Card style={{padding:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>e-PC and HKID link your identity across clinics, so those stay admin-managed - contact your practice manager for those. Everything below is yours to keep current.</div>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Registration number</div>
+        <input value={form.registrationNumber} onChange={e=>setForm(f=>({...f,registrationNumber:e.target.value}))} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Registration/license expiry</div>
+        <input type="date" value={form.registrationExpiry} onChange={e=>setForm(f=>({...f,registrationExpiry:e.target.value}))} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        {ACCREDITED_REGISTER_ROLES.includes(staffMember.role)&&<>
+          <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Registering body / society</div>
+          <input value={form.registeringBody} onChange={e=>setForm(f=>({...f,registeringBody:e.target.value}))} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        </>}
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Updated document (optional - PDF or image)</div>
+        <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',marginBottom:'12px',boxSizing:'border-box'}}>
+          {docFile?.name || 'Tap to upload'}
+          <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>setDocFile(e.target.files[0]||null)}/>
+        </label>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setEditing(false)} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSave} disabled={saving||uploading} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,fontSize:'13px',cursor:'pointer'}}>{uploading?'Uploading…':saving?'Saving…':'Save'}</button>
+        </div>
+      </Card>}
 
       <SecLabel>Switch clinic</SecLabel>
       {affiliatedClinics.length===0
@@ -3207,6 +3299,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newRole,setNewRole]=useState('doctor')
   const [newDept,setNewDept]=useState('')
   const [newReg,setNewReg]=useState('')
+  const [newRegisteringBody,setNewRegisteringBody]=useState('')
   const [newExpiry,setNewExpiry]=useState('')
   const [newDisciplinary,setNewDisciplinary]=useState('clear')
   const [newSex,setNewSex]=useState('')
@@ -3216,6 +3309,9 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newEmail,setNewEmail]=useState('')
   const [editingEmailId,setEditingEmailId]=useState(null)
   const [editEmailValue,setEditEmailValue]=useState('')
+  const [editingCredentialsId,setEditingCredentialsId]=useState(null)
+  const [credEditForm,setCredEditForm]=useState({})
+  const [confirmingId,setConfirmingId]=useState(null)
 
   // Anyone onboarded before the email field existed has no way to use
   // "Forgot password" until this is filled in - lets a practice manager
@@ -3223,6 +3319,48 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   async function handleSaveEmail(person) {
     await supabase.from('staff_credentials').update({ email: editEmailValue.trim()||null }).eq('id', person.id)
     setEditingEmailId(null)
+    load()
+  }
+
+  // Practice manager editing someone else's credentials is itself the
+  // verification act (same trust level as onboarding them in the first
+  // place) - applies immediately, no separate confirm step. Contrast with
+  // handleConfirmCredentialUpdate below, for when the STAFF MEMBER edited
+  // their own record from My Credentials - that one does need a second
+  // set of eyes.
+  function startEditCredentials(s) {
+    setEditingCredentialsId(s.id)
+    setCredEditForm({
+      department: s.department||'', registration_number: s.registration_number||'',
+      registration_expiry: s.registration_expiry||'', epc_link: s.epc_link||'', hkid: s.hkid||'',
+      registering_body: s.registering_body||'',
+    })
+  }
+  async function handleSaveCredentials(person) {
+    await supabase.from('staff_credentials').update({
+      department: credEditForm.department.trim()||null,
+      registration_number: credEditForm.registration_number.trim()||null,
+      registration_expiry: credEditForm.registration_expiry||null,
+      epc_link: credEditForm.epc_link.trim()||null,
+      hkid: credEditForm.hkid.trim()||null,
+      registering_body: credEditForm.registering_body.trim()||null,
+    }).eq('id', person.id)
+    setEditingCredentialsId(null)
+    load()
+  }
+
+  // Confirms a credential change the STAFF MEMBER submitted themselves
+  // (My Credentials → Edit) - verification_status got flipped back to
+  // 'pending' the moment they saved it, same signal PractitionerApp
+  // already uses for a self-submitted update on an otherwise-active
+  // record. This is the practice manager reviewing it and signing off,
+  // not re-doing the edit.
+  async function handleConfirmCredentialUpdate(person) {
+    setConfirmingId(person.id)
+    await supabase.from('staff_credentials').update({
+      verification_status: 'verified', confirmed_by: staffMember?.name, last_verified_at: new Date().toISOString(),
+    }).eq('id', person.id)
+    setConfirmingId(null)
     load()
   }
   const [newIsNurse,setNewIsNurse]=useState(false)
@@ -3234,8 +3372,6 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [uploadedDocUrl,setUploadedDocUrl]=useState(null)
   const [uploadedDocName,setUploadedDocName]=useState(null)
   const [uploading,setUploading]=useState(false)
-
-  const ROLE_LABELS = { doctor:'Doctor', clinic_assistant:'Clinic Assistant', admin:'Practice Manager' }
 
   async function handleDocUpload(file) {
     setUploading(true)
@@ -3290,7 +3426,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       // below), HKID + e-PC together are the real identity match used
       // to recognise the same person already onboarded at another
       // clinic, rather than blocking on a repeat e-PC as a "duplicate."
-      const rowNeedsEpc = row.role==='doctor' || rowIsNurse
+      const rowNeedsEpc = EPC_TRACK_ROLES.includes(row.role) || rowIsNurse
       if (rowNeedsEpc && !row.epc_link?.trim()) { skippedRows.push(`${row.full_name} - e-PC link required for doctors/nurses`); continue }
       if (rowNeedsEpc && !row.hkid?.trim()) { skippedRows.push(`${row.full_name} - HKID required for doctors/nurses`); continue }
       const medsaId = `MED-${Date.now().toString(36).toUpperCase()}-${imported}`
@@ -3312,6 +3448,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
         institution_source:'clinic_ops', institution_id:institutionId, medsa_id:medsaId,
         full_name:row.full_name, email:row.email.trim(), role:row.role, department:row.department,
         registration_number:row.registration_number||null, registration_expiry:row.registration_expiry||null,
+        registering_body: ACCREDITED_REGISTER_ROLES.includes(row.role) ? (row.registering_body||null) : null,
         sex:row.sex||null, date_of_birth:row.date_of_birth||null,
         has_epc: !!row.epc_link?.trim(),
         is_nurse: rowIsNurse,
@@ -3354,9 +3491,10 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newRole==='doctor' && !newDob) return
-    const needsEpc = newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse)
+    const needsEpc = EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse)
     if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
     if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
+    if (ACCREDITED_REGISTER_ROLES.includes(newRole) && !newRegisteringBody?.trim()) { setOnboardError('Registering body is required for this profession.'); return }
     setSaving(true)
     setOnboardError(null)
 
@@ -3385,6 +3523,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
       full_name:`${newFirstName}${newLastName?' '+newLastName:''}`, email:newEmail.trim(), role:newRole, department:newDept,
       registration_number:newReg||null, registration_expiry:newExpiry||null,
       registration_doc_url:uploadedDocUrl||null,
+      registering_body: ACCREDITED_REGISTER_ROLES.includes(newRole) ? newRegisteringBody.trim() : null,
       sex:newSex||null, date_of_birth:newDob||null,
       has_epc: !!newEpcLink?.trim(), epc_link: newEpcLink?.trim() || null,
       hkid: needsEpc ? newHkid.trim() : null, practitioner_identity_id: practitionerIdentityId,
@@ -3405,11 +3544,12 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (pwErr) { setOnboardError(`Staff created, but setting password failed: ${pwErr.message}`); return }
     setShowOnboard(false)
     setNewFirstName('');setNewLastName('');setNewEmail('');setNewDept('');setNewReg('');setNewExpiry('');setNewDisciplinary('clear');setNewPin('');setUploadedDocUrl(null);setUploadedDocName(null)
-    setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([])
+    setNewSex('');setNewDob('');setNewEpcLink('');setNewHkid('');setNewIsNurse(false);setNewMchkDeclared(false);setNewSchemes([]);setNewRegisteringBody('')
     load()
   }
 
   async function handleOffboard(person) {
+    if (!window.confirm(`Offboard ${person.full_name}? This can't be reversed - they'll immediately lose access and drop off every roster/queue. Re-onboarding afterward creates a brand new account, not a restore.`)) return
     await supabase.from('staff_credentials').update({ status:'offboarded', offboarded_by:staffMember?.name, offboarded_at:new Date().toISOString() }).eq('id', person.id)
     load()
   }
@@ -3455,6 +3595,18 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <option value="doctor">Doctor</option>
             <option value="clinic_assistant">Clinic Assistant</option>
             <option value="admin">Practice Manager</option>
+            <optgroup label="Allied health - statutory board (e-PC)">
+              <option value="physiotherapist">Physiotherapist</option>
+              <option value="occupational_therapist">Occupational Therapist</option>
+              <option value="optometrist">Optometrist</option>
+              <option value="radiographer">Radiographer</option>
+              <option value="medical_lab_technologist">Medical Laboratory Technologist</option>
+            </optgroup>
+            <optgroup label="Allied health - accredited register">
+              <option value="speech_therapist">Speech Therapist</option>
+              <option value="dietitian">Dietitian</option>
+              <option value="clinical_psychologist">Clinical Psychologist</option>
+            </optgroup>
           </select>
           <input value={newDept} onChange={e=>setNewDept(e.target.value)} placeholder="Speciality (e.g. General, Chinese Medicine, Physio)" list="dept-suggestions" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <datalist id="dept-suggestions">
@@ -3470,12 +3622,16 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
             <input type="date" value={newDob} onChange={e=>setNewDob(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
           <input value={newReg} onChange={e=>setNewReg(e.target.value)} placeholder="Registration number" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          {ACCREDITED_REGISTER_ROLES.includes(newRole)&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Registering body - required. This profession has no government e-PC; their credential is a live status on their own society's voluntary register (e.g. "HKASLT" for a speech therapist).</div>
+            <input value={newRegisteringBody} onChange={e=>setNewRegisteringBody(e.target.value)} placeholder="Registering body / society" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          </>}
           {newRole==='clinic_assistant'&&<label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px',color:C.textSub,marginBottom:'10px',cursor:'pointer'}}>
             <input type="checkbox" checked={newIsNurse} onChange={e=>setNewIsNurse(e.target.checked)}/>
             Also a credentialed nurse (unlocks e-PC requirement and portal eligibility)
           </label>}
-          {(newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&<>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real MCHK-issued identifier and the actual scan target itself, not a separate Medsa-generated code.</div>
+          {(EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real government-issued identifier and the actual scan target itself (MCHK for doctors, the Allied Health Practitioners Council for the 5 statutory-board allied health professions) - not a separate Medsa-generated code.</div>
             <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>HKID - required. Together with e-PC, this is how Medsa recognises the same real person if they also work at another clinic, so they log in once and switch clinics instead of getting a second, disconnected account.</div>
             <input value={newHkid} onChange={e=>setNewHkid(e.target.value)} placeholder="HKID" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
@@ -3511,7 +3667,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((newRole==='doctor'||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))||(ACCREDITED_REGISTER_ROLES.includes(newRole)&&!newRegisteringBody?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
@@ -3522,9 +3678,29 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
                 <div style={{fontSize:'11px',color:C.textSub}}>{s.role==='clinic_assistant'&&s.is_nurse?'Nurse (Clinic Assistant)':ROLE_LABELS[s.role]||s.role} · {s.department} {s.disciplinary_status==='flagged'&&<span style={{color:C.red}}>· Flagged</span>}</div>
               </div>
               <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+                <button onClick={()=>startEditCredentials(s)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Edit credentials</button>
                 <button onClick={()=>handleOffboard(s)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Offboard</button>
               </div>
             </div>
+            {s.verification_status==='pending'&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'8px 10px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'8px'}}>
+              <span style={{fontSize:'11px',color:C.amber}}>{'⚠'} {s.full_name} updated their own credentials - review before this counts as verified again.</span>
+              <button onClick={()=>handleConfirmCredentialUpdate(s)} disabled={confirmingId===s.id} style={{padding:'5px 10px',background:C.amber,color:'#fff',border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer',flexShrink:0}}>{confirmingId===s.id?'…':'Confirm'}</button>
+            </div>}
+            {editingCredentialsId===s.id&&<div style={{background:C.card,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+              <input value={credEditForm.department} onChange={e=>setCredEditForm(f=>({...f,department:e.target.value}))} placeholder="Speciality/department" style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <input value={credEditForm.registration_number} onChange={e=>setCredEditForm(f=>({...f,registration_number:e.target.value}))} placeholder="Registration number" style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>Registration/license expiry</div>
+              <input type="date" value={credEditForm.registration_expiry} onChange={e=>setCredEditForm(f=>({...f,registration_expiry:e.target.value}))} style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              {(EPC_TRACK_ROLES.includes(s.role)||s.is_nurse)&&<>
+                <input value={credEditForm.epc_link} onChange={e=>setCredEditForm(f=>({...f,epc_link:e.target.value}))} placeholder="e-PC government verification link" style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                <input value={credEditForm.hkid} onChange={e=>setCredEditForm(f=>({...f,hkid:e.target.value}))} placeholder="HKID" style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              </>}
+              {ACCREDITED_REGISTER_ROLES.includes(s.role)&&<input value={credEditForm.registering_body} onChange={e=>setCredEditForm(f=>({...f,registering_body:e.target.value}))} placeholder="Registering body / society" style={{width:'100%',padding:'7px 8px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>}
+              <div style={{display:'flex',gap:'6px'}}>
+                <button onClick={()=>handleSaveCredentials(s)} style={{flex:1,padding:'7px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Save</button>
+                <button onClick={()=>setEditingCredentialsId(null)} style={{flex:1,padding:'7px',background:C.cream,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Cancel</button>
+              </div>
+            </div>}
             {editingEmailId===s.id
               ? <div style={{display:'flex',gap:'6px'}}>
                   <input value={editEmailValue} onChange={e=>setEditEmailValue(e.target.value)} placeholder="Email" style={{flex:1,padding:'7px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',boxSizing:'border-box'}}/>
