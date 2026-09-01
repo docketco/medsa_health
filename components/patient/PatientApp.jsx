@@ -942,6 +942,43 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     setGeneratingPdf(false)
   }
 
+  // A separate receipt from any consultation record - this one is for the
+  // treatment plan PURCHASE itself (the prepaid session package), reusing
+  // the same header/footer/record-card design as the rest of this screen's
+  // PDFs so it doesn't look like a different app generated it.
+  async function handleDownloadPlanReceipt(p) {
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Treatment Plan Receipt`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    const remaining = (p.sessions_paid||0) - (p.sessions_used||0)
+    const hasSessionValue = p.session_value != null
+    const normalTotal = hasSessionValue ? p.session_value * (p.sessions_paid||0) : null
+    const discount = hasSessionValue ? Math.max(0, normalTotal - (p.price_total||0)) : 0
+    const details = [
+      ['Sessions included', `${p.sessions_paid||0} sessions (${remaining} remaining)`],
+      ...(p.expiry_date ? [['Valid until', new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+      ...(hasSessionValue ? [['Normal price', `HK$${p.session_value.toFixed(2)} per session × ${p.sessions_paid||0} = HK$${normalTotal.toFixed(2)}`]] : []),
+    ]
+    drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
+      title: p.plan_name || 'Treatment plan',
+      dateInstitution: `${p.created_at ? new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : ''} · ${p.institutions?.name || 'Medsa'}`,
+      details,
+      receiptText: `Paid HK$${(p.price_total||0).toFixed(2)}${discount>0 ? ` (includes a HK$${discount.toFixed(2)} package discount)` : ''}`,
+      subtitle,
+    })
+    drawPdfFooter(doc, pageWidth, pageHeight)
+
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-TreatmentPlan-${(p.plan_name||'plan').replace(/[^a-z0-9]/gi,'_')}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   const [myUploads,setMyUploads]=useState([])
   const [uploading,setUploading]=useState(false)
   const [uploadError,setUploadError]=useState(null)
@@ -1273,7 +1310,8 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                 <div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Sessions remaining':'剩餘節數'}</div><div style={{fontSize:'15px',fontWeight:700,color:remaining>0?C.green:C.amber}}>{remaining} / {p.sessions_paid||0}</div></div>
                 {p.price_total!=null&&<div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Total paid':'總付款'}</div><div style={{fontSize:'13px',fontWeight:600}}>HK${(p.price_total||0).toFixed(2)}</div></div>}
               </div>
-              {p.expiry_date&&<div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Expires':'到期日'} {new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
+              {p.expiry_date&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{isEn?'Expires':'到期日'} {new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
+              <div onClick={()=>handleDownloadPlanReceipt(p)} style={{fontSize:'11px',color:C.green,cursor:'pointer',marginTop:'4px'}}>{'⬇'} {isEn?'Download plan receipt (PDF)':'下載療程收據 (PDF)'}</div>
             </Card>
           )
         })}

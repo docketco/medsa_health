@@ -91,6 +91,38 @@ function hoursRemaining(checkedInAt) {
   return Math.max(0, remaining / (60*60*1000))
 }
 
+// Fetches a clinic's uploaded receipt logo and decodes it into what
+// jsPDF's addImage needs (a data URL, its pixel dimensions, and its
+// format). Used by both the consultation receipt and the treatment plan
+// receipt PDF generators. Never throws - a broken/unreachable logo should
+// degrade to the text-only header, not break receipt generation.
+async function loadLogoForPdf(url) {
+  if (!url) return null
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const blob = await res.blob()
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+    const { width, height } = await new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => resolve({ width: img.width, height: img.height })
+      img.onerror = reject
+      img.src = dataUrl
+    })
+    if (!width || !height) return null
+    const format = /^data:image\/png/i.test(dataUrl) ? 'PNG' : /^data:image\/(jpe?g)/i.test(dataUrl) ? 'JPEG' : /^data:image\/webp/i.test(dataUrl) ? 'WEBP' : null
+    if (!format) return null
+    return { dataUrl, format, aspect: width / height }
+  } catch {
+    return null
+  }
+}
+
 // Module-level, not scoped to any one component - moved here after
 // discovering it was previously local to InventoryScreen only, making it
 // inaccessible to the new bulk staff import (a different component)
@@ -4452,10 +4484,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   }
   const [planName,setPlanName]=useState('')
   const [planSessions,setPlanSessions]=useState('')
+  const [planSessionValue,setPlanSessionValue]=useState('')
   const [planPrice,setPlanPrice]=useState('')
   const [planExpiry,setPlanExpiry]=useState('')
   const [planMethod,setPlanMethod]=useState('card')
   const [planSaving,setPlanSaving]=useState(false)
+  const [newPlanReceipt,setNewPlanReceipt]=useState(null)
 
   async function loadPendingPayments() {
     setPendingLoading(true)
@@ -4484,9 +4518,22 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   // diagnosis, itemized charges) with this specific receipt, not just
   // the bare transaction line the ledger card shows.
   async function handleDownloadReceipt(t) {
-    const { data: record } = t.medical_record_id
-      ? await supabase.from('medical_records').select('*').eq('id', t.medical_record_id).maybeSingle()
-      : { data: null }
+    const [{ data: record }, { data: institution }, { data: plan }] = await Promise.all([
+      t.medical_record_id
+        ? supabase.from('medical_records').select('*').eq('id', t.medical_record_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      institutionId
+        ? supabase.from('institutions').select('receipt_logo_url, receipt_clinic_name, receipt_address, receipt_phone, receipt_footer_note').eq('id', institutionId).maybeSingle()
+        : Promise.resolve({ data: null }),
+      t.treatment_plan_id
+        ? supabase.from('treatment_plans').select('plan_name, sessions_paid, sessions_used').eq('id', t.treatment_plan_id).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
+    const { data: medications } = record
+      ? await supabase.from('medications').select('medication_name, dosage, frequency, quantity, duration_days').eq('medical_record_id', record.id)
+      : { data: [] }
+    const logo = await loadLogoForPdf(institution?.receipt_logo_url)
+
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
@@ -4496,12 +4543,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const GREEN = [0,98,65], GREEN_LIGHT = [234,243,239], GRAY = [110,110,110], GRAY_LIGHT = [246,246,244], INK = [26,26,26], BORDER = [222,220,214]
     const receiptNo = `RCPT-${t.id ? String(t.id).slice(0,8).toUpperCase() : new Date(t.created_at).getTime().toString(36).toUpperCase()}`
     const footerY = pageHeight - 16
+    const clinicName = institution?.receipt_clinic_name || 'Medsa Health'
 
     function drawFooter() {
       doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
       doc.line(left, footerY-6, right, footerY-6)
       doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
-      doc.text('Medsa Health · System-generated receipt · No signature required', left, footerY)
+      doc.text(institution?.receipt_footer_note || `${clinicName} · System-generated receipt · No signature required`, left, footerY)
       doc.text(`Printed ${new Date().toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}`, right, footerY, {align:'right'})
     }
     // Keeps content off the footer band, adding a fresh page (with its
@@ -4515,78 +4563,165 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     doc.setFillColor(...GREEN)
     doc.rect(0, 0, pageWidth, 34, 'F')
     doc.setTextColor(255,255,255)
+    let textLeft = left
+    if (logo) {
+      // Cap width too, not just height - a wide/horizontal logo (a
+      // wordmark-style aspect ratio) sized purely by height could push
+      // the clinic name text into the right-aligned receipt number/date.
+      let logoH = 20, logoW = logoH * logo.aspect
+      if (logoW > 34) { logoW = 34; logoH = logoW / logo.aspect }
+      doc.addImage(logo.dataUrl, logo.format, left, 7, logoW, logoH)
+      textLeft = left + logoW + 5
+    }
     doc.setFontSize(19); doc.setFont(undefined,'bold')
-    doc.text('Medsa Health', left, 16)
-    doc.setFontSize(9); doc.setFont(undefined,'normal')
-    doc.text('Digital health platform · medsa.health', left, 23)
+    doc.text(clinicName, textLeft, 15)
+    doc.setFontSize(8.5); doc.setFont(undefined,'normal')
+    const subLine = institution?.receipt_clinic_name
+      ? [institution.receipt_address, institution.receipt_phone].filter(Boolean).join('  ·  ') || 'Powered by Medsa Health'
+      : 'Digital health platform · medsa.health'
+    doc.text(subLine, textLeft, 22)
+    if (institution?.receipt_clinic_name) {
+      doc.setFontSize(7.5); doc.setTextColor(230,240,236)
+      doc.text('Powered by Medsa Health', textLeft, 28)
+      doc.setTextColor(255,255,255)
+    }
     doc.setFontSize(13); doc.setFont(undefined,'bold')
-    doc.text('OFFICIAL RECEIPT', right, 15, {align:'right'})
+    doc.text('OFFICIAL RECEIPT', right, 14, {align:'right'})
     doc.setFontSize(9); doc.setFont(undefined,'normal')
     doc.text(receiptNo, right, 21, {align:'right'})
     doc.text(new Date(t.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), right, 27, {align:'right'})
 
     let y = 46
 
-    // ── Patient / visit summary card ──
-    const cardH = record?.diagnosis || record?.doctor_name ? 34 : 26
-    doc.setFillColor(...GRAY_LIGHT)
-    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
-    doc.roundedRect(left, y, contentWidth, cardH, 2, 2, 'FD')
+    // ── Patient / visit summary card (dynamic height so a long diagnosis
+    // never overlaps the row above it or spills past the card border -
+    // it used to be a fixed 26/34mm box regardless of how much text was
+    // actually going into it) ──
     const colGap = left + contentWidth/2
-    function fieldPair(label, value, x, fy) {
+    const cardTop = y
+    function fieldPair(label, value, x, fy, maxW) {
       doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
       doc.text(label.toUpperCase(), x, fy)
       doc.setFontSize(10.5); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
-      doc.text(String(value||'—'), x, fy+5)
+      const lines = maxW ? doc.splitTextToSize(String(value||'—'), maxW) : [String(value||'—')]
+      doc.text(lines, x, fy+5)
+      return lines.length
     }
-    fieldPair('Patient', t.patient_name, left+8, y+11)
-    fieldPair('Payment method', (t.payment_method||'').replace(/_/g,' '), colGap, y+11)
-    fieldPair('Attended by', t.staff_name, left+8, y+24)
-    fieldPair('Doctor', record?.doctor_name || '—', colGap, y+24)
-    if (record?.diagnosis) fieldPair('Diagnosis', record.diagnosis, left+8, y+31)
-    y += cardH + 12
+    // Card height must match the actual field positions below (row1 label
+    // at cardTop+11, row2 at +24, diagnosis row at +37) - it previously
+    // used a base that was 13mm short of where row2's value really sits,
+    // so the diagnosis line (and even row2 in some cases) rendered
+    // outside/below the card border.
+    let cardH = 39
+    if (record?.diagnosis) {
+      const dLines = doc.splitTextToSize(record.diagnosis, contentWidth-16)
+      cardH = 41 + dLines.length*5
+    }
+    doc.setFillColor(...GRAY_LIGHT)
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+    doc.roundedRect(left, cardTop, contentWidth, cardH, 2, 2, 'FD')
+    let cy = cardTop + 11
+    fieldPair('Patient', t.patient_name, left+8, cy)
+    fieldPair('Payment method', (t.payment_method||'').replace(/_/g,' '), colGap, cy)
+    cy += 13
+    fieldPair('Attended by', t.staff_name, left+8, cy)
+    fieldPair('Doctor', record?.doctor_name || '—', colGap, cy)
+    cy += 13
+    if (record?.diagnosis) fieldPair('Diagnosis', record.diagnosis, left+8, cy, contentWidth-16)
+    y = cardTop + cardH + 10
 
-    // ── Itemized charges table ──
-    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
-    doc.text('Itemized Charges', left, y)
-    y += 7
-    const qtyX = right-58, priceX = right-32, amtX = right
-    function tableHeader() {
+    // ── Treatment plan usage banner - makes it explicit on the receipt
+    // itself that this visit drew down a session from a plan, not just
+    // an implicit "payment method: treatment_plan" value ──
+    if (t.payment_method === 'treatment_plan' && plan) {
+      y = ensureSpace(y, 16)
+      doc.setFillColor(...GREEN_LIGHT)
+      doc.setDrawColor(...GREEN); doc.setLineWidth(0.3)
+      doc.roundedRect(left, y, contentWidth, 14, 2, 2, 'FD')
+      doc.setFontSize(9.5); doc.setFont(undefined,'bold'); doc.setTextColor(...GREEN)
+      const remaining = (plan.sessions_paid||0) - (plan.sessions_used||0)
+      doc.text(`1 session used from "${plan.plan_name}" · ${remaining} of ${plan.sessions_paid} sessions remaining`, left+6, y+9)
+      y += 14 + 10
+    }
+
+    // Shared table renderer for both the charges and medications tables -
+    // same striped-row look. measureRow is a pure height calculation (no
+    // drawing) so a row's height is known before deciding whether it needs
+    // a page break; drawRow does the actual drawing, called exactly once
+    // per row at its final, post-page-break position.
+    function sectionTable(title, headerCols, rows, measureRow, drawRow, emptyText) {
+      y = ensureSpace(y, 20)
+      doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
+      doc.text(title, left, y)
+      y += 7
       doc.setFillColor(...GREEN)
       doc.rect(left, y-5.5, contentWidth, 8, 'F')
       doc.setFontSize(8.5); doc.setFont(undefined,'bold'); doc.setTextColor(255,255,255)
-      doc.text('DESCRIPTION', left+3, y)
-      doc.text('QTY', qtyX, y, {align:'right'})
-      doc.text('UNIT PRICE', priceX, y, {align:'right'})
-      doc.text('AMOUNT', amtX, y, {align:'right'})
+      headerCols.forEach(([label,x,align]) => doc.text(label, x, y, align?{align}:undefined))
       y += 8
-    }
-    tableHeader()
-    doc.setTextColor(...INK)
-    const items = record?.line_items || []
-    if (items.length === 0) {
-      doc.setFontSize(9.5); doc.setFont(undefined,'italic'); doc.setTextColor(...GRAY)
-      doc.text('No itemized charges are on file for this visit.', left+3, y+1)
       doc.setTextColor(...INK)
-      y += 9
-    } else {
-      items.forEach((item,idx) => {
-        const descLines = doc.splitTextToSize(item.description||'—', contentWidth-70)
-        const rowH = Math.max(descLines.length,1)*5 + 4
-        y = ensureSpace(y, rowH)
-        if (idx%2===1) { doc.setFillColor(...GRAY_LIGHT); doc.rect(left, y-4.5, contentWidth, rowH, 'F') }
-        doc.setFontSize(9.5); doc.setFont(undefined,'normal')
-        doc.text(descLines, left+3, y)
-        doc.text(String(item.qty||1), qtyX, y, {align:'right'})
-        doc.text(`HK$${(item.fee||0).toFixed(2)}`, priceX, y, {align:'right'})
-        doc.setFont(undefined,'bold')
-        doc.text(`HK$${((item.fee||0)*(item.qty||1)).toFixed(2)}`, amtX, y, {align:'right'})
-        y += rowH
-      })
+      if (rows.length === 0) {
+        doc.setFontSize(9.5); doc.setFont(undefined,'italic'); doc.setTextColor(...GRAY)
+        doc.text(emptyText, left+3, y+1)
+        doc.setTextColor(...INK)
+        y += 9
+      } else {
+        rows.forEach((row,idx) => {
+          const rowH = measureRow(row)
+          y = ensureSpace(y, rowH)
+          if (idx%2===1) { doc.setFillColor(...GRAY_LIGHT); doc.rect(left, y-4.5, contentWidth, rowH, 'F'); doc.setTextColor(...INK) }
+          drawRow(row, idx, y)
+          y += rowH
+        })
+      }
+      doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+      doc.line(left, y, right, y)
+      y += 10
     }
-    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
-    doc.line(left, y, right, y)
-    y += 10
+
+    // ── Itemized charges table ──
+    const qtyX = right-58, priceX = right-32, amtX = right
+    const items = record?.line_items || []
+    sectionTable('Itemized Charges',
+      [['DESCRIPTION', left+3], ['QTY', qtyX, 'right'], ['UNIT PRICE', priceX, 'right'], ['AMOUNT', amtX, 'right']],
+      items,
+      (item) => Math.max(doc.splitTextToSize(item.description||'—', contentWidth-70).length,1)*5 + 4,
+      (item, idx, rowY) => {
+        const descLines = doc.splitTextToSize(item.description||'—', contentWidth-70)
+        doc.setFontSize(9.5); doc.setFont(undefined,'normal')
+        doc.text(descLines, left+3, rowY)
+        doc.text(String(item.qty||1), qtyX, rowY, {align:'right'})
+        doc.text(`HK$${(item.fee||0).toFixed(2)}`, priceX, rowY, {align:'right'})
+        doc.setFont(undefined,'bold')
+        doc.text(`HK$${((item.fee||0)*(item.qty||1)).toFixed(2)}`, amtX, rowY, {align:'right'})
+      },
+      'No itemized charges are on file for this visit.'
+    )
+
+    // ── Medications prescribed table ──
+    const doseX = right-95, qtyMedX = right-45, durX = right
+    function medRowLineCount(med) {
+      const nameLines = doc.splitTextToSize(med.medication_name||'—', doseX-left-6)
+      const doseText = [med.dosage, med.frequency].filter(Boolean).join(' · ')
+      const doseLines = doc.splitTextToSize(doseText||'—', qtyMedX-doseX-4)
+      return Math.max(nameLines.length, doseLines.length, 1)
+    }
+    sectionTable('Medications Prescribed',
+      [['MEDICATION', left+3], ['DOSAGE & FREQUENCY', doseX], ['QTY', qtyMedX, 'right'], ['DURATION', durX, 'right']],
+      medications || [],
+      (med) => medRowLineCount(med)*5 + 4,
+      (med, idx, rowY) => {
+        const nameLines = doc.splitTextToSize(med.medication_name||'—', doseX-left-6)
+        const doseText = [med.dosage, med.frequency].filter(Boolean).join(' · ')
+        const doseLines = doc.splitTextToSize(doseText||'—', qtyMedX-doseX-4)
+        doc.setFontSize(9.5); doc.setFont(undefined,'normal')
+        doc.text(nameLines, left+3, rowY)
+        doc.text(doseLines, doseX, rowY)
+        doc.text(String(med.quantity ?? '—'), qtyMedX, rowY, {align:'right'})
+        doc.text(med.duration_days ? `${med.duration_days} days` : '—', durX, rowY, {align:'right'})
+      },
+      'No medications were prescribed at this visit.'
+    )
 
     // ── Totals block ──
     const consultFee = record?.total_fee ?? t.consultation_fee ?? 0
@@ -4599,8 +4734,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       doc.setTextColor(...INK); doc.text(`-HK$${(t.insurer_covers||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
     }
     if (t.payment_method==='treatment_plan') {
+      // The plan may not have covered the full visit (a shortfall is
+      // collected separately when a visit costs more than the plan's
+      // normal per-session value) - show what the plan actually covered,
+      // not the whole visit cost, so this doesn't overstate the plan's
+      // contribution when a shortfall was also collected.
+      const coveredByPlan = Math.max(0, (consultFee||0) - (t.patient_pays||0))
       doc.setTextColor(...GRAY); doc.text('Covered by treatment plan', totalsX, y)
-      doc.setTextColor(...INK); doc.text(`-HK$${(consultFee||0).toFixed(2)}`, right, y, {align:'right'}); y += 6
+      doc.setTextColor(...INK); doc.text(`-HK$${coveredByPlan.toFixed(2)}`, right, y, {align:'right'}); y += 6
     }
     y += 2
     doc.setFillColor(...GREEN_LIGHT)
@@ -4689,6 +4830,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setPlansLoading(true)
     const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)')
     setTreatmentPlans((data||[]).map(p => ({
+      id: p.id,
       patient: p.patients?.full_name || 'Unknown',
       plan: p.plan_name,
       paid: p.sessions_paid,
@@ -4696,6 +4838,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       remaining: p.sessions_paid - p.sessions_used,
       status: p.status,
       expiryDate: p.expiry_date,
+      priceTotal: p.price_total,
+      sessionValue: p.session_value,
     })))
     setPlansLoading(false)
   }
@@ -4772,15 +4916,23 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadEligiblePlans()
   }, [billingChoice, billingRecord])
 
-  // A treatment plan session has a real value (price_total / sessions_paid),
-  // and a visit doesn't always cost exactly that - extra services or a
-  // pricier consultation than the package assumed. This used to mark
-  // patient_pays:0 unconditionally just because a plan was picked, billing
-  // the whole visit as "covered" even when the session's real value fell
-  // short of what was actually charged. Now computes the real shortfall
-  // and requires it to be collected before the visit counts as billed.
-  const planPerSessionValue = selectedTreatmentPlan?.price_total!=null && selectedTreatmentPlan?.sessions_paid
-    ? selectedTreatmentPlan.price_total / selectedTreatmentPlan.sessions_paid : null
+  // A treatment plan session has a real, normal value - session_value,
+  // what one session is actually worth, set when the plan was created.
+  // A visit doesn't always cost exactly that (extra services, a pricier
+  // consultation than the package assumed), so a genuine shortfall - the
+  // visit costing MORE than a normal session - still needs collecting.
+  //
+  // This used to fall back to price_total/sessions_paid (the discounted
+  // average a patient actually pays per session under the package) as the
+  // reference value whenever session_value wasn't set. That's wrong even
+  // as a fallback for any plan that intentionally discounts (e.g. HK$180
+  // for 3 sessions normally worth HK$100 each) - it would charge the
+  // patient the gap between the visit's real cost and the discounted
+  // average at every visit, clawing back the discount the package was
+  // supposed to give them. Only a real reference price (session_value)
+  // should ever produce a shortfall; without one on file, there's no
+  // honest "normal price" to compare against, so no shortfall is charged.
+  const planPerSessionValue = selectedTreatmentPlan?.session_value ?? null
   const treatmentPlanShortfall = planPerSessionValue!=null && billingRecord
     ? Math.max(0, (billingRecord.total_fee||0) - planPerSessionValue) : 0
 
@@ -5123,16 +5275,19 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const { data: newPlan } = await supabase.from('treatment_plans').insert({
       patient_id: planFoundPatient.id, institution_id: institutionId,
       plan_name: planName, sessions_paid: parseInt(planSessions)||0, sessions_used: 0,
-      status: 'active', price_total: parseFloat(planPrice)||0, created_by: staffMember?.name,
+      status: 'active', price_total: parseFloat(planPrice)||0,
+      session_value: planSessionValue.trim() ? parseFloat(planSessionValue) : null,
+      created_by: staffMember?.name,
       expiry_date: planExpiry || null,
     }).select().maybeSingle()
     const fee = calculatePaymentProcessingFee(planMethod, parseFloat(planPrice)||0)
-    await supabase.from('transactions').insert({
+    const { data: txn } = await supabase.from('transactions').insert({
       institution_id: institutionId, patient_name: planFoundPatient.full_name,
       consultation_fee: parseFloat(planPrice)||0, insurer_covers: 0, patient_pays: parseFloat(planPrice)||0,
       payment_method: planMethod, card_processing_fee: fee, treatment_plan_id: newPlan?.id,
       staff_name: staffMember?.name || 'Unknown',
-    })
+    }).select().maybeSingle()
+    setNewPlanReceipt(newPlan && txn ? { plan: newPlan, txn } : null)
     setPlanSaving(false)
     setPlanStep('done')
     loadTreatmentPlans()
@@ -5142,7 +5297,153 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   function resetPlanCreation() {
     setShowCreatePlan(false); setPlanStep('form'); setPlanPatientQuery(''); setPlanFoundPatient(null); setPlanNotFound(false)
     setPlanScanOpen(false); setPlanScanChoices([])
-    setPlanName(''); setPlanSessions(''); setPlanPrice(''); setPlanExpiry(''); setPlanMethod('card')
+    setPlanName(''); setPlanSessions(''); setPlanSessionValue(''); setPlanPrice(''); setPlanExpiry(''); setPlanMethod('card')
+    setNewPlanReceipt(null)
+  }
+
+  // A separate receipt from the per-visit consultation receipt - this one
+  // is for the treatment plan PURCHASE itself (the package bought up
+  // front), not any individual visit. Re-fetches fresh rather than trusting
+  // whatever's already in state, so it works the same whether called right
+  // after creating a plan or later from the ongoing plans list.
+  async function handleDownloadPlanReceipt(planId) {
+    const [{ data: plan }, { data: institution }, { data: txn }] = await Promise.all([
+      supabase.from('treatment_plans').select('*, patients(full_name)').eq('id', planId).maybeSingle(),
+      institutionId
+        ? supabase.from('institutions').select('receipt_logo_url, receipt_clinic_name, receipt_address, receipt_phone, receipt_footer_note').eq('id', institutionId).maybeSingle()
+        : Promise.resolve({ data: null }),
+      supabase.from('transactions').select('*').eq('treatment_plan_id', planId).order('created_at', {ascending:true}).limit(1).maybeSingle(),
+    ])
+    if (!plan) return
+    const logo = await loadLogoForPdf(institution?.receipt_logo_url)
+
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const left = 18, right = pageWidth - 18
+    const contentWidth = right - left
+    const GREEN = [0,98,65], GREEN_LIGHT = [234,243,239], GRAY = [110,110,110], GRAY_LIGHT = [246,246,244], INK = [26,26,26], BORDER = [222,220,214]
+    const receiptNo = `PLAN-${plan.id ? String(plan.id).slice(0,8).toUpperCase() : new Date(plan.created_at).getTime().toString(36).toUpperCase()}`
+    const footerY = pageHeight - 16
+    const clinicName = institution?.receipt_clinic_name || 'Medsa Health'
+
+    function drawFooter() {
+      doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+      doc.line(left, footerY-6, right, footerY-6)
+      doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text(institution?.receipt_footer_note || `${clinicName} · System-generated receipt · No signature required`, left, footerY)
+      doc.text(`Printed ${new Date().toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}`, right, footerY, {align:'right'})
+    }
+
+    doc.setFillColor(...GREEN)
+    doc.rect(0, 0, pageWidth, 34, 'F')
+    doc.setTextColor(255,255,255)
+    let textLeft = left
+    if (logo) {
+      // Cap width too, not just height - a wide/horizontal logo (a
+      // wordmark-style aspect ratio) sized purely by height could push
+      // the clinic name text into the right-aligned receipt number/date.
+      let logoH = 20, logoW = logoH * logo.aspect
+      if (logoW > 34) { logoW = 34; logoH = logoW / logo.aspect }
+      doc.addImage(logo.dataUrl, logo.format, left, 7, logoW, logoH)
+      textLeft = left + logoW + 5
+    }
+    doc.setFontSize(19); doc.setFont(undefined,'bold')
+    doc.text(clinicName, textLeft, 15)
+    doc.setFontSize(8.5); doc.setFont(undefined,'normal')
+    const subLine = institution?.receipt_clinic_name
+      ? [institution.receipt_address, institution.receipt_phone].filter(Boolean).join('  ·  ') || 'Powered by Medsa Health'
+      : 'Digital health platform · medsa.health'
+    doc.text(subLine, textLeft, 22)
+    if (institution?.receipt_clinic_name) {
+      doc.setFontSize(7.5); doc.setTextColor(230,240,236)
+      doc.text('Powered by Medsa Health', textLeft, 28)
+      doc.setTextColor(255,255,255)
+    }
+    doc.setFontSize(13); doc.setFont(undefined,'bold')
+    doc.text('TREATMENT PLAN RECEIPT', right, 14, {align:'right'})
+    doc.setFontSize(9); doc.setFont(undefined,'normal')
+    doc.text(receiptNo, right, 21, {align:'right'})
+    doc.text(new Date(plan.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), right, 27, {align:'right'})
+
+    let y = 46
+    const colGap = left + contentWidth/2
+    const cardTop = y
+    const cardH = 46
+    function fieldPair(label, value, x, fy) {
+      doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text(label.toUpperCase(), x, fy)
+      doc.setFontSize(10.5); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
+      doc.text(String(value||'—'), x, fy+5)
+    }
+    doc.setFillColor(...GRAY_LIGHT)
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+    doc.roundedRect(left, cardTop, contentWidth, cardH, 2, 2, 'FD')
+    let cy = cardTop + 11
+    fieldPair('Patient', plan.patients?.full_name, left+8, cy)
+    fieldPair('Treatment plan', plan.plan_name, colGap, cy)
+    cy += 13
+    fieldPair('Purchased by', txn?.staff_name, left+8, cy)
+    fieldPair('Payment method', (txn?.payment_method||'').replace(/_/g,' '), colGap, cy)
+    cy += 13
+    fieldPair('Sessions included', `${plan.sessions_paid} sessions`, left+8, cy)
+    fieldPair('Valid until', plan.expiry_date ? new Date(plan.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : 'No expiry', colGap, cy)
+    y = cardTop + cardH + 12
+
+    // ── Pricing breakdown ──
+    doc.setFontSize(11); doc.setFont(undefined,'bold'); doc.setTextColor(...INK)
+    doc.text('Pricing', left, y)
+    y += 9
+    const hasSessionValue = plan.session_value != null
+    const normalTotal = hasSessionValue ? plan.session_value * plan.sessions_paid : null
+    doc.setFontSize(9.5)
+    if (hasSessionValue) {
+      doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text(`Normal price (${plan.sessions_paid} sessions × HK$${plan.session_value.toFixed(2)})`, left, y)
+      doc.setTextColor(...INK); doc.text(`HK$${normalTotal.toFixed(2)}`, right, y, {align:'right'}); y += 6.5
+      const discount = Math.max(0, normalTotal - (plan.price_total||0))
+      if (discount > 0) {
+        doc.setTextColor(...GRAY); doc.text('Package discount', left, y)
+        doc.setTextColor(...GREEN); doc.text(`-HK$${discount.toFixed(2)}`, right, y, {align:'right'}); y += 6.5
+      }
+    } else {
+      doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+      doc.text('Package price', left, y)
+      doc.setTextColor(...INK); doc.text(`HK$${(plan.price_total||0).toFixed(2)}`, right, y, {align:'right'}); y += 6.5
+    }
+    y += 3
+    doc.setFillColor(...GREEN_LIGHT)
+    doc.roundedRect(left, y-6, contentWidth, 14, 2, 2, 'F')
+    doc.setFont(undefined,'bold'); doc.setFontSize(12); doc.setTextColor(...GREEN)
+    doc.text('Amount Paid', left+6, y+2)
+    doc.text(`HK$${(plan.price_total||0).toFixed(2)}`, right-6, y+2, {align:'right'})
+    y += 20
+    if (hasSessionValue && plan.sessions_paid) {
+      doc.setFont(undefined,'normal'); doc.setFontSize(8.5); doc.setTextColor(...GRAY)
+      doc.text(`Works out to HK$${(plan.price_total/plan.sessions_paid).toFixed(2)} per session, vs. the normal HK$${plan.session_value.toFixed(2)} per session.`, left, y)
+      y += 10
+    }
+
+    // ── How this plan works ──
+    y += 4
+    doc.setFillColor(...GRAY_LIGHT)
+    doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
+    const noteLines = doc.splitTextToSize('Each visit that uses a session from this plan will show on that visit\'s own consultation receipt, noting the session used and how many remain. This receipt only covers the purchase of the plan itself.', contentWidth-16)
+    const noteBoxH = noteLines.length*5 + 10
+    doc.roundedRect(left, y, contentWidth, noteBoxH, 2, 2, 'FD')
+    doc.setFontSize(8.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
+    doc.text(noteLines, left+8, y+7)
+    y += noteBoxH
+
+    drawFooter()
+
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-TreatmentPlan-${(plan.patients?.full_name||'patient').replace(/[^a-z0-9]/gi,'_')}-${new Date(plan.created_at).toISOString().slice(0,10)}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   if (tab==='plans') return (
@@ -5176,6 +5477,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <input type="number" value={planSessions} onChange={e=>setPlanSessions(e.target.value)} placeholder="Total sessions" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
           <input type="number" value={planPrice} onChange={e=>setPlanPrice(e.target.value)} placeholder="Total price (HK$)" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
         </div>
+        <div style={{marginBottom:'6px'}}>
+          <label style={{fontSize:'11px',color:C.textSub,display:'block',marginBottom:'4px'}}>Normal price per session (optional - for showing the discount)</label>
+          <input type="number" value={planSessionValue} onChange={e=>setPlanSessionValue(e.target.value)} placeholder="e.g. 100 (a single session normally costs this)" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        {planSessionValue&&planSessions&&planPrice&&(parseFloat(planSessionValue)*parseInt(planSessions))>parseFloat(planPrice)&&<div style={{fontSize:'12px',color:C.green,marginBottom:'10px',background:C.greenXLight,borderRadius:'8px',padding:'8px 10px'}}>
+            Patient pays HK${planPrice} for {planSessions} sessions instead of HK${(parseFloat(planSessionValue)*parseInt(planSessions)).toFixed(2)} - a {(100-(parseFloat(planPrice)/(parseFloat(planSessionValue)*parseInt(planSessions))*100)).toFixed(0)}% discount.
+        </div>}
         <div style={{marginBottom:'14px'}}>
           <label style={{fontSize:'11px',color:C.textSub,display:'block',marginBottom:'4px'}}>Expiry date (optional)</label>
           <input type="date" value={planExpiry} onChange={e=>setPlanExpiry(e.target.value)} style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box'}}/>
@@ -5205,6 +5513,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         <div style={{fontSize:'28px',marginBottom:'8px'}}>{'\u2713'}</div>
         <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>Plan created and paid</div>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Logged in Financial Records - {planSessions} sessions ready to use</div>
+        {newPlanReceipt&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>handleDownloadPlanReceipt(newPlanReceipt.plan.id)}>{'\u2b07'} Download plan receipt (PDF)</Btn>}
         <Btn variant="primary" onClick={resetPlanCreation}>Done</Btn>
       </Card>}
 
@@ -5232,6 +5541,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               </div>
             </div>
             {p.expiryDate&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>Expires {new Date(p.expiryDate).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
+            <div onClick={()=>handleDownloadPlanReceipt(p.id)} style={{fontSize:'11px',color:C.green,cursor:'pointer',marginTop:'8px'}}>{'⬇'} Download plan receipt (PDF)</div>
           </Card>
         ))}
       </div>
@@ -5802,6 +6112,103 @@ function MimsSettingsScreen({ staffMember, institutionId, institutionName }) {
         <Btn variant="primary" style={{flex:1}} onClick={()=>handleSave(false)} disabled={saving||!apiKeyInput.trim()}>{saving?'Saving...':'Save key'}</Btn>
         {connectedAt&&<Btn style={{flex:1}} onClick={()=>handleSave(true)} disabled={saving}>Disconnect</Btn>}
       </div>
+    </PageWrap>
+  )
+}
+
+// ── RECEIPT BRANDING ─────────────────────────────────────────────────────────
+// Lets a practice manager put their own clinic's identity on receipts
+// (logo, clinic name, address, phone, footer note) instead of the default
+// "Medsa Health" branding - both handleDownloadReceipt (consultation
+// receipts) and handleDownloadPlanReceipt (treatment plan receipts) read
+// these same institutions columns. Writes go straight from the browser
+// (not through a server route) since none of these fields are secret -
+// same anon-writable pattern as the rest of institutions' public columns.
+function ReceiptBrandingScreen({ institutionId, institutionName }) {
+  const [loading,setLoading]=useState(true)
+  const [logoUrl,setLogoUrl]=useState(null)
+  const [clinicName,setClinicName]=useState('')
+  const [address,setAddress]=useState('')
+  const [phone,setPhone]=useState('')
+  const [footerNote,setFooterNote]=useState('')
+  const [uploading,setUploading]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [saved,setSaved]=useState(false)
+
+  async function load() {
+    if (!institutionId) return
+    setLoading(true)
+    const { data } = await supabase.from('institutions')
+      .select('receipt_logo_url, receipt_clinic_name, receipt_address, receipt_phone, receipt_footer_note')
+      .eq('id', institutionId).maybeSingle()
+    setLogoUrl(data?.receipt_logo_url || null)
+    setClinicName(data?.receipt_clinic_name || '')
+    setAddress(data?.receipt_address || '')
+    setPhone(data?.receipt_phone || '')
+    setFooterNote(data?.receipt_footer_note || '')
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [institutionId])
+
+  async function handleLogoFile(file) {
+    setUploading(true)
+    const path = `${institutionId}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('clinic-branding').upload(path, file)
+    if (!error) {
+      const { data } = supabase.storage.from('clinic-branding').getPublicUrl(path)
+      setLogoUrl(data.publicUrl)
+    }
+    setUploading(false)
+  }
+
+  async function handleSave() {
+    setSaving(true); setSaved(false)
+    await supabase.from('institutions').update({
+      receipt_logo_url: logoUrl,
+      receipt_clinic_name: clinicName.trim() || null,
+      receipt_address: address.trim() || null,
+      receipt_phone: phone.trim() || null,
+      receipt_footer_note: footerNote.trim() || null,
+    }).eq('id', institutionId)
+    setSaving(false)
+    setSaved(true)
+  }
+
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Receipt Branding</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center',lineHeight:1.5}}>Puts {institutionName||'your clinic'}'s own logo and details on consultation and treatment plan receipts instead of the default Medsa Health branding. Leave blank to keep using the default.</div>
+
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
+
+      {!loading&&<>
+        <SecLabel>Clinic logo</SecLabel>
+        <div style={{display:'flex',alignItems:'center',gap:'14px',marginBottom:'18px'}}>
+          {logoUrl
+            ? <img src={logoUrl} alt="Clinic logo" style={{width:'64px',height:'64px',objectFit:'contain',borderRadius:'8px',border:`0.5px solid ${C.border}`,background:'#fff'}}/>
+            : <div style={{width:'64px',height:'64px',borderRadius:'8px',border:`1px dashed ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:C.textMuted,textAlign:'center'}}>No logo</div>}
+          <div style={{flex:1}}>
+            <input type="file" accept="image/*" id="receipt-logo-upload" style={{display:'none'}} onChange={e=>{const f=e.target.files[0]; if(f) handleLogoFile(f)}}/>
+            <Btn onClick={()=>document.getElementById('receipt-logo-upload').click()} disabled={uploading}>{uploading?'Uploading...':logoUrl?'Replace logo':'Upload logo'}</Btn>
+            {logoUrl&&<div onClick={()=>setLogoUrl(null)} style={{fontSize:'11px',color:C.red,cursor:'pointer',marginTop:'8px'}}>Remove logo</div>}
+          </div>
+        </div>
+
+        <SecLabel>Clinic name on receipt</SecLabel>
+        <input value={clinicName} onChange={e=>setClinicName(e.target.value)} placeholder={institutionName || 'e.g. Kowloon Family Clinic'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'12px'}}/>
+
+        <SecLabel>Address</SecLabel>
+        <input value={address} onChange={e=>setAddress(e.target.value)} placeholder="e.g. 12/F, Nathan Road, Mong Kok, Kowloon" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'12px'}}/>
+
+        <SecLabel>Phone</SecLabel>
+        <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="e.g. +852 2345 6789" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'12px'}}/>
+
+        <SecLabel>Footer note (optional)</SecLabel>
+        <input value={footerNote} onChange={e=>setFooterNote(e.target.value)} placeholder="Defaults to a standard system-generated receipt note" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+
+        {saved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>Saved - new receipts will use this branding.</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||uploading}>{saving?'Saving...':'Save branding'}</Btn>
+      </>}
     </PageWrap>
   )
 }
@@ -6612,6 +7019,7 @@ export default function ClinicOpsApp() {
     {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
     {key:'mimssettings', icon:'alert', label:'Drug Safety Database', roles:['admin']},
+    {key:'receiptbranding', icon:'tag', label:'Receipt Branding', roles:['admin']},
     {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant']},
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
@@ -6688,6 +7096,7 @@ export default function ClinicOpsApp() {
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
         {screen==='mimssettings'&&staffMember?.role==='admin'&&<MimsSettingsScreen staffMember={staffMember} institutionId={institutionId} institutionName={institutionName}/>}
+        {screen==='receiptbranding'&&staffMember?.role==='admin'&&<ReceiptBrandingScreen institutionId={institutionId} institutionName={institutionName}/>}
         {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
