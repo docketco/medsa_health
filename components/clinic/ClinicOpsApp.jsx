@@ -5269,7 +5269,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       {invTab==='stock'&&<>
       <div style={{display:'flex',gap:'10px',marginBottom:'16px',justifyContent:'center'}}>
         <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
-          {'\u2191'} Import stock CSV
+          {'\u2191'} Import stock & prices CSV
           <input type="file" accept=".csv" onChange={handleStockFile} style={{display:'none'}}/>
         </label>
       </div>
@@ -5355,14 +5355,18 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       </>}
 
       {invTab==='drugs'&&<>
+      <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'12px',lineHeight:1.5}}>
+        This is safety-reference info (effects, precautions, dosing lookup codes) - not stock or pricing. To add a drug's stock level or price (so it can be prescribed and auto-billed), use Stock {'→'} Import stock & prices CSV instead.
+      </div>
       <div style={{display:'flex',gap:'10px',marginBottom:'16px',justifyContent:'center'}}>
         <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
-          {'↑'} Import drug info CSV
+          {'↑'} Import drug safety-reference CSV
           <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
         </label>
       </div>
-      {importResult?.type==='reference'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
+      {importResult?.type==='reference'&&<div style={{background:importResult.imported>0?C.greenXLight:C.amberLight,border:`0.5px solid ${importResult.imported>0?C.green:C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:importResult.imported>0?C.green:C.amber,textAlign:'center'}}>
         Drug info import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {importResult.imported===0&&importResult.total>0&&<div style={{marginTop:'4px'}}>All rows skipped usually means this CSV doesn't have a drug_name column, or is a stock/price CSV meant for the Stock tab instead.</div>}
         {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
