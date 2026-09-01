@@ -1346,27 +1346,19 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   }
   const [lineItems,setLineItems]=useState([]) // [{service_item_id, description, category, fee, qty}]
   const [catalog,setCatalog]=useState([])
-  const [catalogAllTypes,setCatalogAllTypes]=useState([]) // unfiltered, for the "why is this empty" diagnostic below
-  // Real bug found here: this used to be its own useState, initialized
-  // once from medicineType and never updated again (setCatalogClinicType
-  // was never called anywhere) - because ConsultationScreen isn't
-  // remounted between different consultations (no key on it), whichever
-  // clinic_type happened to be correct (or not) the FIRST time this
-  // component ever mounted in a session stuck for every consultation
-  // after that, regardless of what medicineType actually was. Deriving
-  // it directly every render removes the staleness entirely.
-  const catalogClinicType = medicineType==='chinese' ? 'tcm' : 'western'
 
-  // Real service catalog, filtered by clinic type - what the doctor
-  // actually picks from to build the itemized list, rather than typing
-  // free text or manually searching a code database.
+  // Real service catalog - what the doctor actually picks from to build
+  // the itemized list, rather than typing free text or manually
+  // searching a code database. Shows the whole active price list, not
+  // filtered by clinic type - a clinic_type mismatch (bad data, or a
+  // mixed-practice clinic) used to make items silently invisible here
+  // with no way to tell why; showing everything means nothing's ever
+  // hidden from the person actually billing.
   useEffect(() => {
     async function loadCatalog() {
       const { data } = await supabase.from('service_items').select('*')
-        .in('clinic_type', [catalogClinicType, 'general']).eq('active', true).order('category')
+        .eq('active', true).order('category')
       setCatalog(data || [])
-      const { data: allData } = await supabase.from('service_items').select('name,clinic_type,active')
-      setCatalogAllTypes(allData || [])
       // A visit shouldn't need the doctor to remember to add a base
       // consultation charge every single time - auto-itemize it from
       // the catalog if one's listed (matched by name), otherwise as an
@@ -1390,7 +1382,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       })
     }
     loadCatalog()
-  }, [catalogClinicType])
+  }, [])
 
   const invoiceTotal = lineItems.reduce((sum, i) => sum + (i.fee * i.qty), 0)
 
@@ -1590,11 +1582,17 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         // consultation is happening - during an active one, access stays
         // open until actually submitted, not by a ticking clock, since
         // consultation length varies with patient volume.
+        // The MOST RECENT intake row overall, not the most recent one
+        // that happens to say consent_given:true - filtering to
+        // consent_given:true first (the old query) meant a patient who
+        // explicitly declined on their latest visit still had an older,
+        // still-in-window "yes" row found and honoured instead, silently
+        // ignoring their actual, more recent choice.
         const { data: intake } = await supabase.from('appointment_intake')
-          .select('access_window_start, access_window_end').eq('patient_id', p.id).eq('consent_given', true)
+          .select('access_window_start, access_window_end, consent_given').eq('patient_id', p.id)
           .order('created_at', { ascending: false }).limit(1).maybeSingle()
         const now = new Date()
-        const pastStart = !!intake && now >= new Date(intake.access_window_start)
+        const pastStart = !!intake && intake.consent_given && now >= new Date(intake.access_window_start)
         setConsentWindow({ checked: true, allowed: pastStart })
         if (pastStart) {
           const { data: r } = await supabase.from('medical_records').select('*,institutions(name)').eq('patient_id',p.id).order('date_of_record',{ascending:false})
@@ -1894,15 +1892,11 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         {lineItems.length>0&&<div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:700,fontSize:'14px'}}><span>Total</span><span>HK${invoiceTotal.toFixed(2)}</span></div>}
         <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'6px'}}>Add treatment or charge</div>
         <select value="" onChange={e=>{ const item = catalog.find(i=>i.id===e.target.value); if (item) addLineItem(item) }} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',background:'#fff'}}>
-          <option value="">{catalog.length===0?'No catalog items for this clinic type yet - use Price List to add some':`Select from price list (${catalog.length} items)...`}</option>
+          <option value="">{catalog.length===0?'No active items on the price list yet - use Price List to add some':`Select from price list (${catalog.length} items)...`}</option>
           {catalog.map(item=>(
             <option key={item.id} value={item.id}>{item.name} - HK${item.default_price}</option>
           ))}
         </select>
-        {catalogAllTypes.length>0&&<div style={{fontSize:'11px',color:catalog.length===0?C.amber:C.textMuted,marginBottom:'8px',lineHeight:1.6}}>
-          This screen shows items tagged '{catalogClinicType}' or 'general' - {catalog.length} of {catalogAllTypes.length} match.
-          {catalogAllTypes.length>0&&<div style={{marginTop:'4px'}}>All price list items: {catalogAllTypes.map((i,idx)=>`${i.name} [${i.clinic_type}${i.active?'':' inactive'}]`).join(', ')}</div>}
-        </div>}
         <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
           <div style={{padding:'10px 14px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Or type a charge not in the price list - matching items suggest as you type</div>
@@ -2368,12 +2362,30 @@ function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
   )
 }
 
-function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus, queues=[], checkInError, staffMember, onNavCredentials }) {
+function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppointment, onUpdateStatus, queues=[], checkInError, staffMember, institutionId, onNavCredentials, onNavStaff }) {
   // Same 120-day check as My Credentials - surfaced here too, since a
   // warning that only ever showed on a sub-page nobody was told to visit
   // wasn't a real alert, just something that happened to exist if you
   // already knew to go look for it.
   const ownRegExpiringSoon = staffMember?.registrationExpiry && new Date(staffMember.registrationExpiry) <= new Date(Date.now()+120*24*60*60*1000)
+
+  // A practice manager (admin) usually has no registration_expiry of
+  // their own to trigger the check above - the alert they actually need
+  // is "which of MY STAFF have credentials expiring soon", which
+  // previously only ever showed up if they happened to open Staff >
+  // Expiring. Same 120-day threshold as that tab.
+  const [expiringStaffCount,setExpiringStaffCount]=useState(0)
+  useEffect(() => {
+    async function loadExpiringStaffCount() {
+      if (staffMember?.role !== 'admin' || !institutionId) return
+      const cutoff = new Date(Date.now()+120*24*60*60*1000).toISOString().slice(0,10)
+      const { count } = await supabase.from('staff_credentials').select('id', { count:'exact', head:true })
+        .eq('institution_id', institutionId).eq('status','active')
+        .not('registration_expiry','is',null).lte('registration_expiry', cutoff)
+      setExpiringStaffCount(count || 0)
+    }
+    loadExpiringStaffCount()
+  }, [staffMember?.role, institutionId])
   const inRoom = queue.filter(q=>q.status!=='done'&&q.status!=='no_show').length
   const [todaysQueue,setTodaysQueue]=useState([]) // scheduled but not yet checked in
   const [loadingQueue,setLoadingQueue]=useState(true)
@@ -2451,6 +2463,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Overview</h2>
       {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} {checkInError}</div>}
       {ownRegExpiringSoon&&<div onClick={onNavCredentials} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5,cursor:'pointer'}}>{'⚠'} Your registration expires {staffMember.registrationExpiry} - tap to renew and update it in My Credentials before it lapses.</div>}
+      {expiringStaffCount>0&&<div onClick={onNavStaff} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.5,cursor:'pointer'}}>{'⚠'} {expiringStaffCount} staff member{expiringStaffCount>1?'s have':' has'} a registration expiring within 4 months - tap to review in Staff.</div>}
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Checked in today" value={inRoom} sub="patients" color={C.blue} bg={C.blueLight}/>
         <StatCard label="Pending prescriptions" value={pendingCount} sub="awaiting front desk" color={C.amber} bg={C.amberLight}/>
@@ -3165,19 +3178,29 @@ function PriceListScreen({ medicineType }) {
     load()
   }
 
-  async function toggleActive(item) {
-    await supabase.from('service_items').update({ active: !item.active }).eq('id', item.id)
-    load()
-  }
-
   // The one item ConsultationScreen auto-adds as the first line item on
   // every new consultation, for this clinic_type - explicit, instead of
   // the screen guessing by name match (which could land on any clinic's
   // "...consult..."-named item, not necessarily this one). Only one
   // default per clinic_type, so setting a new one clears the old.
-  async function setAsDefault(item) {
-    await supabase.from('service_items').update({ is_default: false }).eq('clinic_type', item.clinic_type).eq('is_default', true)
-    await supabase.from('service_items').update({ is_default: true }).eq('id', item.id)
+  // A real toggle, not a one-way pick - the button used to disappear
+  // once an item became the default, so there was no way to unset it
+  // short of making a different item default instead. Default is global
+  // (one item across the whole price list) now that the doctor's picker
+  // also shows the whole list rather than filtering by clinic type.
+  async function toggleDefault(item) {
+    if (item.is_default) {
+      await supabase.from('service_items').update({ is_default: false }).eq('id', item.id)
+    } else {
+      await supabase.from('service_items').update({ is_default: false }).eq('is_default', true)
+      await supabase.from('service_items').update({ is_default: true }).eq('id', item.id)
+    }
+    load()
+  }
+
+  async function deleteItem(item) {
+    if (!window.confirm(`Delete "${item.name}" from the price list? This can't be undone.`)) return
+    await supabase.from('service_items').delete().eq('id', item.id)
     load()
   }
 
@@ -3247,8 +3270,8 @@ function PriceListScreen({ medicineType }) {
               </div>
               <div style={{display:'flex',gap:'6px',flexShrink:0}}>
                 <button onClick={()=>startEdit(item)} style={{padding:'6px 12px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Edit</button>
-                {!item.is_default&&<button onClick={()=>setAsDefault(item)} style={{padding:'6px 12px',background:C.card,color:C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>Set as default</button>}
-                <button onClick={()=>toggleActive(item)} style={{padding:'6px 12px',background:item.active?C.card:C.greenLight,color:item.active?C.textSub:C.green,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.active?'Deactivate':'Reactivate'}</button>
+                <button onClick={()=>toggleDefault(item)} style={{padding:'6px 12px',background:item.is_default?C.green:C.card,color:item.is_default?'#fff':C.textSub,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{item.is_default?'Default ✓':'Set as default'}</button>
+                <button onClick={()=>deleteItem(item)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>Delete</button>
               </div>
             </div>
           )}
@@ -4050,8 +4073,14 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     if (!medsaId || (dataWindows[medsaId]?.checked && !force)) return
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
-    const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).eq('consent_given', true).order('created_at',{ascending:false}).limit(1).maybeSingle()
-    if (!data) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
+    // Most recent intake row overall, regardless of what it says - not
+    // just the most recent one that happens to say consent_given:true.
+    // Filtering to consent_given:true before ordering meant a patient's
+    // explicit "No" on their latest visit was invisible to this check as
+    // long as an older, still-in-window "Yes" existed - that older
+    // consent kept being honoured over their actual, more recent choice.
+    const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    if (!data || !data.consent_given) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
     const now = new Date()
     const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
     setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,reason:allowed?null:'outside_window',patientId:patientRow.id}}))
@@ -5052,9 +5081,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 }
 
 function InventoryScreen({ staffMember, institutionId, medicineType }) {
+  const [invTab,setInvTab]=useState('stock') // 'stock' | 'drugs' - order sets moved to its own page, this only ever held stock + drug reference
   const [items,setItems]=useState([])
   const [loading,setLoading]=useState(true)
   const [showReorderOnly,setShowReorderOnly]=useState(false)
+  const [drugRefs,setDrugRefs]=useState([])
+  const [loadingDrugs,setLoadingDrugs]=useState(true)
+  const [drugSearch,setDrugSearch]=useState('')
   const [pendingDelta,setPendingDelta]=useState({}) // itemId -> uncommitted delta
   const [confirming,setConfirming]=useState(null)
   const [importResult,setImportResult]=useState(null)
@@ -5070,26 +5103,6 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
   const [editingPriceId,setEditingPriceId]=useState(null)
   const [editingPriceValue,setEditingPriceValue]=useState('')
   const [savingPrice,setSavingPrice]=useState(false)
-
-  async function handleOrderSetFile(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    if (staffMember?.role !== 'admin') { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Only a practice manager can import order sets - this is real safety logic, not inventory.' }); return }
-    if (!institutionId) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
-    const text = await file.text()
-    const rows = parseCSV(text).filter(row => row.drug_name)
-    // Writes go through a server route now, not straight to the database -
-    // order sets drive real hard-stop/soft-stop safety logic, so the write
-    // itself is re-checked server-side against the caller's actual stored
-    // role rather than trusting this client-side check alone.
-    const res = await fetch('/api/staff/import-order-sets', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ medsaId: staffMember.id, institutionId, rows }),
-    })
-    const result = await res.json()
-    if (!res.ok) { setImportResult({ type:'orderset', imported:0, skipped:0, total:0, error: result.error || 'Import failed.' }); return }
-    setImportResult({ type:'orderset', imported: result.imported, skipped: result.skipped, total: result.total })
-  }
 
   async function handleStockFile(e) {
     const file = e.target.files[0]
@@ -5148,6 +5161,7 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
       imported++
     }
     setImportResult({ type:'reference', imported, skipped: skipped+skippedForNoCode.length, skippedForNoCode, total: rows.length })
+    loadDrugRefs()
   }
 
   async function handleAddItem() {
@@ -5195,7 +5209,16 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
     load()
   }, [institutionId])
 
+  async function loadDrugRefs() {
+    setLoadingDrugs(true)
+    const { data } = await supabase.from('drug_reference').select('*').eq('medicine_type', medicineType==='chinese'?'chinese':'western').order('drug_name')
+    setDrugRefs(data||[])
+    setLoadingDrugs(false)
+  }
+  useEffect(() => { loadDrugRefs() }, [medicineType])
+
   const displayed = showReorderOnly ? items.filter(i=>i.stock<=i.reorderAt) : items
+  const filteredDrugRefs = drugRefs.filter(d => d.drug_name?.toLowerCase().includes(drugSearch.toLowerCase()))
   const lowStockCount = items.filter(i=>i.stock<=i.reorderAt).length
 
   function adjustPending(id, delta) {
@@ -5224,29 +5247,25 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
 
   return (
     <PageWrap maxWidth={640}>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Inventory</h2>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'16px',textAlign:'center'}}>Inventory</h2>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px',justifyContent:'center'}}>
+        {[['stock','Stock'],['drugs','Drugs']].map(([k,l])=>(
+          <div key={k} onClick={()=>setInvTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:invTab===k?C.green:C.card,color:invTab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
+
+      {invTab==='stock'&&<>
       <div style={{display:'flex',gap:'10px',marginBottom:'16px',justifyContent:'center'}}>
         <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
           {'\u2191'} Import stock CSV
           <input type="file" accept=".csv" onChange={handleStockFile} style={{display:'none'}}/>
         </label>
-        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
-          {'\u2191'} Import drug info CSV
-          <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
-        </label>
-        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
-          {'\u2191'} Import order sets CSV
-          <input type="file" accept=".csv" onChange={handleOrderSetFile} style={{display:'none'}}/>
-        </label>
       </div>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Drug info CSV requires an hk_registration_number or atc_code column per row - this is what would let a real safety database look each drug up. Rows without either are skipped, not imported with guessed data.</div>
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Order sets CSV requires drug_name per row - only a practice manager can import this, and every rule is auto-approved under your own name, since who approved it is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple). Same-drug-name rows in hard_stop_conditions/soft_stop_conditions on another drug's row are what the drug-to-drug interaction check reads at prescribing time.</div>
-      {importResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
-        {{stock:'Stock', reference:'Drug info', orderset:'Order sets'}[importResult.type]} import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
-        {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
+      {importResult?.type==='stock'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
+        Stock import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
       </div>}
       <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
-        Stock CSV columns: item_name, stock, unit, reorder_at, supplier, price (optional - a drug with a price here is auto-added to the itemized bill when prescribed) · Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type)
+        Stock CSV columns: item_name, stock, unit, reorder_at, supplier, price (optional - a drug with a price here is auto-added to the itemized bill when prescribed)
       </div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
       {lowStockCount>0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'16px'}}>
@@ -5321,6 +5340,39 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
           <Btn variant="primary" style={{flex:1}} onClick={handleAddItem} disabled={addingItem}>{addingItem?'Adding...':'Add item'}</Btn>
         </div>
       </Card>}
+      </>}
+
+      {invTab==='drugs'&&<>
+      <div style={{display:'flex',gap:'10px',marginBottom:'16px',justifyContent:'center'}}>
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'↑'} Import drug info CSV
+          <input type="file" accept=".csv" onChange={handleReferenceFile} style={{display:'none'}}/>
+        </label>
+      </div>
+      {importResult?.type==='reference'&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green,textAlign:'center'}}>
+        Drug info import: {importResult.imported} of {importResult.total} rows imported{importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.
+        {importResult.skippedForNoCode?.length>0&&<div style={{marginTop:'4px'}}>Skipped for missing a required HK Registration Number or ATC Code: {importResult.skippedForNoCode.join(', ')}</div>}
+      </div>}
+      <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'16px',lineHeight:1.5}}>
+        Drug info CSV columns: drug_name, effects, intake_info, precautions, medicine_type (optional - western or chinese, defaults to this clinic's type). Requires an hk_registration_number or atc_code column per row - this is what lets a real safety database look each drug up; rows without either are skipped, not imported with guessed data.
+      </div>
+      <input value={drugSearch} onChange={e=>setDrugSearch(e.target.value)} placeholder="Search drugs..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+      {loadingDrugs&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
+      {!loadingDrugs&&filteredDrugRefs.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No drugs on file yet - import a drug info CSV above.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {filteredDrugRefs.map(d=>(
+          <Card key={d.id} style={{padding:'12px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'10px'}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{d.drug_name}</div>
+              {d.is_dangerous_drug&&<span style={{fontSize:'10px',fontWeight:700,color:C.red,background:C.redLight,borderRadius:'4px',padding:'2px 6px',whiteSpace:'nowrap'}}>DANGEROUS DRUG</span>}
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{d.hk_registration_number?`HK Reg ${d.hk_registration_number}`:''}{d.hk_registration_number&&d.atc_code?' · ':''}{d.atc_code?`ATC ${d.atc_code}`:''}</div>
+            {d.effects&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'6px'}}>{d.effects}</div>}
+            {d.precautions&&<div style={{fontSize:'12px',color:C.amber,marginTop:'4px'}}>{'⚠'} {d.precautions}</div>}
+          </Card>
+        ))}
+      </div>
+      </>}
     </PageWrap>
   )
 }
@@ -5330,30 +5382,68 @@ function InventoryScreen({ staffMember, institutionId, medicineType }) {
 // prescribing. A doctor or nurse who just wants to look up "what's the
 // safe dose range / hard-stop conditions for this drug" without
 // starting a prescription had nowhere to go for that.
-function OrderSetsScreen({ institutionId }) {
+function OrderSetsScreen({ institutionId, staffMember }) {
   const [orderSets, setOrderSets] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [importResult, setImportResult] = useState(null)
 
-  useEffect(() => {
-    async function load() {
-      if (!institutionId) return
-      setLoading(true)
-      const { data } = await supabase.from('order_sets').select('*').eq('institution_id', institutionId).order('drug_name')
-      setOrderSets(data || [])
-      setLoading(false)
-    }
+  async function load() {
+    if (!institutionId) return
+    setLoading(true)
+    const { data } = await supabase.from('order_sets').select('*').eq('institution_id', institutionId).order('drug_name')
+    setOrderSets(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [institutionId])
+
+  // Moved here from Inventory - order sets are per-drug dosing/safety
+  // rules (hard-stop/soft-stop conditions, age and dose ranges), a
+  // completely different kind of data from stock or drug-reference
+  // info, so the upload for them belongs on the page that actually
+  // shows what got imported.
+  async function handleOrderSetFile(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    if (staffMember?.role !== 'admin') { setImportResult({ imported:0, skipped:0, total:0, error:'Only a practice manager can import order sets - this is real safety logic, not inventory.' }); return }
+    if (!institutionId) { setImportResult({ imported:0, skipped:0, total:0, error:'Institution not resolved yet - try again in a moment.' }); return }
+    const text = await file.text()
+    const rows = parseCSV(text).filter(row => row.drug_name)
+    // Writes go through a server route, not straight to the database -
+    // order sets drive real hard-stop/soft-stop safety logic, so the
+    // write itself is re-checked server-side against the caller's
+    // actual stored role rather than trusting this client-side check
+    // alone.
+    const res = await fetch('/api/staff/import-order-sets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ medsaId: staffMember.id, institutionId, rows }),
+    })
+    const result = await res.json()
+    if (!res.ok) { setImportResult({ imported:0, skipped:0, total:0, error: result.error || 'Import failed.' }); return }
+    setImportResult({ imported: result.imported, skipped: result.skipped, total: result.total })
     load()
-  }, [institutionId])
+  }
 
   const filtered = orderSets.filter(o => o.drug_name?.toLowerCase().includes(search.toLowerCase()))
 
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Order Sets</h2>
+      {staffMember?.role==='admin'&&<>
+      <div style={{display:'flex',justifyContent:'center',marginBottom:'12px'}}>
+        <label style={{fontSize:'13px',fontWeight:600,padding:'11px 18px',borderRadius:'10px',cursor:'pointer',background:C.green,color:'#fff',boxShadow:'0 1px 3px rgba(0,0,0,0.12)'}}>
+          {'↑'} Import order sets CSV
+          <input type="file" accept=".csv" onChange={handleOrderSetFile} style={{display:'none'}}/>
+        </label>
+      </div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',textAlign:'center'}}>Requires drug_name per row, and every rule is auto-approved under your own name, since who approved it is never optional. Columns: min_dose_per_kg, max_dose_per_kg, dose_unit, min_age_years, max_age_years, renal_adjustment_notes, high_alert, hard_stop_conditions, soft_stop_conditions (semicolon-separated for multiple). Same-drug-name rows in hard_stop_conditions/soft_stop_conditions on another drug's row are what the drug-to-drug interaction check reads at prescribing time.</div>
+      {importResult&&<div style={{background:importResult.error?C.amberLight:C.greenXLight,border:`0.5px solid ${importResult.error?C.amber:C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:importResult.error?C.amber:C.green,textAlign:'center'}}>
+        {importResult.error || `Order sets import: ${importResult.imported} of ${importResult.total} rows imported${importResult.skipped>0?`, ${importResult.skipped} skipped`:''}.`}
+      </div>}
+      </>}
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by drug name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{orderSets.length===0?'No order sets imported yet - a practice manager can add them from Inventory.':'No drug matches that search.'}</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{orderSets.length===0?'No order sets imported yet - a practice manager can import a CSV above.':'No drug matches that search.'}</div>}
       {filtered.map(o=>(
         <Card key={o.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
@@ -6196,7 +6286,7 @@ export default function ClinicOpsApp() {
         setStaffMember(null);setScreen('overview')
       }}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
-        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} onNavCredentials={()=>setScreen('mycredentials')}/>}
+        {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} institutionId={institutionId} onNavCredentials={()=>setScreen('mycredentials')} onNavStaff={()=>setScreen('staff')}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
@@ -6243,7 +6333,7 @@ export default function ClinicOpsApp() {
         />}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} institutionName={institutionName}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
-        {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId}/>}
+        {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
