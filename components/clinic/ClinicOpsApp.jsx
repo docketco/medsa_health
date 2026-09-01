@@ -5705,6 +5705,8 @@ function MimsSettingsScreen({ staffMember, institutionId, institutionName }) {
 // these same institutions columns. Writes go straight from the browser
 // (not through a server route) since none of these fields are secret -
 // same anon-writable pattern as the rest of institutions' public columns.
+const DEFAULT_RECEIPT_BANNER_COLOR = '#006241'
+
 function ReceiptBrandingScreen({ institutionId, institutionName }) {
   const [loading,setLoading]=useState(true)
   const [logoUrl,setLogoUrl]=useState(null)
@@ -5712,6 +5714,7 @@ function ReceiptBrandingScreen({ institutionId, institutionName }) {
   const [address,setAddress]=useState('')
   const [phone,setPhone]=useState('')
   const [footerNote,setFooterNote]=useState('')
+  const [bannerColor,setBannerColor]=useState(DEFAULT_RECEIPT_BANNER_COLOR)
   const [uploading,setUploading]=useState(false)
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
@@ -5720,13 +5723,14 @@ function ReceiptBrandingScreen({ institutionId, institutionName }) {
     if (!institutionId) return
     setLoading(true)
     const { data } = await supabase.from('institutions')
-      .select('receipt_logo_url, receipt_clinic_name, receipt_address, receipt_phone, receipt_footer_note')
+      .select('receipt_logo_url, receipt_clinic_name, receipt_address, receipt_phone, receipt_footer_note, receipt_banner_color')
       .eq('id', institutionId).maybeSingle()
     setLogoUrl(data?.receipt_logo_url || null)
     setClinicName(data?.receipt_clinic_name || '')
     setAddress(data?.receipt_address || '')
     setPhone(data?.receipt_phone || '')
     setFooterNote(data?.receipt_footer_note || '')
+    setBannerColor(data?.receipt_banner_color || DEFAULT_RECEIPT_BANNER_COLOR)
     setLoading(false)
   }
   useEffect(() => { load() }, [institutionId])
@@ -5750,6 +5754,7 @@ function ReceiptBrandingScreen({ institutionId, institutionName }) {
       receipt_address: address.trim() || null,
       receipt_phone: phone.trim() || null,
       receipt_footer_note: footerNote.trim() || null,
+      receipt_banner_color: bannerColor !== DEFAULT_RECEIPT_BANNER_COLOR ? bannerColor : null,
     }).eq('id', institutionId)
     setSaving(false)
     setSaved(true)
@@ -5786,6 +5791,14 @@ function ReceiptBrandingScreen({ institutionId, institutionName }) {
 
         <SecLabel>Footer note (optional)</SecLabel>
         <input value={footerNote} onChange={e=>setFooterNote(e.target.value)} placeholder="Defaults to a standard system-generated receipt note" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+
+        <SecLabel>Banner color</SecLabel>
+        <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
+          <input type="color" value={bannerColor} onChange={e=>setBannerColor(e.target.value)} style={{width:'44px',height:'44px',padding:0,border:`0.5px solid ${C.border}`,borderRadius:'8px',cursor:'pointer'}}/>
+          <input value={bannerColor} onChange={e=>{const v=e.target.value; if(/^#[0-9a-fA-F]{0,6}$/.test(v)) setBannerColor(v)}} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          {bannerColor!==DEFAULT_RECEIPT_BANNER_COLOR&&<Btn onClick={()=>setBannerColor(DEFAULT_RECEIPT_BANNER_COLOR)}>Reset</Btn>}
+        </div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>Colors the header band and accents on both receipt types. Text automatically switches to stay readable, whatever color you pick.</div>
 
         {saved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>Saved - new receipts will use this branding.</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||uploading}>{saving?'Saving...':'Save branding'}</Btn>
