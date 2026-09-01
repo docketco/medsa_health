@@ -67,7 +67,7 @@ export default function ClinicSignupPage() {
         orphf_code: orphfCode.trim() || null, phone: phone.trim() || null, address: address.trim() || null,
         verification_status: verification.overall_status || verification.status || 'unchecked',
         government_schemes: schemes.length ? schemes : null,
-      }).select().maybeSingle()
+      }).select('id').maybeSingle()
       if (instErr) throw instErr
 
       const medsaId = `MED-${Date.now().toString(36).toUpperCase()}`

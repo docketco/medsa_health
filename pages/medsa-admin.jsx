@@ -735,7 +735,11 @@ function ClinicsTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('institutions').select('*').order('created_at',{ascending:false}).limit(50)
+    // Named columns, not '*' - institutions.mims_api_key is a real
+    // credential (locked down the same way staff_credentials' password
+    // columns are) and a wildcard select fails outright the moment any
+    // selected column, wildcard included, isn't granted to anon.
+    const { data } = await supabase.from('institutions').select('id,name,type,address,district,phone,email,medsa_partner,active,created_at,institution_type,name_tc,onboarding_status,created_by_name,created_by_email,medicine_type,business_registration_number,orphf_code,verification_status,contract_start_date,contract_expiry_date,government_schemes,mims_connected_at,mims_connected_by').order('created_at',{ascending:false}).limit(50)
     setClinics(data||[])
     setLoading(false)
   }
@@ -764,7 +768,7 @@ function ClinicsTab() {
       contract_start_date: new Date().toISOString().slice(0,10),
       contract_expiry_date: form.contractExpiryDate || null,
       government_schemes: form.schemes.length ? form.schemes : null,
-    }).select().maybeSingle()
+    }).select('id').maybeSingle()
     if (instErr) { setResult({ error: instErr.message }); setSaving(false); return }
 
     const medsaId = `MED-${Date.now().toString(36).toUpperCase()}`

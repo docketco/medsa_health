@@ -1324,7 +1324,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           body: JSON.stringify({
             patientId: patient.id, ageInMonths, weightKg: parseFloat(weightKg)||null,
             drugName: drugName.trim(), atcCode: drugRef.atc_code, hkRegistrationNumber: drugRef.hk_registration_number,
-            otherDrugs,
+            otherDrugs, institutionId,
           }),
         })
         cdsResult = await res.json()
@@ -1941,6 +1941,13 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
               <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
               {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
             </div>
+            {/* Direct confirmation that this exact drug name matched a
+                priced inventory item and was added to the bill below -
+                without this, whether the auto-itemize actually fired was
+                invisible unless you scrolled up to the bill yourself. */}
+            {rx.drug.trim()&&(drugPrices[rx.drug.trim().toLowerCase()]!=null
+              ? <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{'✓'} HK${drugPrices[rx.drug.trim().toLowerCase()].toFixed(2)} added to bill (matched "{rx.drug.trim()}" in inventory)</div>
+              : <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>No priced inventory item matches "{rx.drug.trim()}" - pick a suggestion above, or add a price for it in Inventory {'→'} Stock, to have it auto-added to the bill.</div>)}
 
             {safetyChecks[i]&&safetyChecks[i].status==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Checking safety data...</div>}
             {safetyChecks[i]&&safetyChecks[i].status==='no_data_on_file'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{'\u26a0'} No safety data on file for this drug (no local order set, no standardized code for external lookup) - prescribing as usual, nothing blocked.</div>}
@@ -3193,7 +3200,12 @@ function PriceListScreen({ medicineType }) {
       await supabase.from('service_items').update({ is_default: false }).eq('id', item.id)
     } else {
       await supabase.from('service_items').update({ is_default: false }).eq('is_default', true)
-      await supabase.from('service_items').update({ is_default: true }).eq('id', item.id)
+      // Force active:true together with is_default - the doctor's picker
+      // only ever shows active items, so a default set on a deactivated
+      // one is invisible to it and silently falls back to a name-match
+      // guess instead. A default that can't actually show up is not a
+      // real default.
+      await supabase.from('service_items').update({ is_default: true, active: true }).eq('id', item.id)
     }
     load()
   }
@@ -5387,6 +5399,8 @@ function OrderSetsScreen({ institutionId, staffMember }) {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [importResult, setImportResult] = useState(null)
+  const [openId, setOpenId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
 
   async function load() {
     if (!institutionId) return
@@ -5424,6 +5438,16 @@ function OrderSetsScreen({ institutionId, staffMember }) {
     load()
   }
 
+  async function deleteOrderSet(o) {
+    if (staffMember?.role !== 'admin') return
+    if (!window.confirm(`Delete the order set for "${o.drug_name}"? This removes its dosing/safety rules - prescribing this drug will no longer be checked against them.`)) return
+    setDeletingId(o.id)
+    await supabase.from('order_sets').delete().eq('id', o.id)
+    setOrderSets(prev => prev.filter(x => x.id !== o.id))
+    if (openId === o.id) setOpenId(null)
+    setDeletingId(null)
+  }
+
   const filtered = orderSets.filter(o => o.drug_name?.toLowerCase().includes(search.toLowerCase()))
 
   return (
@@ -5444,20 +5468,97 @@ function OrderSetsScreen({ institutionId, staffMember }) {
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by drug name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>{orderSets.length===0?'No order sets imported yet - a practice manager can import a CSV above.':'No drug matches that search.'}</div>}
-      {filtered.map(o=>(
-        <Card key={o.id} style={{padding:'16px 18px',marginBottom:'10px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+      {filtered.map(o=>{
+        const open = openId === o.id
+        return (
+        <Card key={o.id} style={{padding:'16px 18px',marginBottom:'10px',cursor:'pointer'}} onClick={()=>setOpenId(open?null:o.id)}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
             <div style={{fontSize:'14px',fontWeight:700}}>{o.drug_name}</div>
-            {o.high_alert&&<Badge text="High alert" type="full"/>}
+            <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+              {o.high_alert&&<Badge text="High alert" type="full"/>}
+              <span style={{fontSize:'12px',color:C.textMuted}}>{open?'▲':'▼'}</span>
+            </div>
           </div>
-          {(o.min_dose_per_kg||o.max_dose_per_kg)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Dose range: {o.min_dose_per_kg||'?'}{'–'}{o.max_dose_per_kg||'?'} {o.dose_unit}/kg</div>}
-          {(o.min_age_years!=null||o.max_age_years!=null)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Age range: {o.min_age_years??'0'}{'–'}{o.max_age_years??'∞'} years</div>}
-          {o.renal_adjustment_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Renal: {o.renal_adjustment_notes}</div>}
-          {o.hard_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.red,marginBottom:'4px'}}>{'⚠'} Hard stop: {o.hard_stop_conditions.join(', ')}</div>}
-          {o.soft_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'4px'}}>{'⚠'} Soft stop: {o.soft_stop_conditions.join(', ')}</div>}
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Approved by {o.approved_by}{o.approved_at?` on ${new Date(o.approved_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+          {open&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+            {(o.min_dose_per_kg||o.max_dose_per_kg)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Dose range: {o.min_dose_per_kg||'?'}{'–'}{o.max_dose_per_kg||'?'} {o.dose_unit}/kg</div>}
+            {(o.min_age_years!=null||o.max_age_years!=null)&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Age range: {o.min_age_years??'0'}{'–'}{o.max_age_years??'∞'} years</div>}
+            {o.renal_adjustment_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Renal: {o.renal_adjustment_notes}</div>}
+            {o.hard_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.red,marginBottom:'4px'}}>{'⚠'} Hard stop: {o.hard_stop_conditions.join(', ')}</div>}
+            {o.soft_stop_conditions?.length>0&&<div style={{fontSize:'12px',color:C.amber,marginBottom:'4px'}}>{'⚠'} Soft stop: {o.soft_stop_conditions.join(', ')}</div>}
+            {!o.min_dose_per_kg&&!o.max_dose_per_kg&&o.min_age_years==null&&o.max_age_years==null&&!o.renal_adjustment_notes&&!o.hard_stop_conditions?.length&&!o.soft_stop_conditions?.length&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>No dosing/safety details filled in for this drug beyond what's shown above.</div>}
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',marginBottom:'10px'}}>Approved by {o.approved_by}{o.approved_at?` on ${new Date(o.approved_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+            {staffMember?.role==='admin'&&<button onClick={()=>deleteOrderSet(o)} disabled={deletingId===o.id} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{deletingId===o.id?'Deleting...':'Delete'}</button>}
+          </div>}
         </Card>
-      ))}
+        )
+      })}
+    </PageWrap>
+  )
+}
+
+// ── DRUG SAFETY DATABASE (MIMS) ─────────────────────────────────────────────
+// Connects this clinic's real drug-safety database key, so the safety
+// check that fires when prescribing (checkDrugSafety, in ConsultationScreen)
+// switches from the honest mock to a real one automatically - see
+// lib/cdsAdapter.js's getCdsAdapter(). The key itself is never sent back to
+// the browser once saved (institutions.mims_api_key has no anon SELECT at
+// all) - this screen only ever shows whether one is connected, not what it is.
+function MimsSettingsScreen({ staffMember, institutionId, institutionName }) {
+  const [connectedAt,setConnectedAt]=useState(null)
+  const [connectedBy,setConnectedBy]=useState(null)
+  const [loading,setLoading]=useState(true)
+  const [apiKeyInput,setApiKeyInput]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [result,setResult]=useState(null)
+
+  async function load() {
+    if (!institutionId) return
+    setLoading(true)
+    const { data } = await supabase.from('institutions').select('mims_connected_at, mims_connected_by').eq('id', institutionId).maybeSingle()
+    setConnectedAt(data?.mims_connected_at || null)
+    setConnectedBy(data?.mims_connected_by || null)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [institutionId])
+
+  async function handleSave(disconnect=false) {
+    setSaving(true)
+    setResult(null)
+    const res = await fetch('/api/staff/set_mims_api_key', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ medsaId: staffMember.id, institutionId, apiKey: disconnect ? '' : apiKeyInput }),
+    })
+    const data = await res.json()
+    if (!res.ok) { setResult({ error: data.error || 'Could not save.' }); setSaving(false); return }
+    setResult({ connected: data.connected })
+    setApiKeyInput('')
+    setSaving(false)
+    load()
+  }
+
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Drug Safety Database</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center',lineHeight:1.5}}>Connects {institutionName||'this clinic'} to a real drug-safety database (MIMS Integrated or similar) for the check that runs when prescribing. Without one connected, that check runs on built-in test logic only - not a real clinical safety verdict.</div>
+
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
+      {!loading&&<div style={{background:connectedAt?C.greenXLight:C.amberLight,border:`0.5px solid ${connectedAt?C.green:C.amber}`,borderRadius:'10px',padding:'12px 16px',marginBottom:'20px',fontSize:'12px',color:connectedAt?C.green:C.amber}}>
+        {connectedAt
+          ? `✓ Connected by ${connectedBy} on ${new Date(connectedAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - prescribing safety checks now use this real database.`
+          : '⚠ Not connected - prescribing safety checks are running on test logic only, not real clinical data.'}
+      </div>}
+
+      <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'6px'}}>MIMS Integrated API key</div>
+      <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder={connectedAt?'Enter a new key to replace the current one':'Paste your MIMS Integrated API key'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'12px'}}/>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>This is a real API key issued by MIMS to your clinic under a MIMS Integrated API agreement - not the login for a doctor's personal MIMS account. If your clinic doesn't have one yet, that's a step to take up with MIMS directly, not something this page can create.</div>
+
+      {result?.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{result.error}</div>}
+      {result&&!result.error&&<div style={{fontSize:'12px',color:C.green,marginBottom:'12px'}}>{result.connected?'Connected.':'Disconnected.'}</div>}
+
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn variant="primary" style={{flex:1}} onClick={()=>handleSave(false)} disabled={saving||!apiKeyInput.trim()}>{saving?'Saving...':'Save key'}</Btn>
+        {connectedAt&&<Btn style={{flex:1}} onClick={()=>handleSave(true)} disabled={saving}>Disconnect</Btn>}
+      </div>
     </PageWrap>
   )
 }
@@ -6267,6 +6368,7 @@ export default function ClinicOpsApp() {
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
     {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
+    {key:'mimssettings', icon:'alert', label:'Drug Safety Database', roles:['admin']},
     {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant']},
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
@@ -6342,6 +6444,7 @@ export default function ClinicOpsApp() {
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
+        {screen==='mimssettings'&&staffMember?.role==='admin'&&<MimsSettingsScreen staffMember={staffMember} institutionId={institutionId} institutionName={institutionName}/>}
         {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>
