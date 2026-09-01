@@ -4395,6 +4395,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [method,setMethod]=useState('card')
   const [paid,setPaid]=useState(false)
   const [paidRecord,setPaidRecord]=useState(null)
+  const [paidTransaction,setPaidTransaction]=useState(null)
+  const [billingTransaction,setBillingTransaction]=useState(null)
   const [receiptSent,setReceiptSent]=useState(false)
   const [printed,setPrinted]=useState(false)
   const [billingRecord,setBillingRecord]=useState(null) // the consultation record being billed, when arriving via preselectRecordId
@@ -4640,7 +4642,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // itemized charges - the PDF export has nothing to look up without it.
     const { data: linkedRecord } = await supabase.from('medical_records')
       .select('*').eq('insurance_claim_id', selectedPayment.id).maybeSingle()
-    await supabase.from('transactions').insert({
+    // .select() to get the real inserted row back (with its id and
+    // created_at) - the "Download receipt" button on the next screen
+    // needs the actual saved transaction, not a reconstruction of it,
+    // to build a real PDF from.
+    const { data: txn } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: selectedPayment.patients?.full_name || 'Unknown',
       consultation_fee: selectedPayment.amount,
@@ -4651,7 +4657,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       claim_ref: selectedPayment.claim_ref,
       medical_record_id: linkedRecord?.id || null, patient_id: selectedPayment.patient_id || null,
       staff_name: staffMember?.name || 'Unknown',
-    })
+    }).select().maybeSingle()
+    setPaidTransaction(txn || null)
     setPaidRecord(linkedRecord || null)
     setSaving(false)
     setPaid(true)
@@ -4775,7 +4782,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (planUpdateErr) setBillingTxnError(planUpdateErr.message)
     else if (!planUpdateRows || planUpdateRows.length === 0) setBillingTxnError('Sessions used could not be updated on the treatment plan (0 rows matched) - check the plan still exists.')
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    const { error: txnErr } = await supabase.from('transactions').insert({
+    const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
@@ -4784,8 +4791,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       treatment_plan_id: selectedTreatmentPlan.id,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
-    })
+    }).select().maybeSingle()
     if (txnErr) setBillingTxnError(txnErr.message)
+    setBillingTransaction(txn || null)
     setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed })
     setSubmittingClaim(false)
     // The Treatment Plans tab only ever loaded once, on mount - without
@@ -4818,7 +4826,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // "collect $0" step. Still needs its own transaction/receipt row -
     // previously this branch recorded nothing at all in the ledger.
     if (!result.fees || result.fees.patientPayableTotal <= 0) {
-      await supabase.from('transactions').insert({
+      const { data: txn } = await supabase.from('transactions').insert({
         institution_id: institutionId,
         patient_name: billingRecord.patients?.full_name || 'Unknown',
         consultation_fee: billingRecord.total_fee || 0,
@@ -4827,7 +4835,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         claim_ref: result.claimId,
         medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
         staff_name: staffMember?.name || 'Unknown',
-      })
+      }).select().maybeSingle()
+      setBillingTransaction(txn || null)
       setBillingResult(result)
     }
     setSubmittingClaim(false)
@@ -4867,7 +4876,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setCollectingCopay(true)
     const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
     const fees = await adapter.recordCopayPayment(claimAdjudication.claimId, copayMethod)
-    await supabase.from('transactions').insert({
+    const { data: txn } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
@@ -4878,7 +4887,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       claim_ref: claimAdjudication.claimId,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
-    })
+    }).select().maybeSingle()
+    setBillingTransaction(txn || null)
     setBillingResult(claimAdjudication)
     setCollectingCopay(false)
   }
@@ -4888,7 +4898,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
-    const { error: txnErr } = await supabase.from('transactions').insert({
+    const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
       consultation_fee: billingRecord.total_fee || 0,
@@ -4896,12 +4906,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       payment_method: paymentMethod, card_processing_fee: fees.paymentProcessingFee,
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
-    })
+    }).select().maybeSingle()
     // A failed insert here (e.g. a column this code expects hasn't
     // been added to the database yet) used to be silently swallowed -
     // the visit was marked billed and the screen said "complete," but
     // no row ever reached Financial Records. Surface it instead.
     if (txnErr) setBillingTxnError(txnErr.message)
+    setBillingTransaction(txn || null)
     setBillingResult({ status: 'PAID_DIRECT', fees })
     setSubmittingClaim(false)
   }
@@ -4919,7 +4930,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           {billingResult.claimId&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Claim {billingResult.claimId} - {billingResult.status}</div>}
           {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining</div>}
           {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.red,textAlign:'left'}}>{'⚠'} The visit is marked billed, but recording it failed: {billingTxnError}. It won't appear in Financial Records - let Medsa support know.</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null)}}>Done</Btn>
+          {billingTransaction&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>handleDownloadReceipt(billingTransaction)}>Download receipt (PDF)</Btn>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null)}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -5205,8 +5217,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   if (paid) return (
     <PageWrap maxWidth={440}>
-      <style>{'@media print { .no-print { display: none !important; } }'}</style>
-      <div style={{textAlign:'center',padding:'50px 20px'}} className="print-receipt">
+      <div style={{textAlign:'center',padding:'50px 20px'}}>
         <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
         <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Payment received</div>
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>HK${selectedPayment?((selectedPayment.deductible_applied||0)+(selectedPayment.patient_copay_amount||0)):0} - {selectedPayment?.patients?.full_name||'Unknown'}</div>
@@ -5219,15 +5230,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           ))}
         </Card>}
         {!paidRecord&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No itemized consultation record linked to this claim.</div>}
-        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}} className="no-print">
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
           <Btn variant={receiptSent?'secondary':'primary'} disabled={receiptSent||!paidRecord} onClick={async()=>{
             await supabase.from('medical_records').update({receipt_sent_at:new Date().toISOString()}).eq('id',paidRecord.id)
             setReceiptSent(true)
           }}>{receiptSent?"Marked sent to patient's Medsa app":!paidRecord?'No record to send':'Send receipt to Medsa app'}</Btn>
-          <Btn onClick={()=>{window.print();setPrinted(true)}}>{printed?'Printed':'Print receipt'}</Btn>
+          {/* This used to be window.print() on this bare on-screen div -
+              a browser print of unstyled stacked text, not a real
+              receipt. Now generates the same properly laid-out PDF as
+              Financial Records' download, so there's one receipt design
+              in the whole app, not two. */}
+          <Btn disabled={!paidTransaction} onClick={()=>{handleDownloadReceipt(paidTransaction);setPrinted(true)}}>{!paidTransaction?'Receipt unavailable':printed?'Downloaded - download again':'Download receipt (PDF)'}</Btn>
         </div>
         {receiptSent&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{'\u25c7'} Receipt, consultation notes, and prescription are now synced to the patient's Medsa cloud record.</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null)}}>New payment</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setPaid(false);setReceiptSent(false);setPrinted(false);setSelectedPayment(null);setPaidTransaction(null)}}>New payment</Btn>
       </div>
     </PageWrap>
   )
