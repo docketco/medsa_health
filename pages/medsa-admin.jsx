@@ -402,6 +402,13 @@ function PartnersTab() {
   async function handleSubmit() {
     if (!form.name.trim()) return
     setSaving(true)
+    // Every insurance_companies row needs a real institutions counterpart
+    // (institution_type='insurer') - the table agents/agent_policies
+    // actually attach to. Reuses one if it already exists under this
+    // exact name (e.g. an insurer institutions row created earlier for
+    // agents, being onboarded here now for the first time as a partner).
+    const { data: existingInst } = await supabase.from('institutions').select('id').eq('institution_type','insurer').ilike('name', form.name.trim()).maybeSingle()
+    const institutionRefId = existingInst?.id || (await supabase.from('institutions').insert({ name: form.name.trim(), institution_type:'insurer' }).select().maybeSingle()).data?.id
     await supabase.from('insurance_companies').insert({
       name: form.name.trim(), contact_name: form.contact_name.trim()||null,
       contact_email: form.contact_email.trim()||null, contact_phone: form.contact_phone.trim()||null,
@@ -409,6 +416,7 @@ function PartnersTab() {
       contract_start_date: new Date().toISOString().slice(0,10),
       contract_expiry_date: form.contractExpiryDate || null,
       contract_doc_url: contractDocUrl || null,
+      institution_ref_id: institutionRefId || null,
     })
     setSaving(false)
     setCreating(false)

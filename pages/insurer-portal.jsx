@@ -26,12 +26,12 @@ function InsurerLogin({ onLogin }) {
     setChecking(true)
     setError(null)
     const { data: company } = await supabase.from('insurance_companies')
-      .select('id, name, status, relationship_type').ilike('contact_email', email.trim()).maybeSingle()
+      .select('id, name, status, relationship_type, medsa_id, institution_ref_id').ilike('contact_email', email.trim()).maybeSingle()
     if (!company || company.status !== 'active') { setChecking(false); setError('No active insurer account matches that email.'); return }
     const { data: ok } = await supabase.rpc('verify_insurance_company_password', { p_company_id: company.id, p_password: password })
     setChecking(false)
     if (!ok) { setError('Incorrect password.'); return }
-    onLogin({ id: company.id, name: company.name, relationshipType: company.relationship_type })
+    onLogin({ id: company.id, name: company.name, relationshipType: company.relationship_type, medsaId: company.medsa_id, institutionRefId: company.institution_ref_id })
   }
 
   return (

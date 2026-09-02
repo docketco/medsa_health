@@ -37,7 +37,7 @@ function InsuranceDashboard({ onNav, company }) {
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.65,letterSpacing:'1px',textTransform:'uppercase'}}>{company?.name||'Insurance'} — Partner dashboard</div>
         <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Welcome back</div>
-        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}</div>
+        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
       </div>
       <SecLabel>Performance</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
@@ -492,6 +492,216 @@ function SponsoredListings({ company }) {
   )
 }
 
+// ── TEAMS & AGENTS (institution side) ──────────────────────────────────────
+// "Onboard/offboard agent/team", teams' plan authorizations from the
+// institution's basket - none of this existed before; every agent was
+// flatly tied to one institution with no branch layer and no per-team
+// product restriction at all.
+function TeamManagementCard({ company, team, plans, onChanged }) {
+  const [members,setMembers]=useState([])
+  const [authorizedPlanIds,setAuthorizedPlanIds]=useState(new Set())
+  const [loading,setLoading]=useState(true)
+  const [showAddMember,setShowAddMember]=useState(false)
+  const [memberForm,setMemberForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data: appts } = await supabase.from('agent_institution_appointments')
+      .select('agent_id, agents(id, full_name, email, medsa_id)').eq('institution_id', company.institutionRefId).eq('team_id', team.id).eq('status','active')
+    setMembers((appts||[]).map(a=>a.agents).filter(Boolean))
+    const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', team.id)
+    setAuthorizedPlanIds(new Set((auths||[]).map(a=>a.plan_id)))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [team.id])
+
+  async function toggleAuthorization(planId) {
+    if (authorizedPlanIds.has(planId)) {
+      await supabase.from('team_plan_authorizations').delete().eq('team_id', team.id).eq('plan_id', planId)
+    } else {
+      await supabase.from('team_plan_authorizations').insert({ team_id: team.id, plan_id: planId })
+    }
+    load()
+  }
+
+  async function setAssignmentMode(mode) {
+    await supabase.from('insurance_teams').update({ assignment_mode: mode }).eq('id', team.id)
+    onChanged()
+  }
+
+  async function handleAddMember() {
+    if (!memberForm.email.trim()) return
+    setSaving(true); setNotice(null)
+    try {
+      const res = await fetch('/api/agent/onboard', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...memberForm, agentType:'captive', institutionId: company.institutionRefId, teamId: team.id }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message||'Could not add member.'); setSaving(false); return }
+      setNotice(data.isNew ? `Added - temp password ${data.emailSent?'emailed':data.tempPassword}.` : 'Existing agent appointed to this team.')
+      setMemberForm({ fullName:'', email:'', phone:'', licenseNumber:'' })
+      setShowAddMember(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card style={{padding:'16px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+        <div>
+          <div style={{fontSize:'14px',fontWeight:600}}>{team.name}</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{team.medsa_id}</div>
+        </div>
+      </div>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>{loading?'Loading…':`${members.length} member${members.length===1?'':'s'}`}</div>
+      {!loading&&members.map(m=>(
+        <div key={m.id} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',fontSize:'12px',borderBottom:`0.5px solid ${C.border}`}}>
+          <span>{m.full_name}{team.team_lead_agent_id===m.id?' (lead)':''}</span>
+          <span style={{color:C.textMuted}}>{m.medsa_id}</span>
+        </div>
+      ))}
+
+      <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,margin:'14px 0 6px'}}>Won-inquiry assignment</div>
+      <div style={{display:'flex',gap:'6px',marginBottom:'14px'}}>
+        {[['confirmer','Whoever confirmed'],['random','Random member'],['manual','I assign manually']].map(([k,l])=>(
+          <div key={k} onClick={()=>setAssignmentMode(k)} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'11px',fontWeight:500,cursor:'pointer',background:team.assignment_mode===k?C.navy:C.beige,color:team.assignment_mode===k?'#fff':C.text,border:`0.5px solid ${team.assignment_mode===k?C.navy:C.border}`}}>{l}</div>
+        ))}
+      </div>
+
+      <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,margin:'14px 0 6px'}}>Plans this team is authorized to sell</div>
+      {plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No plans in your basket yet - add one under "Manage plans".</div>}
+      {plans.map(p=>(
+        <div key={p.id} onClick={()=>toggleAuthorization(p.id)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
+          <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${authorizedPlanIds.has(p.id)?C.green:C.border}`,background:authorizedPlanIds.has(p.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{authorizedPlanIds.has(p.id)?'✓':''}</div>
+          <span style={{fontSize:'12px'}}>{p.plan_name}</span>
+        </div>
+      ))}
+
+      {notice&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'10px'}}>{notice}</div>}
+      {showAddMember ? (
+        <div style={{marginTop:'12px',background:C.beige,borderRadius:'8px',padding:'12px'}}>
+          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number']].map(([k,ph])=>(
+            <input key={k} value={memberForm[k]} onChange={e=>setMemberForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box'}}/>
+          ))}
+          <div style={{display:'flex',gap:'6px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setShowAddMember(false)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1,fontSize:'12px'}} onClick={handleAddMember} disabled={saving||!memberForm.email.trim()}>{saving?'Saving…':'Add / appoint'}</Btn>
+          </div>
+        </div>
+      ) : (
+        <Btn style={{width:'100%',marginTop:'12px',fontSize:'12px'}} onClick={()=>setShowAddMember(true)}>+ Add member</Btn>
+      )}
+    </Card>
+  )
+}
+
+function TeamsAndAgents({ company }) {
+  const [teams,setTeams]=useState([])
+  const [plans,setPlans]=useState([])
+  const [independents,setIndependents]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [creating,setCreating]=useState(false)
+  const [newTeamName,setNewTeamName]=useState('')
+  const [showAddIndependent,setShowAddIndependent]=useState(false)
+  const [indyForm,setIndyForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data: teamRows } = await supabase.from('insurance_teams').select('*').eq('institution_id', company.institutionRefId).order('created_at')
+    setTeams(teamRows||[])
+    const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', company.name).eq('status','active')
+    setPlans(planRows||[])
+    const { data: apptRows } = await supabase.from('agent_institution_appointments')
+      .select('agent_id, agents(id, full_name, email, medsa_id, agent_type)').eq('institution_id', company.institutionRefId).is('team_id', null).eq('status','active')
+    setIndependents((apptRows||[]).map(a=>a.agents).filter(Boolean))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id, company.name])
+
+  async function handleCreateTeam() {
+    if (!newTeamName.trim()) return
+    setSaving(true)
+    await supabase.from('insurance_teams').insert({
+      institution_id: company.institutionRefId, name: newTeamName.trim(),
+      medsa_id: `${company.medsaId||'TEAM'}-T${Math.floor(100+Math.random()*899)}`,
+    })
+    setSaving(false); setCreating(false); setNewTeamName('')
+    load()
+  }
+
+  async function handleAddIndependent() {
+    if (!indyForm.email.trim()) return
+    setSaving(true); setNotice(null)
+    try {
+      const res = await fetch('/api/agent/onboard', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...indyForm, agentType:'independent', institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message||'Could not appoint agent.'); setSaving(false); return }
+      setNotice(data.isNew ? `Appointed - temp password ${data.emailSent?'emailed':data.tempPassword}.` : 'Existing agent appointed.')
+      setIndyForm({ fullName:'', email:'', phone:'', licenseNumber:'' })
+      setShowAddIndependent(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Teams are branches under {company.name} - each has its own roster, its own subset of your plan basket it's authorized to sell, and its own rule for how a won inquiry gets down to one member. Independent agents appointed to you directly (not under any team) get your whole basket.</div>
+      </div>
+      <SecLabel>Teams</SecLabel>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&teams.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>No teams yet.</div>}
+      {teams.map(t=><TeamManagementCard key={t.id} company={company} team={t} plans={plans} onChanged={load}/>)}
+      {creating ? (
+        <Card style={{padding:'16px'}}>
+          <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)} placeholder="Team / branch name (e.g. Metrotown Branch)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleCreateTeam} disabled={saving||!newTeamName.trim()}>{saving?'Creating…':'Create team'}</Btn>
+          </div>
+        </Card>
+      ) : (
+        <div style={{padding:'0 16px 8px'}}><Btn variant="navy" style={{width:'100%'}} onClick={()=>setCreating(true)}>+ New team</Btn></div>
+      )}
+
+      <SecLabel>Independent agents appointed to you</SecLabel>
+      {!loading&&independents.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None yet.</div>}
+      {independents.map(a=>(
+        <Card key={a.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between'}}>
+          <span style={{fontSize:'13px'}}>{a.full_name}</span>
+          <span style={{fontSize:'11px',color:C.textMuted}}>{a.medsa_id}</span>
+        </Card>
+      ))}
+      {notice&&<div style={{fontSize:'11px',color:C.textSub,padding:'0 16px'}}>{notice}</div>}
+      {showAddIndependent ? (
+        <Card style={{padding:'16px'}}>
+          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number']].map(([k,ph])=>(
+            <input key={k} value={indyForm[k]} onChange={e=>setIndyForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+          ))}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setShowAddIndependent(false)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleAddIndependent} disabled={saving||!indyForm.email.trim()}>{saving?'Saving…':'Appoint agent'}</Btn>
+          </div>
+        </Card>
+      ) : (
+        <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setShowAddIndependent(true)}>+ Appoint an independent agent</Btn></div>
+      )}
+    </div>
+  )
+}
+
 // ── ROOT ─────────────────────────────────────────────────────────────────────
 // company: {id, name, relationshipType}. This used to be entirely
 // hardcoded to "AIA" everywhere below (a demo shell, reachable only from
@@ -504,9 +714,9 @@ function SponsoredListings({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents'}
   const isPartnered = company?.relationshipType!=='unpartnered'
-  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
     : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'claims',icon:'◇',label:'Claims'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
@@ -523,6 +733,7 @@ export default function InsuranceApp({ company, onLogout }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
+        {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
         {screen==='ads'&&isPartnered&&<SponsoredListings company={company}/>}
