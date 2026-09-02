@@ -82,6 +82,47 @@ function SubmitClaimScreen({ clinic }) {
   const [description,setDescription]=useState('')
   const [amount,setAmount]=useState('')
 
+  // Real, structured ICD-10 coding for out-of-network claims too - was
+  // always the free-text category string before, even though the same
+  // real icd10_reference table ClinicOps already searches exists and is
+  // just as reachable here.
+  const [icd10Codes,setIcd10Codes]=useState([])
+  const [icd10Search,setIcd10Search]=useState('')
+  const [icd10Open,setIcd10Open]=useState(false)
+  const [icd10Results,setIcd10Results]=useState([])
+  const [icd10Loading,setIcd10Loading]=useState(false)
+  useEffect(() => {
+    if (!icd10Search.trim()) { setIcd10Results([]); return }
+    setIcd10Loading(true)
+    const timeout = setTimeout(async () => {
+      const { data } = await supabase.from('icd10_reference').select('*')
+        .or(`code.ilike.%${icd10Search}%,label.ilike.%${icd10Search}%`).limit(8)
+      setIcd10Results(data||[])
+      setIcd10Loading(false)
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [icd10Search])
+  const [icd10Suggestions,setIcd10Suggestions]=useState([])
+  const [icd10Suggesting,setIcd10Suggesting]=useState(false)
+  const [icd10SuggestError,setIcd10SuggestError]=useState(null)
+  async function suggestIcd10() {
+    setIcd10Suggesting(true); setIcd10SuggestError(null); setIcd10Suggestions([])
+    try {
+      const res = await fetch('/api/cds/suggest_icd10', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ text: [category, description].filter(Boolean).join('. ') }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setIcd10SuggestError(data.error || 'Suggestion failed.'); return }
+      setIcd10Suggestions(data.suggestions || [])
+      if ((data.suggestions||[]).length===0) setIcd10SuggestError(data.note || 'No confident match found - search or enter manually.')
+    } catch {
+      setIcd10SuggestError('AI coding suggestion unavailable right now - pick codes manually.')
+    } finally {
+      setIcd10Suggesting(false)
+    }
+  }
+
   const [submitting,setSubmitting]=useState(false)
   const [result,setResult]=useState(null) // {status, fees, ...} | {error}
 
@@ -115,19 +156,22 @@ function SubmitClaimScreen({ clinic }) {
     setResult(null)
     const adapter = getInsuranceAdapter()
     const grossAmount = parseFloat(amount)
+    const items = icd10Codes.length>0
+      ? [{ code: icd10Codes[0].code, description: icd10Codes.map(c=>c.label).join(', '), amount: grossAmount, category, icd10Codes: icd10Codes.map(c=>c.code) }]
+      : [{ code: category, description: description || category, amount: grossAmount, category }]
     const adjudication = await adapter.adjudicateClaim({
       patientId: patient.id,
       clinicId: clinic.id,
       sourceType: 'external_clinic',
       totalGrossAmount: grossAmount,
-      items: [{ code: category, description: description || category, amount: grossAmount, category }],
+      items,
       verificationMethod: 'HKID_LOOKUP',
       verificationPayload: { hkid: hkid.trim() },
     })
     setSubmitting(false)
     setResult(adjudication)
     if (adjudication.status !== 'REJECTED' || adjudication.fees) {
-      setAmount(''); setDescription('')
+      setAmount(''); setDescription(''); setIcd10Codes([]); setIcd10Suggestions([])
       loadRecentClaims()
     }
   }
@@ -160,6 +204,44 @@ function SubmitClaimScreen({ clinic }) {
             {CLAIM_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
           <input value={description} onChange={e=>setDescription(e.target.value)} placeholder="Description (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'6px',gap:'8px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',fontWeight:600}}>ICD-10 code (optional, speeds up direct billing)</div>
+            <span onClick={category||description?suggestIcd10:undefined} style={{fontSize:'11px',fontWeight:600,color:C.green,cursor:'pointer',whiteSpace:'nowrap'}}>{icd10Suggesting?'Thinking…':'✨ Suggest codes'}</span>
+          </div>
+          {icd10SuggestError&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontStyle:'italic'}}>{icd10SuggestError}</div>}
+          {icd10Suggestions.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
+            {icd10Suggestions.filter(s=>!icd10Codes.some(x=>x.code===s.code)).map(s=>(
+              <div key={s.code} onClick={()=>{setIcd10Codes(prev=>[...prev,{code:s.code,label:s.label}]);setIcd10Suggestions(prev=>prev.filter(x=>x.code!==s.code))}} title={s.reasoning} style={{display:'flex',alignItems:'center',gap:'6px',background:C.blueLight||'#eef4ff',border:`0.5px dashed ${C.blue}`,borderRadius:'20px',padding:'6px 10px',cursor:'pointer'}}>
+                <span style={{fontWeight:700,color:C.blue,fontSize:'12px'}}>{s.code}</span>
+                <span style={{fontSize:'12px',color:C.textSub}}>{s.label}</span>
+                <span style={{fontSize:'11px',color:C.blue}}>+ add</span>
+              </div>
+            ))}
+          </div>}
+          {icd10Codes.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
+            {icd10Codes.map(c=>(
+              <div key={c.code} style={{display:'flex',alignItems:'center',gap:'6px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'20px',padding:'6px 10px'}}>
+                <span style={{fontWeight:700,color:C.green,fontSize:'12px'}}>{c.code}</span>
+                <span style={{fontSize:'12px',color:C.textSub}}>{c.label}</span>
+                <span onClick={()=>setIcd10Codes(prev=>prev.filter(x=>x.code!==c.code))} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>
+              </div>
+            ))}
+          </div>}
+          <div style={{position:'relative',marginBottom:'12px'}}>
+            <input value={icd10Search} onChange={e=>{setIcd10Search(e.target.value);setIcd10Open(true)}} onFocus={()=>setIcd10Open(true)} placeholder="Search to add an ICD-10 code…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+            {icd10Open&&icd10Search.trim()&&<div style={{position:'absolute',top:'100%',left:0,right:0,background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:200,overflowY:'auto',zIndex:20,boxShadow:'0 4px 12px rgba(0,0,0,0.1)'}}>
+              {icd10Loading&&<div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>Searching…</div>}
+              {!icd10Loading&&icd10Results.filter(c=>!icd10Codes.some(x=>x.code===c.code)).map(c=>(
+                <div key={c.code} onClick={()=>{setIcd10Codes(prev=>[...prev,c]);setIcd10Search('');setIcd10Open(false)}} style={{padding:'10px 14px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px'}}>
+                  <span style={{fontWeight:700,color:C.green}}>{c.code}</span> {c.label}
+                </div>
+              ))}
+              {!icd10Loading&&icd10Results.length===0&&
+                <div style={{padding:'10px 14px',fontSize:'12px',color:C.textMuted}}>No match in the reference set - the category above still applies normally.</div>}
+            </div>}
+          </div>
+
           <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="Amount (HK$)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
           {amount&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'12px'}}>Medsa's processing fee if approved: <strong>HK${calculatePlatformClaimFee(amount)}</strong> (2% + HK$10), charged to the insurer, never deducted from the clinic.</div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting||!amount}>{submitting?'Submitting…':'Submit claim'}</Btn>
