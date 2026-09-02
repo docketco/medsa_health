@@ -40,6 +40,16 @@ export default async function handler(req, res) {
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object
     const submissionId = session.metadata?.submission_id
+    const sponsorPlanId = session.metadata?.plan_id
+    if (sponsorPlanId) {
+      const months = parseInt(session.metadata?.months) || 1
+      const until = new Date()
+      until.setMonth(until.getMonth() + months)
+      await supabase.from('insurance_plans').update({
+        sponsored: true, sponsored_until: until.toISOString().slice(0,10),
+        sponsor_price_hkd: (session.amount_total || 0) / 100,
+      }).eq('id', sponsorPlanId)
+    }
     if (submissionId) {
       const { data: sub } = await supabase.from('home_carousel_submissions').select('*').eq('id', submissionId).maybeSingle()
       if (sub && sub.payment_status !== 'paid') {

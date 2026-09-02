@@ -54,6 +54,7 @@ export default function InsurerSignupPage() {
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'10px'}}>{result.companyName} is active</div>
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Sign in at <strong>/insurer-portal</strong> with your contact email and this temporary password - change it once you're in.</div>
           <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px',fontSize:'16px',fontWeight:700,letterSpacing:'1px'}}>{result.tempPassword}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'12px'}}>{result.emailSent ? `Also emailed to ${contactEmail}.` : `Not emailed (${result.emailReason || 'email not configured'}) - save this password now.`}</div>
         </> : <>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'10px'}}>Application received</div>
           <div style={{fontSize:'13px',color:C.textSub}}>{result.companyName} is recorded as a pending partnership application. Medsa will reach out to your contact email to complete onboarding - no login exists until then.</div>
