@@ -346,7 +346,7 @@ export function AgentClaimView({ claimRef }) {
       </div>
       <SecLabel>Claim details</SecLabel>
       <Card style={{padding:'0 16px'}}>
-        {[['Claim ID',claim.claim_ref],['Patient',claim.patients?.full_name],['Medsa ID',claim.patients?.medsa_id],['Insurer',claim.insurance_plans?.company_name],['Total amount',`HK$${claim.amount}`],['Insurer covers',`HK$${claim.insurer_covered_amount}`],['Patient pays',`HK$${(claim.patient_copay_amount||0)+(claim.deductible_applied||0)}`]].map(([l,v],i,arr)=>(
+        {[['Claim ID',claim.claim_ref],['Patient',claim.patients?.full_name],['Medsa ID',claim.patients?.medsa_id],['Insurer',claim.insurance_plans?.company_name],claim.icd10_codes?['ICD-10',claim.icd10_codes]:null,['Total amount',`HK$${claim.amount}`],['Insurer covers',`HK$${claim.insurer_covered_amount}`],['Patient pays',`HK$${(claim.patient_copay_amount||0)+(claim.deductible_applied||0)}`]].filter(Boolean).map(([l,v],i,arr)=>(
           <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,textAlign:'right',maxWidth:'60%'}}>{v||'—'}</span></div>
         ))}
       </Card>

@@ -1224,6 +1224,26 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [icd10Open,setIcd10Open]=useState(false)
   const [icd10Results,setIcd10Results]=useState([])
   const [icd10Loading,setIcd10Loading]=useState(false)
+  const [icd10Suggestions,setIcd10Suggestions]=useState([])
+  const [icd10Suggesting,setIcd10Suggesting]=useState(false)
+  const [icd10SuggestError,setIcd10SuggestError]=useState(null)
+  async function suggestIcd10() {
+    setIcd10Suggesting(true); setIcd10SuggestError(null); setIcd10Suggestions([])
+    try {
+      const res = await fetch('/api/cds/suggest_icd10', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ text: [diagnosis, notes].filter(Boolean).join('. ') }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setIcd10SuggestError(data.error || 'Suggestion failed.'); return }
+      setIcd10Suggestions(data.suggestions || [])
+      if ((data.suggestions||[]).length===0) setIcd10SuggestError(data.note || 'No confident match found - search or enter manually.')
+    } catch {
+      setIcd10SuggestError('AI coding suggestion unavailable right now - pick codes manually.')
+    } finally {
+      setIcd10Suggesting(false)
+    }
+  }
   const [weightKg,setWeightKg]=useState('')
   const [heightCm,setHeightCm]=useState('')
   const [lastVitals,setLastVitals]=useState(null)
@@ -1862,7 +1882,20 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
 
       {weightKg&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>Using weight {weightKg}kg (set in Weight / Height above) for dose-safety reference ranges below.</div>}
 
-      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>ICD-10 codes - structured coding, required for direct-billing claims. A visit can have more than one.</div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'6px',gap:'8px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted}}>ICD-10 codes - structured coding, required for direct-billing claims. A visit can have more than one.</div>
+        <span onClick={diagnosis||notes?suggestIcd10:undefined} style={{fontSize:'11px',fontWeight:600,color:diagnosis||notes?C.green:C.textMuted,cursor:diagnosis||notes?'pointer':'not-allowed',whiteSpace:'nowrap',flexShrink:0}}>{icd10Suggesting?'Thinking…':'✨ Suggest codes'}</span>
+      </div>
+      {icd10SuggestError&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontStyle:'italic'}}>{icd10SuggestError}</div>}
+      {icd10Suggestions.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {icd10Suggestions.filter(s=>!icd10Codes.some(x=>x.code===s.code)).map(s=>(
+          <div key={s.code} onClick={()=>{setIcd10Codes(prev=>[...prev,{code:s.code,label:s.label}]);setIcd10Suggestions(prev=>prev.filter(x=>x.code!==s.code))}} title={s.reasoning} style={{display:'flex',alignItems:'center',gap:'6px',background:C.blueLight||'#eef4ff',border:`0.5px dashed ${C.blue}`,borderRadius:'20px',padding:'6px 10px',cursor:'pointer'}}>
+            <span style={{fontWeight:700,color:C.blue,fontSize:'12px'}}>{s.code}</span>
+            <span style={{fontSize:'12px',color:C.textSub}}>{s.label}</span>
+            <span style={{fontSize:'11px',color:C.blue}}>+ add</span>
+          </div>
+        ))}
+      </div>}
       {icd10Codes.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
         {icd10Codes.map(c=>(
           <div key={c.code} style={{display:'flex',alignItems:'center',gap:'6px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'20px',padding:'6px 10px'}}>
@@ -5915,17 +5948,23 @@ function ClaimsScreen({ onNavPayment }) {
     loadAffiliations()
   }, [selectedPatient?.id])
 
-  const [pendingMedicalRecordId,setPendingMedicalRecordId]=useState(null)
+  const [pendingRecord,setPendingRecord]=useState(null)
   useEffect(() => {
-    if (!selectedPatient?.id) { setPendingMedicalRecordId(null); return }
+    if (!selectedPatient?.id) { setPendingRecord(null); return }
     async function loadRecord() {
-      const { data } = await supabase.from('medical_records').select('id')
+      // Also pulls icd10_code/diagnosis now - this is what the claim's
+      // items get built from below, instead of the generic claim-type
+      // string every claim used to submit regardless of the real coding
+      // already captured on the visit.
+      const { data } = await supabase.from('medical_records').select('id, icd10_code, diagnosis')
         .eq('patient_id', selectedPatient.id).is('insurance_claim_id', null)
         .order('date_of_record', { ascending: false }).limit(1).maybeSingle()
-      setPendingMedicalRecordId(data?.id || null)
+      setPendingRecord(data || null)
     }
     loadRecord()
   }, [selectedPatient?.id])
+  const pendingMedicalRecordId = pendingRecord?.id || null
+  const pendingIcd10Codes = (pendingRecord?.icd10_code || '').split(',').map(s=>s.trim()).filter(Boolean)
 
   const affiliatedPlans = affiliatedPolicies ? plans.filter(pl => affiliatedPolicies.some(ap => ap.plan_id === pl.id)) : plans
 
@@ -6053,8 +6092,9 @@ function ClaimsScreen({ onNavPayment }) {
           {[
             {label:'Patient consent on file', ok:selectedPatient.consented},
             {label:'Insurance plan selected', ok:!!selectedPlan},
-            {label:'Consultation record attached', ok:true},
-            {label:'Diagnosis on file', ok:true},
+            {label:'Consultation record attached', ok:!!pendingRecord},
+            {label:'Diagnosis on file', ok:!!pendingRecord?.diagnosis},
+            {label:'ICD-10 code on file', ok:pendingIcd10Codes.length>0},
           ].map((item,i,arr)=>(
             <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
               <span style={{color:item.ok?C.green:C.red,fontSize:'13px'}}>{item.ok?'\u2713':'\u2715'}</span>
@@ -6074,10 +6114,17 @@ function ClaimsScreen({ onNavPayment }) {
           <Btn variant="primary" onClick={async ()=>{
             setAdjudicating(true)
             const adapter = getInsuranceAdapter(selectedPlan.company_name)
+            // Real ICD-10 codes already captured on the visit go on the
+            // claim itself now - was always the generic claim-type string
+            // ("outpatient" etc.) before, even when the doctor had coded
+            // the diagnosis properly on the consultation.
+            const items = pendingIcd10Codes.length>0
+              ? [{ code: pendingIcd10Codes[0], description: pendingRecord.diagnosis || pendingIcd10Codes.join(', '), amount: parseFloat(amount), category: claimType, icd10Codes: pendingIcd10Codes }]
+              : [{ code: claimType, description: claimType, amount: parseFloat(amount) }]
             const result = await adapter.adjudicateClaim({
               patientId: selectedPatient.id, policyNumber: selectedPlan.id,
               clinicId: 'clinic_ops', totalGrossAmount: parseFloat(amount),
-              items: [{ code: claimType, description: claimType, amount: parseFloat(amount) }],
+              items,
               medicalRecordId: pendingMedicalRecordId || undefined,
             })
             setAdjudicationResult(result)
