@@ -360,6 +360,8 @@ function PartnersTab() {
   const [managingPlansFor, setManagingPlansFor] = useState(null)
   const [renewingId, setRenewingId] = useState(null)
   const [renewDate, setRenewDate] = useState('')
+  const [approvingId, setApprovingId] = useState(null)
+  const [approvedPassword, setApprovedPassword] = useState(null)
 
   const [uploadError, setUploadError] = useState(null)
 
@@ -420,6 +422,26 @@ function PartnersTab() {
     load()
   }
 
+  // Self-serve partnered applications (see /insurer-signup) land as
+  // status='pending' with no password set yet - approving here is what
+  // actually issues their first login, via the same server-side
+  // set_insurance_company_password flow create_tpa_clinic.js uses.
+  async function approveInsurer(company) {
+    setApprovingId(company.id)
+    setApprovedPassword(null)
+    try {
+      const res = await fetch('/api/admin/approve_insurer', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      const data = await res.json()
+      if (data.status === 'OK') setApprovedPassword({ id: company.id, password: data.tempPassword })
+    } finally {
+      setApprovingId(null)
+      load()
+    }
+  }
+
   async function handleRenew(company) {
     if (!renewDate) return
     await supabase.from('insurance_companies').update({
@@ -470,17 +492,23 @@ function PartnersTab() {
         const daysLeft = daysUntil(c.contract_expiry_date)
         const expiringSoon = daysLeft!=null && daysLeft<=30
         return (
-        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${expiringSoon?C.amber:C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+        <div key={c.id} style={{background:C.cream,border:`0.5px solid ${c.status==='pending'?C.amber:expiringSoon?C.amber:C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name}{c.contact_email?` · ${c.contact_email}`:''}</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{c.relationship_type==='unpartnered'?'TPA-only':'Partnered'}{c.self_serve?' · self-serve':''}</div>
             </div>
             <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
-              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:c.status==='pending'?C.amberLight:C.card,color:c.status==='active'?C.green:c.status==='pending'?C.amber:C.textMuted,fontWeight:600}}>{c.status}</span>
               {c.newInquiries>0&&<span onClick={()=>setManagingPlansFor(c)} style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:C.amberLight,color:C.amber,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>{c.newInquiries} new inquir{c.newInquiries===1?'y':'ies'}</span>}
             </div>
           </div>
+          {c.status==='pending'&&<div style={{marginBottom:'8px'}}>
+            {approvedPassword?.id===c.id
+              ? <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px'}}>Approved. Temp password: <strong style={{letterSpacing:'0.5px'}}>{approvedPassword.password}</strong> - send this to {c.contact_email}.</div>
+              : <button onClick={()=>approveInsurer(c)} disabled={approvingId===c.id} style={{width:'100%',padding:'10px',background:C.amber,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{approvingId===c.id?'Approving…':'Approve & activate - issues login'}</button>}
+          </div>}
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
             : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
