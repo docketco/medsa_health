@@ -40,5 +40,5 @@ export default function InstitutionPage() {
   const [portal, setPortal] = useState(null)
   if (!portal)                return <PortalSelector onSelect={setPortal}/>
   if (portal === 'institution') return <InstitutionApp/>
-  if (portal === 'insurance')   return <InsuranceApp/>
+  if (portal === 'insurance')   return <InsuranceApp company={{name:'AIA', relationshipType:'partnered'}}/>
 }

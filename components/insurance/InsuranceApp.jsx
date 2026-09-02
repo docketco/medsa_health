@@ -31,13 +31,13 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
 }
 
 // ── INSURANCE DASHBOARD ───────────────────────────────────────────────────────
-function InsuranceDashboard({ onNav }) {
+function InsuranceDashboard({ onNav, company }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.65,letterSpacing:'1px',textTransform:'uppercase'}}>AIA Insurance — Partner dashboard</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Good morning, AIA Admin</div>
-        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>Partner since Jan 2024 · 3 plans listed</div>
+        <div style={{fontSize:'11px',opacity:0.65,letterSpacing:'1px',textTransform:'uppercase'}}>{company?.name||'Insurance'} — Partner dashboard</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Welcome back</div>
+        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}</div>
       </div>
       <SecLabel>Performance</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
@@ -48,12 +48,14 @@ function InsuranceDashboard({ onNav }) {
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
-        {[
+        {(company?.relationshipType==='unpartnered' ? [
+          {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
+        ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
           {key:'analytics',icon:'◈',label:'Analytics',sub:'Views, referrals, conversion'},
-        ].map(item=>(
+        ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
             <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
@@ -70,7 +72,7 @@ function InsuranceDashboard({ onNav }) {
 }
 
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
-function PlanManager() {
+function PlanManager({ company }) {
   const [plans,setPlans]=useState([])
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
@@ -80,7 +82,7 @@ function PlanManager() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name','AIA').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('company_name',company.name).order('created_at',{ascending:false})
     setPlans(data||[])
     setLoading(false)
   }
@@ -101,7 +103,7 @@ function PlanManager() {
     if (!form.plan_name || validTiers.length===0) return
     setSaving(true)
     const { data: newPlan } = await supabase.from('insurance_plans').insert({
-      company_name: 'AIA', plan_name: form.plan_name, plan_type: form.plan_type || null,
+      company_name: company.name, plan_name: form.plan_name, plan_type: form.plan_type || null,
       key_benefits: form.key_benefits || null, status: 'active',
     }).select().maybeSingle()
     if (newPlan) {
@@ -187,7 +189,7 @@ function PlanManager() {
 // agent sees via their emailed /claim-review link. Tapping a card opens
 // that same real AgentClaimView right here instead of only being reachable
 // via a link, so this dashboard isn't a second, disconnected surface.
-function InsuranceAdminClaimsLog({ onOpenClaim }) {
+function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
   const [filter,setFilter]=useState('All')
   const [claims,setClaims]=useState([])
   const [loading,setLoading]=useState(true)
@@ -195,18 +197,19 @@ function InsuranceAdminClaimsLog({ onOpenClaim }) {
   useEffect(() => {
     async function load() {
       setLoading(true)
-      // AIA-scoped, matching PlanManager's own company_name filter above -
-      // this dashboard is a single insurer's view, not a cross-insurer one.
+      // Scoped to the logged-in company, matching PlanManager's own
+      // company_name filter above - this dashboard is a single insurer's
+      // view, not a cross-insurer one.
       const { data } = await supabase.from('insurance_claims')
         .select('*, patients(full_name), insurance_plans!inner(plan_name, company_name)')
-        .eq('insurance_plans.company_name', 'AIA')
+        .eq('insurance_plans.company_name', company.name)
         .order('submitted_at', { ascending: false })
         .limit(50)
       setClaims(data||[])
       setLoading(false)
     }
     load()
-  }, [])
+  }, [company.name])
 
   const statusMeta = {
     approved: {label:'Approved', type:'ok'},
@@ -435,11 +438,21 @@ function SponsoredListings() {
 }
 
 // ── ROOT ─────────────────────────────────────────────────────────────────────
-export default function InsuranceApp() {
+// company: {id, name, relationshipType}. This used to be entirely
+// hardcoded to "AIA" everywhere below (a demo shell, reachable only from
+// behind Medsa's own admin password - see pages/institution.jsx's own
+// comment about that) - now driven by whichever real insurer actually
+// logged in via pages/insurer-portal.jsx. An unpartnered company (TPA
+// service only, no plan/client management) gets a trimmed nav with just
+// the claims log - the fuller Plans/Sponsored/Analytics screens are a
+// partnered-only concern.
+export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
   const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics'}
-  const navItems=[{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+  const isPartnered = company?.relationshipType!=='unpartnered'
+  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'claims',icon:'◇',label:'Claims'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -449,15 +462,16 @@ export default function InsuranceApp() {
         {screen!=='dashboard'&&<button onClick={()=>setScreen(screen==='claim-detail'?'claims':'dashboard')} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>}
         <MedsaLogo height={20}/>
         <span style={{flex:1,fontSize:'13px',color:'rgba(255,255,255,0.7)',fontWeight:500}}>{titles[screen]}</span>
-        <span style={{fontSize:'10px',background:C.navyLight,color:C.navy,padding:'3px 9px',borderRadius:'20px',fontWeight:600}}>⬡ AIA</span>
+        <span style={{fontSize:'10px',background:C.navyLight,color:C.navy,padding:'3px 9px',borderRadius:'20px',fontWeight:600}}>⬡ {company?.name||'Preview'}</span>
+        {onLogout&&<span onClick={onLogout} style={{fontSize:'11px',color:'rgba(255,255,255,0.6)',cursor:'pointer'}}>Sign out</span>}
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
-        {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen}/>}
-        {screen==='plans'&&<PlanManager/>}
-        {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim}/>}
+        {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
+        {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
+        {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
-        {screen==='ads'&&<SponsoredListings/>}
-        {screen==='analytics'&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
+        {screen==='ads'&&isPartnered&&<SponsoredListings/>}
+        {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
         {navItems.map(item=>(
