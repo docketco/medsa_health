@@ -435,7 +435,7 @@ function PartnersTab() {
         body: JSON.stringify({ companyId: company.id }),
       })
       const data = await res.json()
-      if (data.status === 'OK') setApprovedPassword({ id: company.id, password: data.tempPassword })
+      if (data.status === 'OK') setApprovedPassword({ id: company.id, password: data.tempPassword, emailSent: data.emailSent, emailReason: data.emailReason })
     } finally {
       setApprovingId(null)
       load()
@@ -506,7 +506,7 @@ function PartnersTab() {
           </div>
           {c.status==='pending'&&<div style={{marginBottom:'8px'}}>
             {approvedPassword?.id===c.id
-              ? <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px'}}>Approved. Temp password: <strong style={{letterSpacing:'0.5px'}}>{approvedPassword.password}</strong> - send this to {c.contact_email}.</div>
+              ? <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px'}}>Approved. Temp password: <strong style={{letterSpacing:'0.5px'}}>{approvedPassword.password}</strong>{approvedPassword.emailSent ? ` - emailed to ${c.contact_email}.` : ` - not emailed (${approvedPassword.emailReason||'email not configured'}), send it to ${c.contact_email} yourself.`}</div>
               : <button onClick={()=>approveInsurer(c)} disabled={approvingId===c.id} style={{width:'100%',padding:'10px',background:C.amber,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{approvingId===c.id?'Approving…':'Approve & activate - issues login'}</button>}
           </div>}
           {c.contract_expiry_date

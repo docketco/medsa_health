@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
+import { sendEmail } from '../../../lib/email'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -23,5 +24,15 @@ export default async function handler(req, res) {
   const { error: pwErr } = await supabase.rpc('set_insurance_company_password', { p_company_id: company.id, p_new_password: tempPassword })
   if (pwErr) return res.status(500).json({ status: 'ERROR', message: `Approved but password could not be set: ${pwErr.message}` })
 
-  return res.status(200).json({ status: 'OK', companyName: company.name, tempPassword })
+  let emailResult = { sent: false, reason: 'No contact email on file.' }
+  if (company.contact_email) {
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
+    emailResult = await sendEmail({
+      to: company.contact_email,
+      subject: 'Medsa Health - your partnership is approved',
+      html: `<p>Hi ${company.contact_name || 'there'},</p><p>${company.name}'s partnership with Medsa is approved and active.</p><p>Sign in at <a href="${siteUrl}/insurer-portal">${siteUrl}/insurer-portal</a> with:</p><p>Email: ${company.contact_email}<br/>Temporary password: <strong>${tempPassword}</strong></p><p>Please change this password once you're in.</p>`,
+    })
+  }
+
+  return res.status(200).json({ status: 'OK', companyName: company.name, tempPassword, emailSent: emailResult.sent, emailReason: emailResult.reason })
 }

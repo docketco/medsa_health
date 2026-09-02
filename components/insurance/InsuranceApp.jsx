@@ -63,10 +63,18 @@ function InsuranceDashboard({ onNav, company }) {
           </div>
         ))}
       </div>
-      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px'}}>
-        <div style={{fontSize:'12px',color:C.brown,fontWeight:600,marginBottom:'4px'}}>How Medsa partner listings work</div>
-        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Claims submitted via Medsa are routed to your existing system via webhook.</div>
-      </div>
+      {company?.relationshipType==='unpartnered' ? (
+        <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'14px',padding:'16px'}}>
+          <div style={{fontSize:'13px',color:'#fff',fontWeight:600,marginBottom:'6px'}}>⬡ Want a sponsored spot in patient search?</div>
+          <div style={{fontSize:'12px',color:'rgba(255,255,255,0.8)',lineHeight:1.6,marginBottom:'12px'}}>Sponsored placements, plan listings, and client management are part of a full Medsa Partnership - a closer, integrated relationship beyond claims processing. Upgrade to get your plans in front of patients directly.</div>
+          <a href="/insurer-signup" style={{display:'block',textAlign:'center',background:'#fff',color:C.navy,borderRadius:'8px',padding:'10px',fontSize:'13px',fontWeight:600,textDecoration:'none'}}>Apply for a Partnership</a>
+        </div>
+      ) : (
+        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px'}}>
+          <div style={{fontSize:'12px',color:C.brown,fontWeight:600,marginBottom:'4px'}}>How Medsa partner listings work</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Claims submitted via Medsa are routed to your existing system via webhook.</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -403,35 +411,82 @@ export function AgentClaimView({ claimRef }) {
 }
 
 // ── SPONSORED LISTINGS ────────────────────────────────────────────────────────
-function SponsoredListings() {
+// Self-serve, pay-and-push - no Medsa approval step (unlike the
+// carousel/newsletter sponsor flow). Real plans, real Stripe Checkout,
+// real expiry - was entirely hardcoded sample data with a "Launch
+// sponsorship" button that submitted nothing.
+function SponsoredListings({ company }) {
+  const [plans,setPlans]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [selectedPlanId,setSelectedPlanId]=useState('')
+  const [months,setMonths]=useState(3)
+  const [starting,setStarting]=useState(false)
+  const [error,setError]=useState(null)
+  const RATE = 3000
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('id, plan_name, sponsored, sponsored_until, sponsor_price_hkd').eq('company_name', company.name).order('plan_name')
+    setPlans(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.name])
+
+  const today = new Date().toISOString().slice(0,10)
+  const active = plans.filter(p => p.sponsored && p.sponsored_until >= today)
+  const available = plans.filter(p => !(p.sponsored && p.sponsored_until >= today))
+
+  async function handleLaunch() {
+    if (!selectedPlanId) return
+    setStarting(true); setError(null)
+    try {
+      const res = await fetch('/api/insurer/create_sponsor_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ planId: selectedPlanId, companyId: company.id, months }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setError(data.message || 'Could not start checkout.')
+    } catch {
+      setError('Something went wrong - please try again.')
+    }
+    setStarting(false)
+  }
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px'}}>
         <div style={{fontSize:'14px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>⬡ Sponsored placements</div>
-        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Sponsored plans appear at the top of patient searches and are included in Medsa's AI recommendations. You set a monthly budget and pay per referral click.</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Sponsored plans get priority placement in patient searches and AI recommendations for the period you pay for. HK${RATE.toLocaleString()}/month, charged upfront for the duration you pick - no approval needed, it goes live as soon as payment clears.</div>
       </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       <SecLabel>Active sponsorships</SecLabel>
-      {[{plan:'AIA Prime Care',placement:'AI recommendations + search top',budget:'HK$5,000/mo',clicks:284,cpc:'HK$17.6'},{plan:'AIA Critical Rider',placement:'Search top only',budget:'HK$2,000/mo',clicks:91,cpc:'HK$22.0'}].map((s,i)=>(
-        <Card key={i} style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{s.plan}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{s.placement}</div>
-          <div style={{display:'flex',gap:'16px',fontSize:'12px',marginBottom:'12px'}}>
-            <span style={{color:C.textSub}}>Budget: <strong style={{color:C.text}}>{s.budget}</strong></span>
-            <span style={{color:C.textSub}}>Clicks: <strong style={{color:C.text}}>{s.clicks}</strong></span>
-            <span style={{color:C.textSub}}>CPC: <strong style={{color:C.text}}>{s.cpc}</strong></span>
-          </div>
-          <Btn style={{width:'100%',fontSize:'12px'}}>Edit sponsorship</Btn>
+      {!loading&&active.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None right now.</div>}
+      {active.map(p=>(
+        <Card key={p.id} style={{padding:'14px 16px'}}>
+          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{p.plan_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub}}>Sponsored until {new Date(p.sponsored_until).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{p.sponsor_price_hkd?` · paid HK$${p.sponsor_price_hkd.toLocaleString()}`:''}</div>
         </Card>
       ))}
-      <SecLabel>Add sponsorship to a plan</SecLabel>
+      <SecLabel>Sponsor a plan</SecLabel>
       <Card style={{padding:'16px'}}>
-        {[['Select plan','AIA Prime Care+'],['Placement','AI recommendations'],['Monthly budget','HK$3,000']].map(([l,ph])=>(
-          <div key={l} style={{marginBottom:'12px'}}>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{l}</div>
-            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit'}} placeholder={ph}/>
-          </div>
-        ))}
-        <Btn variant="navy" style={{width:'100%'}}>Launch sponsorship</Btn>
+        {available.length===0
+          ? <div style={{fontSize:'12px',color:C.textMuted}}>{plans.length===0?'Add a plan under "Manage plans" first.':'All your plans are already sponsored.'}</div>
+          : <>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Select plan</div>
+            <select value={selectedPlanId} onChange={e=>setSelectedPlanId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}>
+              <option value="">Choose a plan…</option>
+              {available.map(p=><option key={p.id} value={p.id}>{p.plan_name}</option>)}
+            </select>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Duration</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+              {[1,3,6].map(m=>(
+                <div key={m} onClick={()=>setMonths(m)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:months===m?C.navy:C.beige,color:months===m?'#fff':C.text,border:`0.5px solid ${months===m?C.navy:C.border}`}}>{m} mo · HK${(RATE*m).toLocaleString()}</div>
+              ))}
+            </div>
+            {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+            <Btn variant="navy" style={{width:'100%'}} onClick={handleLaunch} disabled={!selectedPlanId||starting}>{starting?'Starting checkout…':`Pay HK$${(RATE*months).toLocaleString()} & launch`}</Btn>
+          </>}
       </Card>
     </div>
   )
@@ -470,7 +525,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
-        {screen==='ads'&&isPartnered&&<SponsoredListings/>}
+        {screen==='ads'&&isPartnered&&<SponsoredListings company={company}/>}
         {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
