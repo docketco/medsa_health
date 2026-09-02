@@ -203,17 +203,25 @@ function PoliciesScreen({ agent, policies, onNewPolicy }) {
 // Phase 1: manual entry. The AI-assisted entry mentioned for later would
 // pre-fill this form from a signed contract document once that pipeline
 // exists - this form is built so that slots in without changing structure.
-function NewPolicyScreen({ agent, onBack, onSaved }) {
-  const [patientSearch,setPatientSearch]=useState('')
-  const [foundPatient,setFoundPatient]=useState(null)
+function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
+  const [patientSearch,setPatientSearch]=useState(prefillInquiry?.applicant_full_name || '')
+  const [foundPatient,setFoundPatient]=useState(prefillInquiry?.patient_id ? { id: prefillInquiry.patient_id, full_name: prefillInquiry.applicant_full_name, medsa_id: null } : null)
   const [insurers,setInsurers]=useState([])
   const [selectedInsurer,setSelectedInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:null)
-  const [planName,setPlanName]=useState('')
+  const [planName,setPlanName]=useState(prefillInquiry?.insurance_plans?.plan_name || '')
   const [policyNumber,setPolicyNumber]=useState('')
   const [premium,setPremium]=useState('')
   const [startDate,setStartDate]=useState('')
   const [renewalDate,setRenewalDate]=useState('')
   const [status,setStatus]=useState('quote')
+  // Referral fee to Medsa - only relevant when this policy converts a
+  // real inquiry (an unsolicited manually-entered policy has no referral
+  // to pay a fee for). broker_commission_hkd is self-reported - Medsa's
+  // system has no way to know an insurer's real commission - but once
+  // entered, referral_fee_hkd is capped at 50% of it, matching the
+  // Insurance Authority's published referral-fee benchmark.
+  const [brokerCommission,setBrokerCommission]=useState('')
+  const [referralFee,setReferralFee]=useState('')
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
 
@@ -222,6 +230,10 @@ function NewPolicyScreen({ agent, onBack, onSaved }) {
       supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
     }
   }, [agent.agent_type])
+
+  const commissionNum = parseFloat(brokerCommission) || 0
+  const referralFeeNum = parseFloat(referralFee) || 0
+  const referralFeeExceedsCap = commissionNum > 0 && referralFeeNum > commissionNum * 0.5
 
   async function searchPatient() {
     if (!patientSearch.trim()) return
@@ -245,6 +257,9 @@ function NewPolicyScreen({ agent, onBack, onSaved }) {
         premium: parseFloat(premium) || null,
         start_date: startDate || null,
         renewal_date: renewalDate || null,
+        inquiry_id: prefillInquiry?.id || null,
+        broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
+        referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
       })
       if (insErr) throw insErr
       onSaved()
@@ -259,6 +274,8 @@ function NewPolicyScreen({ agent, onBack, onSaved }) {
     <PageWrap maxWidth={560}>
       <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>Back</div>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Issue Policy / Quote</h2>
+
+      {prefillInquiry&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.text,lineHeight:1.5}}>Converting the plan inquiry from <strong>{prefillInquiry.applicant_full_name||'this applicant'}</strong> - saving below links this policy back to it, closing the loop for referral-fee tracking.</div>}
 
       <SecLabel>Patient</SecLabel>
       <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
@@ -300,12 +317,22 @@ function NewPolicyScreen({ agent, onBack, onSaved }) {
         ))}
       </div>
 
+      {prefillInquiry&&<>
+        <SecLabel>Referral fee owed to Medsa (optional)</SecLabel>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>Enter your real commission on this policy and Medsa's fee, if you're ready to - the fee is capped at 50% of commission (the Insurance Authority's own referral-fee benchmark). Leave blank to sort out later; Medsa admin can also fill this in from their side.</div>
+        <div style={{display:'flex',gap:'10px',marginBottom:'8px'}}>
+          <input value={brokerCommission} onChange={e=>setBrokerCommission(e.target.value)} type="number" placeholder="Your commission (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={referralFee} onChange={e=>setReferralFee(e.target.value)} type="number" placeholder="Referral fee to Medsa (HK$)" style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        {referralFeeExceedsCap&&<div style={{fontSize:'11px',color:C.red,marginBottom:'12px'}}>That's more than 50% of the commission entered (HK${(commissionNum*0.5).toFixed(0)} max) - the IA's referral-fee benchmark.</div>}
+      </>}
+
       <div style={{background:C.blueLight,borderRadius:'8px',padding:'10px 14px',marginBottom:'16px',fontSize:'11px',color:C.blue,lineHeight:1.5}}>
         {'\u25c7'} Manual entry for now. Once a contract is signed and written up, this form is designed to be pre-filled automatically from that document in a future update.
       </div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||!planName||(agent.agent_type==='independent'&&!selectedInsurer)}>{saving?'Saving...':'Save policy'}</Btn>
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||!planName||(agent.agent_type==='independent'&&!selectedInsurer)||referralFeeExceedsCap}>{saving?'Saving...':'Save policy'}</Btn>
     </PageWrap>
   )
 }
@@ -581,9 +608,10 @@ function InquiryMessageThread({ inquiry, agentName }) {
   )
 }
 
-function PlanInquiriesScreen({ agent }) {
+function PlanInquiriesScreen({ agent, onConvert }) {
   const [unclaimed,setUnclaimed]=useState([])
   const [mine,setMine]=useState([])
+  const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Set())
   const [loading,setLoading]=useState(true)
   const [claimingId,setClaimingId]=useState(null)
   const [claimNotice,setClaimNotice]=useState(null)
@@ -597,6 +625,10 @@ function PlanInquiriesScreen({ agent }) {
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
     setMine(mineRows||[])
+    // Which claimed inquiries already converted to a real policy - so
+    // "Convert to policy" only ever shows once, not every visit.
+    const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
+    setConvertedInquiryIds(new Set((convertedRows||[]).map(r=>r.inquiry_id)))
     setLoading(false)
   }
   useEffect(() => { load() }, [agent.id])
@@ -654,7 +686,12 @@ function PlanInquiriesScreen({ agent }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
               </div>
-              {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
+              <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px'}}>
+                {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
+                {convertedInquiryIds.has(i.id)
+                  ? <Badge text="Converted to policy" type="ok"/>
+                  : <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>}
+              </div>
             </div>
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
@@ -837,6 +874,7 @@ function ReferralsScreen({ agent }) {
 export default function AgentApp() {
   const [agent,setAgent]=useState(null)
   const [screen,setScreen]=useState('overview')
+  const [prefillInquiry,setPrefillInquiry]=useState(null)
   const [policies,setPolicies]=useState([])
   const [inquiries,setInquiries]=useState([])
   const [newInquiryCount,setNewInquiryCount]=useState(0)
@@ -889,10 +927,10 @@ export default function AgentApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
         {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries}/>}
-        {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>setScreen('newpolicy')}/>}
-        {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} onBack={()=>setScreen('policies')} onSaved={()=>{loadData(agent);setScreen('policies')}}/>}
+        {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}}/>}
+        {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
-        {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent}/>}
+        {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent} onConvert={(inq)=>{setPrefillInquiry(inq);setScreen('newpolicy')}}/>}
         {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
         {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}

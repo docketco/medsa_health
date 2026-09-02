@@ -557,7 +557,17 @@ function CompanyPlansManager({ company, onBack }) {
     const planIds = (data||[]).map(p=>p.id)
     if (planIds.length>0) {
       const { data: inq } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name), agents:claimed_by_agent_id(name)').in('plan_id', planIds).order('created_at',{ascending:false})
-      setInquiries(inq||[])
+      // Referral-fee ledger: which of these inquiries actually converted
+      // to a real policy, and what's owed for it. inquiry_id only gets
+      // set when an agent uses "Convert to policy" (see AgentApp.jsx) -
+      // an inquiry with no linked policy here just hasn't converted yet.
+      const inqIds = (inq||[]).map(i=>i.id)
+      let policiesByInquiry = {}
+      if (inqIds.length>0) {
+        const { data: pol } = await supabase.from('agent_policies').select('id, inquiry_id, broker_commission_hkd, referral_fee_hkd, referral_fee_status').in('inquiry_id', inqIds)
+        policiesByInquiry = Object.fromEntries((pol||[]).map(p=>[p.inquiry_id, p]))
+      }
+      setInquiries((inq||[]).map(i => ({ ...i, policy: policiesByInquiry[i.id] || null })))
     } else {
       setInquiries([])
     }
@@ -567,6 +577,17 @@ function CompanyPlansManager({ company, onBack }) {
 
   async function markContacted(inq) {
     await supabase.from('plan_inquiries').update({ status:'contacted' }).eq('id', inq.id)
+    load()
+  }
+
+  async function saveReferralFee(policyId, hkd) {
+    await supabase.from('agent_policies').update({ referral_fee_hkd: parseFloat(hkd) || null }).eq('id', policyId)
+    load()
+  }
+
+  async function advanceReferralFeeStatus(policyId, currentStatus) {
+    const next = currentStatus==='unbilled' ? 'invoiced' : currentStatus==='invoiced' ? 'paid' : 'unbilled'
+    await supabase.from('agent_policies').update({ referral_fee_status: next }).eq('id', policyId)
     load()
   }
 
@@ -653,6 +674,12 @@ function CompanyPlansManager({ company, onBack }) {
             {inq.status==='new'
               ? <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
               : <div style={{marginTop:'6px',fontSize:'11px',color:C.green}}>✓ Contacted</div>}
+            {inq.policy&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+              <span style={{fontSize:'11px',color:C.textMuted}}>Converted to policy - referral fee:</span>
+              <input type="number" defaultValue={inq.policy.referral_fee_hkd||''} onBlur={e=>saveReferralFee(inq.policy.id, e.target.value)} placeholder="HK$" style={{width:80,padding:'5px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              {inq.policy.broker_commission_hkd&&<span style={{fontSize:'11px',color:C.textMuted}}>(commission HK${inq.policy.broker_commission_hkd}, cap HK${(inq.policy.broker_commission_hkd*0.5).toFixed(0)})</span>}
+              <span onClick={()=>advanceReferralFeeStatus(inq.policy.id, inq.policy.referral_fee_status)} style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',cursor:'pointer',fontWeight:600,background:inq.policy.referral_fee_status==='paid'?C.greenLight:inq.policy.referral_fee_status==='invoiced'?C.amberLight:C.card,color:inq.policy.referral_fee_status==='paid'?C.green:inq.policy.referral_fee_status==='invoiced'?C.amber:C.textMuted}}>{inq.policy.referral_fee_status} - tap to advance</span>
+            </div>}
           </div>
         ))}
       </>}
