@@ -41,57 +41,44 @@ function daysUntil(dateStr) {
 // Captive agents belong to one insurer (like a doctor belongs to one
 // clinic). Independent agents are standalone and can hold policies with
 // multiple insurers at once - their view aggregates across all of them.
+// Real login - this used to be "pick your name off a public list of
+// every agent in the system, type a PIN" with the PIN never actually
+// checked (Sign in fired regardless of what was typed). Same
+// email+password pattern already fixed this session for external
+// clinics and insurance companies.
 function AgentLogin({ onLogin }) {
-  const [agents,setAgents]=useState([])
-  const [loading,setLoading]=useState(true)
-  const [selected,setSelected]=useState(null)
-  const [pin,setPin]=useState('')
+  const [email,setEmail]=useState('')
+  const [password,setPassword]=useState('')
+  const [checking,setChecking]=useState(false)
+  const [error,setError]=useState(null)
 
-  useEffect(() => {
-    async function load() {
-      const { data } = await supabase.from('agents').select('*, institutions(name)')
-      setAgents(data||[])
-      setLoading(false)
-    }
-    load()
-  }, [])
+  async function handleLogin() {
+    setChecking(true)
+    setError(null)
+    const { data: agent } = await supabase.from('agents')
+      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, institutions(name)')
+      .ilike('email', email.trim()).maybeSingle()
+    if (!agent) { setChecking(false); setError('No agent account matches that email.'); return }
+    const { data: ok } = await supabase.rpc('verify_agent_password', { p_agent_id: agent.id, p_password: password })
+    setChecking(false)
+    if (!ok) { setError('Incorrect password.'); return }
+    onLogin(agent)
+  }
 
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:420}}>
+      <div style={{width:'100%',maxWidth:380}}>
         <div style={{textAlign:'center',marginBottom:'28px'}}>
           <div style={{fontSize:'22px',fontWeight:700,color:C.text}}>Medsa Agent Portal</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>Select your account to sign in</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>Sign in with your agent account</div>
         </div>
-        {!selected ? (
-          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-            {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-            {agents.map(a=>(
-              <div key={a.id} onClick={()=>setSelected(a)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
-                <div style={{width:38,height:38,borderRadius:'10px',background:a.agent_type==='captive'?'#ddeae1':'#eeedfe',color:a.agent_type==='captive'?C.green:C.purple,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'14px',flexShrink:0}}>{a.full_name[0]}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:'14px',fontWeight:600}}>{a.full_name}</div>
-                  <div style={{fontSize:'12px',color:C.textSub}}>{a.agent_type==='captive'?`Captive - ${a.institutions?.name||'Insurer'}`:'Independent agent'}</div>
-                </div>
-                <span style={{color:C.textMuted}}>{'\u203a'}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'24px'}}>
-            <div style={{textAlign:'center',marginBottom:'18px'}}>
-              <div style={{width:52,height:52,borderRadius:'12px',background:selected.agent_type==='captive'?'#ddeae1':'#eeedfe',color:selected.agent_type==='captive'?C.green:C.purple,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'18px',margin:'0 auto 10px'}}>{selected.full_name[0]}</div>
-              <div style={{fontSize:'15px',fontWeight:600}}>{selected.full_name}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{selected.agent_type==='captive'?`Captive - ${selected.institutions?.name||'Insurer'}`:'Independent agent'}</div>
-            </div>
-            <input type="password" value={pin} onChange={e=>setPin(e.target.value)} placeholder="PIN" maxLength={4}
-              style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'18px',textAlign:'center',letterSpacing:'8px',marginBottom:'14px',boxSizing:'border-box'}}/>
-            <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}} onClick={()=>{setSelected(null);setPin('')}}>Back</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={()=>onLogin(selected)}>Sign in</Btn>
-            </div>
-          </div>
-        )}
+        <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px'}}>
+          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" onKeyDown={e=>e.key==='Enter'&&handleLogin()} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={handleLogin} disabled={checking||!email||!password}>{checking?'Checking\u2026':'Sign in'}</Btn>
+        </div>
+        <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'16px',lineHeight:1.5}}>No account yet? Your institution or team lead onboards you - not self-serve.</div>
       </div>
     </div>
   )
@@ -103,6 +90,7 @@ function Sidebar({ screen, setScreen, agent, onLogout, navItems }) {
       <div style={{padding:'20px 18px',borderBottom:`0.5px solid ${C.border}`}}>
         <div style={{fontSize:'16px',fontWeight:700}}>Medsa Agent</div>
         <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{agent.agent_type==='captive'?agent.institutions?.name||'Insurer':'Independent'}</div>
+        {agent.medsa_id&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>{agent.medsa_id}</div>}
       </div>
       <div style={{flex:1,padding:'12px 10px',overflowY:'auto'}}>
         {navItems.map(item=>(
@@ -158,8 +146,59 @@ function OverviewScreen({ agent, policies, inquiries }) {
 }
 
 // ── POLICIES ──────────────────────────────────────────────────────────────
+// Agent-initiated: "I want to hand this client to a teammate" - distinct
+// from the patient-initiated switch_requested_at flag elsewhere (that one
+// creates a fresh inquiry while this policy keeps running uninterrupted;
+// this is the agent's own side of a handoff, and needs the team lead to
+// approve it before the policy's agent_id actually changes).
+function TransferRequestModal({ policy, agent, onClose, onRequested }) {
+  const [teammates,setTeammates]=useState([])
+  const [toAgentId,setToAgentId]=useState('')
+  const [reason,setReason]=useState('')
+  const [saving,setSaving]=useState(false)
+
+  useEffect(() => {
+    if (!policy) return
+    supabase.from('agent_institution_appointments').select('agent_id, agents(id, full_name)')
+      .eq('team_id', agent.team_id).eq('status','active').neq('agent_id', agent.id)
+      .then(({data}) => setTeammates((data||[]).map(a=>a.agents).filter(Boolean)))
+  }, [policy, agent.team_id, agent.id])
+
+  if (!policy) return null
+
+  async function handleSubmit() {
+    setSaving(true)
+    await supabase.from('agent_client_transfer_requests').insert({
+      policy_id: policy.id, from_agent_id: agent.id, to_agent_id: toAgentId || null,
+      team_id: agent.team_id, reason: reason || null,
+    })
+    setSaving(false)
+    onRequested()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>Request transfer</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{policy.patient_name} - {policy.plan_name}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Hand to (optional - leave blank for the team lead to pick)</div>
+        <select value={toAgentId} onChange={e=>setToAgentId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}>
+          <option value="">Any teammate</option>
+          {teammates.map(t=><option key={t.id} value={t.id}>{t.full_name}</option>)}
+        </select>
+        <textarea value={reason} onChange={e=>setReason(e.target.value)} placeholder="Reason (optional)" rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box',fontFamily:'inherit',resize:'none'}}/>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleSubmit} disabled={saving}>{saving?'Sending…':'Send request'}</Btn>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PoliciesScreen({ agent, policies, onNewPolicy }) {
   const [filter,setFilter]=useState('all')
+  const [transferringPolicy,setTransferringPolicy]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
 
   return (
@@ -191,10 +230,12 @@ function PoliciesScreen({ agent, policies, onNewPolicy }) {
                 <span>Premium: HK${p.premium}/mo</span>
                 {p.renewal_date&&<span style={{color:d!==null&&d<=30?C.amber:C.textMuted}}>Renews {new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{d!==null&&d<=30&&d>=0?` (${d}d)`:''}</span>}
               </div>
+              {agent.team_id&&<div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to teammate</Btn></div>}
             </Card>
           )
         })}
       </div>
+      <TransferRequestModal policy={transferringPolicy} agent={agent} onClose={()=>setTransferringPolicy(null)} onRequested={()=>setTransferringPolicy(null)}/>
     </PageWrap>
   )
 }
@@ -612,6 +653,11 @@ function PlanInquiriesScreen({ agent, onConvert }) {
   const [unclaimed,setUnclaimed]=useState([])
   const [mine,setMine]=useState([])
   const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Set())
+  // plan_id -> [team_id, ...] authorized to sell it. A plan with no entry
+  // here has no team gating at all - the old flat claim race still
+  // applies unchanged. A plan that DOES have team authorizations can only
+  // be won by a member of one of those teams, via team-confirm below.
+  const [planTeamAuth,setPlanTeamAuth]=useState({})
   const [loading,setLoading]=useState(true)
   const [claimingId,setClaimingId]=useState(null)
   const [claimNotice,setClaimNotice]=useState(null)
@@ -629,9 +675,50 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     // "Convert to policy" only ever shows once, not every visit.
     const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
     setConvertedInquiryIds(new Set((convertedRows||[]).map(r=>r.inquiry_id)))
+
+    const planIds = [...new Set((unclaimedRows||[]).map(i=>i.plan_id).filter(Boolean))]
+    if (planIds.length>0) {
+      const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', planIds)
+      const byPlan = {}
+      for (const a of (auths||[])) (byPlan[a.plan_id] ||= []).push(a.team_id)
+      setPlanTeamAuth(byPlan)
+    } else {
+      setPlanTeamAuth({})
+    }
     setLoading(false)
   }
   useEffect(() => { load() }, [agent.id])
+
+  // First team (among those authorized to sell this plan) to confirm
+  // wins the lead - same atomic race pattern as handleClaim below, just
+  // scoped to team_confirmed_by_team_id instead of claimed_by_agent_id.
+  // Once a team wins, its own assignment_mode decides the final agent
+  // immediately (confirmer/random) or leaves it for the team lead
+  // (manual) - see TeamLeadScreen's "Awaiting your assignment".
+  async function handleTeamConfirm(inquiry) {
+    if (!agent.team_id) return
+    setClaimingId(inquiry.id)
+    setClaimNotice(null)
+    const { data } = await supabase.from('plan_inquiries')
+      .update({ team_confirmed_by_team_id: agent.team_id, team_confirmed_at: new Date().toISOString(), confirmed_by_agent_id: agent.id })
+      .eq('id', inquiry.id).is('team_confirmed_by_team_id', null).select()
+    if (!data || data.length === 0) {
+      setClaimNotice('Another team already confirmed this inquiry first.')
+      setClaimingId(null); load(); return
+    }
+    const { data: team } = await supabase.from('insurance_teams').select('assignment_mode').eq('id', agent.team_id).maybeSingle()
+    if (team?.assignment_mode === 'confirmer') {
+      await supabase.from('plan_inquiries').update({ claimed_by_agent_id: agent.id, claimed_at: new Date().toISOString() }).eq('id', inquiry.id)
+    } else if (team?.assignment_mode === 'random') {
+      const { data: appts } = await supabase.from('agent_institution_appointments').select('agent_id').eq('team_id', agent.team_id).eq('status','active')
+      const memberIds = (appts||[]).map(a=>a.agent_id)
+      const pick = memberIds[Math.floor(Math.random()*memberIds.length)] || agent.id
+      await supabase.from('plan_inquiries').update({ claimed_by_agent_id: pick, claimed_at: new Date().toISOString() }).eq('id', inquiry.id)
+    }
+    // 'manual' leaves claimed_by_agent_id null - the team lead assigns it.
+    setClaimingId(null)
+    load()
+  }
 
   // Atomic first-come-first-served claim - the .is('claimed_by_agent_id', null)
   // filter means this UPDATE only affects the row if nobody has claimed
@@ -661,18 +748,28 @@ function PlanInquiriesScreen({ agent, onConvert }) {
       {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
       {!loading&&unclaimed.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'24px'}}>
-        {unclaimed.map(i=>(
+        {unclaimed.map(i=>{
+          const authTeams = planTeamAuth[i.plan_id]
+          const isTeamGated = authTeams && authTeams.length > 0
+          const myTeamEligible = isTeamGated && agent.team_id && authTeams.includes(agent.team_id)
+          return (
           <Card key={i.id} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+                {isTeamGated&&<div style={{fontSize:'11px',color:C.blue,marginTop:'2px'}}>Only authorized teams can take this one - competing branches, first to confirm wins the lead</div>}
               </div>
-              <Btn variant="primary" onClick={()=>handleClaim(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Claiming…':'Claim'}</Btn>
+              {isTeamGated
+                ? (myTeamEligible
+                  ? <Btn variant="primary" onClick={()=>handleTeamConfirm(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Confirming…':'Confirm for team'}</Btn>
+                  : <span style={{fontSize:'11px',color:C.textMuted}}>Not your team's plan</span>)
+                : <Btn variant="primary" onClick={()=>handleClaim(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Claiming…':'Claim'}</Btn>}
             </div>
           </Card>
-        ))}
+          )
+        })}
       </div>
 
       <SecLabel>Your claimed inquiries</SecLabel>
@@ -759,6 +856,174 @@ function RenewalsScreen({ agent, policies, onRenewed }) {
   )
 }
 
+// ── TEAM LEAD SCREEN ─────────────────────────────────────────────────────
+// Only reachable by whoever insurance_teams.team_lead_agent_id actually
+// points at - same portal every other agent uses, just with this one
+// extra screen visible, so a lead who also carries their own book of
+// business isn't forced into a separate app.
+function TeamLeadScreen({ agent, team }) {
+  const [members,setMembers]=useState([])
+  const [plans,setPlans]=useState([])
+  const [authorizedPlanIds,setAuthorizedPlanIds]=useState(new Set())
+  const [pendingAssignments,setPendingAssignments]=useState([])
+  const [transferRequests,setTransferRequests]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showAddMember,setShowAddMember]=useState(false)
+  const [memberForm,setMemberForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+  const [assigningId,setAssigningId]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data: appts } = await supabase.from('agent_institution_appointments')
+      .select('agent_id, agents(id, full_name, email, medsa_id)').eq('team_id', team.id).eq('status','active')
+    setMembers((appts||[]).map(a=>a.agents).filter(Boolean))
+    const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', agent.institutions?.name||'').eq('status','active')
+    setPlans(planRows||[])
+    const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', team.id)
+    setAuthorizedPlanIds(new Set((auths||[]).map(a=>a.plan_id)))
+    // Inquiries this team won but that need a human to hand them to one
+    // member - only ever non-empty when the team's assignment_mode is
+    // 'manual'.
+    const { data: pending } = await supabase.from('plan_inquiries')
+      .select('*, insurance_plans(plan_name)').eq('team_confirmed_by_team_id', team.id).is('claimed_by_agent_id', null)
+    setPendingAssignments(pending||[])
+    const { data: transfers } = await supabase.from('agent_client_transfer_requests')
+      .select('*, agent_policies(patient_name, plan_name), from:from_agent_id(full_name), to:to_agent_id(full_name)')
+      .eq('team_id', team.id).eq('status','pending')
+    setTransferRequests(transfers||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [team.id])
+
+  async function toggleAuthorization(planId) {
+    if (authorizedPlanIds.has(planId)) {
+      await supabase.from('team_plan_authorizations').delete().eq('team_id', team.id).eq('plan_id', planId)
+    } else {
+      await supabase.from('team_plan_authorizations').insert({ team_id: team.id, plan_id: planId })
+    }
+    load()
+  }
+
+  async function setAssignmentMode(mode) {
+    await supabase.from('insurance_teams').update({ assignment_mode: mode }).eq('id', team.id)
+    load()
+  }
+
+  async function assignInquiry(inquiryId, toAgentId) {
+    setAssigningId(inquiryId)
+    await supabase.from('plan_inquiries').update({ claimed_by_agent_id: toAgentId, claimed_at: new Date().toISOString() }).eq('id', inquiryId)
+    setAssigningId(null)
+    load()
+  }
+
+  async function decideTransfer(reqRow, approve) {
+    await supabase.from('agent_client_transfer_requests').update({
+      status: approve?'approved':'rejected', decided_at: new Date().toISOString(), decided_by_agent_id: agent.id,
+    }).eq('id', reqRow.id)
+    if (approve && reqRow.to_agent_id) {
+      await supabase.from('agent_policies').update({ agent_id: reqRow.to_agent_id }).eq('id', reqRow.policy_id)
+    }
+    load()
+  }
+
+  async function handleAddMember() {
+    if (!memberForm.email.trim()) return
+    setSaving(true); setNotice(null)
+    try {
+      const res = await fetch('/api/agent/onboard', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...memberForm, agentType:'captive', institutionId: agent.institution_id, teamId: team.id }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message||'Could not add member.'); setSaving(false); return }
+      setNotice(data.isNew ? `Added - temp password ${data.emailSent?'emailed':data.tempPassword}.` : 'Existing agent appointed to this team.')
+      setMemberForm({ fullName:'', email:'', phone:'', licenseNumber:'' })
+      setShowAddMember(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <PageWrap maxWidth={720}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>{team.name}</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>{team.medsa_id}</div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+
+      {pendingAssignments.length>0&&<>
+        <SecLabel>Awaiting your assignment</SecLabel>
+        {pendingAssignments.map(inq=>(
+          <Card key={inq.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{inq.applicant_full_name||'Unnamed applicant'} - {inq.insurance_plans?.plan_name}</div>
+            <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginTop:'10px'}}>
+              {members.map(m=>(
+                <Btn key={m.id} variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>assignInquiry(inq.id, m.id)} disabled={assigningId===inq.id}>{m.full_name}</Btn>
+              ))}
+            </div>
+          </Card>
+        ))}
+      </>}
+
+      {transferRequests.length>0&&<>
+        <SecLabel>Transfer requests</SecLabel>
+        {transferRequests.map(r=>(
+          <Card key={r.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{r.from?.full_name||'Agent'} wants to hand this to {r.to?.full_name||'another member'}{r.reason?`: ${r.reason}`:''}</div>
+            <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
+              <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>decideTransfer(r, true)}>Approve</Btn>
+              <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>decideTransfer(r, false)}>Reject</Btn>
+            </div>
+          </Card>
+        ))}
+      </>}
+
+      <SecLabel>Members</SecLabel>
+      {!loading&&members.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No members yet.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'16px'}}>
+        {members.map(m=>(
+          <Card key={m.id} style={{padding:'10px 16px',display:'flex',justifyContent:'space-between'}}>
+            <span style={{fontSize:'13px'}}>{m.full_name}{team.team_lead_agent_id===m.id?' (lead)':''}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{m.medsa_id}</span>
+          </Card>
+        ))}
+      </div>
+      {notice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>{notice}</div>}
+      {showAddMember ? (
+        <Card style={{padding:'16px',marginBottom:'20px'}}>
+          {[['fullName','Full name (blank if adding an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number']].map(([k,ph])=>(
+            <input key={k} value={memberForm[k]} onChange={e=>setMemberForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+          ))}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setShowAddMember(false)}>Cancel</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleAddMember} disabled={saving||!memberForm.email.trim()}>{saving?'Saving…':'Add / appoint'}</Btn>
+          </div>
+        </Card>
+      ) : (
+        <div style={{marginBottom:'20px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddMember(true)}>+ Add member</Btn></div>
+      )}
+
+      <SecLabel>Won-inquiry assignment</SecLabel>
+      <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
+        {[['confirmer','Whoever confirmed'],['random','Random member'],['manual','I assign manually']].map(([k,l])=>(
+          <div key={k} onClick={()=>setAssignmentMode(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:team.assignment_mode===k?C.green:C.card,color:team.assignment_mode===k?'#fff':C.text}}>{l}</div>
+        ))}
+      </div>
+
+      <SecLabel>Plans this team is authorized to sell</SecLabel>
+      {plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>No plans in your insurer's basket yet.</div>}
+      {plans.map(p=>(
+        <div key={p.id} onClick={()=>toggleAuthorization(p.id)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',cursor:'pointer'}}>
+          <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${authorizedPlanIds.has(p.id)?C.green:C.border}`,background:authorizedPlanIds.has(p.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{authorizedPlanIds.has(p.id)?'✓':''}</div>
+          <span style={{fontSize:'13px'}}>{p.plan_name}</span>
+        </div>
+      ))}
+    </PageWrap>
+  )
+}
 
 // ── ROOT ──────────────────────────────────────────────────────────────────
 // ── PENDING CLAIMS REVIEW ────────────────────────────────────────────────
@@ -879,6 +1144,13 @@ export default function AgentApp() {
   const [inquiries,setInquiries]=useState([])
   const [newInquiryCount,setNewInquiryCount]=useState(0)
   const [loading,setLoading]=useState(true)
+  const [myLeadTeam,setMyLeadTeam]=useState(null)
+
+  useEffect(() => {
+    if (!agent?.id) { setMyLeadTeam(null); return }
+    supabase.from('insurance_teams').select('*').eq('team_lead_agent_id', agent.id).maybeSingle()
+      .then(({data}) => setMyLeadTeam(data||null))
+  }, [agent?.id])
 
   async function loadData(a) {
     setLoading(true)
@@ -917,6 +1189,7 @@ export default function AgentApp() {
     {key:'claimsreview', icon:'\u26a0', label:'Pending Claims'},
     {key:'referrals', icon:'\u25c8', label:'Referrals'},
     {key:'renewals', icon:'\u25ce', label:'Renewals', badge: renewalsSoonCount},
+    ...(myLeadTeam ? [{key:'team', icon:'\u25c6', label:`Team: ${myLeadTeam.name}`}] : []),
   ]
 
   if (!agent) return <AgentLogin onLogin={setAgent}/>
@@ -934,6 +1207,7 @@ export default function AgentApp() {
         {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
         {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
+        {!loading&&screen==='team'&&myLeadTeam&&<TeamLeadScreen agent={agent} team={myLeadTeam}/>}
       </div>
     </div>
   )

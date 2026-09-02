@@ -35,6 +35,15 @@ export default async function handler(req, res) {
     return res.status(409).json({ status: 'ERROR', message: 'An application or account already exists for this email.' })
   }
 
+  // Every insurance_companies row needs a real institutions counterpart
+  // (institution_type='insurer') - that's the table agents.institution_id
+  // and agent_policies.institution_id actually point at. Without this,
+  // a self-serve-signed-up company would have nowhere real for its
+  // future teams/agents to attach to.
+  const { data: institutionRow, error: instErr } = await supabase.from('institutions')
+    .insert({ name: companyName.trim(), institution_type: 'insurer' }).select().maybeSingle()
+  if (instErr) return res.status(500).json({ status: 'ERROR', message: instErr.message })
+
   const isUnpartnered = relationshipType === 'unpartnered'
   const { data: company, error: insErr } = await supabase.from('insurance_companies').insert({
     name: companyName.trim(), contact_name: contactName?.trim() || null,
@@ -42,6 +51,7 @@ export default async function handler(req, res) {
     relationship_type: relationshipType, self_serve: true,
     status: isUnpartnered ? 'active' : 'pending',
     onboarded_by: isUnpartnered ? 'self-serve' : 'self-serve (pending approval)',
+    institution_ref_id: institutionRow.id,
   }).select().maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
 
