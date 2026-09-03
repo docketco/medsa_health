@@ -79,6 +79,80 @@ function InsuranceDashboard({ onNav, company }) {
   )
 }
 
+// ── PLAN RIDERS & DEDUCTIBLES (phase 6 - real quoting tools) ──────────────
+// What NewPolicyScreen's package builder actually reads from - a plan
+// with none of this still works (line item is just the tier premium,
+// no add-ons, one flat deductible), it just can't be combined/customized.
+function PlanExtrasManager({ plan, onChanged }) {
+  const [riders,setRiders]=useState([])
+  const [deductibles,setDeductibles]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [newRider,setNewRider]=useState({ name:'', monthly_premium:'', description:'' })
+  const [newDeductible,setNewDeductible]=useState({ deductible_hkd:'', premium_adjustment_pct:'' })
+
+  async function load() {
+    setLoading(true)
+    const { data: r } = await supabase.from('insurance_plan_riders').select('*').eq('plan_id', plan.id).eq('status','active').order('monthly_premium')
+    setRiders(r||[])
+    const { data: d } = await supabase.from('insurance_plan_deductible_options').select('*').eq('plan_id', plan.id).order('deductible_hkd')
+    setDeductibles(d||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [plan.id])
+
+  async function addRider() {
+    if (!newRider.name.trim() || newRider.monthly_premium==='') return
+    await supabase.from('insurance_plan_riders').insert({ plan_id: plan.id, name: newRider.name.trim(), monthly_premium: parseFloat(newRider.monthly_premium)||0, description: newRider.description||null })
+    setNewRider({ name:'', monthly_premium:'', description:'' })
+    load(); onChanged?.()
+  }
+  async function removeRider(id) {
+    await supabase.from('insurance_plan_riders').update({ status:'inactive' }).eq('id', id)
+    load(); onChanged?.()
+  }
+  async function addDeductible() {
+    if (newDeductible.deductible_hkd==='') return
+    await supabase.from('insurance_plan_deductible_options').insert({ plan_id: plan.id, deductible_hkd: parseFloat(newDeductible.deductible_hkd)||0, premium_adjustment_pct: parseFloat(newDeductible.premium_adjustment_pct)||0 })
+    setNewDeductible({ deductible_hkd:'', premium_adjustment_pct:'' })
+    load(); onChanged?.()
+  }
+  async function removeDeductible(id) {
+    await supabase.from('insurance_plan_deductible_options').delete().eq('id', id)
+    load(); onChanged?.()
+  }
+
+  return (
+    <div style={{background:C.beige,borderRadius:'8px',padding:'12px',marginTop:'10px'}}>
+      {loading&&<div style={{fontSize:'11px',color:C.textMuted}}>Loading…</div>}
+      <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,marginBottom:'6px'}}>Riders / add-ons</div>
+      {riders.map(r=>(
+        <div key={r.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:'12px',padding:'4px 0'}}>
+          <span>{r.name} - HK${r.monthly_premium}/mo{r.description?` (${r.description})`:''}</span>
+          <span onClick={()=>removeRider(r.id)} style={{color:C.textMuted,cursor:'pointer'}}>✕</span>
+        </div>
+      ))}
+      <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
+        <input value={newRider.name} onChange={e=>setNewRider(f=>({...f,name:e.target.value}))} placeholder="Rider name (e.g. Dental & Optical)" style={{flex:2,padding:'6px 8px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <input value={newRider.monthly_premium} onChange={e=>setNewRider(f=>({...f,monthly_premium:e.target.value}))} type="number" placeholder="HK$/mo" style={{flex:1,padding:'6px 8px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={addRider}>Add</Btn>
+      </div>
+
+      <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,margin:'14px 0 6px'}}>Deductible options</div>
+      {deductibles.map(d=>(
+        <div key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:'12px',padding:'4px 0'}}>
+          <span>HK${d.deductible_hkd} deductible - {d.premium_adjustment_pct>0?'+':''}{d.premium_adjustment_pct}% premium</span>
+          <span onClick={()=>removeDeductible(d.id)} style={{color:C.textMuted,cursor:'pointer'}}>✕</span>
+        </div>
+      ))}
+      <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
+        <input value={newDeductible.deductible_hkd} onChange={e=>setNewDeductible(f=>({...f,deductible_hkd:e.target.value}))} type="number" placeholder="Deductible HK$" style={{flex:1,padding:'6px 8px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <input value={newDeductible.premium_adjustment_pct} onChange={e=>setNewDeductible(f=>({...f,premium_adjustment_pct:e.target.value}))} type="number" placeholder="% premium adj (e.g. -15)" style={{flex:1,padding:'6px 8px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={addDeductible}>Add</Btn>
+      </div>
+    </div>
+  )
+}
+
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
 function PlanManager({ company }) {
   const [plans,setPlans]=useState([])
@@ -87,6 +161,7 @@ function PlanManager({ company }) {
   const [saving,setSaving]=useState(false)
   const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'' })
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  const [expandedPlanId,setExpandedPlanId]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -135,7 +210,7 @@ function PlanManager({ company }) {
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans listed yet.</div>}
       {!loading&&plans.map((p)=>(
-        <Card key={p.id} style={{padding:'14px 16px'}}>
+        <Card key={p.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedPlanId(expandedPlanId===p.id?null:p.id)}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
@@ -143,11 +218,13 @@ function PlanManager({ company }) {
             </div>
             {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
           </div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'12px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
               ? <span style={{color:C.red}}>No pricing tiers entered</span>
               : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>`Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`).join(' · ')}
           </div>
+          <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
+          {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
         </Card>
       ))}
       {creating&&(
@@ -611,6 +688,56 @@ function TeamsAndAgents({ company }) {
   const [indyForm,setIndyForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
   const [saving,setSaving]=useState(false)
   const [notice,setNotice]=useState(null)
+  // Bulk CSV onboarding - only real path for onboarding at any volume,
+  // since there's no real HK agent-license registry to self-serve
+  // signup against (same reasoning as leaving license_number
+  // self-declared). Columns: fullName,email,phone,licenseNumber.
+  const [bulkTeamId,setBulkTeamId]=useState('')
+  const [bulkRows,setBulkRows]=useState([])
+  const [bulkRunning,setBulkRunning]=useState(false)
+  const [bulkResults,setBulkResults]=useState([])
+
+  function handleBulkFile(file) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const lines = String(e.target.result).split(/\r?\n/).filter(l=>l.trim())
+      const [header, ...rows] = lines
+      const cols = header.split(',').map(c=>c.trim().toLowerCase())
+      const parsed = rows.map(line => {
+        const vals = line.split(',').map(v=>v.trim())
+        const row = {}
+        cols.forEach((c,i)=>{ row[c] = vals[i]||'' })
+        return row
+      }).filter(r=>r.email)
+      setBulkRows(parsed)
+      setBulkResults([])
+    }
+    reader.readAsText(file)
+  }
+
+  async function runBulkImport() {
+    setBulkRunning(true)
+    const results = []
+    for (const row of bulkRows) {
+      try {
+        const res = await fetch('/api/agent/onboard', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            fullName: row.fullname, email: row.email, phone: row.phone, licenseNumber: row.licensenumber,
+            agentType: bulkTeamId ? 'captive' : 'independent', institutionId: company.institutionRefId, teamId: bulkTeamId || null,
+          }),
+        })
+        const data = await res.json()
+        results.push({ email: row.email, ok: data.status==='OK', message: data.status==='OK' ? (data.isNew?'created':'appointed') : (data.message||'failed') })
+      } catch (e) {
+        results.push({ email: row.email, ok: false, message: e.message })
+      }
+    }
+    setBulkResults(results)
+    setBulkRunning(false)
+    setBulkRows([])
+    load()
+  }
 
   async function load() {
     setLoading(true)
@@ -660,6 +787,26 @@ function TeamsAndAgents({ company }) {
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Teams are branches under {company.name} - each has its own roster, its own subset of your plan basket it's authorized to sell, and its own rule for how a won inquiry gets down to one member. Independent agents appointed to you directly (not under any team) get your whole basket.</div>
       </div>
+
+      <SecLabel>Bulk onboard agents (CSV)</SecLabel>
+      <Card style={{padding:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Columns: fullName, email, phone, licenseNumber. An email that already has an agent account is appointed (not re-created); a new one gets a temp password emailed to them.</div>
+        <select value={bulkTeamId} onChange={e=>setBulkTeamId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}>
+          <option value="">Independent (no team - whole basket)</option>
+          {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box',marginBottom:'10px'}}>
+          {bulkRows.length>0 ? `${bulkRows.length} row(s) ready` : 'Tap to upload CSV'}
+          <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleBulkFile(e.target.files[0])}/>
+        </label>
+        {bulkRows.length>0&&<Btn variant="navy" style={{width:'100%'}} onClick={runBulkImport} disabled={bulkRunning}>{bulkRunning?'Importing…':`Import ${bulkRows.length} agent(s)`}</Btn>}
+        {bulkResults.length>0&&<div style={{marginTop:'10px'}}>
+          {bulkResults.map((r,i)=>(
+            <div key={i} style={{fontSize:'11px',color:r.ok?C.green:C.red}}>{r.ok?'✓':'✕'} {r.email} - {r.message}</div>
+          ))}
+        </div>}
+      </Card>
+
       <SecLabel>Teams</SecLabel>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&teams.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>No teams yet.</div>}
