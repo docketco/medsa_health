@@ -247,6 +247,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy }) {
 function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [patientSearch,setPatientSearch]=useState(prefillInquiry?.applicant_full_name || '')
   const [foundPatient,setFoundPatient]=useState(prefillInquiry?.patient_id ? { id: prefillInquiry.patient_id, full_name: prefillInquiry.applicant_full_name, medsa_id: null } : null)
+  const [patientAge,setPatientAge]=useState(null)
   const [insurers,setInsurers]=useState([])
   const [selectedInsurer,setSelectedInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:null)
   const [planName,setPlanName]=useState(prefillInquiry?.insurance_plans?.plan_name || '')
@@ -266,11 +267,94 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
 
+  // ── Package builder (phase 6) ── real plans from this agent's own
+  // basket (a team's authorized subset, or - independent/no-team - the
+  // whole institution basket), with real riders/deductible options and
+  // multi-plan bundling. Purely additive: an agent can still ignore all
+  // of this and type a bare plan name/premium below, same as before.
+  const [basketPlans,setBasketPlans]=useState([])
+  const [builderInsurer,setBuilderInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:'')
+  const [builderPlanId,setBuilderPlanId]=useState('')
+  const [builderRiders,setBuilderRiders]=useState([])
+  const [builderDeductibles,setBuilderDeductibles]=useState([])
+  const [builderDeductibleId,setBuilderDeductibleId]=useState('')
+  const [builderSelectedRiderIds,setBuilderSelectedRiderIds]=useState(new Set())
+  const [lineItems,setLineItems]=useState([]) // [{planId, planName, deductibleId, deductibleHkd, riderIds:[], riderNames:[], premium}]
+  const [bundleDiscount,setBundleDiscount]=useState('')
+
   useEffect(() => {
     if (agent.agent_type==='independent') {
       supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
     }
   }, [agent.agent_type])
+
+  useEffect(() => {
+    if (!foundPatient?.id) { setPatientAge(null); return }
+    supabase.from('patients').select('date_of_birth').eq('id', foundPatient.id).maybeSingle().then(({data}) => {
+      if (!data?.date_of_birth) { setPatientAge(null); return }
+      const dob = new Date(data.date_of_birth)
+      const age = Math.floor((Date.now() - dob.getTime()) / (365.25*24*3600*1000))
+      setPatientAge(age)
+    })
+  }, [foundPatient?.id])
+
+  // Which plans this agent can actually build a quote from: a team's
+  // authorized subset if they're on one, else their whole institution's
+  // basket (independent agents pick the institution first, above).
+  useEffect(() => {
+    async function loadBasket() {
+      if (!builderInsurer) { setBasketPlans([]); return }
+      const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
+      if (!inst) { setBasketPlans([]); return }
+      const { data: allPlans } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active')
+      if (agent.team_id) {
+        const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
+        const authIds = new Set((auths||[]).map(a=>a.plan_id))
+        setBasketPlans((allPlans||[]).filter(p=>authIds.has(p.id)))
+      } else {
+        setBasketPlans(allPlans||[])
+      }
+    }
+    loadBasket()
+  }, [builderInsurer, agent.team_id])
+
+  useEffect(() => {
+    setBuilderDeductibleId(''); setBuilderSelectedRiderIds(new Set())
+    if (!builderPlanId) { setBuilderRiders([]); setBuilderDeductibles([]); return }
+    supabase.from('insurance_plan_riders').select('*').eq('plan_id', builderPlanId).eq('status','active').then(({data})=>setBuilderRiders(data||[]))
+    supabase.from('insurance_plan_deductible_options').select('*').eq('plan_id', builderPlanId).then(({data})=>setBuilderDeductibles(data||[]))
+  }, [builderPlanId])
+
+  const builderPlan = basketPlans.find(p=>p.id===builderPlanId)
+  const builderBasePremium = (() => {
+    if (!builderPlan) return 0
+    const tiers = builderPlan.insurance_plan_pricing_tiers||[]
+    const matched = patientAge!=null ? tiers.find(t=>patientAge>=t.age_min && patientAge<=t.age_max) : null
+    return (matched || tiers[0])?.monthly_premium || 0
+  })()
+  const builderDeductible = builderDeductibles.find(d=>d.id===builderDeductibleId)
+  const builderRidersTotal = builderRiders.filter(r=>builderSelectedRiderIds.has(r.id)).reduce((s,r)=>s+(r.monthly_premium||0),0)
+  const builderComputedPremium = Math.round((builderBasePremium * (1 + (builderDeductible?.premium_adjustment_pct||0)/100) + builderRidersTotal) * 100) / 100
+
+  function toggleBuilderRider(id) {
+    setBuilderSelectedRiderIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+  }
+
+  function addLineItem() {
+    if (!builderPlan) return
+    const riderNames = builderRiders.filter(r=>builderSelectedRiderIds.has(r.id)).map(r=>r.name)
+    setLineItems(prev => [...prev, {
+      planId: builderPlan.id, planName: builderPlan.plan_name, institutionId: builderInsurer,
+      deductibleId: builderDeductibleId||null, deductibleHkd: builderDeductible?.deductible_hkd??null,
+      riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
+    }])
+    setBuilderPlanId('')
+  }
+  function removeLineItem(i) {
+    setLineItems(prev => prev.filter((_,idx)=>idx!==i))
+  }
+  const lineItemsTotal = lineItems.reduce((s,l)=>s+l.premium,0)
+  const bundleDiscountNum = parseFloat(bundleDiscount) || 0
 
   const commissionNum = parseFloat(brokerCommission) || 0
   const referralFeeNum = parseFloat(referralFee) || 0
@@ -287,22 +371,51 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     setSaving(true)
     setError(null)
     try {
-      const { error: insErr } = await supabase.from('agent_policies').insert({
-        agent_id: agent.id,
-        institution_id: selectedInsurer,
-        patient_id: foundPatient?.id || null,
-        patient_name: foundPatient?.full_name || patientSearch,
-        plan_name: planName,
-        policy_number: policyNumber || null,
-        status,
-        premium: parseFloat(premium) || null,
-        start_date: startDate || null,
-        renewal_date: renewalDate || null,
-        inquiry_id: prefillInquiry?.id || null,
-        broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
-        referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
-      })
-      if (insErr) throw insErr
+      if (lineItems.length > 0) {
+        // Package path: one policy_bundles row when combining, one
+        // agent_policies row per plan, riders linked per policy.
+        let bundleId = null
+        if (lineItems.length > 1) {
+          const { data: bundle, error: bErr } = await supabase.from('policy_bundles').insert({
+            agent_id: agent.id, patient_id: foundPatient?.id||null, patient_name: foundPatient?.full_name||patientSearch,
+            discount_hkd: bundleDiscountNum, notes: null,
+          }).select().maybeSingle()
+          if (bErr) throw bErr
+          bundleId = bundle.id
+        }
+        for (const li of lineItems) {
+          const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
+            agent_id: agent.id, institution_id: li.institutionId, patient_id: foundPatient?.id||null,
+            patient_name: foundPatient?.full_name||patientSearch, plan_name: li.planName, plan_id: li.planId,
+            policy_number: policyNumber||null, status, premium: li.premium, deductible_hkd: li.deductibleHkd,
+            start_date: startDate||null, renewal_date: renewalDate||null, bundle_id: bundleId,
+            inquiry_id: prefillInquiry?.id || null,
+            broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
+            referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
+          }).select().maybeSingle()
+          if (pErr) throw pErr
+          if (li.riderIds.length > 0) {
+            await supabase.from('agent_policy_riders').insert(li.riderIds.map(riderId => ({ policy_id: pol.id, rider_id: riderId })))
+          }
+        }
+      } else {
+        const { error: insErr } = await supabase.from('agent_policies').insert({
+          agent_id: agent.id,
+          institution_id: selectedInsurer,
+          patient_id: foundPatient?.id || null,
+          patient_name: foundPatient?.full_name || patientSearch,
+          plan_name: planName,
+          policy_number: policyNumber || null,
+          status,
+          premium: parseFloat(premium) || null,
+          start_date: startDate || null,
+          renewal_date: renewalDate || null,
+          inquiry_id: prefillInquiry?.id || null,
+          broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
+          referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
+        })
+        if (insErr) throw insErr
+      }
       onSaved()
     } catch (e) {
       setError(e.message)
@@ -326,19 +439,75 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       {foundPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.green}}>Matched: {foundPatient.full_name} ({foundPatient.medsa_id})</div>}
       {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually below and continue without linking a Medsa profile.</div>}
 
-      {agent.agent_type==='independent'&&<>
-        <SecLabel>Insurer</SecLabel>
-        <select value={selectedInsurer||''} onChange={e=>setSelectedInsurer(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box'}}>
+      <SecLabel>Build from basket (real plans, riders, deductibles)</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'8px'}}>
+        {patientAge!=null&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Patient age {patientAge} - matching pricing tier auto-selected below.</div>}
+        <select value={builderInsurer||''} onChange={e=>setBuilderInsurer(e.target.value)} disabled={agent.agent_type==='captive'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}>
+          <option value="">Select insurer</option>
+          {agent.agent_type==='captive'
+            ? <option value={agent.institution_id}>{agent.institutions?.name||'Your insurer'}</option>
+            : insurers.map(ins=><option key={ins.id} value={ins.id}>{ins.name}</option>)}
+        </select>
+        <select value={builderPlanId} onChange={e=>setBuilderPlanId(e.target.value)} disabled={!builderInsurer} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}>
+          <option value="">{basketPlans.length===0?'No authorized plans in this basket':'Select plan'}</option>
+          {basketPlans.map(p=><option key={p.id} value={p.id}>{p.plan_name}</option>)}
+        </select>
+        {builderPlan&&<>
+          {builderDeductibles.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Deductible</div>
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'10px'}}>
+              {builderDeductibles.map(d=>(
+                <div key={d.id} onClick={()=>setBuilderDeductibleId(d.id)} style={{padding:'6px 10px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:builderDeductibleId===d.id?C.green:C.card,color:builderDeductibleId===d.id?'#fff':C.text}}>HK${d.deductible_hkd} ({d.premium_adjustment_pct>0?'+':''}{d.premium_adjustment_pct}%)</div>
+              ))}
+            </div>
+          </>}
+          {builderRiders.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Riders / add-ons</div>
+            <div style={{marginBottom:'10px'}}>
+              {builderRiders.map(r=>(
+                <div key={r.id} onClick={()=>toggleBuilderRider(r.id)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'4px 0',cursor:'pointer'}}>
+                  <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${builderSelectedRiderIds.has(r.id)?C.green:C.border}`,background:builderSelectedRiderIds.has(r.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{builderSelectedRiderIds.has(r.id)?'✓':''}</div>
+                  <span style={{fontSize:'12px'}}>{r.name} (+HK${r.monthly_premium}/mo)</span>
+                </div>
+              ))}
+            </div>
+          </>}
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>Line premium: HK${builderComputedPremium}/mo</div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={addLineItem}>+ Add this plan to the package</Btn>
+        </>}
+      </Card>
+      {lineItems.length>0&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>Package ({lineItems.length} plan{lineItems.length>1?'s':''})</div>
+        {lineItems.map((li,i)=>(
+          <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'6px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+            <div>
+              <div style={{fontWeight:500}}>{li.planName}</div>
+              {(li.deductibleHkd!=null||li.riderNames.length>0)&&<div style={{color:C.textMuted,fontSize:'11px'}}>{li.deductibleHkd!=null?`HK$${li.deductibleHkd} deductible`:''}{li.riderNames.length>0?`${li.deductibleHkd!=null?' · ':''}${li.riderNames.join(', ')}`:''}</div>}
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+              <span>HK${li.premium}/mo</span>
+              <span onClick={()=>removeLineItem(i)} style={{color:C.textMuted,cursor:'pointer'}}>✕</span>
+            </div>
+          </div>
+        ))}
+        {lineItems.length>1&&<div style={{marginTop:'10px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Bundle discount (HK$/mo, real negotiated figure)</div>
+          <input value={bundleDiscount} onChange={e=>setBundleDiscount(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>}
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:700,marginTop:'12px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+          <span>Total</span><span>HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</span>
+        </div>
+      </Card>}
+
+      <SecLabel>{lineItems.length>0?'Or add a plan not in the basket':'Plan details (manual, no basket plan available)'}</SecLabel>
+      <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'16px'}}>
+        {agent.agent_type==='independent'&&lineItems.length===0&&<select value={selectedInsurer||''} onChange={e=>setSelectedInsurer(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}>
           <option value="">Select insurer</option>
           {insurers.map(ins=><option key={ins.id} value={ins.id}>{ins.name}</option>)}
-        </select>
-      </>}
-
-      <SecLabel>Plan details</SecLabel>
-      <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'16px'}}>
+        </select>}
         <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number (optional for quotes)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-        <input value={premium} onChange={e=>setPremium(e.target.value)} placeholder="Monthly premium (HK$)" type="number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        {lineItems.length===0&&<input value={premium} onChange={e=>setPremium(e.target.value)} placeholder="Monthly premium (HK$)" type="number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>}
         <div style={{display:'flex',gap:'10px'}}>
           <div style={{flex:1}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Start date</div>
@@ -373,7 +542,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||!planName||(agent.agent_type==='independent'&&!selectedInsurer)||referralFeeExceedsCap}>{saving?'Saving...':'Save policy'}</Btn>
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||(lineItems.length===0&&(!planName||(agent.agent_type==='independent'&&!selectedInsurer)))||referralFeeExceedsCap}>{saving?'Saving...':lineItems.length>0?`Save package (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Save policy'}</Btn>
     </PageWrap>
   )
 }
