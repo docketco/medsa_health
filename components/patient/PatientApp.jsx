@@ -416,29 +416,58 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) return
 
+    // 'in_room' was never a real clinic_queue status (ClinicOps only ever
+    // writes waiting/serving/done/no_show) - this meant the moment a
+    // patient was actually called in (status flips to 'serving'), this
+    // query found nothing and the whole banner silently vanished instead
+    // of showing they're now being seen.
     const { data: myEntry } = await supabase
       .from('clinic_queue')
-      .select('*, institutions(name)')
+      .select('*, institutions(name), appointments(scheduled_at)')
       .eq('patient_id', patientRow.id)
-      .in('status', ['waiting','in_room'])
+      .in('status', ['waiting','serving'])
       .order('checked_in_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
     if (!myEntry) { setQueueStatus({ checkedIn:false }); return }
 
-    // Position = how many other patients checked in earlier are still
-    // waiting ahead of this one, at the same institution.
-    const { count } = await supabase
-      .from('clinic_queue')
-      .select('id', { count: 'exact', head: true })
-      .eq('institution_id', myEntry.institution_id)
-      .eq('status', 'waiting')
-      .lt('checked_in_at', myEntry.checked_in_at)
+    if (myEntry.status === 'serving') {
+      setQueueStatus({
+        checkedIn: true, beingSeen: true, position: 0,
+        ticket: myEntry.ticket, clinic: myEntry.institutions?.name || 'Clinic', doctor: myEntry.doctor_name || 'Unassigned',
+      })
+      return
+    }
+
+    // Same rule ClinicOps's own queue board uses (queuePosition there) -
+    // an on-time/early booked patient queues near their appointment time
+    // rather than pure check-in order, so this doesn't disagree with what
+    // front desk is actually looking at. Also scoped to this patient's
+    // own queue only, not every other doctor's line at this clinic -
+    // counting institution-wide is what made this show inflated numbers
+    // once a clinic runs more than one queue.
+    const myCheckedInAt = new Date(myEntry.checked_in_at).getTime()
+    const myApptTime = myEntry.appointments?.scheduled_at ? new Date(myEntry.appointments.scheduled_at).getTime() : null
+    const myPosition = (myApptTime && myCheckedInAt <= myApptTime) ? myApptTime : myCheckedInAt
+
+    let othersQuery = supabase.from('clinic_queue').select('checked_in_at, appointments(scheduled_at)')
+      .eq('status', 'waiting').neq('id', myEntry.id)
+    othersQuery = myEntry.queue_id
+      ? othersQuery.eq('queue_id', myEntry.queue_id)
+      : othersQuery.eq('institution_id', myEntry.institution_id).is('queue_id', null)
+    const { data: others } = await othersQuery
+
+    const aheadCount = (others||[]).filter(o => {
+      const oCheckedInAt = new Date(o.checked_in_at).getTime()
+      const oApptTime = o.appointments?.scheduled_at ? new Date(o.appointments.scheduled_at).getTime() : null
+      const oPosition = (oApptTime && oCheckedInAt <= oApptTime) ? oApptTime : oCheckedInAt
+      return oPosition < myPosition
+    }).length
 
     setQueueStatus({
-      checkedIn: true,
-      position: count || 0,
+      checkedIn: true, beingSeen: false,
+      position: aheadCount,
       ticket: myEntry.ticket,
       clinic: myEntry.institutions?.name || 'Clinic',
       doctor: myEntry.doctor_name || 'Unassigned',
@@ -482,11 +511,12 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       {queueStatus.checkedIn&&(
         <div style={{margin:'14px 16px 0',background:C.navy,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
           <div style={{width:44,height:44,borderRadius:'12px',background:'rgba(255,255,255,0.15)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-            <div style={{fontSize:'16px',fontWeight:800,color:'#fff',lineHeight:1}}>{queueStatus.position}</div>
-            <div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{isEn?'ahead':'位在前'}</div>
+            {queueStatus.beingSeen
+              ? <div style={{fontSize:'20px'}}>◉</div>
+              : <><div style={{fontSize:'16px',fontWeight:800,color:'#fff',lineHeight:1}}>{queueStatus.position}</div><div style={{fontSize:'8px',color:'rgba(255,255,255,0.7)'}}>{isEn?'ahead':'位在前'}</div></>}
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${queueStatus.position} people ahead of you`:`您前面有${queueStatus.position}位`}</div>
+            <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{queueStatus.beingSeen ? (isEn?'You’re being seen now':'您正在接受診症') : (isEn?`${queueStatus.position} people ahead of you`:`您前面有${queueStatus.position}位`)}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.7)',marginTop:'2px'}}>{queueStatus.ticket} · {queueStatus.clinic} · {queueStatus.doctor}</div>
           </div>
         </div>
