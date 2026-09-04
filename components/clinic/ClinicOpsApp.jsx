@@ -6274,11 +6274,18 @@ function ClaimsScreen({ onNavPayment }) {
             {label:'Insurance plan selected', ok:!!selectedPlan},
             {label:'Consultation record attached', ok:!!pendingRecord},
             {label:'Diagnosis on file', ok:!!pendingRecord?.diagnosis},
-            {label:'ICD-10 code on file', ok:pendingIcd10Codes.length>0},
+            {label:'ICD-10 code on file', ok:pendingIcd10Codes.length>0, detail:pendingIcd10Codes.length>0?pendingIcd10Codes.join(', '):null},
           ].map((item,i,arr)=>(
-            <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <span style={{color:item.ok?C.green:C.red,fontSize:'13px'}}>{item.ok?'\u2713':'\u2715'}</span>
-              <span style={{fontSize:'13px',color:item.ok?C.text:C.red}}>{item.label}</span>
+            <div key={i} style={{padding:'6px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <span style={{color:item.ok?C.green:C.red,fontSize:'13px'}}>{item.ok?'\u2713':'\u2715'}</span>
+                <span style={{fontSize:'13px',color:item.ok?C.text:C.red}}>{item.label}</span>
+              </div>
+              {/* Shows the actual code(s) that will go on the claim, not
+                  just a checkmark - this is what a doctor/front desk
+                  actually needs to see to confirm the right coding is
+                  about to be submitted, not just that some code exists. */}
+              {item.detail&&<div style={{fontSize:'11px',color:C.textMuted,marginLeft:'21px'}}>{item.detail}</div>}
             </div>
           ))}
         </Card>
@@ -6327,6 +6334,12 @@ function ClaimsScreen({ onNavPayment }) {
           {'\u26a0'} {adjudicationResult.verificationFlag==='referral_required'
             ? 'This plan requires a doctor referral for this practitioner, and none is on file yet - submitted, but held for manual review until a referral is approved.'
             : 'This practitioner isn\u2019t verified (not on a clinic roster, no matching Business Registration) - submitted, but held for manual review rather than auto-settled.'}
+        </div>}
+        {/* Direct visual confirmation that the ICD-10 code(s) captured on
+            the consultation actually made it onto this claim, rather than
+            requiring a trip to the insurer/database to check. */}
+        {adjudicationResult&&pendingIcd10Codes.length>0&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.green,textAlign:'left'}}>
+          {'✓'} ICD-10 code{pendingIcd10Codes.length>1?'s':''} submitted with this claim: <strong>{pendingIcd10Codes.join(', ')}</strong>
         </div>}
         {adjudicationResult&&<div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px',textAlign:'left',fontSize:'12px'}}>
           <div style={{display:'flex',justifyContent:'space-between',marginBottom:'4px'}}><span>Gross amount</span><strong>HK${adjudicationResult.fees.grossAmount}</strong></div>
