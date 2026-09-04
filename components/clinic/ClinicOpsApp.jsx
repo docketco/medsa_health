@@ -123,6 +123,16 @@ function hoursRemaining(checkedInAt) {
   return Math.max(0, remaining / (60*60*1000))
 }
 
+// A patient who checked in on time or early for a booked appointment
+// should queue near their appointment time, not get pushed behind
+// walk-ins who simply arrived earlier in the day. Someone who checks in
+// late for their appointment has already lost that slot, so they queue
+// by when they actually arrived, same as a walk-in.
+function queuePosition(q) {
+  if (q.appointmentTime && q.checkedInAt <= q.appointmentTime) return q.appointmentTime
+  return q.checkedInAt
+}
+
 // Module-level, not scoped to any one component - moved here after
 // discovering it was previously local to InventoryScreen only, making it
 // inaccessible to the new bulk staff import (a different component)
@@ -1197,7 +1207,10 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   // Completed/no-show tickets used to sit here all day (the queue only
   // ever grew, never shrank) - a doctor's active list should only be who
   // still needs seeing.
-  const activeQueue = queue.filter(q=>q.status!=='done'&&q.status!=='no_show')
+  // Sorted by queuePosition, not raw check-in order - an on-time/early
+  // booked patient queues near their appointment time rather than behind
+  // every walk-in who happened to arrive earlier in the day.
+  const activeQueue = queue.filter(q=>q.status!=='done'&&q.status!=='no_show').sort((a,b)=>queuePosition(a)-queuePosition(b))
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>My Patients</h2>
@@ -2484,8 +2497,13 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
   // purely a display grouping.
   const [checkedInView,setCheckedInView]=useState('speciality')
   // Keep each entry's real position in `queue` (used by onRemoveFromQueue)
-  // even after sorting/grouping for display.
-  const checkedInSortedByTime = queue.map((q,i)=>({...q,_idx:i})).sort((a,b)=>a.checkedInAt-b.checkedInAt)
+  // even after sorting/grouping for display. Sorted by queuePosition, not
+  // raw check-in time - a patient who arrived on time or early for their
+  // booked appointment queues near that appointment time rather than
+  // behind every walk-in who happened to arrive earlier in the day; a
+  // patient late for their appointment queues by when they actually
+  // checked in, same as a walk-in.
+  const checkedInSortedByTime = queue.map((q,i)=>({...q,_idx:i})).sort((a,b)=>queuePosition(a)-queuePosition(b))
   const checkedInBySpeciality = checkedInSortedByTime.reduce((acc,q)=>{
     const key = q.department || 'General'
     ;(acc[key] = acc[key]||[]).push(q)
@@ -2495,9 +2513,12 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
   // One shared board when the clinic hasn't set up named queues (the
   // common case); a separate "now serving" + call-next per queue once
   // it has, since each queue's line is independent of the others.
+  // Built from checkedInSortedByTime (queuePosition order), not raw
+  // `queue` - otherwise "Call next" pulled whoever happened to be first
+  // in check-in order even when an on-time appointment should go first.
   const queueGroups = queues.length>1
-    ? queues.map(q=>({ id:q.id, name:q.name, entries: queue.filter(e=>e.queueId===q.id) }))
-    : [{ id:null, name:null, entries: queue }]
+    ? queues.map(q=>({ id:q.id, name:q.name, entries: checkedInSortedByTime.filter(e=>e.queueId===q.id) }))
+    : [{ id:null, name:null, entries: checkedInSortedByTime }]
 
   async function callNext(waitingList) {
     const next = waitingList[0]
@@ -6453,7 +6474,7 @@ export default function ClinicOpsApp() {
       const queueDayEnd = new Date(); queueDayEnd.setHours(23,59,59,999)
       const { data: queueRows } = await supabase
         .from('clinic_queue')
-        .select('*, patients(medsa_id)')
+        .select('*, patients(medsa_id), appointments(scheduled_at)')
         .eq('institution_id', institutionId)
         .gte('checked_in_at', queueDayStart.toISOString())
         .lte('checked_in_at', queueDayEnd.toISOString())
@@ -6467,6 +6488,7 @@ export default function ClinicOpsApp() {
         doctor: r.doctor_name || 'Unassigned',
         room: r.room || '-',
         checkedInAt: new Date(r.checked_in_at).getTime(),
+        appointmentTime: r.appointments?.scheduled_at ? new Date(r.appointments.scheduled_at).getTime() : null,
         department: r.department || 'All departments',
         status: r.status,
         checkinNote: r.checkin_note || null,
@@ -6596,6 +6618,7 @@ export default function ClinicOpsApp() {
       institution_id: staffMember?.institutionId || null,
       patient_id: patient.id,
       patient_name: patient.full_name,
+      appointment_id: matchingAppt?.id || null,
       // For a genuine walk-in (no booked appointment), front desk picks
       // the doctor by speciality right at check-in (explicitDoctor) -
       // that's the real assignment, not a guess. Falls back further only
@@ -6639,6 +6662,7 @@ export default function ClinicOpsApp() {
       doctor: data.doctor_name, room: data.room, checkedInAt: new Date(data.checked_in_at).getTime(),
       department: data.department, status: data.status, checkinNote: data.checkin_note || null,
       appointmentId: matchingAppt?.id || null,
+      appointmentTime: matchingAppt?.scheduled_at ? new Date(matchingAppt.scheduled_at).getTime() : null,
     }])
     setCheckInError(null)
 
