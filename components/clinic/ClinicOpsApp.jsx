@@ -96,6 +96,27 @@ async function loadClinicDoctors() {
   return (data||[]).map(d => ({ name: d.full_name, department: d.department }))
 }
 
+// Hides slots in whichever hours are already at a doctor's online-booking
+// cap (Working Hours -> "Online bookings allowed per hour"), so the rest
+// of that hour stays reserved for walk-ins instead of getting filled up
+// by bookings alone. excludeApptId lets a reschedule not count the
+// appointment being moved against its own original hour.
+async function filterSlotsByHourlyCap(slots, doctorName, dayDate, maxPerHour, excludeApptId) {
+  if (!maxPerHour) return slots
+  const dayStart = new Date(dayDate); dayStart.setHours(0,0,0,0)
+  const dayEnd = new Date(dayDate); dayEnd.setHours(23,59,59,999)
+  const { data } = await supabase.from('appointments').select('id,scheduled_at')
+    .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops').neq('status', 'cancelled')
+    .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+  const countByHour = {}
+  ;(data||[]).forEach(a => {
+    if (excludeApptId && a.id === excludeApptId) return
+    const hr = new Date(a.scheduled_at).getHours()
+    countByHour[hr] = (countByHour[hr]||0) + 1
+  })
+  return slots.filter(t => (countByHour[parseInt(t.split(':')[0])]||0) < maxPerHour)
+}
+
 function hoursRemaining(checkedInAt) {
   const elapsed = Date.now() - checkedInAt
   const remaining = 24*60*60*1000 - elapsed
@@ -2655,6 +2676,8 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
+  const [saveError,setSaveError]=useState(null)
+  const [savingChange,setSavingChange]=useState(false)
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
@@ -2743,7 +2766,11 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
     async function loadSlots() {
       setSlotsLoading(true)
       if (!appt?.doctor) { setAvailableSlots([]); setSlotsLoading(false); return }
-      const dayOfWeek = new Date().getDay()
+      // The day this appointment is actually scheduled for, not "today" -
+      // rescheduling an appointment booked for a different day than today
+      // was checking today's working hours instead of that day's.
+      const apptDay = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
+      const dayOfWeek = apptDay.getDay()
       const { data } = await supabase.from('doctor_availability').select('*')
         .eq('doctor_name', appt.doctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
       if (!data || data.is_off) { setAvailableSlots([]); setSlotsLoading(false); return }
@@ -2756,7 +2783,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
         current += data.slot_duration_minutes || 30
       }
-      setAvailableSlots(slots)
+      setAvailableSlots(await filterSlotsByHourlyCap(slots, appt.doctor, apptDay, data.max_bookings_per_hour, appt.id))
       setSlotsLoading(false)
     }
     loadSlots()
@@ -2934,8 +2961,8 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             // it did anything without a manual page reload.
             if (result === true) { onRefreshAppointments?.(); onClose() }
           }}>{checkingIn?'Checking in...':'✓ Check in'}</Btn>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setMode('reschedule')}>📅 Change date/time</Btn>
-          <Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor/treatment</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setSaveError(null);setMode('reschedule')}}>📅 Change date/time</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>{setSaveError(null);setMode('switch')}}>⇄ Switch doctor/treatment</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
           {canLogDiagnosis
             ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
@@ -2961,9 +2988,16 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
               <div key={t} onClick={()=>setNewTime(t)} style={{border:`0.5px solid ${newTime===t?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newTime===t?C.green:C.card,color:newTime===t?'#fff':C.text}}>{t}</div>
             ))}
           </div>}
+          {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,time:newTime||appt.time});onClose()}} disabled={!newTime}>Confirm change</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={!newTime||savingChange} onClick={async()=>{
+              setSavingChange(true); setSaveError(null)
+              const res = await onSave({...appt,time:newTime||appt.time})
+              setSavingChange(false)
+              if (res?.ok===false) { setSaveError(res.error); return }
+              onClose()
+            }}>{savingChange?'Saving…':'Confirm change'}</Btn>
           </div>
         </>}
 
@@ -2976,9 +3010,16 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
               <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
             ))}
           </div>
+          {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,doctor:newDoctor||appt.doctor});onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={!newDoctor||savingChange} onClick={async()=>{
+              setSavingChange(true); setSaveError(null)
+              const res = await onSave({...appt,doctor:newDoctor||appt.doctor})
+              setSavingChange(false)
+              if (res?.ok===false) { setSaveError(res.error); return }
+              onClose()
+            }}>{savingChange?'Saving…':'Confirm switch'}</Btn>
           </div>
         </>}
 
@@ -4045,6 +4086,11 @@ function WorkingHoursScreen() {
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [slotDuration,setSlotDuration]=useState(30)
+  // Most patients here are walk-ins, not online bookings - without a cap,
+  // online booking could fill every single slot in a doctor's day, leaving
+  // no room for the walk-ins who actually make up most of the traffic.
+  // null = no cap, every slot stays bookable.
+  const [maxBookingsPerHour,setMaxBookingsPerHour]=useState(null)
 
   useEffect(() => {
     loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
@@ -4056,9 +4102,11 @@ function WorkingHoursScreen() {
       .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops')
     const byDay = {}
     for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 } // default: closed Sundays
+    setMaxBookingsPerHour(null)
     ;(data||[]).forEach(row => {
       byDay[row.day_of_week] = { start: row.start_time?.slice(0,5)||'09:00', end: row.end_time?.slice(0,5)||'17:00', is_off: row.is_off }
       setSlotDuration(row.slot_duration_minutes || 30)
+      setMaxBookingsPerHour(row.max_bookings_per_hour ?? null)
     })
     setHours(byDay)
     setLoading(false)
@@ -4076,6 +4124,7 @@ function WorkingHoursScreen() {
     const rows = Object.entries(hours).map(([day, h]) => ({
       doctor_name: selectedDoctor, institution_source: 'clinic_ops', day_of_week: parseInt(day),
       start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: slotDuration,
+      max_bookings_per_hour: maxBookingsPerHour,
       updated_at: new Date().toISOString(),
     }))
     await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
@@ -4103,6 +4152,17 @@ function WorkingHoursScreen() {
           <div style={{display:'flex',gap:'8px'}}>
             {[15,20,30,45,60].map(m=>(
               <div key={m} onClick={()=>{setSlotDuration(m);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:slotDuration===m?C.green:C.card,color:slotDuration===m?'#fff':C.text}}>{m}m</div>
+            ))}
+          </div>
+        </Card>
+
+        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>Online bookings allowed per hour</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Reserves the rest of each hour for walk-ins - most patients here don't book ahead.</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <div onClick={()=>{setMaxBookingsPerHour(null);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:maxBookingsPerHour===null?C.green:C.card,color:maxBookingsPerHour===null?'#fff':C.text}}>No cap</div>
+            {[1,2,3,4,6].map(n=>(
+              <div key={n} onClick={()=>{setMaxBookingsPerHour(n);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:maxBookingsPerHour===n?C.green:C.card,color:maxBookingsPerHour===n?'#fff':C.text}}>{n}</div>
             ))}
           </div>
         </Card>
@@ -4182,7 +4242,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
         current += data.slot_duration_minutes || 30
       }
-      setNewApptSlots(slots)
+      setNewApptSlots(await filterSlotsByHourlyCap(slots, newApptDoctor, selectedDay, data.max_bookings_per_hour))
       setNewApptSlotsLoading(false)
     }
     if (showNewApptForm) loadSlots()
@@ -4216,6 +4276,19 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     const scheduledAt = new Date(selectedDay)
     const [h,m] = newApptTime.split(':').map(Number)
     scheduledAt.setHours(h||9, m||0, 0, 0)
+    // The slot picker above already hides times another patient holds, but
+    // that's a point-in-time read - two people booking the same slot at
+    // nearly the same moment could both pass that check. Re-check right
+    // before writing so the second one gets a clear error instead of a
+    // silent double-booking.
+    const { data: clash } = await supabase.from('appointments').select('id')
+      .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops')
+      .eq('scheduled_at', scheduledAt.toISOString()).neq('status', 'cancelled').maybeSingle()
+    if (clash) {
+      setNewApptSaving(false)
+      setNewApptError(`${newApptDoctor} already has another appointment at ${newApptTime}. Pick a different time.`)
+      return
+    }
     const { error: insErr } = await supabase.from('appointments').insert({
       patient_id: newApptPatient.id,
       doctor_name: newApptDoctor,
@@ -4337,13 +4410,22 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     checkDataWindow(appt.medsaId, true)
   }
 
+  // Reschedule, switch-doctor and notes edits used to only ever update
+  // local React state here - onSave never actually wrote scheduled_at,
+  // doctor_name or reason_for_visit to Supabase, so a "successful" change
+  // silently reverted the moment the page reloaded or loadRealAppointments
+  // ran again. Now every branch writes through to the database and
+  // refreshes from it, and reschedule/switch also re-check for a clash
+  // right before writing (the slot picker's own list can go stale between
+  // opening the form and confirming).
   async function handleSaveAppt(updated) {
+    const original = activeAppt
+    if (!original) return { ok: true }
+
     if (updated.cancelled && updated.isReal && updated.medsaId) {
-      // Real booking (not demo data) - actually cancel it in Supabase,
-      // not just remove it from the local list. Scoped to this exact
-      // appointment id when we have one - the old day-range lookup
-      // (no id filter) meant cancelling one of a patient's two same-day
-      // appointments cancelled both.
+      // Scoped to this exact appointment id when we have one - the old
+      // day-range lookup (no id filter) meant cancelling one of a
+      // patient's two same-day appointments cancelled both.
       if (updated.id) {
         await supabase.from('appointments').update({status:'cancelled'}).eq('id', updated.id)
       } else {
@@ -4354,14 +4436,42 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
           await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
         }
       }
+      loadRealAppointments(selectedDay)
+      return { ok: true }
     }
-    setAppointments(prev => {
-      const idx = prev.indexOf(activeAppt)
-      if (updated.cancelled) return prev.filter((_,i)=>i!==idx)
-      const next = [...prev]
-      next[idx] = updated
-      return next
-    })
+
+    if (updated.id && updated.time && updated.time !== original.time) {
+      const scheduledAt = new Date(selectedDay)
+      const [h,m] = updated.time.split(':').map(Number)
+      scheduledAt.setHours(h||9, m||0, 0, 0)
+      const { data: clash } = await supabase.from('appointments').select('id')
+        .eq('doctor_name', original.doctor).eq('institution_source','clinic_ops')
+        .eq('scheduled_at', scheduledAt.toISOString()).neq('status','cancelled').neq('id', updated.id).maybeSingle()
+      if (clash) return { ok:false, error:`${original.doctor} already has another appointment at ${updated.time}. Pick a different time.` }
+      const { error } = await supabase.from('appointments').update({ scheduled_at: scheduledAt.toISOString() }).eq('id', updated.id)
+      if (error) return { ok:false, error: error.message }
+      loadRealAppointments(selectedDay)
+      return { ok: true }
+    }
+
+    if (updated.id && updated.doctor && updated.doctor !== original.doctor) {
+      const { data: clash } = await supabase.from('appointments').select('id')
+        .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops')
+        .eq('scheduled_at', original.scheduledAt).neq('status','cancelled').neq('id', updated.id).maybeSingle()
+      if (clash) return { ok:false, error:`${updated.doctor} already has another appointment at ${original.time}. Pick a different doctor.` }
+      const { error } = await supabase.from('appointments').update({ doctor_name: updated.doctor }).eq('id', updated.id)
+      if (error) return { ok:false, error: error.message }
+      loadRealAppointments(selectedDay)
+      return { ok: true }
+    }
+
+    if (updated.id && updated.notes !== undefined && updated.notes !== original.notes) {
+      await supabase.from('appointments').update({ reason_for_visit: updated.notes }).eq('id', updated.id)
+      loadRealAppointments(selectedDay)
+      return { ok: true }
+    }
+
+    return { ok: true }
   }
   return (
     <PageWrap maxWidth={640}>
