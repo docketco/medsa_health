@@ -2503,7 +2503,11 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
   // behind every walk-in who happened to arrive earlier in the day; a
   // patient late for their appointment queues by when they actually
   // checked in, same as a walk-in.
-  const checkedInSortedByTime = queue.map((q,i)=>({...q,_idx:i})).sort((a,b)=>queuePosition(a)-queuePosition(b))
+  // A ticket drops off this board the moment it's done (the doctor's own
+  // consultation submission sets that automatically - no manual "Mark
+  // done" needed) or marked no-show, instead of sitting there all day
+  // needing a manual "Cancel check-in" to clear it.
+  const checkedInSortedByTime = queue.map((q,i)=>({...q,_idx:i})).filter(q=>q.status!=='done'&&q.status!=='no_show').sort((a,b)=>queuePosition(a)-queuePosition(b))
   const checkedInBySpeciality = checkedInSortedByTime.reduce((acc,q)=>{
     const key = q.department || 'General'
     ;(acc[key] = acc[key]||[]).push(q)
@@ -2595,12 +2599,14 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
                       <div style={{fontSize:'13px',fontWeight:500}}>{q.patientName}</div>
                       <div style={{fontSize:'12px',color:C.textSub}}>{q.doctor}</div>
                     </div>
-                    <Badge text="Serving" type="ok"/>
+                    <Badge text="In consultation" type="ok"/>
                   </div>
-                  <div style={{display:'flex',gap:'8px'}}>
-                    <Btn style={{flex:1}} onClick={()=>onUpdateStatus(q,'no_show')}>No-show</Btn>
-                    <Btn variant="primary" style={{flex:1}} onClick={()=>onUpdateStatus(q,'done')}>Mark done</Btn>
-                  </div>
+                  {/* No manual "Mark done" here - the doctor's own
+                      consultation submission marks the ticket done and
+                      drops it off this board automatically. No-show stays
+                      manual since only front desk knows a patient never
+                      actually walked in. */}
+                  <Btn style={{width:'100%'}} onClick={()=>onUpdateStatus(q,'no_show')}>No-show</Btn>
                 </Card>
               ))}
             </div>
@@ -2619,7 +2625,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
         {queue.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No one checked in yet.</div>}
         {checkedInView==='time'&&checkedInSortedByTime.map(q=>{
           const hrsLeft = hoursRemaining(q.checkedInAt)
-          const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
+          const statusBadge = {waiting:['Waiting','due'],serving:['In consultation','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
           return (
             <Card key={q._idx} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:q._idx})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
               <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
@@ -2637,7 +2643,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
             <div style={{fontSize:'11px',fontWeight:600,color:C.textSub,marginBottom:'6px'}}>{speciality}</div>
             {entries.map(q=>{
               const hrsLeft = hoursRemaining(q.checkedInAt)
-              const statusBadge = {waiting:['Waiting','due'],serving:['Serving','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
+              const statusBadge = {waiting:['Waiting','due'],serving:['In consultation','ok'],done:['Done','ok'],no_show:['No-show','full']}[q.status] || ['Waiting','due']
               return (
                 <Card key={q._idx} onClick={()=>setActiveAction({type:'checkedin', entry:q, index:q._idx})} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer',marginBottom:'8px'}}>
                   <div style={{width:32,height:32,borderRadius:'8px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
@@ -2675,10 +2681,10 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAction.entry.patientName}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{activeAction.type==='checkedin'?`${activeAction.entry.ticket} · checked in`:`${activeAction.entry.time} · scheduled`}</div>
           {activeAction.type==='checkedin'&&activeAction.entry.status==='waiting'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'serving');setActiveAction(null)}}>Call now</Btn>}
-          {activeAction.type==='checkedin'&&activeAction.entry.status==='serving'&&<div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
-            <Btn style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'no_show');setActiveAction(null)}}>No-show</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'done');setActiveAction(null)}}>Mark done</Btn>
-          </div>}
+          {/* No manual "Mark done" - the doctor's own consultation
+              submission marks the ticket done and drops it off the board
+              automatically. */}
+          {activeAction.type==='checkedin'&&activeAction.entry.status==='serving'&&<Btn style={{width:'100%',marginBottom:'8px'}} onClick={async()=>{await onUpdateStatus(activeAction.entry,'no_show');setActiveAction(null)}}>No-show</Btn>}
           {activeAction.type==='checkedin'
             ? <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onRemoveFromQueue(activeAction.index);setActiveAction(null)}}>↩ Cancel check-in</Btn>
             : <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await onCancelAppointment(activeAction.entry.id);setActiveAction(null);loadTodaysQueue()}}>✕ Cancel appointment</Btn>}
