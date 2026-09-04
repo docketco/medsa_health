@@ -2194,10 +2194,44 @@ function MedAlarmCard({ medId, med, schedule, next, defaultOn, defaultTime, isEn
   )
 }
 
-function CalendarScreen({ isEn, appointments=[], medications=[] }) {
+function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCancelled }) {
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
+
+  // A patient previously had no way to cancel a booking from the app at
+  // all - this screen only ever displayed appointments, with no click
+  // handler on the card. Cancelling here is a real status flip (same
+  // 'cancelled' status ClinicOps itself uses), which is also what
+  // automatically frees the slot back up: every availability check
+  // (this app's own booking flow and ClinicOps's) already excludes
+  // cancelled appointments, so nothing extra is needed to "reopen" it.
+  const [activeAppt,setActiveAppt]=useState(null)
+  const [cancelling,setCancelling]=useState(false)
+  const [cancelledMsg,setCancelledMsg]=useState(null)
+
+  async function handleCancelAppointment(appt) {
+    setCancelling(true)
+    const { error } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appt.id)
+    setCancelling(false)
+    if (error) { setCancelledMsg(isEn?`Could not cancel: ${error.message}`:`無法取消：${error.message}`); return }
+    setActiveAppt(null)
+    setCancelledMsg(isEn?'Appointment cancelled.':'預約已取消。')
+    setTimeout(()=>setCancelledMsg(null), 4000)
+    onCancelled?.()
+    // Best-effort, same opt-in/no-op-safe pattern as the booking
+    // confirmation email - never blocks the cancellation itself, which
+    // already succeeded above.
+    if (patient?.notify_email !== false && patient?.email) {
+      fetch('/api/appointments/notify_cancellation', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          email: patient.email, patientName: patient.full_name,
+          doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
+        }),
+      }).catch(()=>{})
+    }
+  }
 
   async function handleAddReminder(m) {
     setAddingReminderId(m.id)
@@ -2255,27 +2289,46 @@ function CalendarScreen({ isEn, appointments=[], medications=[] }) {
         </div>
       </div>
       <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
-      {appointments.length>0 ? appointments.map((appt,i)=>{
-        const dt = new Date(appt.scheduled_at)
-        const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
-        const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Hong_Kong'})
-        const drName = appt.practitioners?.full_name ? 'Dr '+appt.practitioners.full_name.split(',')[0] : appt.appointment_type
-        return(
-          <Card key={i} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'14px',fontWeight:500}}>{drName}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
-              <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
-            </div>
-            <div style={{textAlign:'right',flexShrink:0}}>
-              <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>{dateStr}</div>
-              {appt.patient_pays>0&&<div style={{fontSize:'11px',color:C.amber}}>HK${appt.patient_pays} due</div>}
-            </div>
-          </Card>
-        )
-      }) : <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No upcoming appointments yet.':'暫無即將到來的預約。'}</div>}
+      {cancelledMsg&&<div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>{'✓'} {cancelledMsg}</div>}
+      {(() => {
+        // Only what's actually still ahead and not cancelled - this used
+        // to render every appointment ever booked (past, cancelled,
+        // everything) under an "Upcoming" heading with no way to act on
+        // any of it.
+        const upcoming = appointments.filter(a => a.status!=='cancelled' && new Date(a.scheduled_at).getTime() > Date.now())
+          .sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at))
+        if (upcoming.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No upcoming appointments yet.':'暫無即將到來的預約。'}</div>
+        return upcoming.map((appt,i)=>{
+          const dt = new Date(appt.scheduled_at)
+          const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
+          const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Hong_Kong'})
+          const drName = appt.practitioners?.full_name ? 'Dr '+appt.practitioners.full_name.split(',')[0] : (appt.doctor_name || appt.appointment_type)
+          return(
+            <Card key={i} onClick={()=>setActiveAppt(appt)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:'pointer'}}>
+              <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'14px',fontWeight:500}}>{drName}</div>
+                <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
+                <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{dateStr}</div>
+                {appt.patient_pays>0&&<div style={{fontSize:'11px',color:C.amber}}>HK${appt.patient_pays} due</div>}
+              </div>
+              <span style={{color:C.textMuted,fontSize:'16px'}}>{'›'}</span>
+            </Card>
+          )
+        })
+      })()}
+      {activeAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setActiveAppt(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,margin:'0 16px',padding:'24px'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAppt.practitioners?.full_name ? 'Dr '+activeAppt.practitioners.full_name.split(',')[0] : (activeAppt.doctor_name || activeAppt.appointment_type)}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{new Date(activeAppt.scheduled_at).toLocaleString('en-HK',{dateStyle:'full',timeStyle:'short'})}</div>
+          <Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
+        </div>
+      </div>}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
       {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
         <MedAlarmCard key={i} medId={m.id} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} next="Check schedule" defaultOn={m.alarm_enabled||false} defaultTime={m.alarm_time?.slice(0,5)||'08:00'} isEn={isEn}/>
@@ -4330,7 +4383,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} patient={patient} onCancelled={loadRealData}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
