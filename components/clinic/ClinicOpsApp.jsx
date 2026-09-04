@@ -3047,11 +3047,16 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
     if (!/[^A-Za-z0-9]/.test(newPw)) { setPwError('New password must contain at least one special character.'); return }
     if (newPw !== newPwConfirm) { setPwError('New password and confirmation don\'t match.'); return }
     setPwSaving(true)
-    const { data: ok } = await supabase.rpc('verify_staff_password', { p_medsa_id: staffMember.id, p_password: currentPw })
-    if (!ok) { setPwError('Current password is incorrect.'); setPwSaving(false); return }
-    const { error: pwErr } = await supabase.rpc('set_staff_password', { p_medsa_id: staffMember.id, p_new_password: newPw })
+    // Real change, atomically - was two separate calls (verify, then
+    // set_staff_password), and set_staff_password only ever writes when
+    // no password exists yet (a one-time onboarding guard), so an actual
+    // change to an already-provisioned account silently did nothing: no
+    // error, but the old password kept working. change_staff_password
+    // both proves the current password and overwrites in one call.
+    const { data: ok, error: pwErr } = await supabase.rpc('change_staff_password', { p_medsa_id: staffMember.id, p_current_password: currentPw, p_new_password: newPw })
     setPwSaving(false)
     if (pwErr) { setPwError(pwErr.message); return }
+    if (!ok) { setPwError('Current password is incorrect.'); return }
     setCurrentPw(''); setNewPw(''); setNewPwConfirm('')
     setChangingPw(false)
     setPwSuccess(true)
@@ -6716,11 +6721,19 @@ export default function ClinicOpsApp() {
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} institutionId={institutionId} onNavCredentials={()=>setScreen('mycredentials')} onNavStaff={()=>setScreen('staff')}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
-        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('schedule');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
+        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('checkin');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
           prefillName={newPatientPrefillName}
-          onCreated={newPatientOrigin==='schedule' ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')} : undefined}
+          onCreated={newPatientOrigin==='schedule'
+            ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')}
+            // Was undefined here - a brand-new patient registered from
+            // the Check-In screen's own "new patient" button got created
+            // but never actually checked in, silently dropping them
+            // instead of joining the walk-in queue like every other
+            // check-in does.
+            : (patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}
+          }
         />}
         {screen==='schedule'&&<ScheduleScreen
           staffMember={staffMember}
