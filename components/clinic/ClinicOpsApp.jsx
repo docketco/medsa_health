@@ -69,7 +69,7 @@ function Toggle({ checked=false, onChange }) {
 }
 
 function Badge({ text, type }) {
-  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red],waiting:[C.blueLight,C.blue]}
+  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red],waiting:[C.blueLight,C.blue],muted:[C.card,C.textSub]}
   const [bg,fg]=map[type]||map.ok
   return <span style={{fontSize:'11px',background:bg,color:fg,padding:'4px 10px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
 }
@@ -1788,6 +1788,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       if (queueEntry?.id) {
         await supabase.from('clinic_queue').update({ status: 'done' }).eq('id', queueEntry.id)
       }
+      // Mark the linked appointment finished too, not just the queue ticket -
+      // the Schedule page reads appointments.status, and without this it had
+      // no way to ever show a consultation as actually done.
+      if (queueEntry?.appointmentId) {
+        await supabase.from('appointments').update({ status: 'completed' }).eq('id', queueEntry.appointmentId)
+      }
       setSaved(true)
     } catch (e) {
       setError(e.message)
@@ -2798,6 +2804,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   // consent window AND having actually checked in - being scheduled for
   // today alone isn't enough to log a new diagnosis.
   const isCheckedIn = appt.status==='checked_in'
+  const isCompleted = appt.status==='completed'
   const canLogDiagnosis = withinDataWindow && isCheckedIn && role==='doctor'
 
   // Only offer doctors in the same department/specialty as this
@@ -2813,7 +2820,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         {!loadingPatient&&patientFetchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>⚠ {patientFetchError}</div>}
 
         {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
-          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCheckedIn?'✓ Checked in':'Scheduled'}</div>
+          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCompleted?'✓ Completed':isCheckedIn?'✓ Checked in':'Scheduled'}</div>
           <div style={{fontSize:'17px',fontWeight:700}}>{fullPatient.full_name}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{fullPatient.medsa_id} · DOB {new Date(fullPatient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
           <div style={{display:'flex',gap:'10px'}}>
@@ -2909,7 +2916,12 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
             for whoever clicked it. */}
         {checkInError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5}}>{'⚠'} {checkInError}</div>}
 
-        {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {!mode&&isCompleted&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ This appointment has been completed.</div>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+        </div>}
+
+        {!mode&&!isCompleted&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {!isCheckedIn&&onCheckedIn&&<Btn variant="primary" style={{width:'100%'}} disabled={checkingIn} onClick={async()=>{
             setCheckingIn(true)
             const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient }, false, undefined, true, null, appt.id)
@@ -4374,14 +4386,18 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
         {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
-          <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,cursor:a.status!=='open'?'pointer':'default'}}>
-            <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0}}>{a.time}</div>
+          <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,background:a.status==='completed'?C.card:undefined,cursor:a.status!=='open'?'pointer':'default'}}>
+            <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0,color:a.status==='completed'?C.textMuted:C.text}}>{a.time}</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:'13px',fontWeight:500}}>{a.patient}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{a.doctor} - {a.type}</div>
+              <div style={{fontSize:'13px',fontWeight:500,color:a.status==='completed'?C.textMuted:C.text,textDecoration:a.status==='completed'?'line-through':'none'}}>{a.patient}</div>
+              <div style={{fontSize:'12px',color:C.textMuted}}>{a.doctor} - {a.type}</div>
             </div>
-            {a.status!=='open'&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
-            {a.status==='open'?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>:<><Badge text={a.status==='checked_in'?'✓ Checked in':a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='checked_in'?'ok':a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
+            {a.status!=='open'&&a.status!=='completed'&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
+            {a.status==='open'
+              ?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>
+              :a.status==='completed'
+                ?<Badge text="✓ Done" type="muted"/>
+                :<><Badge text={a.status==='checked_in'?'✓ Checked in':a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='checked_in'?'ok':a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
           </Card>
         ))}
       </div>
