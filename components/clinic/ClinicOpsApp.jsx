@@ -1602,6 +1602,16 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     setReferralSent(true)
   }
   const [drugInfoOpen,setDrugInfoOpen]=useState(null)
+  const [drugInfoData,setDrugInfoData]=useState({}) // prescription index -> {loading, found, effects, intake, precautions, isDangerous}
+  async function loadDrugInfo(i, drugName) {
+    setDrugInfoData(prev=>({...prev,[i]:{loading:true}}))
+    const { data } = await supabase.from('drug_reference').select('*')
+      .eq('drug_name', drugName.trim()).eq('medicine_type', medicineType||'western').maybeSingle()
+    setDrugInfoData(prev=>({...prev,[i]: data
+      ? { loading:false, found:true, effects:data.effects, intake:data.intake_info, precautions:data.precautions, isDangerous:data.is_dangerous_drug }
+      : { loading:false, found:false }
+    }))
+  }
   const [expandedRecord,setExpandedRecord]=useState(null)
   const [reportRequests,setReportRequests]=useState({})
   const [inventoryItems,setInventoryItems]=useState([])
@@ -1798,6 +1808,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       if (rxRows.length>0 && patient) {
         const dbRows = rxRows.map(p=>({
           patient_id: patient.id, medical_record_id: savedRecordId, medication_name: p.drug, dosage: p.dosage, frequency: p.frequency,
+          medicine_type: medicineType||'western',
           quantity: parseInt(p.quantity)||1,
           duration_days: parseInt(p.durationDays)||null,
           times_per_day: parseInt(p.timesPerDay)||null,
@@ -2029,7 +2040,11 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
               </div>
               <input value={rx.dosage} onChange={e=>updateRx(i,'dosage',e.target.value)} placeholder="Dosage" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
               <input value={rx.frequency} onChange={e=>updateRx(i,'frequency',e.target.value)} placeholder="Frequency" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-              {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>setDrugInfoOpen(drugInfoOpen===i?null:i)}>Info</Btn>}
+              {rx.drug.trim()&&<Btn style={{fontSize:'11px',padding:'8px 10px',flexShrink:0}} onClick={()=>{
+                const opening = drugInfoOpen!==i
+                setDrugInfoOpen(opening?i:null)
+                if (opening) loadDrugInfo(i, rx.drug)
+              }}>Info</Btn>}
             </div>
             {/* Direct confirmation that this exact drug name matched a
                 priced inventory item and was added to the bill below -
@@ -2106,8 +2121,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
             </div>
 
             {drugInfoOpen===i&&<div style={{marginTop:'6px',background:C.blueLight,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.text,lineHeight:1.6}}>
-              <strong>{rx.drug} - drug information sheet</strong><br/>
-              Standard adult dosing, common side effects, and interaction warnings will display here once linked to a drug reference database (e.g. HK Department of Health formulary). This same sheet is visible to the patient in their Medsa app alongside this prescription.
+              <strong>{rx.drug} - drug information</strong>
+              {drugInfoData[i]?.loading&&<div style={{color:C.textMuted,marginTop:'4px'}}>Checking drug library...</div>}
+              {!drugInfoData[i]?.loading&&drugInfoData[i]?.found&&<>
+                {drugInfoData[i].isDangerous&&<div style={{color:C.red,fontWeight:600,marginTop:'6px'}}>{'⚠'} Dangerous Drugs Ordinance - statutory tracking required</div>}
+                <div style={{marginTop:'6px'}}><strong>Effects:</strong> {drugInfoData[i].effects||'-'}</div>
+                <div style={{marginTop:'4px'}}><strong>Intake:</strong> {drugInfoData[i].intake||'-'}</div>
+                <div style={{marginTop:'4px',color:C.red}}><strong>Precautions:</strong> {drugInfoData[i].precautions||'-'}</div>
+              </>}
+              {!drugInfoData[i]?.loading&&drugInfoData[i]?.found===false&&<div style={{color:C.textMuted,marginTop:'4px'}}>No reference on file yet for "{rx.drug}" - front desk can add effects, intake instructions, and precautions when dispensing this prescription, and it'll show here automatically from then on.</div>}
             </div>}
           </div>
           )
