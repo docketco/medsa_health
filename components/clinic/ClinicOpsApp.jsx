@@ -96,6 +96,33 @@ async function loadClinicDoctors() {
   return (data||[]).map(d => ({ name: d.full_name, department: d.department }))
 }
 
+// Queues should follow the doctors/departments a clinic actually has by
+// default, without a practice manager first having to manually create a
+// same-named queue for each one - this creates any department's queue
+// that's still missing, the first time it's needed. A practice manager's
+// own manually-added extra queues (no department) are untouched and
+// still coexist for front desk to pick from.
+async function ensureDepartmentQueues(institutionId) {
+  if (!institutionId) return
+  const doctors = await loadClinicDoctors()
+  const departments = [...new Set(doctors.map(d=>d.department).filter(Boolean))]
+  if (departments.length === 0) return
+  const { data: existing } = await supabase.from('clinic_queues').select('department,ticket_prefix').eq('institution_id', institutionId)
+  const existingDepartments = new Set((existing||[]).map(q=>q.department).filter(Boolean))
+  const usedPrefixes = new Set((existing||[]).map(q=>q.ticket_prefix))
+  const missing = departments.filter(d => !existingDepartments.has(d))
+  if (missing.length === 0) return
+  const rows = missing.map(dept => {
+    const letter = (dept.match(/[A-Za-z]/)||['Q'])[0].toUpperCase()
+    let candidate = letter
+    let n = 1
+    while (usedPrefixes.has(candidate)) { candidate = letter + n; n++ }
+    usedPrefixes.add(candidate)
+    return { institution_id: institutionId, name: dept, ticket_prefix: candidate.slice(0,2), department: dept, active: true }
+  })
+  await supabase.from('clinic_queues').insert(rows)
+}
+
 // Hides slots in whichever hours are already at a doctor's online-booking
 // cap (Working Hours -> "Online bookings allowed per hour"), so the rest
 // of that hour stays reserved for walk-ins instead of getting filled up
@@ -605,6 +632,18 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     loadQueues()
   }, [staffMember?.institutionId])
 
+  // Recommend the doctor/department's own queue as the default the
+  // moment a doctor is picked (or on load, using the checking-in staff
+  // member's own department) - front desk can still override with a tap
+  // on any other queue chip, this just makes the default the right one
+  // instead of always whichever queue happened to be created first.
+  useEffect(() => {
+    if (queues.length <= 1) return
+    const dept = checkInDoctors.find(d=>d.name===selectedCheckInDoctor)?.department || staffMember?.department
+    const match = queues.find(q=>q.department===dept)
+    if (match) setSelectedQueueId(match.id)
+  }, [selectedCheckInDoctor, queues])
+
   // Shared by both scan and search check-in paths - records the
   // consent answer asked at check-in (appointment_intake, same table a
   // booked appointment already writes to), then runs the real check-in
@@ -962,7 +1001,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   )
 }
 
-function NewPatientScreen({ onBack, onCreated, prefillName }) {
+function NewPatientScreen({ onBack, onCreated, onCheckInNow, prefillName }) {
   const [form,setForm]=useState({firstName:prefillName||'',lastName:'',dob:'',phone:'',hkid:'',email:'',remindersViaPhone:true,remindersViaEmail:false})
   const [saving,setSaving]=useState(false)
   const [submitted,setSubmitted]=useState(false)
@@ -1076,7 +1115,15 @@ function NewPatientScreen({ onBack, onCreated, prefillName }) {
           <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Email text (not yet actually sent - no live provider connected)</div>
           <div style={{fontSize:'12px',color:C.text,whiteSpace:'pre-wrap'}}>{emailText(form.firstName, claimCode)}</div>
         </div>}
-        <Btn variant="primary" onClick={()=>onCreated?createdPatient&&onCreated(createdPatient):onBack()}>{onCreated?'Continue with this patient':'Back to check-in'}</Btn>
+        {/* Reaching this screen from Schedule used to force every new
+            patient through the booking-slot picker next, with no way to
+            just check them in right now - most walk-ins registered here
+            are standing at the desk wanting to be seen today, not booking
+            a future date. */}
+        <div style={{display:'flex',gap:'8px'}}>
+          {onCheckInNow&&<Btn style={{flex:1}} onClick={()=>createdPatient&&onCheckInNow(createdPatient)}>Check in now</Btn>}
+          <Btn variant="primary" style={{flex:onCheckInNow?1:undefined,width:onCheckInNow?undefined:'100%'}} onClick={()=>onCreated?createdPatient&&onCreated(createdPatient):onBack()}>{onCheckInNow?'Book appointment':(onCreated?'Continue with this patient':'Back to check-in')}</Btn>
+        </div>
       </div>
     </PageWrap>
   )
@@ -2722,11 +2769,21 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError, clinicQueues=[] }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [saveError,setSaveError]=useState(null)
   const [savingChange,setSavingChange]=useState(false)
+  // Checking in from here used to always fall through to auto-resolved
+  // queue routing with no say in it - front desk can now see and
+  // override which queue this check-in goes to, same as Check-In/Search
+  // already lets them do. Defaults to this appointment's department queue.
+  const [checkInQueueId,setCheckInQueueId]=useState(null)
+  useEffect(() => {
+    if (!appt) return
+    const match = clinicQueues.find(q=>q.department===appt.department)
+    setCheckInQueueId(match ? match.id : (clinicQueues[0]?.id ?? null))
+  }, [appt?.id, clinicQueues])
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
   const [followupDate,setFollowupDate]=useState('')
@@ -2998,9 +3055,17 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         </div>}
 
         {!mode&&!isCompleted&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {!isCheckedIn&&onCheckedIn&&clinicQueues.length>1&&<div style={{marginBottom:'2px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Check in to which queue?</div>
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {clinicQueues.map(q=>(
+                <div key={q.id} onClick={()=>setCheckInQueueId(q.id)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:checkInQueueId===q.id?C.green:C.card,color:checkInQueueId===q.id?'#fff':C.textSub}}>{q.name}</div>
+              ))}
+            </div>
+          </div>}
           {!isCheckedIn&&onCheckedIn&&<Btn variant="primary" style={{width:'100%'}} disabled={checkingIn} onClick={async()=>{
             setCheckingIn(true)
-            const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient }, false, undefined, true, null, appt.id)
+            const result = await onCheckedIn({ id: appt.patientId, full_name: appt.patient }, false, clinicQueues.length>1?checkInQueueId:undefined, true, null, appt.id)
             setCheckingIn(false)
             // Closing without refreshing the underlying appointments list
             // (unlike onCancelCheckIn just below, which already does this)
@@ -4242,7 +4307,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError, clinicQueues=[] }) {
   const [selectedDay,setSelectedDay]=useState(() => new Date())
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
@@ -4291,7 +4356,24 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
         current += data.slot_duration_minutes || 30
       }
-      setNewApptSlots(await filterSlotsByHourlyCap(slots, newApptDoctor, selectedDay, data.max_bookings_per_hour))
+      // This form was only ever filtering by the hourly walk-in cap, never
+      // actually removing a time another patient already holds - it was
+      // possible to pick an already-booked slot here, and only find out it
+      // was rejected after tapping Confirm (or, in the rare race, not even
+      // then). Exclude any exact time this doctor already has a real,
+      // non-cancelled appointment at, same as the reschedule picker and
+      // the patient app's own booking screen already do.
+      const dayStart = new Date(selectedDay); dayStart.setHours(0,0,0,0)
+      const dayEnd = new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+      const { data: existingAppts } = await supabase.from('appointments').select('scheduled_at')
+        .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').neq('status', 'cancelled')
+        .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      const bookedTimes = new Set((existingAppts||[]).map(a => {
+        const d = new Date(a.scheduled_at)
+        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+      }))
+      const openSlots = slots.filter(t => !bookedTimes.has(t))
+      setNewApptSlots(await filterSlotsByHourlyCap(openSlots, newApptDoctor, selectedDay, data.max_bookings_per_hour))
       setNewApptSlotsLoading(false)
     }
     if (showNewApptForm) loadSlots()
@@ -4572,6 +4654,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         staffMember={staffMember}
         onCheckedIn={onCheckedIn}
         checkInError={checkInError}
+        clinicQueues={clinicQueues}
         onRefreshAppointments={()=>loadRealAppointments(selectedDay)}
         onScheduleFollowup={onPreselectPatientForFollowup}
         onCancelCheckIn={async(appt)=>{
@@ -6469,6 +6552,11 @@ export default function ClinicOpsApp() {
 
   async function loadClinicQueues() {
     if (!institutionId) { setClinicQueues([]); return }
+    // Backfills any department that doesn't have its own queue yet before
+    // reading the list, so newly onboarded doctors/departments show up
+    // with a real queue automatically rather than needing a practice
+    // manager to set one up first.
+    await ensureDepartmentQueues(institutionId)
     const { data } = await supabase.from('clinic_queues').select('*').eq('institution_id', institutionId).eq('active', true).order('created_at')
     setClinicQueues(data||[])
   }
@@ -6609,13 +6697,18 @@ export default function ClinicOpsApp() {
 
     // Resolve which queue this ticket belongs to - an explicit choice
     // from the check-in screen's picker when the clinic runs more than
-    // one queue, otherwise the clinic's one active queue, otherwise
-    // legacy no-queue behaviour (a single shared line, ticket prefix A).
+    // one queue, otherwise the doctor/department's own queue (auto-
+    // created for every department - see ensureDepartmentQueues),
+    // otherwise the clinic's one active queue, otherwise legacy
+    // no-queue behaviour (a single shared line, ticket prefix A).
+    // Matched on the queue's department field, not its display name, so
+    // renaming a queue doesn't break the match.
     let queueId = explicitQueueId
     if (queueId === undefined) {
       if (clinicQueues.length === 1) queueId = clinicQueues[0].id
       else if (clinicQueues.length > 1) {
-        const deptMatch = clinicQueues.find(q=>q.name===(matchingAppt?.department||staffMember?.department))
+        const targetDept = matchingAppt?.department || explicitDoctor?.department || staffMember?.department
+        const deptMatch = clinicQueues.find(q=>q.department===targetDept)
         queueId = deptMatch ? deptMatch.id : clinicQueues[0].id
       } else queueId = null
     }
@@ -6925,11 +7018,15 @@ export default function ClinicOpsApp() {
             // check-in does.
             : (patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}
           }
+          onCheckInNow={newPatientOrigin==='schedule'
+            ? (patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}
+            : undefined}
         />}
         {screen==='schedule'&&<ScheduleScreen
           staffMember={staffMember}
           onCheckedIn={handleCheckedIn}
           checkInError={checkInError}
+          clinicQueues={clinicQueues}
           preselectPatient={schedulePreselectPatient}
           onConsumedPreselect={()=>setSchedulePreselectPatient(null)}
           onPreselectPatientForFollowup={setSchedulePreselectPatient}
