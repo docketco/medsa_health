@@ -2343,7 +2343,14 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
         // to render every appointment ever booked (past, cancelled,
         // everything) under an "Upcoming" heading with no way to act on
         // any of it.
-        const upcoming = appointments.filter(a => a.status!=='cancelled' && new Date(a.scheduled_at).getTime() > Date.now())
+        //
+        // "Ahead" means today or later, not literally later than this
+        // exact second - cutting it at Date.now() meant a same-day
+        // appointment vanished from Upcoming (and became impossible to
+        // cancel from here) the moment its scheduled time ticked past,
+        // even if the patient hadn't been seen yet.
+        const todayStart = new Date(); todayStart.setHours(0,0,0,0)
+        const upcoming = appointments.filter(a => a.status!=='cancelled' && a.status!=='completed' && new Date(a.scheduled_at).getTime() >= todayStart.getTime())
           .sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at))
         if (upcoming.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No upcoming appointments yet.':'暫無即將到來的預約。'}</div>
         return upcoming.map((appt,i)=>{

@@ -147,25 +147,24 @@ async function cancelAppointmentSideEffects(appointmentId) {
   }
 }
 
-// Hides slots in whichever hours are already at a doctor's online-booking
-// cap (Working Hours -> "Online bookings allowed per hour"), so the rest
-// of that hour stays reserved for walk-ins instead of getting filled up
-// by bookings alone. excludeApptId lets a reschedule not count the
-// appointment being moved against its own original hour.
-async function filterSlotsByHourlyCap(slots, doctorName, dayDate, maxPerHour, excludeApptId) {
-  if (!maxPerHour) return slots
-  const dayStart = new Date(dayDate); dayStart.setHours(0,0,0,0)
-  const dayEnd = new Date(dayDate); dayEnd.setHours(23,59,59,999)
-  const { data } = await supabase.from('appointments').select('id,scheduled_at')
-    .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops').neq('status', 'cancelled')
-    .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
-  const countByHour = {}
-  ;(data||[]).forEach(a => {
-    if (excludeApptId && a.id === excludeApptId) return
-    const hr = new Date(a.scheduled_at).getHours()
-    countByHour[hr] = (countByHour[hr]||0) + 1
-  })
-  return slots.filter(t => (countByHour[parseInt(t.split(':')[0])]||0) < maxPerHour)
+// Builds the actual, plain-language Frequency text from the structured
+// dosing controls (mode, times/day, which times of day, every-X-hours,
+// duration) - this is what shows up on the medication label, the
+// receipt, and the patient's own medication list.
+function describeFrequency(rx) {
+  const mode = rx.dosingMode || 'fixed'
+  const days = parseInt(rx.durationDays) || 0
+  const durationText = days>0 ? ` for ${days} day${days===1?'':'s'}` : ''
+  if (mode === 'interval') {
+    const hours = parseInt(rx.intervalHours) || 0
+    return hours>0 ? `Every ${hours} hours${durationText}` : ''
+  }
+  if (mode === 'prn') return rx.frequency || ''
+  const times = parseInt(rx.timesPerDay) || 0
+  if (!times) return ''
+  const timesText = times===1 ? 'Once daily' : times===2 ? 'Twice daily' : `${times} times daily`
+  const timeOfDay = (rx.timesOfDay||[]).length>0 ? ` (${rx.timesOfDay.join(', ')})` : ''
+  return `${timesText}${timeOfDay}${durationText}`
 }
 
 function hoursRemaining(checkedInAt) {
@@ -1570,7 +1569,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     }, 300)
     return () => clearTimeout(timeout)
   }, [icd10Search])
-  const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}])
+  const [prescriptions,setPrescriptions]=useState([{drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:'',timesOfDay:[]}])
 
   // Real drug prices, from the same clinic_inventory list Inventory
   // manages stock against - so a prescribed drug's price can be looked
@@ -1756,7 +1755,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     load()
   }, [queueEntry])
 
-  function addPrescriptionLine() { setPrescriptions([...prescriptions, {drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:''}]) }
+  function addPrescriptionLine() { setPrescriptions([...prescriptions, {drug:'',dosage:'',frequency:'',quantity:'',durationDays:'',timesPerDay:'',timesOfDay:[]}]) }
   function updateRx(i, field, value) {
     setPrescriptions(prescriptions.map((p,idx)=>{
       if (idx!==i) return p
@@ -1777,6 +1776,19 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         if (days>0 && hours>0) updated.quantity = String(Math.round((24/hours)*days))
       }
       if (field==='quantity') updated.quantityManuallySet = true
+
+      // Auto-compose the actual Frequency text (what shows up on the
+      // label, receipt, and the patient's own medication list) from the
+      // structured dosing controls below it - the doctor was picking a
+      // real schedule there (times/day, every X hours, which times of
+      // day) but none of it ever made it into the one field that's
+      // actually shown anywhere; Frequency stayed whatever was typed by
+      // hand, or blank. Never overrides a frequency the doctor has
+      // deliberately typed themselves.
+      if (field==='frequency') updated.frequencyManuallySet = true
+      else if (!p.frequencyManuallySet && ['dosingMode','timesPerDay','intervalHours','durationDays','timesOfDay'].includes(field)) {
+        updated.frequency = describeFrequency(updated)
+      }
       return updated
     }))
   }
@@ -2165,6 +2177,22 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                 <span style={{fontSize:'11px',color:C.textSub,flexShrink:0,marginLeft:'8px'}}>for</span>
                 <input value={rx.durationDays} onChange={e=>updateRx(i,'durationDays',e.target.value)} type="number" placeholder="days" style={{width:56,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'5px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
                 <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>days</span>
+              </div>}
+
+              {/* Optional - a plain times/day count doesn't say WHEN, and
+                  "one in the morning, one at night" reads very
+                  differently from "one at noon and one at midnight" even
+                  though both are twice daily. Purely additive to
+                  Frequency, never required. */}
+              {(rx.dosingMode||'fixed')==='fixed'&&parseInt(rx.timesPerDay)>0&&<div style={{display:'flex',gap:'6px',alignItems:'center',marginTop:'6px',flexWrap:'wrap'}}>
+                <span style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Take at</span>
+                {['Morning','Afternoon','Evening','Night'].map(t=>{
+                  const active = (rx.timesOfDay||[]).includes(t)
+                  return <div key={t} onClick={()=>{
+                    const cur = rx.timesOfDay||[]
+                    updateRx(i,'timesOfDay', active ? cur.filter(x=>x!==t) : [...cur,t])
+                  }} style={{fontSize:'11px',padding:'4px 9px',borderRadius:'6px',cursor:'pointer',background:active?C.green:'#fff',color:active?'#fff':C.textSub,border:`0.5px solid ${C.border}`}}>{t}</div>
+                })}
               </div>}
 
               {rx.dosingMode==='interval'&&<div style={{display:'flex',gap:'8px',alignItems:'center'}}>
@@ -2938,7 +2966,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         slots.push(`${String(Math.floor(current/60)).padStart(2,'0')}:${String(current%60).padStart(2,'0')}`)
         current += data.slot_duration_minutes || 30
       }
-      setAvailableSlots(await filterSlotsByHourlyCap(slots, appt.doctor, apptDay, data.max_bookings_per_hour, appt.id))
+      setAvailableSlots(slots)
       setSlotsLoading(false)
     }
     loadSlots()
@@ -4289,11 +4317,6 @@ function WorkingHoursScreen() {
   const [saving,setSaving]=useState(false)
   const [saved,setSaved]=useState(false)
   const [slotDuration,setSlotDuration]=useState(30)
-  // Most patients here are walk-ins, not online bookings - without a cap,
-  // online booking could fill every single slot in a doctor's day, leaving
-  // no room for the walk-ins who actually make up most of the traffic.
-  // null = no cap, every slot stays bookable.
-  const [maxBookingsPerHour,setMaxBookingsPerHour]=useState(null)
 
   useEffect(() => {
     loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
@@ -4305,11 +4328,9 @@ function WorkingHoursScreen() {
       .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops')
     const byDay = {}
     for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 } // default: closed Sundays
-    setMaxBookingsPerHour(null)
     ;(data||[]).forEach(row => {
       byDay[row.day_of_week] = { start: row.start_time?.slice(0,5)||'09:00', end: row.end_time?.slice(0,5)||'17:00', is_off: row.is_off }
       setSlotDuration(row.slot_duration_minutes || 30)
-      setMaxBookingsPerHour(row.max_bookings_per_hour ?? null)
     })
     setHours(byDay)
     setLoading(false)
@@ -4327,7 +4348,6 @@ function WorkingHoursScreen() {
     const rows = Object.entries(hours).map(([day, h]) => ({
       doctor_name: selectedDoctor, institution_source: 'clinic_ops', day_of_week: parseInt(day),
       start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: slotDuration,
-      max_bookings_per_hour: maxBookingsPerHour,
       updated_at: new Date().toISOString(),
     }))
     await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
@@ -4355,17 +4375,6 @@ function WorkingHoursScreen() {
           <div style={{display:'flex',gap:'8px'}}>
             {[15,20,30,45,60].map(m=>(
               <div key={m} onClick={()=>{setSlotDuration(m);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:slotDuration===m?C.green:C.card,color:slotDuration===m?'#fff':C.text}}>{m}m</div>
-            ))}
-          </div>
-        </Card>
-
-        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'2px'}}>Online bookings allowed per hour</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Reserves the rest of each hour for walk-ins - most patients here don't book ahead.</div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <div onClick={()=>{setMaxBookingsPerHour(null);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:maxBookingsPerHour===null?C.green:C.card,color:maxBookingsPerHour===null?'#fff':C.text}}>No cap</div>
-            {[1,2,3,4,6].map(n=>(
-              <div key={n} onClick={()=>{setMaxBookingsPerHour(n);setSaved(false)}} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:maxBookingsPerHour===n?C.green:C.card,color:maxBookingsPerHour===n?'#fff':C.text}}>{n}</div>
             ))}
           </div>
         </Card>
@@ -4462,7 +4471,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
       }))
       const openSlots = slots.filter(t => !bookedTimes.has(t))
-      setNewApptSlots(await filterSlotsByHourlyCap(openSlots, newApptDoctor, selectedDay, data.max_bookings_per_hour))
+      setNewApptSlots(openSlots)
       setNewApptSlotsLoading(false)
     }
     if (showNewApptForm) loadSlots()
@@ -5048,17 +5057,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   // consultation than the package assumed), so a genuine shortfall - the
   // visit costing MORE than a normal session - still needs collecting.
   //
-  // This used to fall back to price_total/sessions_paid (the discounted
-  // average a patient actually pays per session under the package) as the
-  // reference value whenever session_value wasn't set. That's wrong even
-  // as a fallback for any plan that intentionally discounts (e.g. HK$180
-  // for 3 sessions normally worth HK$100 each) - it would charge the
-  // patient the gap between the visit's real cost and the discounted
-  // average at every visit, clawing back the discount the package was
-  // supposed to give them. Only a real reference price (session_value)
-  // should ever produce a shortfall; without one on file, there's no
-  // honest "normal price" to compare against, so no shortfall is charged.
-  const planPerSessionValue = selectedTreatmentPlan?.session_value ?? null
+  // Falls back to price_total/sessions_paid (this plan's own per-session
+  // price) whenever session_value isn't set - most plans never had that
+  // field filled in (it was added after they were created, and the
+  // Create Plan form doesn't require it), and with no fallback at all,
+  // shortfall silently came out to 0 for every single one of them: no
+  // leftover ever calculated or collectible, on any plan without that
+  // one optional field set. A real session_value still take priority
+  // when a practice manager has deliberately set one - e.g. for a
+  // genuinely discounted package (HK$180 for 3 sessions normally worth
+  // HK$100 each), where comparing against the discounted average would
+  // claw the discount back at every visit.
+  const planPerSessionValue = selectedTreatmentPlan?.session_value
+    ?? (selectedTreatmentPlan?.price_total!=null && selectedTreatmentPlan?.sessions_paid>0
+      ? selectedTreatmentPlan.price_total / selectedTreatmentPlan.sessions_paid : null)
   const treatmentPlanShortfall = planPerSessionValue!=null && billingRecord
     ? Math.max(0, (billingRecord.total_fee||0) - planPerSessionValue) : 0
 
@@ -7119,7 +7131,22 @@ export default function ClinicOpsApp() {
           onConsumedPreselect={()=>setSchedulePreselectPatient(null)}
           onPreselectPatientForFollowup={setSchedulePreselectPatient}
           onNavNewPatient={(query)=>{setNewPatientOrigin('schedule');setNewPatientPrefillName(query||'');setScreen('newpatient')}}
-          onGoToConsultation={(appt)=>{setSelectedQueueEntry({patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now(), patientMedsaId: appt.medsaId});setScreen('consultation')}}
+          onGoToConsultation={async(appt)=>{
+            // Was a bare placeholder with no real id/appointmentId, so
+            // submitting a consultation reached from Schedule (rather
+            // than My Patients) never actually marked the queue ticket
+            // done or the appointment completed - the patient kept
+            // showing as waiting/being seen forever, and Schedule never
+            // greyed the appointment out once finished. appointmentId is
+            // just this appointment's own id; the queue ticket itself
+            // still needs a real lookup since this screen never carried
+            // one.
+            const { data: queueRow } = await supabase.from('clinic_queue').select('id')
+              .eq('appointment_id', appt.id).in('status', ['waiting','serving'])
+              .order('checked_in_at', { ascending: false }).limit(1).maybeSingle()
+            setSelectedQueueEntry({id: queueRow?.id || null, appointmentId: appt.id, patientName:appt.patient, ticket:'SCH', checkedInAt:Date.now(), patientMedsaId: appt.medsaId})
+            setScreen('consultation')
+          }}
           onCancelCheckIn={async(appt)=>{
             if (!appt?.medsaId) return
             // Scoped to this exact appointment id when we have one - the
