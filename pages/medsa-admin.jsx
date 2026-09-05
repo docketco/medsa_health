@@ -52,6 +52,74 @@ export default function MedsaAdminPage() {
 // here, never this clinic's EMR. Onboarding is admin-provisioned (not
 // self-serve), same as insurer partners - a real relationship, not an
 // open signup form.
+// Shared onboarding checklist for both real partner-relationship paths -
+// a TPA clinic (external_clinics) and a fully partnered insurer
+// (insurance_companies). Neither activates on a single admin click any
+// more: same as any real platform partnership (think Uber onboarding a
+// driver or a merchant), there's a contract to sign, a technical
+// integration to stand up, and payment terms to agree before the account
+// goes live. See set_partner_checkpoint.js, activate_tpa_clinic.js and
+// approve_insurer.js, which all enforce this server-side too - this UI
+// just makes the three steps visible and completable.
+function PartnerChecklist({ entity, entityType, onChanged }) {
+  const [busy, setBusy] = useState(null)
+  const [showContractForm, setShowContractForm] = useState(false)
+  const [signerName, setSignerName] = useState('')
+  const [showPaymentForm, setShowPaymentForm] = useState(false)
+  const [paymentNote, setPaymentNote] = useState('')
+  const [apiKeyResult, setApiKeyResult] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function runCheckpoint(checkpoint, extra) {
+    setBusy(checkpoint)
+    setError(null)
+    const res = await fetch('/api/admin/set_partner_checkpoint', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ entityType, id: entity.id, checkpoint, ...extra }),
+    })
+    const data = await res.json()
+    setBusy(null)
+    if (data.status !== 'OK') { setError(data.message); return }
+    if (checkpoint === 'integration') setApiKeyResult(data.apiKey)
+    setShowContractForm(false); setShowPaymentForm(false); setSignerName(''); setPaymentNote('')
+    onChanged()
+  }
+
+  const steps = [
+    { key:'contract', label:'Contract / consent signed', done: !!entity.contract_signed_at, note: entity.contract_signed_by ? `Signed by ${entity.contract_signed_by}` : null },
+    { key:'integration', label:'Technical integration connected', done: !!entity.integration_configured_at, note: entity.integration_configured_at ? 'API key issued' : null },
+    { key:'payment', label:'Payment terms confirmed', done: !!entity.payment_confirmed_at, note: entity.payment_note },
+  ]
+
+  return (
+    <div style={{background:C.beige,borderRadius:'10px',padding:'12px',marginBottom:'10px'}}>
+      <div style={{fontSize:'11px',color:C.textSub,fontWeight:600,marginBottom:'8px'}}>Partnership checkpoints - all three required before activation</div>
+      {steps.map(s => (
+        <div key={s.key} style={{marginBottom:'6px'}}>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px'}}>
+            <div style={{fontSize:'12px',color:s.done?C.green:C.text,fontWeight:s.done?600:400}}>{s.done?'✓':'○'} {s.label}</div>
+            {!s.done && s.key==='contract' && !showContractForm && <button onClick={()=>setShowContractForm(true)} style={{padding:'5px 10px',background:C.card,border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer',whiteSpace:'nowrap'}}>Mark signed</button>}
+            {!s.done && s.key==='integration' && <button onClick={()=>runCheckpoint('integration')} disabled={busy==='integration'} style={{padding:'5px 10px',background:C.card,border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer',whiteSpace:'nowrap'}}>{busy==='integration'?'Connecting…':'Connect API'}</button>}
+            {!s.done && s.key==='payment' && !showPaymentForm && <button onClick={()=>setShowPaymentForm(true)} style={{padding:'5px 10px',background:C.card,border:'none',borderRadius:'6px',fontSize:'11px',cursor:'pointer',whiteSpace:'nowrap'}}>Confirm</button>}
+          </div>
+          {s.done && s.note && <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{s.note}</div>}
+        </div>
+      ))}
+
+      {showContractForm && <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
+        <input value={signerName} onChange={e=>setSignerName(e.target.value)} placeholder="Full name of signatory" style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <button onClick={()=>runCheckpoint('contract',{signedByName:signerName})} disabled={!signerName.trim()||busy==='contract'} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{busy==='contract'?'Saving…':'Confirm'}</button>
+      </div>}
+      {showPaymentForm && <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
+        <input value={paymentNote} onChange={e=>setPaymentNote(e.target.value)} placeholder="e.g. Invoiced monthly, net 30" style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <button onClick={()=>runCheckpoint('payment',{note:paymentNote})} disabled={!paymentNote.trim()||busy==='payment'} style={{padding:'8px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{busy==='payment'?'Saving…':'Confirm'}</button>
+      </div>}
+      {apiKeyResult && <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginTop:'8px',fontSize:'11px',wordBreak:'break-all'}}>API key: <strong>{apiKeyResult}</strong><div style={{color:C.textMuted,marginTop:'4px'}}>Only shown once - relay to their technical team now.</div></div>}
+      {error && <div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{error}</div>}
+    </div>
+  )
+}
+
 function TpaClinicsTab() {
   const [clinics, setClinics] = useState([])
   const [claimStats, setClaimStats] = useState({}) // clinicId -> {count, feesEarned}
@@ -61,6 +129,7 @@ function TpaClinicsTab() {
   const [form, setForm] = useState({ clinicName:'', contactName:'', contactEmail:'', contactPhone:'', brNumber:'' })
   const [result, setResult] = useState(null)
   const [resettingId, setResettingId] = useState(null)
+  const [activatingId, setActivatingId] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -99,10 +168,24 @@ function TpaClinicsTab() {
     const data = await res.json()
     if (data.status !== 'OK') { setResult({ error: data.message || 'Could not onboard this clinic.' }); setSaving(false); return }
 
-    setResult({ clinicName: data.clinicName, tempPassword: data.tempPassword })
+    setResult({ applied: data.clinic.clinic_name })
     setSaving(false)
     setCreating(false)
     setForm({ clinicName:'', contactName:'', contactEmail:'', contactPhone:'', brNumber:'' })
+    load()
+  }
+
+  async function handleActivate(clinic) {
+    setActivatingId(clinic.id)
+    setResult(null)
+    const res = await fetch('/api/admin/activate_tpa_clinic', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ clinicId: clinic.id }),
+    })
+    const data = await res.json()
+    setActivatingId(null)
+    if (data.status !== 'OK') { setResult({ error: data.message || 'Could not activate this clinic.' }); return }
+    setResult({ clinicName: data.clinicName, tempPassword: data.tempPassword })
     load()
   }
 
@@ -132,8 +215,12 @@ function TpaClinicsTab() {
         Clinics that submit claims through Medsa's claim portal without ever adopting ClinicOps as their EMR. Same adjudication engine, same per-claim fee as a native clinic - Medsa is just the biller here. Onboarding is a real relationship you set up on their behalf, same as an insurer partner - not a public signup.
       </div>
 
-      {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
-        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Credentials set for {result.clinicName}</div>
+      {result&&result.applied&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'6px'}}>Application recorded for {result.applied}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>No login yet - complete the partnership checkpoints on their card below, then activate.</div>
+      </div>}
+      {result&&result.tempPassword&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Activated - credentials set for {result.clinicName}</div>
         <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{result.tempPassword}</strong></div>
         <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this to the clinic directly - not shown again.</div>
       </div>}
@@ -162,13 +249,16 @@ function TpaClinicsTab() {
                 <div style={{fontSize:'14px',fontWeight:600}}>{c.clinic_name}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name||'—'} · {c.contact_email}</div>
               </div>
-              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:c.status==='onboarding'?C.amberLight:C.card,color:c.status==='active'?C.green:c.status==='onboarding'?C.amber:C.textMuted,fontWeight:600}}>{c.status}</span>
             </div>
-            <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{stats.count} claim{stats.count===1?'':'s'} submitted · <strong>HK${stats.feesEarned.toFixed(0)}</strong> in platform fees earned</div>
-            <div style={{display:'flex',gap:'8px'}}>
-              <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Suspend':'Reactivate'}</button>
-              <button onClick={()=>handleResetPassword(c)} disabled={resettingId===c.id} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{resettingId===c.id?'…':'Reset password'}</button>
-            </div>
+            {c.status==='active' && <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{stats.count} claim{stats.count===1?'':'s'} submitted · <strong>HK${stats.feesEarned.toFixed(0)}</strong> in platform fees earned</div>}
+            {c.status==='onboarding' && <PartnerChecklist entity={c} entityType="tpa_clinic" onChanged={load}/>}
+            {c.status==='onboarding'
+              ? <button onClick={()=>handleActivate(c)} disabled={activatingId===c.id||!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at} style={{width:'100%',padding:'10px',background:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?C.card:C.green,color:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?C.textMuted:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?'not-allowed':'pointer'}}>{activatingId===c.id?'Activating…':'Activate & issue login'}</button>
+              : <div style={{display:'flex',gap:'8px'}}>
+                  <button onClick={()=>toggleStatus(c)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Suspend':'Reactivate'}</button>
+                  <button onClick={()=>handleResetPassword(c)} disabled={resettingId===c.id} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{resettingId===c.id?'…':'Reset password'}</button>
+                </div>}
           </div>
         )
       })}
@@ -515,7 +605,10 @@ function PartnersTab() {
           {c.status==='pending'&&<div style={{marginBottom:'8px'}}>
             {approvedPassword?.id===c.id
               ? <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px'}}>Approved. Temp password: <strong style={{letterSpacing:'0.5px'}}>{approvedPassword.password}</strong>{approvedPassword.emailSent ? ` - emailed to ${c.contact_email}.` : ` - not emailed (${approvedPassword.emailReason||'email not configured'}), send it to ${c.contact_email} yourself.`}</div>
-              : <button onClick={()=>approveInsurer(c)} disabled={approvingId===c.id} style={{width:'100%',padding:'10px',background:C.amber,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{approvingId===c.id?'Approving…':'Approve & activate - issues login'}</button>}
+              : <>
+                  <PartnerChecklist entity={c} entityType="insurer" onChanged={load}/>
+                  <button onClick={()=>approveInsurer(c)} disabled={approvingId===c.id||!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at} style={{width:'100%',padding:'10px',background:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?C.card:C.amber,color:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?C.textMuted:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:(!c.contract_signed_at||!c.integration_configured_at||!c.payment_confirmed_at)?'not-allowed':'pointer'}}>{approvingId===c.id?'Approving…':'Approve & activate - issues login'}</button>
+                </>}
           </div>}
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>

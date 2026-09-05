@@ -2,8 +2,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Approves a pending partnered-insurer application (see
 // /api/insurer/signup.js) - moves it to active and issues its first
-// password in one call, same pattern as create_tpa_clinic.js. Gated by
-// middleware.js's /api/admin/:path* match, same as every other admin route.
+// password in one call. Gated by middleware.js's /api/admin/:path* match,
+// same as every other admin route, AND now gated on the real partnership
+// checkpoints from set_partner_checkpoint.js: a signed contract, a working
+// API integration and confirmed payment terms - a partnered insurer gets
+// real plan listings and client-profile access, so it doesn't get
+// activated on a single click any more than a TPA clinic does (see
+// activate_tpa_clinic.js).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -15,6 +20,15 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const { companyId } = req.body || {}
   if (!companyId) return res.status(400).json({ status: 'ERROR', message: 'companyId is required.' })
+
+  const { data: pending, error: findErr } = await supabase.from('insurance_companies').select('*').eq('id', companyId).maybeSingle()
+  if (findErr || !pending) return res.status(404).json({ status: 'ERROR', message: 'Company not found.' })
+
+  const missing = []
+  if (!pending.contract_signed_at) missing.push('signed contract')
+  if (!pending.integration_configured_at) missing.push('API integration')
+  if (!pending.payment_confirmed_at) missing.push('payment terms')
+  if (missing.length) return res.status(400).json({ status: 'ERROR', message: `Cannot activate yet - still missing: ${missing.join(', ')}.` })
 
   const { data: company, error: updErr } = await supabase.from('insurance_companies')
     .update({ status: 'active' }).eq('id', companyId).select().maybeSingle()
