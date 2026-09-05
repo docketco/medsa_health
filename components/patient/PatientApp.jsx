@@ -2253,6 +2253,14 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
   async function handleCancelAppointment(appt) {
     setCancelling(true)
     const { error } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appt.id)
+    // If this appointment was already checked in, cancelling it left the
+    // queue ticket itself untouched - the patient kept showing as
+    // waiting/being seen on both the front desk board and their own
+    // queue banner here, even though the visit was just called off.
+    if (!error) {
+      await supabase.from('clinic_queue').update({ status: 'no_show' })
+        .eq('appointment_id', appt.id).in('status', ['waiting','serving'])
+    }
     setCancelling(false)
     if (error) { setCancelledMsg(isEn?`Could not cancel: ${error.message}`:`無法取消：${error.message}`); return }
     setActiveAppt(null)
