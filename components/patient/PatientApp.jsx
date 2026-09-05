@@ -421,11 +421,21 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
     // patient was actually called in (status flips to 'serving'), this
     // query found nothing and the whole banner silently vanished instead
     // of showing they're now being seen.
+    //
+    // Also scoped to TODAY - there was no date bound here at all before,
+    // so a queue ticket from a past day that never got explicitly marked
+    // done/no_show (e.g. the doctor never submitted a consultation) kept
+    // showing this patient as "checked in" and counting other patients
+    // ahead of them forever, well past the day it actually happened.
+    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
+    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
     const { data: myEntry } = await supabase
       .from('clinic_queue')
       .select('*, institutions(name), appointments(scheduled_at)')
       .eq('patient_id', patientRow.id)
       .in('status', ['waiting','serving'])
+      .gte('checked_in_at', dayStart.toISOString())
+      .lte('checked_in_at', dayEnd.toISOString())
       .order('checked_in_at', { ascending: false })
       .limit(1)
       .maybeSingle()

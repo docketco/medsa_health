@@ -7009,18 +7009,15 @@ export default function ClinicOpsApp() {
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
           prefillName={newPatientPrefillName}
-          onCreated={newPatientOrigin==='schedule'
-            ? (patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')}
-            // Was undefined here - a brand-new patient registered from
-            // the Check-In screen's own "new patient" button got created
-            // but never actually checked in, silently dropping them
-            // instead of joining the walk-in queue like every other
-            // check-in does.
-            : (patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}
-          }
-          onCheckInNow={newPatientOrigin==='schedule'
-            ? (patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}
-            : undefined}
+          // Both actions are always offered now regardless of which screen
+          // sent the staff member here - registering from Check-In used to
+          // only ever check the patient in with no way to book them a
+          // future slot instead, and registering from Schedule (before
+          // that origin-only fix) used to only ever book with no way to
+          // check them in right now. A newly registered patient could
+          // need either.
+          onCreated={(patient)=>{setSchedulePreselectPatient(patient);setNewPatientPrefillName('');setScreen('schedule')}}
+          onCheckInNow={(patient)=>{handleCheckedIn(patient);setNewPatientPrefillName('');setScreen('checkin')}}
         />}
         {screen==='schedule'&&<ScheduleScreen
           staffMember={staffMember}
