@@ -123,6 +123,30 @@ async function ensureDepartmentQueues(institutionId) {
   await supabase.from('clinic_queues').insert(rows)
 }
 
+// Cancelling an appointment used to leave any queue ticket tied to it
+// completely untouched - if the patient had already checked in, they'd
+// keep showing as waiting/being seen on both the front desk board and
+// their own "X people ahead of you" banner in the app, indefinitely.
+// Also sends the patient the same cancellation email a patient-initiated
+// cancel already gets, so the notification exists in both directions.
+async function cancelAppointmentSideEffects(appointmentId) {
+  if (!appointmentId) return
+  await supabase.from('clinic_queue').update({ status: 'no_show' })
+    .eq('appointment_id', appointmentId).in('status', ['waiting','serving'])
+
+  const { data: appt } = await supabase.from('appointments').select('doctor_name, scheduled_at, patients(email, full_name, notify_email)').eq('id', appointmentId).maybeSingle()
+  const patient = appt?.patients
+  if (patient?.notify_email !== false && patient?.email) {
+    fetch('/api/appointments/notify_cancellation', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        email: patient.email, patientName: patient.full_name,
+        doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
+      }),
+    }).catch(()=>{})
+  }
+}
+
 // Hides slots in whichever hours are already at a doctor's online-booking
 // cap (Working Hours -> "Online bookings allowed per hour"), so the rest
 // of that hour stays reserved for walk-ins instead of getting filled up
@@ -241,7 +265,7 @@ function StaffLogin({ onLogin, kickedOutMessage }) {
       // PractitionerApp uses - clinic_staff was retired before ever going
       // live, so a clinic doctor's identity is portable if they ever also
       // work at a Medsa-partnered hospital later.
-      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,is_nurse,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link,registering_body')
+      const { data } = await supabase.from('staff_credentials').select('medsa_id,full_name,role,department,is_nurse,institution_id,practitioner_portal_enabled,practitioner_identity_id,registration_number,registration_expiry,epc_link,registering_body,email')
   .eq('institution_source','clinic_ops').eq('status','active').order('full_name')
 const mapped = (data||[]).map(s => ({
   id: s.medsa_id, name: s.full_name, role: s.role,
@@ -249,7 +273,7 @@ const mapped = (data||[]).map(s => ({
   department: s.department, isNurse: !!s.is_nurse, institutionId: s.institution_id,
   practitionerPortalEnabled: s.practitioner_portal_enabled, practitionerIdentityId: s.practitioner_identity_id,
   registrationNumber: s.registration_number, registrationExpiry: s.registration_expiry, hasEpc: !!s.epc_link,
-  registeringBody: s.registering_body,
+  registeringBody: s.registering_body, email: s.email,
 }))
       setStaff(mapped)
       setLoading(false)
@@ -2476,21 +2500,39 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
 // dressing/injection queue).
 function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
   const [creating,setCreating]=useState(false)
+  const [editingId,setEditingId]=useState(null)
   const [saving,setSaving]=useState(false)
   const [name,setName]=useState('')
   const [prefix,setPrefix]=useState('')
+  const [department,setDepartment]=useState('')
   const [error,setError]=useState(null)
 
-  async function handleCreate() {
+  function startCreate() {
+    setEditingId(null); setName(''); setPrefix(''); setDepartment(''); setError(null); setCreating(true)
+  }
+  // Renaming a queue or fixing its ticket prefix used to mean deactivating
+  // it and adding a new one from scratch, losing its history - this edits
+  // the same row in place. Also exposes the department tie directly, so a
+  // practice manager can detach an auto-created department queue or point
+  // a manual one at a department without going through the database.
+  function startEdit(q) {
+    setCreating(false); setEditingId(q.id); setName(q.name); setPrefix(q.ticket_prefix); setDepartment(q.department||''); setError(null)
+  }
+  function cancelForm() {
+    setCreating(false); setEditingId(null); setName(''); setPrefix(''); setDepartment('')
+  }
+
+  async function handleSave() {
     if (!name.trim() || !prefix.trim()) return
     setSaving(true)
     setError(null)
-    const { error: err } = await supabase.from('clinic_queues').insert({
-      institution_id: institutionId, name: name.trim(), ticket_prefix: prefix.trim().toUpperCase().slice(0,2), active: true,
-    })
+    const payload = { name: name.trim(), ticket_prefix: prefix.trim().toUpperCase().slice(0,2), department: department.trim()||null }
+    const { error: err } = editingId
+      ? await supabase.from('clinic_queues').update(payload).eq('id', editingId)
+      : await supabase.from('clinic_queues').insert({ institution_id: institutionId, active: true, ...payload })
     setSaving(false)
     if (err) { setError(err.message); return }
-    setCreating(false); setName(''); setPrefix('')
+    cancelForm()
     onRefresh()
   }
 
@@ -2498,6 +2540,8 @@ function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
     await supabase.from('clinic_queues').update({ active: !q.active }).eq('id', q.id)
     onRefresh()
   }
+
+  const formOpen = creating || !!editingId
 
   return (
     <PageWrap maxWidth={520}>
@@ -2509,20 +2553,25 @@ function QueueSettingsScreen({ institutionId, queues, onRefresh }) {
         <Card key={q.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div>
             <div style={{fontSize:'13px',fontWeight:600}}>{q.name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>Ticket prefix "{q.ticket_prefix}"</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>Ticket prefix "{q.ticket_prefix}"{q.department?` · ${q.department} queue`:''}</div>
           </div>
-          <Btn onClick={()=>toggleActive(q)}>{q.active?'Deactivate':'Reactivate'}</Btn>
+          <div style={{display:'flex',gap:'6px'}}>
+            <Btn onClick={()=>startEdit(q)}>Edit</Btn>
+            <Btn onClick={()=>toggleActive(q)}>{q.active?'Deactivate':'Reactivate'}</Btn>
+          </div>
         </Card>
       ))}
 
-      {!creating&&<Btn variant="primary" style={{width:'100%',marginTop:'12px'}} onClick={()=>setCreating(true)}>+ Add a queue</Btn>}
-      {creating&&<Card style={{padding:'16px',marginTop:'12px'}}>
+      {!formOpen&&<Btn variant="primary" style={{width:'100%',marginTop:'12px'}} onClick={startCreate}>+ Add a queue</Btn>}
+      {formOpen&&<Card style={{padding:'16px',marginTop:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>{editingId?'Edit queue':'New queue'}</div>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="Queue name (e.g. Chinese Medicine)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <input value={prefix} onChange={e=>setPrefix(e.target.value)} placeholder="Ticket prefix, 1-2 letters (e.g. B)" maxLength={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <input value={department} onChange={e=>setDepartment(e.target.value)} placeholder="Department this queue routes for (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
         <div style={{display:'flex',gap:'8px'}}>
-          <Btn style={{flex:1}} onClick={()=>{setCreating(false);setName('');setPrefix('')}}>Cancel</Btn>
-          <Btn variant="primary" style={{flex:1}} onClick={handleCreate} disabled={saving||!name.trim()||!prefix.trim()}>{saving?'Saving…':'Add queue'}</Btn>
+          <Btn style={{flex:1}} onClick={cancelForm}>Cancel</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||!name.trim()||!prefix.trim()}>{saving?'Saving…':(editingId?'Save changes':'Add queue')}</Btn>
         </div>
       </Card>}
     </PageWrap>
@@ -3192,6 +3241,30 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
   const [docFile,setDocFile]=useState(null)
   const [uploading,setUploading]=useState(false)
 
+  // Own contact email - was only ever editable by a practice manager on
+  // the Staff tab (needed for password-reset OTP delivery), with no
+  // self-service way to fix a typo or update it after changing providers.
+  // Applies immediately, same as a practice manager editing someone
+  // else's - this is contact info, not a licensing credential, so it
+  // doesn't need the "pending verification" review step below.
+  const [editingEmail,setEditingEmail]=useState(false)
+  const [emailValue,setEmailValue]=useState(staffMember.email||'')
+  const [emailSaving,setEmailSaving]=useState(false)
+  const [emailSaved,setEmailSaved]=useState(null)
+  const [emailError,setEmailError]=useState(null)
+
+  async function handleSaveEmail() {
+    setEmailError(null)
+    const trimmed = emailValue.trim()
+    if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) { setEmailError('Enter a valid email address.'); return }
+    setEmailSaving(true)
+    const { error } = await supabase.from('staff_credentials').update({ email: trimmed||null }).eq('medsa_id', staffMember.id)
+    setEmailSaving(false)
+    if (error) { setEmailError(error.message); return }
+    setEmailSaved(trimmed||null)
+    setEditingEmail(false)
+  }
+
   // Change own password - previously only ever settable at onboarding
   // (by the practice manager) or via the forgot-password email OTP flow;
   // no way to just change it directly while already logged in. Verifies
@@ -3319,6 +3392,22 @@ function PractitionerCredentialsScreen({ staffMember, institutionName, affiliate
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>{setChangingPw(false);setCurrentPw('');setNewPw('');setNewPwConfirm('');setPwError(null)}} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
           <button onClick={handleChangePassword} disabled={pwSaving} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,fontSize:'13px',cursor:'pointer'}}>{pwSaving?'Saving…':'Save new password'}</button>
+        </div>
+      </Card>}
+
+      <SecLabel>Contact email</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,padding:'0 16px 10px',lineHeight:1.5}}>Used for password reset codes and account notices.</div>
+      {!editingEmail&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 16px 16px',gap:'10px'}}>
+        <div style={{fontSize:'13px',color:(emailSaved!==null?emailSaved:staffMember.email)?C.text:C.amber,wordBreak:'break-all'}}>{(emailSaved!==null?emailSaved:staffMember.email)||'⚠ No email on file - required for password reset'}</div>
+        <button onClick={()=>{setEmailValue((emailSaved!==null?emailSaved:staffMember.email)||'');setEmailError(null);setEditingEmail(true)}} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',flexShrink:0}}>Edit</button>
+      </div>}
+      {editingEmail&&<Card style={{padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>Email</div>
+        <input type="email" value={emailValue} onChange={e=>setEmailValue(e.target.value)} placeholder="you@example.com" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        {emailError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{emailError}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>setEditingEmail(false)} style={{flex:1,padding:'10px',background:C.cream,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSaveEmail} disabled={emailSaving} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,fontSize:'13px',cursor:'pointer'}}>{emailSaving?'Saving…':'Save'}</button>
         </div>
       </Card>}
 
@@ -4559,6 +4648,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       // patient's two same-day appointments cancelled both.
       if (updated.id) {
         await supabase.from('appointments').update({status:'cancelled'}).eq('id', updated.id)
+        cancelAppointmentSideEffects(updated.id)
       } else {
         const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', updated.medsaId).maybeSingle()
         if (pRow) {
@@ -6961,6 +7051,7 @@ export default function ClinicOpsApp() {
 
   async function handleCancelAppointment(appointmentId) {
     await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appointmentId)
+    cancelAppointmentSideEffects(appointmentId)
   }
 
   const pendingCount = pendingPrescriptions.filter(p=>p.status==='pending').length
