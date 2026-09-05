@@ -1855,7 +1855,7 @@ function DoctorsScreen({ isEn, patient={} }) {
     setIntakeError(null)
     try {
       const medsaId = patient?.medsa_id
-      const { data: patientRow } = await supabase.from('patients').select('id,email,full_name,notify_email').eq('medsa_id', medsaId).maybeSingle()
+      const { data: patientRow } = await supabase.from('patients').select('id,email,full_name,notify_email,phone,notify_sms').eq('medsa_id', medsaId).maybeSingle()
       if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
 
       // Build the actual appointment datetime from the selected day/time,
@@ -1931,14 +1931,19 @@ function DoctorsScreen({ isEn, patient={} }) {
       })
       if (apptErr) throw apptErr
       setBooked(true)
-      // Best-effort - respects the patient's own toggle (Edit profile ->
-      // Notifications), defaults on. Never blocks the booking itself,
-      // which already succeeded above.
-      if (patientRow.notify_email !== false && patientRow.email) {
+      // Best-effort - respects the patient's own toggles (Edit profile ->
+      // Notifications), both default on. Never blocks the booking itself,
+      // which already succeeded above. Email and SMS are independent -
+      // send whichever is still opted in, even if the other's turned off.
+      const wantsEmail = patientRow.notify_email !== false && patientRow.email
+      const wantsSms = patientRow.notify_sms !== false && patientRow.phone
+      if (wantsEmail || wantsSms) {
         fetch('/api/appointments/notify_booking', {
           method: 'POST', headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
-            email: patientRow.email, patientName: patientRow.full_name,
+            email: wantsEmail ? patientRow.email : null,
+            phone: wantsSms ? patientRow.phone : null,
+            patientName: patientRow.full_name,
             doctorName: activeDoctor.name, scheduledAt: apptDate.toISOString(),
           }),
         }).catch(()=>{})
@@ -2268,13 +2273,17 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
     setTimeout(()=>setCancelledMsg(null), 4000)
     onCancelled?.()
     // Best-effort, same opt-in/no-op-safe pattern as the booking
-    // confirmation email - never blocks the cancellation itself, which
-    // already succeeded above.
-    if (patient?.notify_email !== false && patient?.email) {
+    // confirmation email/SMS - never blocks the cancellation itself,
+    // which already succeeded above.
+    const wantsEmail = patient?.notify_email !== false && patient?.email
+    const wantsSms = patient?.notify_sms !== false && patient?.phone
+    if (wantsEmail || wantsSms) {
       fetch('/api/appointments/notify_cancellation', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          email: patient.email, patientName: patient.full_name,
+          email: wantsEmail ? patient.email : null,
+          phone: wantsSms ? patient.phone : null,
+          patientName: patient.full_name,
           doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
         }),
       }).catch(()=>{})
