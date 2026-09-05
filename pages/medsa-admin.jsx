@@ -273,6 +273,80 @@ function TpaClinicsTab() {
 // paying indirectly per claim Medsa routes for them); this is an
 // insurer paying for the engine itself. See lib/apiAuth.js and
 // pages/api/v1/*.
+// Real, unmocked one-click tester for the direct insurer API - the actual
+// audience for these routes is an insurer's own backend calling them with
+// curl/Postman, which medsa-admin has no equivalent of. This makes the
+// same real HTTP call server-side (test_partner_api.js just forwards it
+// to the live /api/v1/* route) and shows the raw response, so testing
+// auth, eligibility and adjudication needs nothing more than pasting a
+// key and clicking a button.
+function ApiTester({ onTested }) {
+  const [apiKey, setApiKey] = useState('')
+  const [endpoint, setEndpoint] = useState('eligibility')
+  const [hkid, setHkid] = useState('')
+  const [policyNumber, setPolicyNumber] = useState('')
+  const [totalGrossAmount, setTotalGrossAmount] = useState('500')
+  const [sending, setSending] = useState(null)
+  const [result, setResult] = useState(null)
+  const [open, setOpen] = useState(false)
+
+  async function send(mode) {
+    setSending(mode)
+    setResult(null)
+    const keyToSend = mode === 'wrong' ? 'medsa_live_0000000000000000000000000000invalid' : mode === 'missing' ? '' : apiKey
+    const body = endpoint === 'eligibility'
+      ? (policyNumber.trim() ? { policyNumber: policyNumber.trim() } : { hkid: hkid.trim() })
+      : { hkid: hkid.trim(), totalGrossAmount: parseFloat(totalGrossAmount) || 0 }
+    const res = await fetch('/api/admin/test_partner_api', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ endpoint, apiKey: keyToSend, body }),
+    })
+    const data = await res.json()
+    setSending(null)
+    setResult(data)
+    onTested?.()
+  }
+
+  const canSend = endpoint==='eligibility' ? (hkid.trim()||policyNumber.trim()) : hkid.trim()
+
+  return (
+    <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+        <div style={{fontSize:'13px',fontWeight:700}}>🧪 Test this API</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>{open?'Hide ▲':'Open ▼'}</div>
+      </div>
+      {!open&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Paste an issued API key and send a real request to the live endpoint - same thing an insurer's backend would do, no curl/Postman needed.</div>}
+      {open&&<div style={{marginTop:'12px'}}>
+        <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Paste a raw API key (shown once when issued above)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',fontFamily:'monospace'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          {['eligibility','adjudicate'].map(ep => (
+            <div key={ep} onClick={()=>setEndpoint(ep)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:endpoint===ep?C.navy:C.card,color:endpoint===ep?'#fff':C.text}}>POST /{ep}</div>
+          ))}
+        </div>
+        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="Patient HKID" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        {endpoint==='eligibility' && <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="…or a policyNumber directly (skips HKID lookup)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+        {endpoint==='adjudicate' && <input type="number" value={totalGrossAmount} onChange={e=>setTotalGrossAmount(e.target.value)} placeholder="Total gross amount (HKD)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+          <button onClick={()=>send('normal')} disabled={!apiKey.trim()||!canSend||!!sending} style={{flex:1,minWidth:120,padding:'9px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{sending==='normal'?'Sending…':'Send with this key'}</button>
+          <button onClick={()=>send('missing')} disabled={!canSend||!!sending} style={{flex:1,minWidth:120,padding:'9px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{sending==='missing'?'Sending…':'Send with no key'}</button>
+          <button onClick={()=>send('wrong')} disabled={!canSend||!!sending} style={{flex:1,minWidth:120,padding:'9px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{sending==='wrong'?'Sending…':'Send with wrong key'}</button>
+        </div>
+        <div style={{fontSize:'10.5px',color:C.textMuted,marginBottom:'10px'}}>"No key" and "wrong key" should both come back 401 Invalid/Missing - that's the correct, expected result for those two, not a failure.</div>
+
+        {result && <div style={{background:result.status==='ERROR'?C.redLight:result.httpStatus===200?C.greenXLight:C.amberLight,border:`0.5px solid ${result.status==='ERROR'?C.red:result.httpStatus===200?C.green:C.amber}`,borderRadius:'8px',padding:'10px 12px'}}>
+          {result.status==='ERROR'
+            ? <div style={{fontSize:'12px',color:C.red}}>{result.message}</div>
+            : <>
+                <div style={{fontSize:'12px',fontWeight:700,marginBottom:'6px'}}>HTTP {result.httpStatus}</div>
+                <pre style={{fontSize:'11px',whiteSpace:'pre-wrap',wordBreak:'break-all',margin:0,fontFamily:'monospace'}}>{JSON.stringify(result.response, null, 2)}</pre>
+              </>}
+        </div>}
+      </div>}
+    </div>
+  )
+}
+
 function ApiClientsTab() {
   const [clients, setClients] = useState([])
   const [usage, setUsage] = useState({}) // clientId -> call count
@@ -321,6 +395,8 @@ function ApiClientsTab() {
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
         Insurers who pay to call the adjudication engine (POST /api/v1/eligibility, /api/v1/adjudicate) directly with their own API key - no clinic or patient app involved at all. Real HTTP endpoints, real usage logging, same engine as ClinicOps and the TPA portal.
       </div>
+
+      <ApiTester onTested={load}/>
 
       {result&&!result.error&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
         <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ API key issued for {result.name}</div>
