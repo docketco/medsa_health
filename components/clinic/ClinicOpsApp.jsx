@@ -127,20 +127,25 @@ async function ensureDepartmentQueues(institutionId) {
 // completely untouched - if the patient had already checked in, they'd
 // keep showing as waiting/being seen on both the front desk board and
 // their own "X people ahead of you" banner in the app, indefinitely.
-// Also sends the patient the same cancellation email a patient-initiated
-// cancel already gets, so the notification exists in both directions.
+// Also sends the patient the same cancellation email/SMS a patient-
+// initiated cancel already gets, so the notification exists in both
+// directions.
 async function cancelAppointmentSideEffects(appointmentId) {
   if (!appointmentId) return
   await supabase.from('clinic_queue').update({ status: 'no_show' })
     .eq('appointment_id', appointmentId).in('status', ['waiting','serving'])
 
-  const { data: appt } = await supabase.from('appointments').select('doctor_name, scheduled_at, patients(email, full_name, notify_email)').eq('id', appointmentId).maybeSingle()
+  const { data: appt } = await supabase.from('appointments').select('doctor_name, scheduled_at, patients(email, full_name, notify_email, phone, notify_sms)').eq('id', appointmentId).maybeSingle()
   const patient = appt?.patients
-  if (patient?.notify_email !== false && patient?.email) {
+  const wantsEmail = patient?.notify_email !== false && patient?.email
+  const wantsSms = patient?.notify_sms !== false && patient?.phone
+  if (wantsEmail || wantsSms) {
     fetch('/api/appointments/notify_cancellation', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        email: patient.email, patientName: patient.full_name,
+        email: wantsEmail ? patient.email : null,
+        phone: wantsSms ? patient.phone : null,
+        patientName: patient.full_name,
         doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
       }),
     }).catch(()=>{})
@@ -1889,8 +1894,16 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         })
       }
       if (rxRows.length>0 && patient) {
+        // Guarantee a real Frequency ends up saved regardless of exactly
+        // how the doctor got here - describeFrequency already keeps it in
+        // sync live as the dosing controls are used, but this is the one
+        // place that decides what actually reaches the database, so it's
+        // also the right place to make sure a blank one never does: the
+        // label, the receipt, and the patient's own medication list all
+        // just read this stored value, with no fallback of their own.
         const dbRows = rxRows.map(p=>({
-          patient_id: patient.id, medical_record_id: savedRecordId, medication_name: p.drug, dosage: p.dosage, frequency: p.frequency,
+          patient_id: patient.id, medical_record_id: savedRecordId, medication_name: p.drug, dosage: p.dosage,
+          frequency: p.frequency || describeFrequency(p) || null,
           medicine_type: medicineType||'western',
           quantity: parseInt(p.quantity)||1,
           duration_days: parseInt(p.durationDays)||null,
@@ -3015,6 +3028,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   // today alone isn't enough to log a new diagnosis.
   const isCheckedIn = appt.status==='checked_in'
   const isCompleted = appt.status==='completed'
+  const isCancelled = appt.status==='cancelled'
   const canLogDiagnosis = withinDataWindow && isCheckedIn && role==='doctor'
 
   // Only offer doctors in the same department/specialty as this
@@ -3030,7 +3044,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
         {!loadingPatient&&patientFetchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>⚠ {patientFetchError}</div>}
 
         {!loadingPatient&&withinDataWindow&&fullPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'12px',padding:'16px',marginBottom:'14px'}}>
-          <div style={{fontSize:'11px',color:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCompleted?'✓ Completed':isCheckedIn?'✓ Checked in':'Scheduled'}</div>
+          <div style={{fontSize:'11px',color:isCancelled?C.red:C.green,fontWeight:600,textTransform:'uppercase',marginBottom:'6px'}}>{isCancelled?'✕ Cancelled':isCompleted?'✓ Completed':isCheckedIn?'✓ Checked in':'Scheduled'}</div>
           <div style={{fontSize:'17px',fontWeight:700}}>{fullPatient.full_name}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{fullPatient.medsa_id} · DOB {new Date(fullPatient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
           <div style={{display:'flex',gap:'10px'}}>
@@ -3131,7 +3145,12 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
           <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
         </div>}
 
-        {!mode&&!isCompleted&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {!mode&&isCancelled&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          <div style={{fontSize:'12px',color:C.red,textAlign:'center',padding:'8px'}}>✕ This appointment was cancelled.</div>
+          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book a new appointment</Btn>
+        </div>}
+
+        {!mode&&!isCompleted&&!isCancelled&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {!isCheckedIn&&onCheckedIn&&clinicQueues.length>1&&<div style={{marginBottom:'2px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Check in to which queue?</div>
             <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
@@ -4550,9 +4569,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     // Only this clinic's own bookings - ClinicOps and PractitionerApp
     // represent two different institutions and shouldn't see each other's
     // appointments just because they happen to share the same database.
+    // Cancelled appointments used to just be excluded outright, so a
+    // cancellation (from either side) made the appointment silently
+    // vanish from Schedule instead of showing what actually happened to
+    // it - kept here now and rendered crossed out/labelled Cancelled,
+    // same treatment as a completed one.
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
       .eq('institution_source', 'clinic_ops')
-      .neq('status', 'cancelled')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
 
@@ -4725,21 +4748,28 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         ◇ Clinical data access is based on each patient's consent window from booking, not just whether they're physically checked in - see the badge on each appointment.
       </div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>(
-          <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,background:a.status==='completed'?C.card:undefined,cursor:a.status!=='open'?'pointer':'default'}}>
-            <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0,color:a.status==='completed'?C.textMuted:C.text}}>{a.time}</div>
+        {[...appointments].sort((a,b)=>a.time.localeCompare(b.time)).map((a,i)=>{
+          const isDone = a.status==='completed'
+          const isCancelled = a.status==='cancelled'
+          const isMuted = isDone || isCancelled
+          return (
+          <Card key={i} onClick={()=>a.status!=='open'&&setActiveAppt(a)} style={{padding:'12px 16px',display:'flex',alignItems:'center',gap:'12px',opacity:a.status==='open'?0.6:1,background:isMuted?C.card:undefined,cursor:a.status!=='open'?'pointer':'default'}}>
+            <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0,color:isMuted?C.textMuted:C.text}}>{a.time}</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:'13px',fontWeight:500,color:a.status==='completed'?C.textMuted:C.text,textDecoration:a.status==='completed'?'line-through':'none'}}>{a.patient}</div>
+              <div style={{fontSize:'13px',fontWeight:500,color:isCancelled?C.red:isDone?C.textMuted:C.text,textDecoration:isMuted?'line-through':'none'}}>{a.patient}</div>
               <div style={{fontSize:'12px',color:C.textMuted}}>{a.doctor} - {a.type}</div>
             </div>
-            {a.status!=='open'&&a.status!=='completed'&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
+            {a.status!=='open'&&!isMuted&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
             {a.status==='open'
               ?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>
-              :a.status==='completed'
+              :isCancelled
+                ?<Badge text="✕ Cancelled" type="full"/>
+              :isDone
                 ?<Badge text="✓ Done" type="muted"/>
                 :<><Badge text={a.status==='checked_in'?'✓ Checked in':a.status==='confirmed'?'Confirmed':'Pending'} type={a.status==='checked_in'?'ok':a.status==='confirmed'?'ok':'due'}/><span style={{color:C.textMuted,fontSize:'14px'}}>›</span></>}
           </Card>
-        ))}
+          )
+        })}
       </div>
       <ClinicScheduleActionModal
         appt={activeAppt}
@@ -6719,6 +6749,19 @@ export default function ClinicOpsApp() {
         doctor: r.doctor_name || 'Unassigned',
         room: r.room || '-',
         checkedInAt: new Date(r.checked_in_at).getTime(),
+        // Was missing here entirely - every reload of this list (which is
+        // most of the time: opening My Patients, switching screens, the
+        // periodic refetch) silently wiped appointmentId from every
+        // existing entry, since the one place that DID set it
+        // (handleCheckedIn's own optimistic local push, right after
+        // check-in) only ever applies once and gets overwritten the next
+        // time this runs. That's what broke marking the appointment
+        // completed (Schedule never greyed out) for the normal My
+        // Patients path, the same-day-appointment-vs-appointment
+        // disambiguation in "already checked in" checks, and undo-check-in
+        // correctly finding this exact visit's queue ticket instead of
+        // falling back to a same-name match.
+        appointmentId: r.appointment_id || null,
         appointmentTime: r.appointments?.scheduled_at ? new Date(r.appointments.scheduled_at).getTime() : null,
         department: r.department || 'All departments',
         status: r.status,
@@ -6735,7 +6778,7 @@ export default function ClinicOpsApp() {
         id: r.id,
         patientName: r.patients?.full_name || 'Unknown patient',
         doctorName: r.prescribed_by_staff,
-        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency, quantity: r.quantity, durationDays: r.duration_days, timesPerDay: r.times_per_day }],
+        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency, quantity: r.quantity, durationDays: r.duration_days, timesPerDay: r.times_per_day, dosingMode: r.dosing_mode, intervalHours: r.interval_hours }],
         timestamp: new Date(r.start_date).getTime(),
         status: r.dispense_status || 'pending',
       })))
