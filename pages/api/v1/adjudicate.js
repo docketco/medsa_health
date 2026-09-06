@@ -13,6 +13,13 @@ export default async function handler(req, res) {
   const { client, error: authError } = await authenticateApiClient(req)
   if (authError) return res.status(401).json({ error: authError })
 
+  // Same fail-closed insurer scoping as eligibility.js - a key with no
+  // insurer_company_name configured can't adjudicate anyone's claims.
+  if (!client.insurer_company_name) {
+    logApiUsage(client.id, 'adjudicate', 403)
+    return res.status(403).json({ error: 'This API key has no insurer scoping configured - contact Medsa admin.' })
+  }
+
   const { hkid, policyNumber, totalGrossAmount, items, medicalRecordId } = req.body || {}
   if (!hkid) {
     logApiUsage(client.id, 'adjudicate', 400)
@@ -42,6 +49,7 @@ export default async function handler(req, res) {
     totalGrossAmount: parseFloat(totalGrossAmount),
     items: items || [],
     medicalRecordId: medicalRecordId || null,
+    restrictToCompanyName: client.insurer_company_name,
     ...(policyNumber
       ? { policyNumber }
       : { verificationMethod: 'HKID_LOOKUP', verificationPayload: { hkid } }),

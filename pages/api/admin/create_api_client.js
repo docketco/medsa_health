@@ -9,12 +9,18 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 // once here and never stored anywhere; only its hash persists.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { name, contactEmail } = req.body
+  const { name, contactEmail, insurerCompanyName } = req.body
   if (!name) return res.status(400).json({ status: 'ERROR', message: 'name is required.' })
+  // Required, not optional - a key with no insurer scoping can't query
+  // anyone's policies (see the fail-closed check in api/v1/eligibility.js
+  // and adjudicate.js). This is what actually restricts the key to only
+  // this insurer's own plans, not just a display label.
+  if (!insurerCompanyName?.trim()) return res.status(400).json({ status: 'ERROR', message: 'insurerCompanyName is required - which insurer\'s plans (matching insurance_plans.company_name) may this key query?' })
 
   const apiKey = generateApiKey()
   const { data, error } = await supabase.from('api_clients').insert({
     name: name.trim(), contact_email: contactEmail?.trim() || null,
+    insurer_company_name: insurerCompanyName.trim(),
     api_key_hash: hashApiKey(apiKey), onboarded_by: 'medsa-admin', status: 'active',
   }).select().maybeSingle()
   if (error) return res.status(500).json({ status: 'ERROR', message: error.message })

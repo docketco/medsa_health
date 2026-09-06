@@ -353,7 +353,7 @@ function ApiClientsTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ name:'', contactEmail:'' })
+  const [form, setForm] = useState({ name:'', contactEmail:'', insurerCompanyName:'' })
   const [result, setResult] = useState(null)
 
   async function load() {
@@ -366,19 +366,19 @@ function ApiClientsTab() {
   useEffect(() => { load() }, [])
 
   async function handleSubmit() {
-    if (!form.name.trim()) return
+    if (!form.name.trim()||!form.insurerCompanyName.trim()) return
     setSaving(true)
     setResult(null)
     const res = await fetch('/api/admin/create_api_client', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: form.name.trim(), contactEmail: form.contactEmail.trim() }),
+      body: JSON.stringify({ name: form.name.trim(), contactEmail: form.contactEmail.trim(), insurerCompanyName: form.insurerCompanyName.trim() }),
     })
     const data = await res.json()
     setSaving(false)
     if (data.status !== 'OK') { setResult({ error: data.message||'Could not create API client.' }); return }
     setResult({ name: data.apiClient.name, apiKey: data.apiKey })
     setCreating(false)
-    setForm({ name:'', contactEmail:'' })
+    setForm({ name:'', contactEmail:'', insurerCompanyName:'' })
     load()
   }
 
@@ -409,9 +409,11 @@ function ApiClientsTab() {
       {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
         <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="Insurer/company name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         <input value={form.contactEmail} onChange={e=>setForm(f=>({...f,contactEmail:e.target.value}))} placeholder="Contact email (optional)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <input value={form.insurerCompanyName} onChange={e=>setForm(f=>({...f,insurerCompanyName:e.target.value}))} placeholder="Scope this key to which insurer's plans? (must match their plans' company name exactly, e.g. AIA)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>This is what actually restricts the key - it'll only ever be able to look up or adjudicate this insurer's own plans, never another insurer's.</div>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
-          <button onClick={handleSubmit} disabled={saving||!form.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Issuing…':'Issue key'}</button>
+          <button onClick={handleSubmit} disabled={saving||!form.name.trim()||!form.insurerCompanyName.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Issuing…':'Issue key'}</button>
         </div>
       </div>}
 
@@ -426,6 +428,9 @@ function ApiClientsTab() {
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:C.card,color:c.status==='active'?C.green:C.textMuted,fontWeight:600}}>{c.status}</span>
           </div>
+          {c.insurer_company_name
+            ? <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Scoped to: <strong style={{color:C.text}}>{c.insurer_company_name}</strong>'s plans only</div>
+            : <div style={{fontSize:'11px',color:C.red,marginBottom:'6px'}}>⚠ No insurer scoping set - this key is blocked from every lookup until it's given one</div>}
           <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{usage[c.id]||0} API call{(usage[c.id]||0)===1?'':'s'} total</div>
           <button onClick={()=>toggleStatus(c)} style={{width:'100%',padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{c.status==='active'?'Suspend':'Reactivate'}</button>
         </div>
