@@ -12,6 +12,15 @@ export default async function handler(req, res) {
   const { client, error: authError } = await authenticateApiClient(req)
   if (authError) return res.status(401).json({ error: authError })
 
+  // A key with no insurer scoping configured can't be trusted to query
+  // anyone's policies - see set_partner_checkpoint.js, which sets this on
+  // every key issued through the real onboarding flow. Fails closed
+  // rather than silently allowing unrestricted access.
+  if (!client.insurer_company_name) {
+    logApiUsage(client.id, 'eligibility', 403)
+    return res.status(403).json({ error: 'This API key has no insurer scoping configured - contact Medsa admin.' })
+  }
+
   const { hkid, policyNumber } = req.body || {}
   if (!hkid && !policyNumber) {
     logApiUsage(client.id, 'eligibility', 400)
@@ -21,8 +30,8 @@ export default async function handler(req, res) {
   const adapter = getInsuranceAdapter()
   const result = await adapter.checkEligibility(
     hkid
-      ? { verificationMethod: 'HKID_LOOKUP', verificationPayload: { hkid }, clinicId: client.id }
-      : { policyNumber, clinicId: client.id }
+      ? { verificationMethod: 'HKID_LOOKUP', verificationPayload: { hkid }, clinicId: client.id, restrictToCompanyName: client.insurer_company_name }
+      : { policyNumber, clinicId: client.id, restrictToCompanyName: client.insurer_company_name }
   )
 
   logApiUsage(client.id, 'eligibility', 200)

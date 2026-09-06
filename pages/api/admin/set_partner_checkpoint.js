@@ -40,8 +40,15 @@ export default async function handler(req, res) {
     const name = entity.clinic_name || entity.name
     const contactEmail = entity.contact_email
     const apiKey = generateApiKey()
+    // Only an insurer's key gets scoped to its own insurance_plans -
+    // that's what api/v1/eligibility.js and adjudicate.js check before
+    // answering. A TPA clinic serves patients across many different
+    // insurers by design (that's the entire point of the out-of-network
+    // path), so its key is deliberately left unscoped here rather than
+    // locked to one insurer it has no real relationship with.
     const { data: apiClient, error: apiErr } = await supabase.from('api_clients').insert({
       name, contact_email: contactEmail || null, api_key_hash: hashApiKey(apiKey),
+      insurer_company_name: entityType === 'insurer' ? name : null,
       onboarded_by: 'medsa-admin', status: 'active',
     }).select().maybeSingle()
     if (apiErr) return res.status(500).json({ status: 'ERROR', message: apiErr.message })

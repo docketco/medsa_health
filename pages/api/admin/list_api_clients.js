@@ -10,7 +10,7 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const { data: clients, error } = await supabase.from('api_clients')
-    .select('id, name, contact_email, status, onboarded_by, created_at')
+    .select('id, name, contact_email, status, onboarded_by, created_at, insurer_company_name')
     .order('created_at', { ascending: false })
   if (error) return res.status(500).json({ status: 'ERROR', message: error.message })
 
