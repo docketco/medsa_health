@@ -49,6 +49,7 @@ function InsuranceDashboard({ onNav, company }) {
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
         {(company?.relationshipType==='unpartnered' ? [
+          {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
@@ -159,7 +160,7 @@ function PlanManager({ company }) {
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'' })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'' })
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
 
@@ -188,6 +189,12 @@ function PlanManager({ company }) {
     const { data: newPlan } = await supabase.from('insurance_plans').insert({
       company_name: company.name, plan_name: form.plan_name, plan_type: form.plan_type || null,
       key_benefits: form.key_benefits || null, status: 'active',
+      // Real, plan-specific values the adjudication engine actually uses
+      // (see lib/insuranceAdapter.js) - previously nothing on this form
+      // ever set these, so every plan silently used the same hardcoded
+      // 10% copay / $500 deductible regardless of what was entered here.
+      copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
+      annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
     }).select().maybeSingle()
     if (newPlan) {
       await supabase.from('insurance_plan_pricing_tiers').insert(
@@ -199,7 +206,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -217,6 +224,9 @@ function PlanManager({ company }) {
               <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
             </div>
             {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
@@ -257,6 +267,16 @@ function PlanManager({ company }) {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>What's covered (key benefits)</div>
             <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
           </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Copay rate (%)</div>
+              <input type="number" value={form.copay_rate} onChange={e=>setForm(f=>({...f,copay_rate:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 10 (defaults to 10%)"/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
+              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500 (defaults to $500)"/>
+            </div>
+          </div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
             <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':'Submit plan'}</Btn>
@@ -264,6 +284,102 @@ function PlanManager({ company }) {
         </Card>
       )}
       {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={()=>setCreating(true)}>+ Add new plan</Btn></div>}
+    </div>
+  )
+}
+
+// ── COVERAGE RULES (self-serve, unpartnered / TPA-claims-only insurers) ──────
+// The lightweight counterpart to Plan Manager, for an insurer with no
+// relationship to Medsa's marketplace at all - registers just enough
+// (copay rate, deductible, covered categories) for the adjudication
+// engine to calculate real claims against their plan, with none of the
+// marketplace machinery (pricing tiers for agents to sell, sponsorship,
+// riders). self_serve_only:true keeps these out of patient/agent-facing
+// plan browsing - they never agreed to be sold on Medsa, only to have
+// claims processed. Same insurance_plans table, same adjudication engine,
+// deliberately smaller form.
+const COVERAGE_RULE_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+function CoverageRulesManager({ company }) {
+  const [plans,setPlans]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [creating,setCreating]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [form,setForm]=useState({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('*').eq('company_name',company.name).eq('self_serve_only',true).order('created_at',{ascending:false})
+    setPlans(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  function toggleCategory(cat) {
+    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+  }
+
+  async function handleSubmit() {
+    if (!form.plan_name.trim()) return
+    setSaving(true)
+    await supabase.from('insurance_plans').insert({
+      company_name: company.name, plan_name: form.plan_name.trim(),
+      copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
+      annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
+      covered_categories: form.covered_categories,
+      status: 'active', self_serve_only: true, created_by: 'self-serve (TPA-claims-only)',
+    })
+    setSaving(false); setCreating(false)
+    setForm({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    load()
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{margin:'16px 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Register your plans' coverage rules so a claim from any Medsa-network clinic (or the direct API) calculates the right deductible/copay for your policyholders. This isn't a marketplace listing - your plans aren't shown to patients or sold by agents, they're only used to process real claims.</div>
+      </div>
+      <SecLabel>Your registered plans</SecLabel>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans registered yet.</div>}
+      {!loading&&plans.map((p)=>(
+        <Card key={p.id} style={{padding:'14px 16px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px'}}>{p.plan_name}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set - claims won\'t match against this plan'}</div>
+        </Card>
+      ))}
+      {creating&&(
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>New plan</div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
+            <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Standard Outpatient"/>
+          </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Copay rate (%)</div>
+              <input type="number" value={form.copay_rate} onChange={e=>setForm(f=>({...f,copay_rate:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 10"/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
+              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
+            </div>
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+            {COVERAGE_RULE_CATEGORIES.map(cat=>(
+              <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name.trim()}>{saving?'Saving…':'Register plan'}</Btn>
+          </div>
+        </Card>
+      )}
+      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={()=>setCreating(true)}>+ Register a plan</Btn></div>}
     </div>
   )
 }
@@ -861,10 +977,10 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
-    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'claims',icon:'◇',label:'Claims'}]
+    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'claims',icon:'◇',label:'Claims'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -880,6 +996,7 @@ export default function InsuranceApp({ company, onLogout }) {
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
+        {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
         {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
