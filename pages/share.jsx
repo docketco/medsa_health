@@ -9,6 +9,15 @@ import QrScanner from '../components/QrScanner'
 // (clinic proving it's real), THEN choose the action, THEN scan - the
 // scan itself needs to already know what to do with the result the
 // moment it's decoded, so the choice has to come before it, not after.
+//
+// Scope: this is continuity-of-care only - getting a real document into
+// (or out of) a patient's Medsa record so their other doctors can see it.
+// It is deliberately NOT wired into any insurance claim or reimbursement
+// flow, and shouldn't be. If a patient wants to use a document uploaded
+// here to file an out-of-network reimbursement claim, that's their own
+// path through a real claims aggregator (e.g. MediConCen) or the insurer
+// directly - Medsa doesn't process out-of-network claims for insurers it
+// has no relationship with (see the matching note in TpaClinicApp.jsx).
 
 export default function SharePage() {
   const [stage, setStage] = useState('gate') // gate | otp_channel_choice | otp_challenge | choose | upload_file | upload_scan | upload_syncing | upload_done | download_scan | download_waiting | download_ready | error

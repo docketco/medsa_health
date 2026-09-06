@@ -10,6 +10,19 @@ import { getInsuranceAdapter, calculatePlatformClaimFee } from '../../lib/insura
 // clinic, for the same per-claim platform fee. Medsa never becomes this
 // clinic's EMR - it's purely the biller/router here. Login is
 // admin-provisioned (medsa-admin's TPA Clinics tab), not self-serve.
+//
+// Deliberate scope boundary (not a bug): this only ever works for a
+// patient holding a policy through one of Medsa's own platform-partner
+// insurers - the HKID lookup resolves against Medsa's own agent_policies,
+// nothing external. A patient whose insurer has no relationship with
+// Medsa at all correctly gets "no active policy found" here. Medsa does
+// not attempt to become a general out-of-network claims aggregator for
+// arbitrary insurers - real Hong Kong claims aggregators/InsurTechs
+// already do that (e.g. MediConCen, already connected to 16+ HK insurers
+// via AI/OCR claim automation). Competing with an incumbent for the one
+// thing they're already good at isn't worth it; Medsa's real advantage is
+// the native, in-network path (a live structured encounter beats OCR off
+// a photographed receipt every time) - that's where to keep building.
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
