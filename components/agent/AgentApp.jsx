@@ -306,7 +306,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); return }
-      const { data: allPlans } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active')
+      const { data: allPlans } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
         const authIds = new Set((auths||[]).map(a=>a.plan_id))
@@ -1048,7 +1048,7 @@ function TeamLeadScreen({ agent, team }) {
     const { data: appts } = await supabase.from('agent_institution_appointments')
       .select('agent_id, agents(id, full_name, email, medsa_id)').eq('team_id', team.id).eq('status','active')
     setMembers((appts||[]).map(a=>a.agents).filter(Boolean))
-    const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', agent.institutions?.name||'').eq('status','active')
+    const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', agent.institutions?.name||'').eq('status','active').eq('self_serve_only',false)
     setPlans(planRows||[])
     const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', team.id)
     setAuthorizedPlanIds(new Set((auths||[]).map(a=>a.plan_id)))

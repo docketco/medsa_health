@@ -3295,7 +3295,10 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         }
       }
       setPatientConditions(conditionNames)
-      const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active')
+      // self_serve_only excludes TPA-claims-only insurers' plans - they
+      // registered coverage rules for claims processing, never agreed to
+      // be sold/browsed on Medsa's marketplace.
+      const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active').eq('self_serve_only',false)
 
       // Real age from the patient's actual date of birth - this is what
       // determines which tier's price actually applies to them.
