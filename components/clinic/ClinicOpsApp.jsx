@@ -2716,6 +2716,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
       .eq('institution_source', 'clinic_ops')
       .neq('status', 'cancelled')
       .neq('status', 'checked_in')
+      .neq('status', 'completed')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
     setTodaysQueue((data||[]).map(a=>({
@@ -2860,7 +2861,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
 function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError, clinicQueues=[] }) {
-  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'followup' | 'notes'
+  const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [saveError,setSaveError]=useState(null)
   const [savingChange,setSavingChange]=useState(false)
@@ -2876,8 +2877,6 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   }, [appt?.id, clinicQueues])
   const [newTime,setNewTime]=useState('')
   const [newDoctor,setNewDoctor]=useState('')
-  const [followupDate,setFollowupDate]=useState('')
-  const [followupType,setFollowupType]=useState('')
   const [notesDraft,setNotesDraft]=useState('')
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
@@ -3031,9 +3030,14 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const isCancelled = appt.status==='cancelled'
   const canLogDiagnosis = withinDataWindow && isCheckedIn && role==='doctor'
 
-  // Only offer doctors in the same department/specialty as this
-  // appointment - switching to an unrelated specialty wouldn't make sense.
-  const DOCTORS = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  // Every other doctor is offered, not just the same department -
+  // switching specialty is a real, valid reason to change doctor (a
+  // patient gets referred sideways, or the front desk just picks whoever
+  // can see them sooner). Categorized into same-specialty vs other, not
+  // blocked - same-department doctors are the obvious/likely pick so they
+  // list first, but nothing here should prevent the other choice.
+  const sameSpecialtyDoctors = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  const otherSpecialtyDoctors = clinicDoctors.filter(d=>d.department!==appt.department && d.name!==appt.doctor)
 
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
@@ -3142,12 +3146,12 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
 
         {!mode&&isCompleted&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ This appointment has been completed.</div>
-          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}}>+ Add follow-up appointment</Btn>
         </div>}
 
         {!mode&&isCancelled&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           <div style={{fontSize:'12px',color:C.red,textAlign:'center',padding:'8px'}}>✕ This appointment was cancelled.</div>
-          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book a new appointment</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}}>+ Book a new appointment</Btn>
         </div>}
 
         {!mode&&!isCompleted&&!isCancelled&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -3173,7 +3177,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
           }}>{checkingIn?'Checking in...':'✓ Check in'}</Btn>}
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setSaveError(null);setMode('reschedule')}}>📅 Change date/time</Btn>
           <Btn style={{width:'100%'}} onClick={()=>{setSaveError(null);setMode('switch')}}>⇄ Switch doctor/treatment</Btn>
-          <Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Add follow-up appointment</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}}>+ Add follow-up appointment</Btn>
           {canLogDiagnosis
             ? <Btn style={{width:'100%'}} onClick={()=>onGoToConsultation(appt)}>📋 Full diagnosis / log</Btn>
             : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'8px'}}>◇ {role!=='doctor'?'Full diagnosis/log is only available to doctors':`Full diagnosis/log unlocks once this patient has checked in${!withinDataWindow?' and is within their consent window':''}`}</div>}
@@ -3213,13 +3217,25 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
 
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.patient}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department} only</div>
-          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this speciality yet.</div>}
-          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-            {DOCTORS.map(d=>(
-              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-            ))}
-          </div>
+          {sameSpecialtyDoctors.length===0&&otherSpecialtyDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor at this clinic yet.</div>}
+          {sameSpecialtyDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({appt.department})</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {sameSpecialtyDoctors.map(d=>(
+                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+              ))}
+            </div>
+          </>}
+          {otherSpecialtyDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {otherSpecialtyDoctors.map(d=>(
+                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+                </div>
+              ))}
+            </div>
+          </>}
           {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
@@ -3230,17 +3246,6 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
               if (res?.ok===false) { setSaveError(res.error); return }
               onClose()
             }}>{savingChange?'Saving…':'Confirm switch'}</Btn>
-          </div>
-        </>}
-
-        {mode==='followup'&&<>
-          <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Follow-up appointment for {appt.patient}</div>
-          <input value={followupDate} onChange={e=>setFollowupDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
-          <input value={followupType} onChange={e=>setFollowupType(e.target.value)} placeholder="Reason, e.g. Follow-up review" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>This takes you to Schedule with {appt.patient} already selected, so you just pick the day and time - no need to search or re-enter their details.</div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onScheduleFollowup?.({ full_name: appt.patient, id: appt.patientId }); onClose()}} disabled={!followupDate||!followupType}>Schedule follow-up</Btn>
           </div>
         </>}
 

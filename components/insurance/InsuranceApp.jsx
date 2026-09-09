@@ -155,12 +155,15 @@ function PlanExtrasManager({ plan, onChanged }) {
 }
 
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
+const PLAN_MANAGER_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
 function PlanManager({ company }) {
   const [plans,setPlans]=useState([])
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'' })
+  const [editingId,setEditingId]=useState(null)
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+  const [customCategory,setCustomCategory]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
 
@@ -181,32 +184,73 @@ function PlanManager({ company }) {
   function removeTier(i) {
     setTiers(t => t.filter((_,idx)=>idx!==i))
   }
+  function toggleCategory(cat) {
+    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+  }
+  function addCustomCategory() {
+    const val = customCategory.trim()
+    if (!val || form.covered_categories.includes(val)) return
+    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
+    setCustomCategory('')
+  }
+
+  function startCreate() {
+    setEditingId(null)
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setCreating(true)
+  }
+  function startEdit(plan) {
+    setEditingId(plan.id)
+    setForm({
+      plan_name: plan.plan_name||'', plan_type: plan.plan_type||'', key_benefits: plan.key_benefits||'',
+      copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
+      annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
+      covered_categories: plan.covered_categories||[],
+    })
+    const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
+    setTiers(existingTiers.length>0
+      ? existingTiers.map(t=>({ age_min:String(t.age_min), age_max:String(t.age_max), monthly_premium:String(t.monthly_premium), annual_limit:t.annual_limit!=null?String(t.annual_limit):'' }))
+      : [{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setCreating(true)
+  }
 
   async function handleSubmit() {
     const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
     if (!form.plan_name || validTiers.length===0) return
     setSaving(true)
-    const { data: newPlan } = await supabase.from('insurance_plans').insert({
-      company_name: company.name, plan_name: form.plan_name, plan_type: form.plan_type || null,
-      key_benefits: form.key_benefits || null, status: 'active',
+    const payload = {
+      plan_name: form.plan_name, plan_type: form.plan_type || null,
+      key_benefits: form.key_benefits || null,
+      covered_categories: form.covered_categories,
       // Real, plan-specific values the adjudication engine actually uses
       // (see lib/insuranceAdapter.js) - previously nothing on this form
       // ever set these, so every plan silently used the same hardcoded
       // 10% copay / $500 deductible regardless of what was entered here.
       copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
       annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
-    }).select().maybeSingle()
-    if (newPlan) {
+    }
+    let planId = editingId
+    if (editingId) {
+      await supabase.from('insurance_plans').update(payload).eq('id', editingId)
+      await supabase.from('insurance_plan_pricing_tiers').delete().eq('plan_id', editingId)
+    } else {
+      const { data: newPlan } = await supabase.from('insurance_plans').insert({
+        ...payload, company_name: company.name, status: 'active',
+      }).select().maybeSingle()
+      planId = newPlan?.id
+    }
+    if (planId) {
       await supabase.from('insurance_plan_pricing_tiers').insert(
         validTiers.map(t => ({
-          plan_id: newPlan.id, age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
+          plan_id: planId, age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
           monthly_premium: parseFloat(t.monthly_premium),
           annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
         }))
       )
     }
-    setSaving(false); setCreating(false)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'' })
+    setSaving(false); setCreating(false); setEditingId(null)
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -223,7 +267,10 @@ function PlanManager({ company }) {
               <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
             </div>
-            {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+            <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
+              {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+              <span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>
+            </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'}
@@ -233,13 +280,14 @@ function PlanManager({ company }) {
               ? <span style={{color:C.red}}>No pricing tiers entered</span>
               : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>`Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`).join(' · ')}
           </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No covered categories set - claims won\'t match against this plan'}</div>
           <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
           {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
         </Card>
       ))}
       {creating&&(
         <Card style={{padding:'16px'}}>
-          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>New plan listing</div>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. AIA Gold Health"/>
@@ -277,13 +325,30 @@ function PlanManager({ company }) {
               <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500 (defaults to $500)"/>
             </div>
           </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+            {PLAN_MANAGER_CATEGORIES.map(cat=>(
+              <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+            <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+          </div>
+          {form.covered_categories.filter(c=>!PLAN_MANAGER_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+            {form.covered_categories.filter(c=>!PLAN_MANAGER_CATEGORIES.includes(c)).map(cat=>(
+              <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+                {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
+              </div>
+            ))}
+          </div>}
           <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':'Submit plan'}</Btn>
+            <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':editingId?'Save changes':'Submit plan'}</Btn>
           </div>
         </Card>
       )}
-      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={()=>setCreating(true)}>+ Add new plan</Btn></div>}
+      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
     </div>
   )
 }
@@ -304,7 +369,9 @@ function CoverageRulesManager({ company }) {
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
+  const [editingId,setEditingId]=useState(null)
   const [form,setForm]=useState({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+  const [customCategory,setCustomCategory]=useState('')
 
   async function load() {
     setLoading(true)
@@ -317,18 +384,46 @@ function CoverageRulesManager({ company }) {
   function toggleCategory(cat) {
     setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
   }
+  function addCustomCategory() {
+    const val = customCategory.trim()
+    if (!val || form.covered_categories.includes(val)) return
+    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
+    setCustomCategory('')
+  }
+
+  function startCreate() {
+    setEditingId(null)
+    setForm({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setCreating(true)
+  }
+  function startEdit(plan) {
+    setEditingId(plan.id)
+    setForm({
+      plan_name: plan.plan_name||'', copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
+      annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
+      covered_categories: plan.covered_categories||[],
+    })
+    setCreating(true)
+  }
 
   async function handleSubmit() {
     if (!form.plan_name.trim()) return
     setSaving(true)
-    await supabase.from('insurance_plans').insert({
-      company_name: company.name, plan_name: form.plan_name.trim(),
+    const payload = {
+      plan_name: form.plan_name.trim(),
       copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
       annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
       covered_categories: form.covered_categories,
-      status: 'active', self_serve_only: true, created_by: 'self-serve (TPA-claims-only)',
-    })
-    setSaving(false); setCreating(false)
+    }
+    if (editingId) {
+      await supabase.from('insurance_plans').update(payload).eq('id', editingId)
+    } else {
+      await supabase.from('insurance_plans').insert({
+        ...payload, company_name: company.name,
+        status: 'active', self_serve_only: true, created_by: 'self-serve (TPA-claims-only)',
+      })
+    }
+    setSaving(false); setCreating(false); setEditingId(null)
     setForm({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
     load()
   }
@@ -343,7 +438,10 @@ function CoverageRulesManager({ company }) {
       {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans registered yet.</div>}
       {!loading&&plans.map((p)=>(
         <Card key={p.id} style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'6px'}}>{p.plan_name}</div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+            <span onClick={()=>startEdit(p)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',flexShrink:0}}>Edit</span>
+          </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
           </div>
@@ -352,7 +450,7 @@ function CoverageRulesManager({ company }) {
       ))}
       {creating&&(
         <Card style={{padding:'16px'}}>
-          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>New plan</div>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan':'New plan'}</div>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Standard Outpatient"/>
@@ -368,18 +466,34 @@ function CoverageRulesManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
             {COVERAGE_RULE_CATEGORIES.map(cat=>(
               <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
             ))}
           </div>
+          {/* Not every insurer's category names match the fixed list above -
+              this is a real column (insurance_plans.covered_categories,
+              text[]), free-form on write already, just missing a way to
+              actually type a custom value in rather than only toggling
+              from a fixed set. */}
+          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+            <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+          </div>
+          {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+            {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).map(cat=>(
+              <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+                {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
+              </div>
+            ))}
+          </div>}
           <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setCreating(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name.trim()}>{saving?'Saving…':'Register plan'}</Btn>
+            <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name.trim()}>{saving?'Saving…':editingId?'Save changes':'Register plan'}</Btn>
           </div>
         </Card>
       )}
-      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={()=>setCreating(true)}>+ Register a plan</Btn></div>}
+      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Register a plan</Btn></div>}
     </div>
   )
 }
