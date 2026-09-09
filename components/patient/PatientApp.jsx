@@ -3280,6 +3280,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
 
   const [plans,setPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
+  const [planSearch,setPlanSearch]=useState('')
   const [patientConditions,setPatientConditions]=useState([])
 
   useEffect(() => {
@@ -3344,6 +3345,15 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     'Surgery':'手術','Travel emergency':'旅遊緊急','Mental health':'精神健康','Critical illness lump sum':'危疾一筆過賠償',
   }
   function pt(term) { return isEn ? term : (PLAN_TERM_ZH[term] || term) }
+
+  // Real search, not just a decorative box - filters the same real plan
+  // list above by name, company, type, or covered category/condition, so
+  // "search all plans" broadens what's visible beyond just the
+  // health-matched set instead of doing nothing when typed into.
+  const planSearchLower = planSearch.trim().toLowerCase()
+  const visiblePlans = planSearchLower
+    ? plans.filter(p => [p.name, p.company, p.type, ...(p.covers||[]), ...(p.criteria||[])].some(s => (s||'').toLowerCase().includes(planSearchLower)))
+    : plans
 
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -3417,7 +3427,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
         {plansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'Loading plans…':'載入計劃中…'}</div>}
         {!plansLoading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No plans available yet.':'暫無可用計劃。'}</div>}
-        {!plansLoading&&plans.map((plan,i)=>(
+        {!plansLoading&&plans.length>0&&visiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?`No plans match "${planSearch}".`:`沒有符合「${planSearch}」的計劃。`}</div>}
+        {!plansLoading&&visiblePlans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
@@ -3466,7 +3477,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         <div style={{padding:'0 16px 10px'}}>
           <div style={{position:'relative',display:'flex',alignItems:'center'}}>
             <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-            <input style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
+            <input value={planSearch} onChange={e=>setPlanSearch(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
           </div>
         </div>
         <div style={{padding:'0 16px 16px'}}>
