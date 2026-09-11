@@ -41,6 +41,15 @@ export default async function handler(req, res) {
     const session = event.data.object
     const submissionId = session.metadata?.submission_id
     const sponsorPlanId = session.metadata?.plan_id
+    const videoConsultInstitutionId = session.metadata?.video_consult_institution_id
+    if (videoConsultInstitutionId) {
+      const until = new Date()
+      until.setFullYear(until.getFullYear() + 1)
+      await supabase.from('institutions').update({
+        video_consult_enabled: true, video_consult_expires_at: until.toISOString().slice(0,10),
+        video_consult_price_hkd: (session.amount_total || 0) / 100,
+      }).eq('id', videoConsultInstitutionId)
+    }
     if (sponsorPlanId) {
       const months = parseInt(session.metadata?.months) || 1
       const until = new Date()
