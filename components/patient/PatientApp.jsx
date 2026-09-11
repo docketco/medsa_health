@@ -2055,6 +2055,7 @@ function DoctorsScreen({ isEn, patient={} }) {
                   {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
                   {doc.registrationNumber&&` · MCHK ${doc.registrationNumber}`}
                 </div>}
+                {doc.videoConsultEnabled&&<div style={{fontSize:'10px',color:C.blue,fontWeight:600,marginTop:'4px'}}>{'◈ '}{isEn?'Video consultation available':'提供視像診症'}</div>}
                 {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).length>0&&<div style={{display:'flex',gap:'8px',marginTop:'4px',alignItems:'center',flexWrap:'wrap'}}>
                   {(doc.schemes||[]).filter(s=>['cdcc','dhc_network','ehcv','vaccination_subsidy'].includes(s)).map(s=>(
                     <span key={s} style={{fontSize:'10px',background:C.card,color:C.textMuted,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{schemeLabel(s)}</span>
