@@ -2206,34 +2206,94 @@ function DoctorsScreen({ isEn, patient={} }) {
   )
 }
 
-function MedAlarmCard({ medId, med, schedule, next, defaultOn, defaultTime, isEn }) {
+// Generates evenly-spaced reminder times across a day from a start time
+// and an interval - e.g. start 08:00, every 6h -> 08:00, 14:00, 20:00,
+// 02:00. Wraps past midnight on purpose, same as a real "every N hours"
+// dosing schedule does.
+function generateIntervalTimes(startTime, intervalHours) {
+  if (!startTime || !intervalHours) return []
+  const [h,m] = startTime.split(':').map(Number)
+  const startMin = h*60+m
+  const count = Math.max(1, Math.round(24/intervalHours))
+  const times = []
+  for (let i=0;i<count;i++) {
+    const mins = (startMin + i*intervalHours*60) % (24*60)
+    times.push(`${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`)
+  }
+  return times.sort()
+}
+
+// Real multi-time reminders, not just one fixed alarm - a patient on an
+// interval schedule (e.g. every 4h) needs several reminders a day, not
+// one. Auto-generates them from the prescription's own dosing rule when
+// there is one, but manual add/remove always works regardless of mode -
+// the generated set is just a starting point, not a constraint.
+function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, defaultOn, defaultTimes, defaultStartTime, isEn }) {
   const [on,setOn]=useState(defaultOn)
-  const [t,setT]=useState(defaultTime)
+  const [times,setTimes]=useState(defaultTimes&&defaultTimes.length>0?defaultTimes:['08:00'])
+  const [startTime,setStartTime]=useState(defaultStartTime||'08:00')
+  const [newTime,setNewTime]=useState('')
   const [saving,setSaving]=useState(false)
 
   async function toggleAlarm() {
     const newOn = !on
     setOn(newOn)
     setSaving(true)
-    await supabase.from('medications').update({ alarm_enabled: newOn, alarm_time: newOn ? t : null }).eq('id', medId)
+    await supabase.from('medications').update({ alarm_enabled: newOn, alarm_time: newOn ? (times[0]||null) : null }).eq('id', medId)
     setSaving(false)
   }
-  async function changeTime(newTime) {
-    setT(newTime)
-    await supabase.from('medications').update({ alarm_time: newTime }).eq('id', medId)
+  async function persist(newTimes) {
+    setSaving(true)
+    await supabase.from('medications').update({ alarm_times: newTimes, alarm_time: newTimes[0]||null }).eq('id', medId)
+    setSaving(false)
+  }
+  async function useIntervalRule() {
+    const generated = generateIntervalTimes(startTime, intervalHours)
+    setTimes(generated)
+    setSaving(true)
+    await supabase.from('medications').update({ alarm_times: generated, alarm_start_time: startTime, alarm_time: generated[0]||null }).eq('id', medId)
+    setSaving(false)
+  }
+  function addManualTime() {
+    if (!newTime || times.includes(newTime)) return
+    const updated = [...times, newTime].sort()
+    setTimes(updated); setNewTime('')
+    persist(updated)
+  }
+  function removeTime(tm) {
+    const updated = times.filter(x=>x!==tm)
+    setTimes(updated)
+    persist(updated)
   }
 
   return (
     <Card style={{padding:'14px 16px'}}>
       <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
         <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
-        <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule} · Next: {next}</div></div>
+        <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule}</div></div>
         <div onClick={toggleAlarm} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:saving?'wait':'pointer',position:'relative',transition:'background 0.2s',flexShrink:0,opacity:saving?0.6:1}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
       </div>
-      {on&&<div style={{display:'flex',alignItems:'center',gap:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-        <span style={{fontSize:'12px',color:C.textSub}}>{isEn?'Alarm at':'鬧鐘'}</span>
-        <input type="time" value={t} onChange={e=>changeTime(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
-        <span style={{fontSize:'11px',color:C.green,fontWeight:500}}>● Active</span>
+      {on&&<div style={{paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+        {dosingMode==='interval'&&intervalHours>0&&<div style={{marginBottom:'10px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?`Prescribed every ${intervalHours}h - start from:`:`處方每${intervalHours}小時一次 - 開始時間：`}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <input type="time" value={startTime} onChange={e=>setStartTime(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
+            <button onClick={useIntervalRule} disabled={saving} style={{flex:1,padding:'6px 10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{isEn?`Use this - ${Math.max(1,Math.round(24/intervalHours))} reminders/day`:`使用 - 每日${Math.max(1,Math.round(24/intervalHours))}次提醒`}</button>
+          </div>
+        </div>}
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Reminder times':'提醒時間'}</div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
+          {times.map(tm=>(
+            <div key={tm} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'12px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',gap:'6px'}}>
+              {tm}<span onClick={()=>removeTime(tm)} style={{cursor:'pointer',fontWeight:700}}>×</span>
+            </div>
+          ))}
+          {times.length===0&&<span style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No reminder times set':'未設定提醒時間'}</span>}
+        </div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <input type="time" value={newTime} onChange={e=>setNewTime(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
+          <button onClick={addManualTime} disabled={!newTime} style={{padding:'6px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ {isEn?'Add':'新增'}</button>
+        </div>
       </div>}
     </Card>
   )
@@ -2292,7 +2352,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
 
   async function handleAddReminder(m) {
     setAddingReminderId(m.id)
-    await supabase.from('medications').update({ alarm_enabled: true, alarm_time: '08:00' }).eq('id', m.id)
+    await supabase.from('medications').update({ alarm_enabled: true, alarm_time: '08:00', alarm_times: ['08:00'] }).eq('id', m.id)
     setAddingReminderId(null)
     setAddReminderOpen(false)
   }
@@ -2345,39 +2405,34 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
           })}
         </div>
       </div>
-      <SecLabel>{isEn?'Upcoming':'即將到來'}</SecLabel>
+      <SecLabel>{isSameDay(selectedDate,today) ? (isEn?"Today's appointments":'今天的預約') : selectedDate.toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</SecLabel>
       {cancelledMsg&&<div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>{'✓'} {cancelledMsg}</div>}
       {(() => {
-        // Only what's actually still ahead and not cancelled - this used
-        // to render every appointment ever booked (past, cancelled,
-        // everything) under an "Upcoming" heading with no way to act on
-        // any of it.
-        //
-        // "Ahead" means today or later, not literally later than this
-        // exact second - cutting it at Date.now() meant a same-day
-        // appointment vanished from Upcoming (and became impossible to
-        // cancel from here) the moment its scheduled time ticked past,
-        // even if the patient hadn't been seen yet.
-        const todayStart = new Date(); todayStart.setHours(0,0,0,0)
-        const upcoming = appointments.filter(a => a.status!=='cancelled' && a.status!=='completed' && new Date(a.scheduled_at).getTime() >= todayStart.getTime())
+        // A real rundown of the selected day - not a global "upcoming"
+        // feed. Includes completed and past appointments for that day
+        // (crossed out, not hidden) since a patient tapping today's date
+        // wants to see everything that happened today, not just what's
+        // still ahead. Cancelled ones stay excluded - there's nothing to
+        // show for a visit that didn't happen. Tap any date on the
+        // calendar above to see that day's own rundown.
+        const dayAppts = appointments.filter(a => a.status!=='cancelled' && isSameDay(new Date(a.scheduled_at), selectedDate))
           .sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at))
-        if (upcoming.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No upcoming appointments yet.':'暫無即將到來的預約。'}</div>
-        return upcoming.map((appt,i)=>{
+        if (dayAppts.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No appointments this day.':'這天沒有預約。'}</div>
+        return dayAppts.map((appt,i)=>{
           const dt = new Date(appt.scheduled_at)
           const timeStr = dt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})
-          const dateStr = dt.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short',timeZone:'Asia/Hong_Kong'})
           const drName = appt.practitioners?.full_name ? 'Dr '+appt.practitioners.full_name.split(',')[0] : (appt.doctor_name || appt.appointment_type)
+          const isDone = appt.status==='completed'
           return(
-            <Card key={i} onClick={()=>setActiveAppt(appt)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:'pointer'}}>
-              <div style={{width:40,height:40,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>◎</div>
+            <Card key={i} onClick={()=>setActiveAppt(appt)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:'pointer',opacity:isDone?0.65:1}}>
+              <div style={{width:40,height:40,borderRadius:'12px',background:isDone?C.card:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:isDone?C.textMuted:C.green,flexShrink:0}}>{isDone?'✓':'◎'}</div>
               <div style={{flex:1}}>
-                <div style={{fontSize:'14px',fontWeight:500}}>{drName}</div>
+                <div style={{fontSize:'14px',fontWeight:500,textDecoration:isDone?'line-through':'none',color:isDone?C.textMuted:C.text}}>{drName}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
-                <span style={{fontSize:'10px',background:appt.status==='confirmed'?C.greenLight:C.amberLight,color:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
+                <span style={{fontSize:'10px',background:isDone?C.card:appt.status==='confirmed'?C.greenLight:C.amberLight,color:isDone?C.textMuted:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
                 <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{dateStr}</div>
                 {appt.patient_pays>0&&<div style={{fontSize:'11px',color:C.amber}}>HK${appt.patient_pays} due</div>}
               </div>
               <span style={{color:C.textMuted,fontSize:'16px'}}>{'›'}</span>
@@ -2388,14 +2443,15 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
       {activeAppt&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setActiveAppt(null)}>
         <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,margin:'0 16px',padding:'24px'}}>
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAppt.practitioners?.full_name ? 'Dr '+activeAppt.practitioners.full_name.split(',')[0] : (activeAppt.doctor_name || activeAppt.appointment_type)}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{new Date(activeAppt.scheduled_at).toLocaleString('en-HK',{dateStyle:'full',timeStyle:'short'})}</div>
-          <Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{new Date(activeAppt.scheduled_at).toLocaleString('en-HK',{dateStyle:'full',timeStyle:'short',timeZone:'Asia/Hong_Kong'})}</div>
+          {activeAppt.status==='completed'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>{'✓'} {isEn?'This visit is complete.':'此診症已完成。'}</div>}
+          {activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
       {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
-        <MedAlarmCard key={i} medId={m.id} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} next="Check schedule" defaultOn={m.alarm_enabled||false} defaultTime={m.alarm_time?.slice(0,5)||'08:00'} isEn={isEn}/>
+        <MedAlarmCard key={i} medId={m.id} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} dosingMode={m.dosing_mode} intervalHours={m.interval_hours} defaultOn={m.alarm_enabled||false} defaultTimes={(m.alarm_times&&m.alarm_times.length>0)?m.alarm_times:(m.alarm_time?[m.alarm_time.slice(0,5)]:['08:00'])} defaultStartTime={m.alarm_start_time?.slice(0,5)||'08:00'} isEn={isEn}/>
       )) : <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No medication reminders yet.':'暫無用藥提醒。'}</div>}
       {!addReminderOpen&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setAddReminderOpen(true)}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>}
       {addReminderOpen&&<div style={{padding:'0 16px 16px'}}>

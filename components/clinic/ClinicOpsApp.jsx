@@ -2340,7 +2340,14 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
       </div>
       {isDangerousDrug&&<div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'6px',padding:'6px 10px',marginBottom:'10px',fontSize:'11px',fontWeight:600,color:C.red}}>{'\u26a0'} Dangerous Drugs Ordinance - statutory tracking required</div>}
       <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
-        {drug.frequency||'-'} {drug.durationDays&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}
+        {/* describeFrequency() already bakes "for X days" into the
+            composed frequency text when it comes from the structured
+            dosing controls - appending durationDays again unconditionally
+            duplicated it ("Every 8 hours for 7 days for 7 days"). Only
+            add it separately when the frequency text doesn't already
+            mention days - covers a doctor's own manually-typed frequency,
+            which never includes duration. */}
+        {drug.frequency||'-'} {drug.durationDays&&!/day/i.test(drug.frequency||'')&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}
       </div>
       {loading?<div style={{fontSize:'11px',color:C.textMuted}}>Checking drug library...</div>:<>
         <div style={{marginBottom:'8px'}}>
@@ -4713,6 +4720,22 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     }
 
     if (updated.id && updated.doctor && updated.doctor !== original.doctor) {
+      // Switching doctor previously only checked for a conflicting
+      // appointment, never whether the new doctor actually works this
+      // time slot at all - a doctor with no working hours covering it
+      // (or a day off) could silently be assigned an appointment they
+      // never work, same real check the slot picker already applies
+      // when booking or rescheduling.
+      const apptDay = original.scheduledAt ? new Date(original.scheduledAt) : selectedDay
+      const dayOfWeek = apptDay.getDay()
+      const { data: avail } = await supabase.from('doctor_availability').select('*')
+        .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s. Pick a different doctor or time.` }
+      const [h,m] = original.time.split(':').map(Number)
+      const apptMinutes = h*60+(m||0)
+      const [startH,startM] = (avail.start_time||'09:00').split(':').map(Number)
+      const [endH,endM] = (avail.end_time||'17:00').split(':').map(Number)
+      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s - ${original.time} is outside that. Pick a different doctor or time.` }
       const { data: clash } = await supabase.from('appointments').select('id')
         .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops')
         .eq('scheduled_at', original.scheduledAt).neq('status','cancelled').neq('id', updated.id).maybeSingle()
