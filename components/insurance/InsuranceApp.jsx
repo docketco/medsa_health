@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import { supabase } from '../../lib/supabase'
+import { parseCSV } from '../../lib/csvImport'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -693,6 +694,143 @@ function CoverageRulesManager({ company }) {
   )
 }
 
+// ── POLICY VERIFICATION (check a submitted policy number against the
+// insurer's own records) ──────────────────────────────────────────────────
+// The piece that was missing entirely from Coverage Rules: registering a
+// plan's copay/deductible rules never meant anyone checked a claim's real
+// policy number against anything - Medsa just trusted whatever was on
+// file. This doesn't need a full adjudication partnership (Medsa still
+// does 100% of the coverage math) - an insurer only needs to tell Medsa
+// how to confirm a policyholder actually exists on their books, via
+// whichever of these is realistic for them: a plain roster export (any
+// insurer already has one, zero engineering work), or a key to a lookup
+// endpoint they already run.
+const VERIFICATION_MODES = [
+  ['none', 'Not verified', 'Any policy number on file is trusted as-is - the same as before this feature existed.'],
+  ['roster', 'Roster upload', 'Periodically upload a plain export of your active policyholders. Medsa checks every claim\'s policy number against the most recent upload.'],
+  ['api', 'Live lookup API', 'Give Medsa a key to your own member-eligibility endpoint. Medsa calls it at claim time instead of trusting a stored list.'],
+]
+function PolicyVerificationManager({ company }) {
+  const [mode,setMode]=useState('none')
+  const [apiUrl,setApiUrl]=useState('')
+  const [apiKeyInput,setApiKeyInput]=useState('')
+  const [rosterCount,setRosterCount]=useState(0)
+  const [rosterUpdatedAt,setRosterUpdatedAt]=useState(null)
+  const [loading,setLoading]=useState(true)
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+  const [rosterFile,setRosterFile]=useState(null)
+  const [uploadingRoster,setUploadingRoster]=useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_companies').select('verification_mode, verification_api_url, roster_updated_at').eq('id', company.id).maybeSingle()
+    setMode(data?.verification_mode || 'none')
+    setApiUrl(data?.verification_api_url || '')
+    setRosterUpdatedAt(data?.roster_updated_at || null)
+    const { count } = await supabase.from('insurer_policy_roster').select('id', { count: 'exact', head: true }).eq('insurance_company_id', company.id)
+    setRosterCount(count || 0)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id])
+
+  async function saveMode(newMode) {
+    setSaving(true); setNotice(null)
+    const res = await fetch('/api/insurer/set_verification_config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId: company.id, verificationMode: newMode, verificationApiUrl: apiUrl, verificationApiKey: apiKeyInput }),
+    })
+    const json = await res.json()
+    setSaving(false)
+    if (!res.ok) { setNotice(`Error: ${json.error}`); return }
+    setMode(newMode)
+    setApiKeyInput('')
+    setNotice('Saved.')
+    load()
+  }
+
+  async function handleRosterUpload() {
+    if (!rosterFile) return
+    setUploadingRoster(true); setNotice(null)
+    try {
+      const text = await rosterFile.text()
+      const { rows } = parseCSV(text)
+      if (rows.length === 0) throw new Error('No rows found - check the file has a header row plus at least one data row.')
+      // Replace semantics - a stale roster is worse than an empty one
+      // (an old row for a policyholder who's since lapsed would wrongly
+      // keep verifying). Delete-then-insert rather than diffing, since
+      // this is a small, infrequent, whole-file operation.
+      await supabase.from('insurer_policy_roster').delete().eq('insurance_company_id', company.id)
+      const toInsert = rows.map(r => ({
+        insurance_company_id: company.id,
+        policy_number: r.policy_number || null, hkid: r.hkid || null,
+        patient_name: r.patient_name || null, plan_name: r.plan_name || null,
+        status: r.status || 'active',
+      })).filter(r => r.policy_number || r.hkid)
+      if (toInsert.length === 0) throw new Error('No row had a policy_number or hkid column - nothing to check claims against.')
+      const { error } = await supabase.from('insurer_policy_roster').insert(toInsert)
+      if (error) throw error
+      await supabase.from('insurance_companies').update({ roster_updated_at: new Date().toISOString() }).eq('id', company.id)
+      setRosterFile(null)
+      setNotice(`Uploaded ${toInsert.length} polic${toInsert.length===1?'y':'ies'}.`)
+      load()
+    } catch (e) {
+      setNotice(`Error: ${e.message}`)
+    } finally {
+      setUploadingRoster(false)
+    }
+  }
+
+  if (loading) return <div style={{textAlign:'center',padding:'40px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{margin:'16px 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Medsa always does the coverage/copay/deductible math from your registered plan rules. This only controls whether a claim's policy number gets checked against your own records before that math runs.</div>
+      </div>
+      <SecLabel>How should Medsa verify a policy number?</SecLabel>
+      {VERIFICATION_MODES.map(([key,label,desc])=>(
+        <Card key={key} onClick={()=>key!==mode&&saveMode(key)} style={{padding:'14px 16px',cursor:'pointer',...(mode===key?{border:`1.5px solid ${C.navy}`}:{})}}>
+          <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'4px'}}>
+            <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${mode===key?C.navy:C.border}`,background:mode===key?C.navy:'transparent',flexShrink:0}}/>
+            <div style={{fontSize:'13px',fontWeight:600}}>{label}</div>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5,marginLeft:'26px'}}>{desc}</div>
+        </Card>
+      ))}
+      {notice&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green}}>{notice}</div>}
+
+      {mode==='roster'&&<>
+        <SecLabel>Your roster</SecLabel>
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{rosterCount>0 ? `${rosterCount} polic${rosterCount===1?'y':'ies'} on file${rosterUpdatedAt?`, last updated ${new Date(rosterUpdatedAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}.` : 'No roster uploaded yet - every claim will be rejected as unverified until one is.'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>CSV columns: policy_number, hkid (either works), patient_name, plan_name, status (defaults to active).</div>
+          <div style={{display:'flex',gap:'6px'}}>
+            <input type="file" accept=".csv" onChange={e=>setRosterFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
+            <Btn variant="navy" style={{flexShrink:0}} onClick={handleRosterUpload} disabled={!rosterFile||uploadingRoster}>{uploadingRoster?'Uploading…':'Upload & replace'}</Btn>
+          </div>
+        </Card>
+      </>}
+
+      {mode==='api'&&<>
+        <SecLabel>Your lookup endpoint</SecLabel>
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Medsa POSTs {'{ policyNumber, hkid }'} and expects back JSON with a valid/eligible boolean.</div>
+          <div style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Endpoint URL</div>
+            <input value={apiUrl} onChange={e=>setApiUrl(e.target.value)} placeholder="https://your-system.example.com/verify" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+          </div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>API key{apiUrl.trim()&&' (leave blank to keep the current one)'}</div>
+            <input type="password" value={apiKeyInput} onChange={e=>setApiKeyInput(e.target.value)} placeholder="Sent as a Bearer token" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+          </div>
+          <Btn variant="navy" style={{width:'100%'}} onClick={()=>saveMode('api')} disabled={saving||!apiUrl.trim()}>{saving?'Saving…':'Save endpoint'}</Btn>
+        </Card>
+      </>}
+    </div>
+  )
+}
+
 // ── CLAIMS LOG (admin view - real claims, tap one to approve/reject) ──────────
 // Was a hardcoded sample array (fake patients, fake "Admin override" buttons
 // that did nothing) - now the real insurance_claims table, same rows an
@@ -1333,10 +1471,10 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification'}
   const isPartnered = company?.relationshipType!=='unpartnered'
-  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
-    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
+  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -1354,6 +1492,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
         {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
+        {screen==='verify'&&<PolicyVerificationManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
