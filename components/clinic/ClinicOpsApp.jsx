@@ -1280,7 +1280,7 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
   )
 }
 
-function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
+function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh, onMarkServing }) {
   const [actionPatient,setActionPatient]=useState(null)
   // Completed/no-show tickets used to sit here all day (the queue only
   // ever grew, never shrank) - a doctor's active list should only be who
@@ -1314,7 +1314,7 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
         patient={actionPatient}
         onClose={()=>setActionPatient(null)}
         doctorLabel={staffMember?.name || 'Doctor'}
-        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId, staffMember?.name);setActionPatient(null)}}
+        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId, staffMember?.name);onMarkServing?.(actionPatient);setActionPatient(null)}}
         onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
       />
     </PageWrap>
@@ -4968,6 +4968,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [allPlans,setAllPlans]=useState([])
   const [addPlanSearch,setAddPlanSearch]=useState('')
   const [addingPlan,setAddingPlan]=useState(false)
+  const [policyLookupOpen,setPolicyLookupOpen]=useState(false)
+  const [policyLookupCompany,setPolicyLookupCompany]=useState('')
+  const [policyLookupNumber,setPolicyLookupNumber]=useState('')
+  const [policyLookupError,setPolicyLookupError]=useState(null)
+  const [checkingPolicyLookup,setCheckingPolicyLookup]=useState(false)
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
   const [ledger,setLedger]=useState([])
@@ -5310,6 +5315,40 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setAddingPlan(false)
   }
 
+  // "Pull, verify, calculate" straight off a real policy number - no
+  // insurer's shared plan needs to already exist in Medsa for this to
+  // work, unlike handleLinkNewPlan above which only ever offers plans
+  // someone already registered. Resolves via the insurer's own uploaded
+  // roster (see insuranceAdapter.js's ROSTER_POLICY_NUMBER case and
+  // add_per_policy_coverage_to_roster) - if that policy carries its own
+  // copay/deductible/limit terms, those are what actually get used.
+  async function handleCheckByPolicyNumber() {
+    if (!billingRecord || !policyLookupCompany.trim() || !policyLookupNumber.trim()) return
+    setCheckingPolicyLookup(true); setPolicyLookupError(null)
+    const adapter = getInsuranceAdapter(policyLookupCompany.trim())
+    const result = await adapter.checkEligibility({
+      patientId: billingRecord.patient_id, clinicId: institutionId,
+      verificationMethod: 'ROSTER_POLICY_NUMBER',
+      verificationPayload: { companyName: policyLookupCompany.trim(), policyNumber: policyLookupNumber.trim() },
+    })
+    if (!result.isEligible) {
+      setPolicyLookupError(result.verificationError || 'Could not verify this policy.')
+      setCheckingPolicyLookup(false)
+      return
+    }
+    const { error } = await supabase.from('agent_policies').insert({
+      patient_id: billingRecord.patient_id, plan_id: result.resolvedPolicyNumber,
+      policy_number: policyLookupNumber.trim(), status: 'active',
+    })
+    setCheckingPolicyLookup(false)
+    if (error) { setPolicyLookupError(error.message); return }
+    setPolicyLookupOpen(false); setPolicyLookupCompany(''); setPolicyLookupNumber('')
+    setEligiblePlansLoading(true)
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+    setEligiblePlans(matches)
+    setEligiblePlansLoading(false)
+  }
+
   async function handleCollectRemainingCopay() {
     if (!claimAdjudication || !billingRecord) return
     setCollectingCopay(true)
@@ -5460,6 +5499,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 </div>
               ))}
               {allPlans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'8px'}}>Loading plans...</div>}
+            </div>
+          </div>}
+
+          {!policyLookupOpen&&<div onClick={()=>setPolicyLookupOpen(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'10px 0',textAlign:'center'}}>{'+'} Or check by their real policy number</div>}
+          {policyLookupOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px',marginBottom:'12px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>For an insurer who's uploaded their real policies to Medsa - no plan needs to already be registered here, Medsa pulls their own coverage terms straight off the policy number.</div>
+            <input value={policyLookupCompany} onChange={e=>setPolicyLookupCompany(e.target.value)} placeholder="Insurer name (exact)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            <input value={policyLookupNumber} onChange={e=>setPolicyLookupNumber(e.target.value)} placeholder="Policy number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            {policyLookupError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{policyLookupError}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setPolicyLookupOpen(false);setPolicyLookupCompany('');setPolicyLookupNumber('');setPolicyLookupError(null)}}>Cancel</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={handleCheckByPolicyNumber} disabled={checkingPolicyLookup||!policyLookupCompany.trim()||!policyLookupNumber.trim()}>{checkingPolicyLookup?'Checking…':'Check & link'}</Btn>
             </div>
           </div>}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.map(m=>(
@@ -6956,9 +7007,41 @@ export default function ClinicOpsApp() {
       setQueueLoading(false)
   }
 
+  // A video consultation never has anyone to physically check in - the
+  // patient doesn't walk in, so nothing would ever create their
+  // clinic_queue row without this. Auto-checks in any of today's video
+  // appointments that don't have one yet, using the exact same
+  // handleCheckedIn path a front-desk check-in uses (same ticket
+  // numbering, same queue routing) so it behaves identically everywhere
+  // downstream - My Patients, Overview's "Now serving", etc. all just
+  // read clinic_queue already and need no separate video-aware logic.
+  // Sequencing "at the exact time it was booked" among other checked-in
+  // patients falls out of queuePosition() (line ~188) for free - it
+  // already sorts by appointmentTime rather than checkedInAt whenever an
+  // entry has one, which every appointment-linked check-in (video or
+  // walk-in-with-a-booking) does.
+  async function ensureVideoCheckIns() {
+    if (!institutionId) return
+    const { start: dayStart, end: dayEnd } = hkDayBounds(new Date())
+    const { data: videoAppts } = await supabase.from('appointments')
+      .select('id, patient_id, patients(full_name)')
+      .eq('institution_source', 'clinic_ops').eq('consult_type', 'video')
+      .neq('status', 'cancelled').neq('status', 'completed')
+      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+    if (!videoAppts || videoAppts.length === 0) return
+    const { data: existingRows } = await supabase.from('clinic_queue')
+      .select('appointment_id').eq('institution_id', institutionId)
+      .in('appointment_id', videoAppts.map(a => a.id))
+    const alreadyQueued = new Set((existingRows||[]).map(r => r.appointment_id))
+    for (const appt of videoAppts) {
+      if (alreadyQueued.has(appt.id) || !appt.patients?.full_name) continue
+      await handleCheckedIn({ id: appt.patient_id, full_name: appt.patients.full_name }, false, undefined, true, null, appt.id)
+    }
+  }
+
   useEffect(() => {
     if (!staffMember) return
-    loadQueueAndPrescriptions()
+    ensureVideoCheckIns().then(loadQueueAndPrescriptions)
   }, [staffMember, institutionId])
 
   // Refresh every time the doctor actually navigates to see their
@@ -6966,7 +7049,7 @@ export default function ClinicOpsApp() {
   // this session was already open and idle elsewhere.
   useEffect(() => {
     if (!staffMember) return
-    if (screen==='mypatients' || screen==='overview') loadQueueAndPrescriptions()
+    if (screen==='mypatients' || screen==='overview') ensureVideoCheckIns().then(loadQueueAndPrescriptions)
   }, [screen])
 
   async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null, explicitDoctor=null) {
@@ -7321,7 +7404,7 @@ export default function ClinicOpsApp() {
       }}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} institutionId={institutionId} onNavCredentials={()=>setScreen('mycredentials')} onNavStaff={()=>setScreen('staff')}/>}
-        {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions}/>}
+        {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions} onMarkServing={(q)=>{if(q?.status==='waiting')updateQueueStatus(q,'serving')}}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('checkin');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
         {screen==='newpatient'&&<NewPatientScreen
