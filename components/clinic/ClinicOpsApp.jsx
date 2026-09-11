@@ -4608,6 +4608,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       type: a.appointment_type || 'Consultation',
       status: a.status || 'confirmed',
       notes: a.reason_for_visit || '',
+      consultType: a.consult_type || 'in-person',
       isReal: true,
     }))
 
@@ -4790,7 +4791,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
             <div style={{fontSize:'13px',fontWeight:700,width:48,flexShrink:0,color:isMuted?C.textMuted:C.text}}>{a.time}</div>
             <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:500,color:isCancelled?C.red:isDone?C.textMuted:C.text,textDecoration:isMuted?'line-through':'none'}}>{a.patient}</div>
-              <div style={{fontSize:'12px',color:C.textMuted}}>{a.doctor} - {a.type}</div>
+              <div style={{fontSize:'12px',color:C.textMuted}}>{a.doctor} - {a.type}{a.consultType==='video'&&<span style={{color:C.blue,fontWeight:600}}> · ◈ Video</span>}</div>
             </div>
             {a.status!=='open'&&!isMuted&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
             {a.status==='open'
@@ -6196,6 +6197,73 @@ function MimsSettingsScreen({ staffMember, institutionId, institutionName }) {
   )
 }
 
+// ── VIDEO CONSULTATIONS (paid, annual, per-clinic feature) ─────────────────
+// Video consultation was previously offered to every patient for every
+// online-bookable doctor with no real gate at all. Real product decision:
+// it's a paid feature a clinic opts into, billed annually, same self-serve
+// Stripe Checkout pattern as sponsored plan listings - no Medsa approval
+// step, goes live as soon as payment clears (see the webhook).
+const VIDEO_CONSULT_RATE_HKD = 6000 // per year
+
+function VideoConsultSettingsScreen({ institutionId, institutionName }) {
+  const [loading,setLoading]=useState(true)
+  const [enabled,setEnabled]=useState(false)
+  const [expiresAt,setExpiresAt]=useState(null)
+  const [priceHkd,setPriceHkd]=useState(null)
+  const [starting,setStarting]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function load() {
+    if (!institutionId) return
+    setLoading(true)
+    const { data } = await supabase.from('institutions')
+      .select('video_consult_enabled, video_consult_expires_at, video_consult_price_hkd')
+      .eq('id', institutionId).maybeSingle()
+    const today = new Date().toISOString().slice(0,10)
+    setEnabled(!!(data?.video_consult_enabled && (!data.video_consult_expires_at || data.video_consult_expires_at >= today)))
+    setExpiresAt(data?.video_consult_expires_at || null)
+    setPriceHkd(data?.video_consult_price_hkd || null)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [institutionId])
+
+  async function handleEnable() {
+    setStarting(true); setError(null)
+    try {
+      const res = await fetch('/api/clinic/create_video_consult_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ institutionId }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setError(data.message || 'Could not start checkout.')
+    } catch {
+      setError('Something went wrong - please try again.')
+    }
+    setStarting(false)
+  }
+
+  return (
+    <PageWrap maxWidth={520}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Video Consultations</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center',lineHeight:1.5}}>A paid, clinic-wide feature - once enabled, every doctor at {institutionName||'this clinic'} can be booked for a video consultation from Find Care, alongside in-person. A doctor logs and completes a video visit exactly the same way as an in-person one (diagnosis, prescription, everything) - nothing about the consultation flow itself changes.</div>
+
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
+
+      {!loading&&enabled&&<Card style={{padding:'16px'}}>
+        <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Video consultations enabled</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>Active until {expiresAt?new Date(expiresAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'-'}{priceHkd?` · paid HK$${priceHkd.toLocaleString()}`:''}</div>
+      </Card>}
+
+      {!loading&&!enabled&&<Card style={{padding:'16px'}}>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Not enabled{expiresAt?' - your last period has lapsed':''}. HK${VIDEO_CONSULT_RATE_HKD.toLocaleString()}/year, charged upfront - no approval needed, goes live as soon as payment clears.</div>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleEnable} disabled={starting||!institutionId}>{starting?'Starting checkout…':`Pay HK$${VIDEO_CONSULT_RATE_HKD.toLocaleString()} & enable for 1 year`}</Btn>
+      </Card>}
+    </PageWrap>
+  )
+}
+
 // ── RECEIPT BRANDING ─────────────────────────────────────────────────────────
 // Lets a practice manager put their own clinic's identity on receipts
 // (logo, clinic name, address, phone, footer note) instead of the default
@@ -7167,6 +7235,7 @@ export default function ClinicOpsApp() {
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
     {key:'mimssettings', icon:'alert', label:'Drug Safety Database', roles:['admin']},
     {key:'receiptbranding', icon:'tag', label:'Receipt Branding', roles:['admin']},
+    {key:'videoconsult', icon:'scan', label:'Video Consultations', roles:['admin']},
     {key:'mycredentials', icon:'badge', label:'My Credentials', roles:['doctor','clinic_assistant']},
     {key:'help', icon:'help', label:'Help', roles:['admin','clinic_assistant','doctor']},
   ]
@@ -7268,6 +7337,7 @@ export default function ClinicOpsApp() {
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
         {screen==='mimssettings'&&staffMember?.role==='admin'&&<MimsSettingsScreen staffMember={staffMember} institutionId={institutionId} institutionName={institutionName}/>}
         {screen==='receiptbranding'&&staffMember?.role==='admin'&&<ReceiptBrandingScreen institutionId={institutionId} institutionName={institutionName}/>}
+        {screen==='videoconsult'&&staffMember?.role==='admin'&&<VideoConsultSettingsScreen institutionId={institutionId} institutionName={institutionName}/>}
         {screen==='mycredentials'&&<PractitionerCredentialsScreen staffMember={staffMember} institutionName={institutionName} affiliatedClinics={affiliatedClinics} onSwitchClinic={switchClinic}/>}
         {screen==='help'&&<HelpScreen staffMember={staffMember}/>}
       </div>

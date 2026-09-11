@@ -1629,7 +1629,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         return all
       }
       const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
-        supabase.from('staff_credentials').select(`${STAFF_CREDENTIALS_SAFE_COLUMNS}, institutions(name, name_tc)`).eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+        supabase.from('staff_credentials').select(`${STAFF_CREDENTIALS_SAFE_COLUMNS}, institutions(name, name_tc, video_consult_enabled, video_consult_expires_at)`).eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
         fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
         fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
         filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
@@ -1637,6 +1637,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       const dirRes = { data: dirResData }
       const allClinicsRes = { data: allClinicsData }
       const clinicIdsWithDoctors = new Set(clinicsWithDoctorsData.map(d=>d.clinic_id))
+      const todayStr = new Date().toISOString().slice(0,10)
       const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
         spec: d.department||'General Practice', specialties: [d.department||'General Practice'],
@@ -1645,6 +1646,11 @@ function DoctorsScreen({ isEn, patient={} }) {
         phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
         ownershipType: 'private', facilityType: d.institution_source==='clinic_ops'?'small_practice_clinic':'hospital', schemes: d.schemes||[],
+        // Video consultation is a paid, annual, per-clinic feature - only
+        // real for a doctor whose own institution has actually paid for
+        // it and hasn't lapsed, never assumed just because they're
+        // online-bookable.
+        videoConsultEnabled: !!(d.institutions?.video_consult_enabled && (!d.institutions?.video_consult_expires_at || d.institutions.video_consult_expires_at >= todayStr)),
       }))
       // Non-partnered listings are shown at clinic level only - no
       // individual doctor name, specialty, or profile is displayed for a
@@ -1716,6 +1722,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       ownershipType: d.ownershipType||null, facilityType: d.facilityType||null, schemes: d.schemes||[],
       nameTc: d.nameTc||null, clinicTc: d.clinicTc||null,
       address: d.address||null, addressTc: d.addressTc||null,
+      videoConsultEnabled: d.videoConsultEnabled||false,
     }
   }
 
@@ -2067,17 +2074,19 @@ function DoctorsScreen({ isEn, patient={} }) {
 
         {/* Was gated behind doc.videoAvail, a field nothing in the app
             ever populated - so this toggle, and any way to book a video
-            consultation at all, was permanently dead. Every doctor
-            reachable from here is already a partnered, online-bookable
-            doctor, so the choice is always real to offer. */}
-        <Card style={{padding:'14px 16px'}}>
+            consultation at all, was permanently dead. Real gate now:
+            video consultation is a paid, annual, per-clinic feature - only
+            shown when this doctor's own institution has actually paid for
+            it and it hasn't lapsed (see the practice manager's Video
+            Consultations settings card). */}
+        {activeDoctor.videoConsultEnabled&&<Card style={{padding:'14px 16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
           <div style={{display:'flex',gap:'8px'}}>
             {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
               <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
             ))}
           </div>
-        </Card>
+        </Card>}
 
         <Card>
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
