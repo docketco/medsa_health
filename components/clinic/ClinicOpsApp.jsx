@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
+import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import C from '../shared/colours'
@@ -2340,14 +2341,21 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
       </div>
       {isDangerousDrug&&<div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'6px',padding:'6px 10px',marginBottom:'10px',fontSize:'11px',fontWeight:600,color:C.red}}>{'\u26a0'} Dangerous Drugs Ordinance - statutory tracking required</div>}
       <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
-        {/* describeFrequency() already bakes "for X days" into the
-            composed frequency text when it comes from the structured
-            dosing controls - appending durationDays again unconditionally
-            duplicated it ("Every 8 hours for 7 days for 7 days"). Only
-            add it separately when the frequency text doesn't already
-            mention days - covers a doctor's own manually-typed frequency,
-            which never includes duration. */}
-        {drug.frequency||'-'} {drug.durationDays&&!/day/i.test(drug.frequency||'')&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}
+        {/* A presence-check guard here ("only append duration if the
+            frequency text doesn't already mention days") still duplicated
+            in practice - any stale trailing "for N days" already baked
+            into frequency (from before this was fixed, or from a doctor's
+            own manually-typed text) always reads as "mentions days" and
+            silently swallowed the CURRENT durationDays instead of just
+            skipping a redundant append. Strips any trailing "for N days"
+            (one or more, however they got there) before rendering, then
+            always appends the real, current duration exactly once - the
+            displayed text can never carry two, whatever frequency itself
+            contains. */}
+        {(() => {
+          const base = (drug.frequency||'').replace(/(?:\s*for\s+\d+\s+days?)+\s*$/i, '').trim()
+          return <>{base||'-'} {drug.durationDays&&`for ${drug.durationDays} days`} {drug.quantity&&`(${drug.quantity} total)`}</>
+        })()}
       </div>
       {loading?<div style={{fontSize:'11px',color:C.textMuted}}>Checking drug library...</div>:<>
         <div style={{marginBottom:'8px'}}>
@@ -2717,8 +2725,10 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 
   async function loadTodaysQueue() {
     setLoadingQueue(true)
-    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    // "Today" is the clinic's Hong Kong today, not the browser's - a
+    // local setHours(0,0,0,0) window is a different range for a staff
+    // device outside Hong Kong.
+    const { start: dayStart, end: dayEnd } = hkDayBounds(new Date())
     const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
       .eq('institution_source', 'clinic_ops')
       .neq('status', 'cancelled')
@@ -2727,7 +2737,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
       .order('scheduled_at', {ascending:true})
     setTodaysQueue((data||[]).map(a=>({
-      id:a.id, time:new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      id:a.id, time:hkHHMM(a.scheduled_at),
       patientName:a.patients?.full_name||'Unknown', medsaId:a.patients?.medsa_id||null, doctor:a.doctor_name||'Unassigned',
     })))
     setLoadingQueue(false)
@@ -2970,9 +2980,10 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
       if (!appt?.doctor) { setAvailableSlots([]); setSlotsLoading(false); return }
       // The day this appointment is actually scheduled for, not "today" -
       // rescheduling an appointment booked for a different day than today
-      // was checking today's working hours instead of that day's.
-      const apptDay = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
-      const dayOfWeek = apptDay.getDay()
+      // was checking today's working hours instead of that day's. Uses
+      // hkParts, not .getDay(), so this resolves the real Hong Kong
+      // weekday regardless of the staff device's own timezone.
+      const dayOfWeek = hkParts(appt.scheduledAt || new Date()).dayOfWeek
       const { data } = await supabase.from('doctor_availability').select('*')
         .eq('doctor_name', appt.doctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
       if (!data || data.is_off) { setAvailableSlots([]); setSlotsLoading(false); return }
@@ -4477,7 +4488,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       if (!newApptDoctor) { setNewApptSlots([]); return }
       setNewApptSlotsLoading(true)
       setNewApptTime('')
-      const dayOfWeek = selectedDay.getDay()
+      const dayOfWeek = hkParts(selectedDay).dayOfWeek
       const { data } = await supabase.from('doctor_availability').select('*')
         .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
       if (!data || data.is_off) { setNewApptSlots([]); setNewApptSlotsLoading(false); return }
@@ -4496,16 +4507,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       // was rejected after tapping Confirm (or, in the rare race, not even
       // then). Exclude any exact time this doctor already has a real,
       // non-cancelled appointment at, same as the reschedule picker and
-      // the patient app's own booking screen already do.
-      const dayStart = new Date(selectedDay); dayStart.setHours(0,0,0,0)
-      const dayEnd = new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+      // the patient app's own booking screen already do. Hong Kong day
+      // bounds and Hong Kong wall-clock time, not the staff device's own.
+      const { start: dayStart, end: dayEnd } = hkDayBounds(selectedDay)
       const { data: existingAppts } = await supabase.from('appointments').select('scheduled_at')
         .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').neq('status', 'cancelled')
         .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
-      const bookedTimes = new Set((existingAppts||[]).map(a => {
-        const d = new Date(a.scheduled_at)
-        return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-      }))
+      const bookedTimes = new Set((existingAppts||[]).map(a => hkHHMM(a.scheduled_at)))
       const openSlots = slots.filter(t => !bookedTimes.has(t))
       setNewApptSlots(openSlots)
       setNewApptSlotsLoading(false)
@@ -4538,9 +4546,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     setNewApptSaving(true)
     setNewApptError(null)
     const doctorInfo = clinicDoctors.find(d=>d.name===newApptDoctor)
-    const scheduledAt = new Date(selectedDay)
+    // newApptTime is a Hong Kong clinic time (from the real
+    // doctor_availability-driven slot picker above) - hkWallTimeToUTC,
+    // not local setHours, so this stores the correct instant regardless
+    // of the staff device's own timezone.
+    const dayP = hkParts(selectedDay)
     const [h,m] = newApptTime.split(':').map(Number)
-    scheduledAt.setHours(h||9, m||0, 0, 0)
+    const scheduledAt = hkWallTimeToUTC(dayP.year, dayP.month, dayP.day, h||9, m||0)
     // The slot picker above already hides times another patient holds, but
     // that's a point-in-time read - two people booking the same slot at
     // nearly the same moment could both pass that check. Re-check right
@@ -4581,8 +4593,12 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   // read local hardcoded demo data.
   async function loadRealAppointments(dateObj) {
     setLoadingAppts(true)
-    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    // Bounded by the Hong Kong calendar day the schedule screen is
+    // actually showing - scheduled_at is a real UTC instant, and a plain
+    // local setHours(0,0,0,0)/(23,59,59,999) window is a different range
+    // entirely for anyone whose device isn't in Hong Kong time, silently
+    // dropping or shifting appointments near the day boundary.
+    const { start: dayStart, end: dayEnd } = hkDayBounds(dateObj)
     // Only this clinic's own bookings - ClinicOps and PractitionerApp
     // represent two different institutions and shouldn't see each other's
     // appointments just because they happen to share the same database.
@@ -4598,7 +4614,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
 
     const realRows = (data||[]).map(a => ({
       id: a.id,
-      time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      // Hong Kong wall-clock time, not the device's own local time - this
+      // "time" field feeds the switch-doctor and reschedule availability
+      // checks below, so a wrong value here silently broke those checks
+      // for any staff browser outside Hong Kong, not just the display.
+      time: hkHHMM(a.scheduled_at),
       scheduledAt: a.scheduled_at,
       patient: a.patients?.full_name || 'Unknown patient',
       patientId: a.patient_id || null,
@@ -4702,8 +4722,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       } else {
         const { data: pRow } = await supabase.from('patients').select('id').eq('medsa_id', updated.medsaId).maybeSingle()
         if (pRow) {
-          const dayStart=new Date(selectedDay); dayStart.setHours(0,0,0,0)
-          const dayEnd=new Date(selectedDay); dayEnd.setHours(23,59,59,999)
+          const { start: dayStart, end: dayEnd } = hkDayBounds(selectedDay)
           await supabase.from('appointments').update({status:'cancelled'}).eq('patient_id',pRow.id).eq('institution_source','clinic_ops').gte('scheduled_at',dayStart.toISOString()).lte('scheduled_at',dayEnd.toISOString())
         }
       }
@@ -4712,9 +4731,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     }
 
     if (updated.id && updated.time && updated.time !== original.time) {
-      const scheduledAt = new Date(selectedDay)
+      // updated.time is a Hong Kong clinic time (it comes from the real
+      // doctor_availability-driven slot picker) - build the instant with
+      // hkWallTimeToUTC, not local setHours, which used the browser's own
+      // timezone and could silently store the wrong UTC moment.
+      const p = hkParts(selectedDay)
       const [h,m] = updated.time.split(':').map(Number)
-      scheduledAt.setHours(h||9, m||0, 0, 0)
+      const scheduledAt = hkWallTimeToUTC(p.year, p.month, p.day, h||9, m||0)
       const { data: clash } = await supabase.from('appointments').select('id')
         .eq('doctor_name', original.doctor).eq('institution_source','clinic_ops')
         .eq('scheduled_at', scheduledAt.toISOString()).neq('status','cancelled').neq('id', updated.id).maybeSingle()
@@ -4731,17 +4754,24 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       // time slot at all - a doctor with no working hours covering it
       // (or a day off) could silently be assigned an appointment they
       // never work, same real check the slot picker already applies
-      // when booking or rescheduling.
-      const apptDay = original.scheduledAt ? new Date(original.scheduledAt) : selectedDay
-      const dayOfWeek = apptDay.getDay()
+      // when booking or rescheduling. Real root cause of this check
+      // still not blocking correctly: original.scheduledAt is a real UTC
+      // instant, and .getDay() reads it back in the *browser's* local
+      // timezone, not Hong Kong's - for staff testing from outside Hong
+      // Kong this could resolve to the wrong day-of-week entirely, and
+      // original.time (used below) was the same local-time bug via
+      // toLocaleTimeString. hkParts always resolves the real Hong Kong
+      // wall-clock day/time regardless of the device's own timezone.
+      const hkAppt = original.scheduledAt ? hkParts(original.scheduledAt) : hkParts(selectedDay)
+      const dayOfWeek = hkAppt.dayOfWeek
+      const dayLabel = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek]
       const { data: avail } = await supabase.from('doctor_availability').select('*')
         .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
-      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s. Pick a different doctor or time.` }
-      const [h,m] = original.time.split(':').map(Number)
-      const apptMinutes = h*60+(m||0)
+      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${dayLabel}s. Pick a different doctor or time.` }
+      const apptMinutes = hkAppt.hour*60 + hkAppt.minute
       const [startH,startM] = (avail.start_time||'09:00').split(':').map(Number)
       const [endH,endM] = (avail.end_time||'17:00').split(':').map(Number)
-      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s - ${original.time} is outside that. Pick a different doctor or time.` }
+      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${dayLabel}s - ${original.time} is outside that. Pick a different doctor or time.` }
       const { data: clash } = await supabase.from('appointments').select('id')
         .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops')
         .eq('scheduled_at', original.scheduledAt).neq('status','cancelled').neq('id', updated.id).maybeSingle()

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
+import { hkWallTimeToUTC, hkParts, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -1628,8 +1629,15 @@ function DoctorsScreen({ isEn, patient={} }) {
         }
         return all
       }
-      const [medsaRes, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
-        supabase.from('staff_credentials').select(`${STAFF_CREDENTIALS_SAFE_COLUMNS}, institutions(name, name_tc, video_consult_enabled, video_consult_expires_at)`).eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+      const [medsaRes, institutionsData, dirResData, clinicsWithDoctorsData, allClinicsData] = await Promise.all([
+        supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('role','doctor').eq('status','active').eq('mchk_declaration_agreed', true),
+        // Fetched separately from staff_credentials rather than as a nested
+        // institutions(...) embed - an embed ties the whole doctor query's
+        // success to every embedded column already being live in
+        // PostgREST's schema cache, which isn't guaranteed to be
+        // instant right after a migration. A plain top-level select has
+        // no such dependency, and institutions is a small table anyway.
+        supabase.from('institutions').select('id, name, name_tc, video_consult_enabled, video_consult_expires_at'),
         fetchAllRows(supabase.from('directory_doctors').select('*, directory_clinics(*)').eq('mchk_declaration_agreed', true)),
         fetchAllRows(supabase.from('directory_doctors').select('clinic_id')),
         filterPartnerOnly ? Promise.resolve([]) : fetchAllRows(supabase.from('directory_clinics').select('*')),
@@ -1637,11 +1645,15 @@ function DoctorsScreen({ isEn, patient={} }) {
       const dirRes = { data: dirResData }
       const allClinicsRes = { data: allClinicsData }
       const clinicIdsWithDoctors = new Set(clinicsWithDoctorsData.map(d=>d.clinic_id))
+      const institutionById = {}
+      ;(institutionsData.data||[]).forEach(inst => { institutionById[inst.id] = inst })
       const todayStr = new Date().toISOString().slice(0,10)
-      const medsaDoctors = (medsaRes.data||[]).map(d => sanitizeMCHKDisplayData({
+      const medsaDoctors = (medsaRes.data||[]).map(d => {
+        const inst = institutionById[d.institution_id]
+        return sanitizeMCHKDisplayData({
         source:'medsa', id: d.id, init: d.full_name?.[0]||'?', name: d.full_name, sex: d.sex,
         spec: d.department||'General Practice', specialties: [d.department||'General Practice'],
-        clinic: d.institutions?.name || (d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital'), clinicTc: d.institutions?.name_tc,
+        clinic: inst?.name || (d.institution_source==='clinic_ops'?'Medsa Clinic':'Medsa Hospital'), clinicTc: inst?.name_tc,
         institution: d.institution_source, institutionId: d.institution_id, district: null, lat:null, lng:null,
         phone:null, email:null, isPartnered:true, registrationNumber: d.registration_number,
         languages: d.languages_spoken, feeMin: d.fee_range_min, feeMax: d.fee_range_max, affiliatedHospitals: d.affiliated_hospitals,
@@ -1650,8 +1662,8 @@ function DoctorsScreen({ isEn, patient={} }) {
         // real for a doctor whose own institution has actually paid for
         // it and hasn't lapsed, never assumed just because they're
         // online-bookable.
-        videoConsultEnabled: !!(d.institutions?.video_consult_enabled && (!d.institutions?.video_consult_expires_at || d.institutions.video_consult_expires_at >= todayStr)),
-      }))
+        videoConsultEnabled: !!(inst?.video_consult_enabled && (!inst?.video_consult_expires_at || inst.video_consult_expires_at >= todayStr)),
+      })})
       // Non-partnered listings are shown at clinic level only - no
       // individual doctor name, specialty, or profile is displayed for a
       // clinic Medsa has no real relationship with, matching the
@@ -1833,15 +1845,16 @@ function DoctorsScreen({ isEn, patient={} }) {
     }
 
     // Exclude times already booked for this doctor on this exact date.
-    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    // Bounded by the Hong Kong calendar day, and the booked time read back
+    // in Hong Kong wall-clock time - scheduled_at is a real UTC instant,
+    // and reading it apart with the device's own local time (getHours/
+    // getMinutes) silently returns the wrong slot for anyone outside
+    // Hong Kong, both undercounting and overcounting what's actually free.
+    const { start: dayStart, end: dayEnd } = hkDayBounds(dateObj)
     const { data: existing } = await supabase.from('appointments').select('scheduled_at')
       .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).neq('status','cancelled')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
-    const bookedTimes = new Set((existing||[]).map(a => {
-      const d = new Date(a.scheduled_at)
-      return formatTime12h(`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`)
-    }))
+    const bookedTimes = new Set((existing||[]).map(a => formatTime12h(hkHHMM(a.scheduled_at))))
 
     const finalSlots = slots.filter(s => !bookedTimes.has(s))
     setAvailableSlots(finalSlots)
@@ -1869,23 +1882,29 @@ function DoctorsScreen({ isEn, patient={} }) {
       const { data: patientRow } = await supabase.from('patients').select('id,email,full_name,notify_email,phone,notify_sms').eq('medsa_id', medsaId).maybeSingle()
       if (!patientRow) throw new Error('Could not find your profile - try again in a moment.')
 
-      // Build the actual appointment datetime from the selected day/time,
-      // using the real Date object picked in the calendar - not a fragile
-      // day-of-month string, so this works correctly across month/year
-      // boundaries too.
+      // Build the actual appointment datetime from the selected day/time.
+      // Every slot on screen (availability, "9:00am", the day strip) is a
+      // Hong Kong clinic time, not whatever timezone the patient's own
+      // device happens to be in - setHours() on a plain Date uses the
+      // device's local time, which silently stored the wrong UTC instant
+      // for anyone browsing from outside Hong Kong (confirmed: a patient
+      // testing from Canada had their selected time land hours off once
+      // it was displayed back in Hong Kong time). hkWallTimeToUTC treats
+      // the selected day+time as Hong Kong wall-clock time explicitly,
+      // regardless of the device's own timezone.
       const timeMatch = selTime.match(/(\d+):(\d+)(am|pm)/i)
       let hour = timeMatch ? parseInt(timeMatch[1]) : 10
       const minute = timeMatch ? parseInt(timeMatch[2]) : 0
       if (timeMatch && timeMatch[3].toLowerCase()==='pm' && hour!==12) hour += 12
-      const apptDate = new Date(selDay)
-      apptDate.setHours(hour, minute, 0, 0)
+      if (timeMatch && timeMatch[3].toLowerCase()==='am' && hour===12) hour = 0
+      const apptDate = hkWallTimeToUTC(selDay.getFullYear(), selDay.getMonth()+1, selDay.getDate(), hour, minute)
 
       // The full window is genuinely 48 hours: 12 hours before the
       // appointment day starts, the entire appointment day itself (24h),
       // and 12 hours after the appointment day ends - not just 12h either
-      // side of the exact appointment minute.
-      const dayStart = new Date(apptDate); dayStart.setHours(0,0,0,0)
-      const dayEnd = new Date(apptDate); dayEnd.setHours(23,59,59,999)
+      // side of the exact appointment minute. Bounded by the Hong Kong
+      // calendar day, same reasoning as above.
+      const { start: dayStart, end: dayEnd } = hkDayBounds(apptDate)
       const windowStart = new Date(dayStart.getTime() - 12*60*60*1000)
       const windowEnd = new Date(dayEnd.getTime() + 12*60*60*1000)
 
@@ -2317,7 +2336,7 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
   )
 }
 
-function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCancelled }) {
+function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCancelled, onReload }) {
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
@@ -2373,6 +2392,13 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
     await supabase.from('medications').update({ alarm_enabled: true, alarm_time: '08:00', alarm_times: ['08:00'] }).eq('id', m.id)
     setAddingReminderId(null)
     setAddReminderOpen(false)
+    // The medications list is a prop from the parent's own fetch - it
+    // never refreshed after this write, so the medication just enabled
+    // stayed showing as "no reminder yet" (its cached alarm_enabled was
+    // still false) regardless of dosing_mode/interval_hours already
+    // being correct underneath - closing and reopening this panel alone
+    // never actually re-fetched anything.
+    onReload?.()
   }
   const [viewMonth,setViewMonth]=useState(() => { const d=new Date(); d.setDate(1); return d })
   const [selectedDate,setSelectedDate]=useState(() => new Date())
@@ -2433,7 +2459,13 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
         // still ahead. Cancelled ones stay excluded - there's nothing to
         // show for a visit that didn't happen. Tap any date on the
         // calendar above to see that day's own rundown.
-        const dayAppts = appointments.filter(a => a.status!=='cancelled' && isSameDay(new Date(a.scheduled_at), selectedDate))
+        // isSameHkDay, not the local-only isSameDay above - scheduled_at
+        // is a real UTC instant, and comparing it against the clicked
+        // calendar tile using the device's own local calendar date put an
+        // appointment on the wrong day for anyone browsing outside Hong
+        // Kong (an HKT-morning appointment can fall on the previous local
+        // calendar day several timezones west).
+        const dayAppts = appointments.filter(a => a.status!=='cancelled' && isSameHkDay(new Date(a.scheduled_at), selectedDate))
           .sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at))
         if (dayAppts.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No appointments this day.':'這天沒有預約。'}</div>
         return dayAppts.map((appt,i)=>{
@@ -2483,7 +2515,6 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
             </div>
           ))}
           <Btn style={{width:'100%',marginTop:'10px'}} onClick={()=>setAddReminderOpen(false)}>{isEn?'Close':'關閉'}</Btn>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>{isEn?'Reopen this screen to see the new reminder.':'重新打開此頁面以查看新提醒。'}</div>
         </Card>
       </div>}
     </div>
@@ -4547,7 +4578,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} patient={patient} onCancelled={loadRealData}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} patient={patient} onCancelled={loadRealData} onReload={loadRealData}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
