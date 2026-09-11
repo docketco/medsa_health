@@ -705,6 +705,7 @@ function CoverageRulesManager({ company }) {
 // whichever of these is realistic for them: a plain roster export (any
 // insurer already has one, zero engineering work), or a key to a lookup
 // endpoint they already run.
+const EMPTY_ROSTER_ROW = { policy_number:'', hkid:'', patient_name:'', plan_name:'', copay_rate:'', annual_deductible_hkd:'', overall_annual_limit_hkd:'' }
 const VERIFICATION_MODES = [
   ['none', 'Not verified', 'Any policy number on file is trusted as-is - the same as before this feature existed.'],
   ['roster', 'Roster upload', 'Periodically upload a plain export of your active policyholders. Medsa checks every claim\'s policy number against the most recent upload.'],
@@ -721,6 +722,9 @@ function PolicyVerificationManager({ company }) {
   const [notice,setNotice]=useState(null)
   const [rosterFile,setRosterFile]=useState(null)
   const [uploadingRoster,setUploadingRoster]=useState(false)
+  const [addingOne,setAddingOne]=useState(false)
+  const [savingOne,setSavingOne]=useState(false)
+  const [oneForm,setOneForm]=useState(EMPTY_ROSTER_ROW)
 
   async function load() {
     setLoading(true)
@@ -766,6 +770,14 @@ function PolicyVerificationManager({ company }) {
         policy_number: r.policy_number || null, hkid: r.hkid || null,
         patient_name: r.patient_name || null, plan_name: r.plan_name || null,
         status: r.status || 'active',
+        // Optional - a real policy's own negotiated terms, when this
+        // insurer's export carries them, override whatever a shared plan
+        // says (see insuranceAdapter.js's coverageOverrides). Blank
+        // columns are fine; existing verification-only rosters (no
+        // coverage columns at all) keep working exactly as before.
+        copay_rate: r.copay_rate ? parseFloat(r.copay_rate)/100 : null,
+        annual_deductible_hkd: r.annual_deductible_hkd ? parseFloat(r.annual_deductible_hkd) : null,
+        overall_annual_limit_hkd: r.overall_annual_limit_hkd ? parseFloat(r.overall_annual_limit_hkd) : null,
       })).filter(r => r.policy_number || r.hkid)
       if (toInsert.length === 0) throw new Error('No row had a policy_number or hkid column - nothing to check claims against.')
       const { error } = await supabase.from('insurer_policy_roster').insert(toInsert)
@@ -781,12 +793,32 @@ function PolicyVerificationManager({ company }) {
     }
   }
 
+  async function handleAddOnePolicy() {
+    if (!oneForm.policy_number.trim() && !oneForm.hkid.trim()) { setNotice('Error: policy number or HKID is required.'); return }
+    setSavingOne(true); setNotice(null)
+    const { error } = await supabase.from('insurer_policy_roster').insert({
+      insurance_company_id: company.id,
+      policy_number: oneForm.policy_number.trim()||null, hkid: oneForm.hkid.trim()||null,
+      patient_name: oneForm.patient_name.trim()||null, plan_name: oneForm.plan_name.trim()||null,
+      status: 'active',
+      copay_rate: oneForm.copay_rate!=='' ? parseFloat(oneForm.copay_rate)/100 : null,
+      annual_deductible_hkd: oneForm.annual_deductible_hkd!=='' ? parseFloat(oneForm.annual_deductible_hkd) : null,
+      overall_annual_limit_hkd: oneForm.overall_annual_limit_hkd!=='' ? parseFloat(oneForm.overall_annual_limit_hkd) : null,
+    })
+    setSavingOne(false)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setOneForm(EMPTY_ROSTER_ROW)
+    setAddingOne(false)
+    setNotice('Policy added.')
+    load()
+  }
+
   if (loading) return <div style={{textAlign:'center',padding:'40px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
 
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
-        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Medsa always does the coverage/copay/deductible math from your registered plan rules. This only controls whether a claim's policy number gets checked against your own records before that math runs.</div>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Medsa pulls, verifies, and calculates - you don't have to hand-build a matching plan in our Coverage screen first. Upload your real policies (each can carry its own copay/deductible/limit, not one shared rate for everyone) and a claim against that policy number is checked and calculated automatically.</div>
       </div>
       <SecLabel>How should Medsa verify a policy number?</SecLabel>
       {VERIFICATION_MODES.map(([key,label,desc])=>(
@@ -804,11 +836,34 @@ function PolicyVerificationManager({ company }) {
         <SecLabel>Your roster</SecLabel>
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{rosterCount>0 ? `${rosterCount} polic${rosterCount===1?'y':'ies'} on file${rosterUpdatedAt?`, last updated ${new Date(rosterUpdatedAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}.` : 'No roster uploaded yet - every claim will be rejected as unverified until one is.'}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>CSV columns: policy_number, hkid (either works), patient_name, plan_name, status (defaults to active).</div>
-          <div style={{display:'flex',gap:'6px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>CSV columns: policy_number, hkid (either works), patient_name, plan_name, status (defaults to active) - plus optionally copay_rate (%), annual_deductible_hkd, overall_annual_limit_hkd if this policy's own terms differ from your registered plan's defaults. Uploading replaces your whole roster.</div>
+          <div style={{display:'flex',gap:'6px',marginBottom:'14px'}}>
             <input type="file" accept=".csv" onChange={e=>setRosterFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
             <Btn variant="navy" style={{flexShrink:0}} onClick={handleRosterUpload} disabled={!rosterFile||uploadingRoster}>{uploadingRoster?'Uploading…':'Upload & replace'}</Btn>
           </div>
+
+          {!addingOne&&<div onClick={()=>setAddingOne(true)} style={{fontSize:'12px',color:C.navy,fontWeight:600,cursor:'pointer',textAlign:'center',padding:'8px 0',borderTop:`0.5px solid ${C.border}`}}>+ Add one new policy</div>}
+          {addingOne&&<div style={{borderTop:`0.5px solid ${C.border}`,paddingTop:'14px'}}>
+            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>New policy</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <input value={oneForm.policy_number} onChange={e=>setOneForm(f=>({...f,policy_number:e.target.value}))} placeholder="Policy number" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <input value={oneForm.hkid} onChange={e=>setOneForm(f=>({...f,hkid:e.target.value}))} placeholder="HKID (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <input value={oneForm.patient_name} onChange={e=>setOneForm(f=>({...f,patient_name:e.target.value}))} placeholder="Policyholder name" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <input value={oneForm.plan_name} onChange={e=>setOneForm(f=>({...f,plan_name:e.target.value}))} placeholder="Plan name (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>This policy's own terms (optional - leave blank to use your registered plan's defaults)</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+              <input type="number" value={oneForm.copay_rate} onChange={e=>setOneForm(f=>({...f,copay_rate:e.target.value}))} placeholder="Copay %" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <input type="number" value={oneForm.annual_deductible_hkd} onChange={e=>setOneForm(f=>({...f,annual_deductible_hkd:e.target.value}))} placeholder="Deductible HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <input type="number" value={oneForm.overall_annual_limit_hkd} onChange={e=>setOneForm(f=>({...f,overall_annual_limit_hkd:e.target.value}))} placeholder="Annual limit HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setAddingOne(false);setOneForm(EMPTY_ROSTER_ROW)}}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAddOnePolicy} disabled={savingOne}>{savingOne?'Adding…':'Add policy'}</Btn>
+            </div>
+          </div>}
         </Card>
       </>}
 
