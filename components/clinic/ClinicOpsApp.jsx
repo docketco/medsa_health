@@ -1188,29 +1188,26 @@ function NewPatientScreen({ onBack, onCreated, onCheckInNow, prefillName }) {
 }
 
 
-// ── DOCTOR VIDEO CALL — real, working embed via Jitsi Meet's public
+// ── DOCTOR VIDEO CALL — real, working call via Jitsi Meet's public
 // server. No account, API key, or signup required, and it's a genuine,
 // functioning video call, not a demo - the trade-off is it runs on
 // meet.jit.si's shared infrastructure rather than Medsa's own, which is
 // fine for now and can move to a dedicated/self-hosted provider later
 // without changing anything else in this file.
-function DoctorVideoCallModal({ patientName, roomId, onClose }) {
-  if (!patientName) return null
+//
+// Opens in a real new browser tab/window rather than a full-screen
+// in-app modal - a doctor needs to log the consultation (diagnosis,
+// prescription) while the call is still going, and a full-screen modal
+// made that impossible since it covered the entire app underneath. A new
+// tab lets them arrange the call window and the consultation screen side
+// by side however they like.
+function buildJitsiUrl(roomId, patientName) {
   const roomName = `medsa-${(roomId||patientName).toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
-  const jitsiUrl = `https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`
-  return (
-    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column'}}>
-      <div style={{padding:'10px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',background:'#111'}}>
-        <div style={{color:'#fff',fontSize:'13px'}}>Video call with {patientName}</div>
-        <div onClick={onClose} style={{width:36,height:36,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'16px',color:'#fff'}}>✕</div>
-      </div>
-      <iframe
-        src={jitsiUrl}
-        style={{flex:1,border:'none'}}
-        allow="camera; microphone; fullscreen; display-capture; autoplay"
-      />
-    </div>
-  )
+  return `https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`
+}
+function startVideoCall(patientName, roomId) {
+  if (!patientName) return
+  window.open(buildJitsiUrl(roomId, patientName), '_blank', 'noopener')
 }
 
 // ── PATIENT ACTION MODAL — quick actions before entering full consultation ──
@@ -1279,7 +1276,6 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
 
 function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
   const [actionPatient,setActionPatient]=useState(null)
-  const [callingPatient,setCallingPatient]=useState(null) // {name, medsaId}
   // Completed/no-show tickets used to sit here all day (the queue only
   // ever grew, never shrank) - a doctor's active list should only be who
   // still needs seeing.
@@ -1312,10 +1308,9 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
         patient={actionPatient}
         onClose={()=>setActionPatient(null)}
         doctorLabel={staffMember?.name || 'Doctor'}
-        onStartCall={(name, medsaId)=>{setCallingPatient({name, medsaId});setActionPatient(null)}}
+        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId);setActionPatient(null)}}
         onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
       />
-      <DoctorVideoCallModal patientName={callingPatient?.name} roomId={callingPatient?.medsaId} onClose={()=>setCallingPatient(null)}/>
     </PageWrap>
   )
 }
