@@ -1358,6 +1358,35 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
     loadPatient()
   }, [patient?.medsaId])
 
+  // Real availability for every candidate doctor at this exact
+  // appointment's day/time - shown as disabled directly in the picker,
+  // not only rejected after Confirm. Declared before the `if (!patient)`
+  // bail below since hooks can't follow a conditional return - names are
+  // recomputed inline here rather than reusing the sameDeptDoctors/
+  // otherDeptDoctors consts below, which depend on `patient` already
+  // being non-null.
+  const [switchAvail,setSwitchAvail]=useState({})
+  const [switchAvailLoaded,setSwitchAvailLoaded]=useState(false)
+  useEffect(() => {
+    async function loadSwitchAvail() {
+      if (mode!=='switch' || !patient) return
+      setSwitchAvailLoaded(false)
+      const names = [...new Set([
+        ...DOCTOR_DIRECTORY.filter(d=>d.department===patient.department && d.name!==patient.doctor).map(d=>d.name),
+        ...DOCTOR_DIRECTORY.filter(d=>d.department!==patient.department && d.name!==patient.doctor).map(d=>d.name),
+      ])]
+      if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
+      const hk = hkParts(patient.scheduledAt || new Date())
+      const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
+        .in('doctor_name', names).eq('institution_source','practitioner').eq('day_of_week', hk.dayOfWeek)
+      const map = {}
+      ;(data||[]).forEach(row => { map[row.doctor_name] = row })
+      setSwitchAvail(map)
+      setSwitchAvailLoaded(true)
+    }
+    loadSwitchAvail()
+  }, [mode, patient?.id])
+
   if (!patient) return null
 
   const isCheckedIn = patient.status === 'checked_in'
@@ -1367,6 +1396,18 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
   // actual working hours, checked in onSwitchDoctor, not their department.
   const sameDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department===patient.department && d.name!==patient.doctor).map(d=>d.name)
   const otherDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department!==patient.department && d.name!==patient.doctor)
+
+  function isDoctorAvailableForSwitch(name) {
+    if (!switchAvailLoaded) return true
+    const row = switchAvail[name]
+    if (!row || row.is_off) return false
+    if (!patient?.time) return true
+    const [h,m] = patient.time.split(':').map(Number)
+    const mins = h*60 + (m||0)
+    const [sh,sm] = (row.start_time||'09:00').slice(0,5).split(':').map(Number)
+    const [eh,em] = (row.end_time||'17:00').slice(0,5).split(':').map(Number)
+    return mins >= sh*60+sm && mins < eh*60+em
+  }
 
   async function handleSendMessage() {
     if (!msgBody.trim()) { setError('Write a message first.'); return }
@@ -1471,19 +1512,27 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
           {sameDeptDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({patient.department})</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {sameDeptDoctors.map(d=>(
-                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-              ))}
+              {sameDeptDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d)
+                return (
+                <div key={d} onClick={()=>avail&&setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d?C.green:avail?C.card:C.beige,color:newDoctor===d?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d}</span>{!avail&&<span style={{fontSize:'11px'}}>Not available then</span>}
+                </div>
+                )
+              })}
             </div>
           </>}
           {otherDeptDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {otherDeptDoctors.map(d=>(
-                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
-                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+              {otherDeptDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d.name)
+                return (
+                <div key={d.name} onClick={()=>avail&&setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d.name?C.green:avail?C.card:C.beige,color:newDoctor===d.name?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{fontSize:'11px'}}>{avail?d.department:'Not available then'}</span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </>}
           {switchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {switchError}</div>}
@@ -1541,6 +1590,43 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
   const [notesDraft,setNotesDraft]=useState('')
   const [saving,setSaving]=useState(false)
   const [saveError,setSaveError]=useState(null)
+  // Real availability for every candidate doctor at this exact
+  // appointment's day/time - shown as disabled directly in the picker,
+  // not only rejected after Confirm. Declared before the `if (!appt)`
+  // bail below since hooks can't follow a conditional return.
+  const [switchAvail,setSwitchAvail]=useState({})
+  const [switchAvailLoaded,setSwitchAvailLoaded]=useState(false)
+  useEffect(() => {
+    async function loadSwitchAvail() {
+      if (mode!=='switch' || !appt) return
+      setSwitchAvailLoaded(false)
+      const names = [...new Set([
+        ...DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name),
+        ...DOCTOR_DIRECTORY.filter(d=>d.department!==appt.department && d.name!==appt.doctor).map(d=>d.name),
+      ])]
+      if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
+      const hk = hkParts(appt.scheduledAt || new Date())
+      const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
+        .in('doctor_name', names).eq('institution_source','practitioner').eq('day_of_week', hk.dayOfWeek)
+      const map = {}
+      ;(data||[]).forEach(row => { map[row.doctor_name] = row })
+      setSwitchAvail(map)
+      setSwitchAvailLoaded(true)
+    }
+    loadSwitchAvail()
+  }, [mode, appt?.id])
+
+  function isDoctorAvailableForSwitch(name) {
+    if (!switchAvailLoaded) return true
+    const row = switchAvail[name]
+    if (!row || row.is_off) return false
+    if (!appt?.time) return true
+    const [h,m] = appt.time.split(':').map(Number)
+    const mins = h*60 + (m||0)
+    const [sh,sm] = (row.start_time||'09:00').slice(0,5).split(':').map(Number)
+    const [eh,em] = (row.end_time||'17:00').slice(0,5).split(':').map(Number)
+    return mins >= sh*60+sm && mins < eh*60+em
+  }
 
   if (!appt) return null
 
@@ -1621,19 +1707,27 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
           {sameDeptDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({appt.department})</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {sameDeptDoctors.map(d=>(
-                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-              ))}
+              {sameDeptDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d)
+                return (
+                <div key={d} onClick={()=>avail&&setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d?C.green:avail?C.card:C.beige,color:newDoctor===d?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d}</span>{!avail&&<span style={{fontSize:'11px'}}>Not available then</span>}
+                </div>
+                )
+              })}
             </div>
           </>}
           {otherDeptDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {otherDeptDoctors.map(d=>(
-                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
-                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+              {otherDeptDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d.name)
+                return (
+                <div key={d.name} onClick={()=>avail&&setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d.name?C.green:avail?C.card:C.beige,color:newDoctor===d.name?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{fontSize:'11px'}}>{avail?d.department:'Not available then'}</span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </>}
           {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}

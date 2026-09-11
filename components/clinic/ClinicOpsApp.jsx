@@ -1799,33 +1799,14 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     }))
   }
 
-  const [draftSaved,setDraftSaved]=useState(false)
-  const [savingDraft,setSavingDraft]=useState(false)
-
-  // Saves current notes/diagnosis as a draft - stays on this screen so
-  // the doctor can keep editing before finally submitting. This is what
-  // replaces having a separate "prep notes" feature - the same
-  // notes/diagnosis fields work for both prep and the final visit.
-  async function handleSaveDraft() {
-    if (!patient || (!diagnosis.trim() && !notes.trim())) return
-    setSavingDraft(true)
-    setError(null)
-    try {
-      const { error: recErr } = await supabase.from('medical_records').insert({
-        patient_id: patient.id, record_type: 'visit', title: diagnosis || 'Draft consultation note',
-        notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
-        date_of_record: new Date().toISOString().slice(0,10), source: 'clinic_ops', record_status: 'draft',
-      })
-      if (recErr) throw recErr
-      setDraftSaved(true)
-      setTimeout(()=>setDraftSaved(false), 2500)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setSavingDraft(false)
-    }
-  }
-
+  // A separate "Save" (draft) button used to live here alongside Submit -
+  // it genuinely wrote to Supabase, but as its own new medical_records
+  // row with no link back to the eventual submitted one, so tapping it
+  // more than once (or Save then Submit) littered the patient's real
+  // record with orphaned draft rows nothing ever reconciled or cleaned
+  // up. Removed rather than fixed - there's no actual need for a
+  // separate draft state here (same reasoning already applied on the
+  // practitioner portal's own consultation log).
   async function handleSave() {
     // Real enforcement - a hard stop blocks saving entirely, no override
     // possible. A soft stop requires a logged reason before proceeding.
@@ -2288,10 +2269,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       </div>}
 
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      {draftSaved&&<div style={{fontSize:'13px',color:C.green,marginBottom:'12px'}}>✓ Draft saved - keep editing, or submit when ready</div>}
       <div style={{display:'flex',gap:'8px'}}>
-        <Btn style={{flex:1}} onClick={handleSaveDraft} disabled={savingDraft||saving||saved}>{savingDraft?'Saving…':'Save'}</Btn>
-        <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||savingDraft||saved}>{saved?'Submitted':saving?'Submitting...':'Submit'}</Btn>
+        <Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||saved}>{saved?'Submitted':saving?'Submitting...':'Submit'}</Btn>
       </div>
     </PageWrap>
   )
@@ -3057,6 +3036,44 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const sameSpecialtyDoctors = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
   const otherSpecialtyDoctors = clinicDoctors.filter(d=>d.department!==appt.department && d.name!==appt.doctor)
 
+  // Real availability for every candidate doctor, at this exact
+  // appointment's day/time - shown as disabled/unselectable directly in
+  // the picker instead of only rejecting the switch after Confirm, so a
+  // doctor who's off (or outside their hours) that day is visibly not a
+  // real option rather than a dead end after the fact.
+  const [switchAvail,setSwitchAvail]=useState({}) // doctorName -> {is_off, start_time, end_time} | null
+  const [switchAvailLoaded,setSwitchAvailLoaded]=useState(false)
+  useEffect(() => {
+    async function loadSwitchAvail() {
+      if (mode!=='switch' || !appt) return
+      setSwitchAvailLoaded(false)
+      const names = [...sameSpecialtyDoctors, ...otherSpecialtyDoctors.map(d=>d.name)]
+      if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
+      const hk = hkParts(appt.scheduledAt || new Date())
+      const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
+        .in('doctor_name', names).eq('institution_source','clinic_ops').eq('day_of_week', hk.dayOfWeek)
+      const map = {}
+      ;(data||[]).forEach(row => { map[row.doctor_name] = row })
+      setSwitchAvail(map)
+      setSwitchAvailLoaded(true)
+    }
+    loadSwitchAvail()
+  }, [mode, appt?.id])
+
+  // Pending load, treat as available (neutral) rather than flashing every
+  // doctor as disabled for the brief moment before the query resolves.
+  function isDoctorAvailableForSwitch(name) {
+    if (!switchAvailLoaded) return true
+    const row = switchAvail[name]
+    if (!row || row.is_off) return false
+    if (!appt?.time) return true
+    const [h,m] = appt.time.split(':').map(Number)
+    const mins = h*60 + (m||0)
+    const [sh,sm] = (row.start_time||'09:00').slice(0,5).split(':').map(Number)
+    const [eh,em] = (row.end_time||'17:00').slice(0,5).split(':').map(Number)
+    return mins >= sh*60+sm && mins < eh*60+em
+  }
+
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={onClose}>
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:420,padding:'24px',maxHeight:'85vh',overflowY:'auto'}}>
@@ -3239,19 +3256,27 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
           {sameSpecialtyDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({appt.department})</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {sameSpecialtyDoctors.map(d=>(
-                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-              ))}
+              {sameSpecialtyDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d)
+                return (
+                <div key={d} onClick={()=>avail&&setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d?C.green:avail?C.card:C.beige,color:newDoctor===d?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d}</span>{!avail&&<span style={{fontSize:'11px'}}>Not available then</span>}
+                </div>
+                )
+              })}
             </div>
           </>}
           {otherSpecialtyDoctors.length>0&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
             <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-              {otherSpecialtyDoctors.map(d=>(
-                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
-                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+              {otherSpecialtyDoctors.map(d=>{
+                const avail = isDoctorAvailableForSwitch(d.name)
+                return (
+                <div key={d.name} onClick={()=>avail&&setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:avail?'pointer':'not-allowed',background:newDoctor===d.name?C.green:avail?C.card:C.beige,color:newDoctor===d.name?'#fff':avail?C.text:C.textMuted,opacity:avail?1:0.6,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{fontSize:'11px'}}>{avail?d.department:'Not available then'}</span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </>}
           {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
