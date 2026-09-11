@@ -3017,6 +3017,38 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
     loadPatient()
   }, [appt?.medsaId])
 
+  // Real availability for every candidate doctor, at this exact
+  // appointment's day/time - shown as disabled/unselectable directly in
+  // the picker instead of only rejecting the switch after Confirm, so a
+  // doctor who's off (or outside their hours) that day is visibly not a
+  // real option rather than a dead end after the fact. Declared before
+  // the `if (!appt)` bail below since hooks can't follow a conditional
+  // return - names are recomputed inline from clinicDoctors (already
+  // safe to reference here) rather than reusing the sameSpecialtyDoctors/
+  // otherSpecialtyDoctors consts further down, which depend on `appt`
+  // already being non-null.
+  const [switchAvail,setSwitchAvail]=useState({}) // doctorName -> {is_off, start_time, end_time} | null
+  const [switchAvailLoaded,setSwitchAvailLoaded]=useState(false)
+  useEffect(() => {
+    async function loadSwitchAvail() {
+      if (mode!=='switch' || !appt) return
+      setSwitchAvailLoaded(false)
+      const names = [...new Set([
+        ...clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name),
+        ...clinicDoctors.filter(d=>d.department!==appt.department && d.name!==appt.doctor).map(d=>d.name),
+      ])]
+      if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
+      const hk = hkParts(appt.scheduledAt || new Date())
+      const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
+        .in('doctor_name', names).eq('institution_source','clinic_ops').eq('day_of_week', hk.dayOfWeek)
+      const map = {}
+      ;(data||[]).forEach(row => { map[row.doctor_name] = row })
+      setSwitchAvail(map)
+      setSwitchAvailLoaded(true)
+    }
+    loadSwitchAvail()
+  }, [mode, appt?.id, clinicDoctors])
+
   if (!appt || appt.status==='open') return null
 
   // Full diagnosis access requires both being within the patient's own
@@ -3035,30 +3067,6 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   // list first, but nothing here should prevent the other choice.
   const sameSpecialtyDoctors = clinicDoctors.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
   const otherSpecialtyDoctors = clinicDoctors.filter(d=>d.department!==appt.department && d.name!==appt.doctor)
-
-  // Real availability for every candidate doctor, at this exact
-  // appointment's day/time - shown as disabled/unselectable directly in
-  // the picker instead of only rejecting the switch after Confirm, so a
-  // doctor who's off (or outside their hours) that day is visibly not a
-  // real option rather than a dead end after the fact.
-  const [switchAvail,setSwitchAvail]=useState({}) // doctorName -> {is_off, start_time, end_time} | null
-  const [switchAvailLoaded,setSwitchAvailLoaded]=useState(false)
-  useEffect(() => {
-    async function loadSwitchAvail() {
-      if (mode!=='switch' || !appt) return
-      setSwitchAvailLoaded(false)
-      const names = [...sameSpecialtyDoctors, ...otherSpecialtyDoctors.map(d=>d.name)]
-      if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
-      const hk = hkParts(appt.scheduledAt || new Date())
-      const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
-        .in('doctor_name', names).eq('institution_source','clinic_ops').eq('day_of_week', hk.dayOfWeek)
-      const map = {}
-      ;(data||[]).forEach(row => { map[row.doctor_name] = row })
-      setSwitchAvail(map)
-      setSwitchAvailLoaded(true)
-    }
-    loadSwitchAvail()
-  }, [mode, appt?.id])
 
   // Pending load, treat as available (neutral) rather than flashing every
   // doctor as disabled for the brief moment before the query resolves.
