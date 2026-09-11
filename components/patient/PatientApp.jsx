@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
+import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -1474,6 +1475,50 @@ function joinPatientVideoCall(patientDisplayName, roomId) {
   window.open(`https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22${name}%22`, '_blank', 'noopener')
 }
 
+// Real incoming-call screen - fires when the doctor taps "Video call" on
+// their end (see lib/videoCallSignal.js), not just a passive button the
+// patient has to remember to go find. Rendered once at the root of the app
+// (not inside Calendar) so it interrupts whatever screen the patient is on,
+// same as a real phone call. Auto-dismisses after a ring timeout so it
+// doesn't sit there forever if the patient's away from their device.
+function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
+  useEffect(() => {
+    if (!call) return
+    const t = setTimeout(onDismiss, 45000)
+    return () => clearTimeout(t)
+  }, [call, onDismiss])
+
+  if (!call) return null
+
+  function answer() {
+    joinPatientVideoCall(patient?.full_name, call.roomId)
+    onDismiss()
+  }
+
+  return (
+    <div style={{position:'fixed',inset:0,background:'rgba(10,20,15,0.92)',zIndex:500,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff',padding:'24px'}}>
+      <style>{`@keyframes ringPulse{0%,100%{transform:scale(1);opacity:0.55}50%{transform:scale(1.18);opacity:0}}`}</style>
+      <div style={{position:'relative',width:100,height:100,marginBottom:'20px',display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{position:'absolute',inset:0,borderRadius:'50%',background:C.green,animation:'ringPulse 1.4s ease-out infinite'}}/>
+        <div style={{position:'relative',width:88,height:88,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700}}>{'◈'}</div>
+      </div>
+      <div style={{fontSize:'12px',opacity:0.75,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Video consultation':'視像診症'}</div>
+      <div style={{fontSize:'22px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>{call.doctorName}</div>
+      <div style={{fontSize:'13px',opacity:0.7,marginBottom:'40px'}}>{isEn?'is calling…':'來電中…'}</div>
+      <div style={{display:'flex',gap:'28px'}}>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'8px'}}>
+          <button onClick={onDismiss} style={{width:60,height:60,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'22px',cursor:'pointer'}}>{'✕'}</button>
+          <span style={{fontSize:'11px',opacity:0.7}}>{isEn?'Decline':'拒接'}</span>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'8px'}}>
+          <button onClick={answer} style={{width:60,height:60,borderRadius:'50%',background:C.green,border:'none',color:'#fff',fontSize:'22px',cursor:'pointer'}}>{'✓'}</button>
+          <span style={{fontSize:'11px',opacity:0.7}}>{isEn?'Answer':'接聽'}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function DoctorsScreen({ isEn, patient={} }) {
   const [outstandingClaims,setOutstandingClaims]=useState([])
   const [claimsLoading,setClaimsLoading]=useState(true)
@@ -2140,13 +2185,12 @@ function DoctorsScreen({ isEn, patient={} }) {
             <div style={{fontSize:'40px',marginBottom:'12px'}}>✓</div>
             <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>{isEn?'Appointment confirmed':'預約已確認'}</div>
             <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · {selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} at {selTime}</div>
-            {consultType==='video'
-              ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>
-                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Opens in a new tab - your doctor joins the same call at your appointment time.':'將於新分頁開啟 - 醫生會在預約時間加入同一通話。'}</div>
-                  <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{isEn?'Close':'關閉'}</Btn>
-                </div>
-              : <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>}
+            {consultType==='video'&&<div style={{background:C.blueLight,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.navy,lineHeight:1.6,textAlign:'left'}}>
+              {'◈ '}{isEn
+                ? "This is a video consultation. You don't need to do anything now - when it's time, your doctor will call you right here in Medsa and it'll ring like an incoming call. You can also open Calendar and tap this appointment to join yourself."
+                : '這是一次視像診症。您現在無需任何操作 - 到時間醫生會直接在Medsa內致電您，會像來電一樣響鈴。您亦可在「日曆」中點選此預約自行加入。'}
+            </div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>
           </div>
         </div>}
       </>}
@@ -4547,6 +4591,17 @@ export default function PatientApp({ liveData={} }) {
     return () => clearInterval(interval)
   }, [signedInPatient?.id, loadRealData])
 
+  // Real-time "doctor is calling" - subscribed for as long as a real
+  // patient is signed in and the app is open, regardless of which screen
+  // they're on, so it interrupts like an actual incoming call rather than
+  // only being visible from Calendar. See lib/videoCallSignal.js.
+  const [incomingCall,setIncomingCall]=useState(null)
+  useEffect(() => {
+    if (!signedInPatient?.medsa_id) return
+    const unsubscribe = subscribeIncomingCalls(signedInPatient.medsa_id, (payload) => setIncomingCall(payload))
+    return unsubscribe
+  }, [signedInPatient?.medsa_id])
+
   // Computed and hooked before the early returns below (not after) -
   // every hook in this component must run on every render regardless of
   // gate/loading state, or React throws "rendered more hooks than
@@ -4643,6 +4698,7 @@ export default function PatientApp({ liveData={} }) {
       />
       <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
       <ExternalRequestModal request={pendingExternalRequest} records={liveRecords} onDone={()=>setPendingExternalRequest(null)}/>
+      <IncomingCallOverlay call={incomingCall} isEn={isEn} patient={patient} onDismiss={()=>setIncomingCall(null)}/>
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent

@@ -4,6 +4,7 @@ import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumn
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
+import { broadcastIncomingCall } from '../../lib/videoCallSignal'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
 
@@ -1205,9 +1206,14 @@ function buildJitsiUrl(roomId, patientName) {
   const roomName = `medsa-${(roomId||patientName).toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
   return `https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`
 }
-function startVideoCall(patientName, roomId) {
+// Also pings the patient app in real time (see lib/videoCallSignal.js) so
+// the patient sees an actual incoming-call screen rather than needing to
+// already be sitting on their Calendar tab waiting - roomId doubles as the
+// patient's own medsa_id, which is what the signal is addressed to.
+function startVideoCall(patientName, roomId, doctorName) {
   if (!patientName) return
   window.open(buildJitsiUrl(roomId, patientName), '_blank', 'noopener')
+  broadcastIncomingCall(roomId, doctorName, roomId)
 }
 
 // ── PATIENT ACTION MODAL — quick actions before entering full consultation ──
@@ -1308,7 +1314,7 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh }) {
         patient={actionPatient}
         onClose={()=>setActionPatient(null)}
         doctorLabel={staffMember?.name || 'Doctor'}
-        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId);setActionPatient(null)}}
+        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId, staffMember?.name);setActionPatient(null)}}
         onGoToConsultation={()=>{onSelectPatient(actionPatient);setActionPatient(null)}}
       />
     </PageWrap>

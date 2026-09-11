@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
+import { broadcastIncomingCall } from '../../lib/videoCallSignal'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -1300,10 +1301,14 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
 // before - not an actual call). Opens in a real new browser tab rather
 // than a full-screen in-app modal, so a doctor can log the consultation
 // while the call is still going instead of it covering the whole app.
-function startVideoCall(patientName, roomId) {
+// Also pings the patient app in real time (see lib/videoCallSignal.js) so
+// the patient sees an actual incoming-call screen instead of needing to
+// already be sitting on their Calendar tab waiting.
+function startVideoCall(patientName, roomId, doctorName) {
   if (!patientName) return
   const roomName = `medsa-${(roomId||patientName).toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
   window.open(`https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`, '_blank', 'noopener')
+  broadcastIncomingCall(roomId, doctorName, roomId)
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
@@ -3608,7 +3613,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         doctorLabel={myName}
         role={role}
         doctorName={doctorName}
-        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId);setActiveTodoPatient(null)}}
+        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId, doctorName||myName);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
         onViewFullRecord={()=>{setActiveTodoPatient(null);onViewFullRecord&&onViewFullRecord()}}
         onSwitchDoctor={async(newDoctorName)=>{
