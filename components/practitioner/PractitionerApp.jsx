@@ -1324,6 +1324,8 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
   const [error,setError]=useState(null)
+  const [switchSaving,setSwitchSaving]=useState(false)
+  const [switchError,setSwitchError]=useState(null)
   const [fullPatient,setFullPatient]=useState(null)
   const [loadingPatient,setLoadingPatient]=useState(true)
   const [conditions,setConditions]=useState([])
@@ -1364,9 +1366,11 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
 
   const isCheckedIn = patient.status === 'checked_in'
 
-  // Only offer doctors in the same department as this patient's current
-  // doctor - switching to an unrelated specialty wouldn't make sense.
+  // Same specialty is shown first, but other specialties are offered too
+  // (categorised, not blocked) - the real gate is the receiving doctor's
+  // actual working hours, checked in onSwitchDoctor, not their department.
   const sameDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department===patient.department && d.name!==patient.doctor).map(d=>d.name)
+  const otherDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department!==patient.department && d.name!==patient.doctor)
 
   async function handleSendMessage() {
     if (!msgBody.trim()) { setError('Write a message first.'); return }
@@ -1467,16 +1471,35 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
 
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {patient.name}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {patient.department||'the same department'} only</div>
-          {sameDeptDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
-          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-            {sameDeptDoctors.map(d=>(
-              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-            ))}
-          </div>
+          {sameDeptDoctors.length===0&&otherDeptDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor at this clinic yet.</div>}
+          {sameDeptDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({patient.department})</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {sameDeptDoctors.map(d=>(
+                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+              ))}
+            </div>
+          </>}
+          {otherDeptDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {otherDeptDoctors.map(d=>(
+                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+                </div>
+              ))}
+            </div>
+          </>}
+          {switchError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {switchError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSwitchDoctor(newDoctor);setMode(null);onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
+              setSwitchSaving(true); setSwitchError(null)
+              const res = await onSwitchDoctor(newDoctor)
+              setSwitchSaving(false)
+              if (res?.ok===false) { setSwitchError(res.error); return }
+              setMode(null); onClose()
+            }} disabled={!newDoctor||switchSaving}>{switchSaving?'Saving…':'Confirm switch'}</Btn>
           </div>
         </>}
 
@@ -1520,11 +1543,16 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
   const [followupDate,setFollowupDate]=useState('')
   const [followupType,setFollowupType]=useState('')
   const [notesDraft,setNotesDraft]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [saveError,setSaveError]=useState(null)
 
   if (!appt) return null
 
-  // Only offer doctors in the same department as this appointment.
-  const DOCTORS = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  // Same specialty first, but other specialties are still offered
+  // (categorised, not blocked) - a department mismatch alone shouldn't
+  // stop a real switch when the receiving doctor is actually available.
+  const sameDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department===appt.department && d.name!==appt.doctor).map(d=>d.name)
+  const otherDeptDoctors = DOCTOR_DIRECTORY.filter(d=>d.department!==appt.department && d.name!==appt.doctor)
   const TIMES = ['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00','15:30']
 
   return (
@@ -1567,7 +1595,7 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
           <textarea value={notesDraft} onChange={e=>setNotesDraft(e.target.value)} rows={4} placeholder="Symptoms, patient-reported notes, anything relevant for the visit…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'14px',boxSizing:'border-box'}}/>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,notes:notesDraft});setMode(null)}}>Save notes</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{setSaving(true);await onSave({...appt,notes:notesDraft});setSaving(false);setMode(null)}} disabled={saving}>{saving?'Saving…':'Save notes'}</Btn>
           </div>
         </>}
 
@@ -1578,24 +1606,50 @@ function ReceptionistScheduleActionModal({ appt, onClose, onSave, withinDataWind
               <div key={t} onClick={()=>setNewTime(t)} style={{border:`0.5px solid ${newTime===t?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newTime===t?C.green:C.card,color:newTime===t?'#fff':C.text}}>{t}</div>
             ))}
           </div>
+          {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,time:newTime||appt.time});onClose()}} disabled={!newTime}>Confirm change</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
+              setSaving(true); setSaveError(null)
+              const res = await onSave({...appt,time:newTime||appt.time})
+              setSaving(false)
+              if (res?.ok===false) { setSaveError(res.error); return }
+              onClose()
+            }} disabled={!newTime||saving}>{saving?'Saving…':'Confirm change'}</Btn>
           </div>
         </>}
 
         {mode==='switch'&&<>
           <div style={{fontSize:'13px',fontWeight:500,marginBottom:'10px'}}>Switch doctor for {appt.name}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Showing doctors in {appt.department||'the same department'} only</div>
-          {DOCTORS.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor in this department yet.</div>}
-          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-            {DOCTORS.map(d=>(
-              <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
-            ))}
-          </div>
+          {sameDeptDoctors.length===0&&otherDeptDoctors.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>No other doctor at this clinic yet.</div>}
+          {sameDeptDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Same specialty ({appt.department})</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {sameDeptDoctors.map(d=>(
+                <div key={d} onClick={()=>setNewDoctor(d)} style={{border:`0.5px solid ${newDoctor===d?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d?C.green:C.card,color:newDoctor===d?'#fff':C.text}}>{d}</div>
+              ))}
+            </div>
+          </>}
+          {otherDeptDoctors.length>0&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Other specialties</div>
+            <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+              {otherDeptDoctors.map(d=>(
+                <div key={d.name} onClick={()=>setNewDoctor(d.name)} style={{border:`0.5px solid ${newDoctor===d.name?C.green:C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',cursor:'pointer',background:newDoctor===d.name?C.green:C.card,color:newDoctor===d.name?'#fff':C.text,display:'flex',justifyContent:'space-between'}}>
+                  <span>{d.name}</span><span style={{color:newDoctor===d.name?'rgba(255,255,255,0.8)':C.textMuted,fontSize:'11px'}}>{d.department}</span>
+                </div>
+              ))}
+            </div>
+          </>}
+          {saveError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px',fontSize:'12px',color:C.amber}}>{'⚠'} {saveError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setMode(null)}>Back</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={()=>{onSave({...appt,doctor:newDoctor||appt.doctor});onClose()}} disabled={!newDoctor}>Confirm switch</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={async()=>{
+              setSaving(true); setSaveError(null)
+              const res = await onSave({...appt,doctor:newDoctor||appt.doctor})
+              setSaving(false)
+              if (res?.ok===false) { setSaveError(res.error); return }
+              onClose()
+            }} disabled={!newDoctor||saving}>{saving?'Saving…':'Confirm switch'}</Btn>
           </div>
         </>}
 
@@ -3180,6 +3234,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       .order('scheduled_at', {ascending:true})
 
     const realRows = (data||[]).map(a => ({
+      id: a.id, scheduledAt: a.scheduled_at,
       time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
       name: a.patients?.full_name || 'Unknown patient',
       medsaId: a.patients?.medsa_id || null,
@@ -3266,13 +3321,84 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   const [showNewApptModal,setShowNewApptModal]=useState(false)
   const myName = ROLES[role]?.label || 'Doctor'
 
-  function handleReceptionSave(index, updated) {
-    setAppts(prev => {
-      const next = [...prev]
-      if (updated.cancelled) { next.splice(index,1); return next }
-      next[index] = updated
-      return next
-    })
+  // Was purely a local setState - reschedule/switch/cancel all looked like
+  // they worked, then silently reverted the moment loadAppointmentsForDay
+  // ran again (a new day tap, a page reload). Nothing here ever reached
+  // Supabase, which is also why "switch doctor" could never have been
+  // checking the new doctor's real availability - there was no real write
+  // for a check to gate. The availability check itself runs against real
+  // doctor_availability rows even for an illustrative demo appointment (no
+  // real appointments.id) - the receiving doctor's real hours are the
+  // point, not whether this particular row is a real booking - it's only
+  // the actual database write that's skipped for a demo row, same as
+  // before.
+  async function handleReceptionSave(index, updated) {
+    const original = appts[index]
+
+    if (updated.doctor && updated.doctor !== original.doctor) {
+      const apptDay = original.scheduledAt ? new Date(original.scheduledAt) : selectedDay
+      const dayOfWeek = apptDay.getDay()
+      const { data: avail } = await supabase.from('doctor_availability').select('*')
+        .eq('doctor_name', updated.doctor).eq('institution_source','practitioner').eq('day_of_week', dayOfWeek).maybeSingle()
+      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s. Pick a different doctor or time.` }
+      const [h,m] = original.time.split(':').map(Number)
+      const apptMinutes = h*60+(m||0)
+      const [startH,startM] = (avail.start_time||'09:00').split(':').map(Number)
+      const [endH,endM] = (avail.end_time||'17:00').split(':').map(Number)
+      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s - ${original.time} is outside that. Pick a different doctor or time.` }
+      if (original.id) {
+        const { data: clash } = await supabase.from('appointments').select('id')
+          .eq('doctor_name', updated.doctor).eq('institution_source','practitioner')
+          .eq('scheduled_at', original.scheduledAt).neq('status','cancelled').neq('id', original.id).maybeSingle()
+        if (clash) return { ok:false, error:`${updated.doctor} already has another appointment at ${original.time}. Pick a different doctor.` }
+        const { error } = await supabase.from('appointments').update({ doctor_name: updated.doctor }).eq('id', original.id)
+        if (error) return { ok:false, error: error.message }
+        loadAppointmentsForDay(selectedDay)
+        return { ok: true }
+      }
+      // Demo row - no real booking to persist, but the availability check
+      // above was still real. Reflect the switch locally same as before.
+      setAppts(prev => prev.map((a,i)=> i===index ? {...a, doctor: updated.doctor} : a))
+      return { ok: true }
+    }
+
+    if (!original?.id) {
+      setAppts(prev => {
+        const next = [...prev]
+        if (updated.cancelled) { next.splice(index,1); return next }
+        next[index] = updated
+        return next
+      })
+      return { ok: true }
+    }
+
+    if (updated.cancelled) {
+      await supabase.from('appointments').update({ status:'cancelled' }).eq('id', original.id)
+      loadAppointmentsForDay(selectedDay)
+      return { ok: true }
+    }
+
+    if (updated.time && updated.time !== original.time) {
+      const scheduledAt = new Date(original.scheduledAt)
+      const [h,m] = updated.time.split(':').map(Number)
+      scheduledAt.setHours(h||9, m||0, 0, 0)
+      const { data: clash } = await supabase.from('appointments').select('id')
+        .eq('doctor_name', original.doctor).eq('institution_source','practitioner')
+        .eq('scheduled_at', scheduledAt.toISOString()).neq('status','cancelled').neq('id', original.id).maybeSingle()
+      if (clash) return { ok:false, error:`${original.doctor} already has another appointment at ${updated.time}. Pick a different time.` }
+      const { error } = await supabase.from('appointments').update({ scheduled_at: scheduledAt.toISOString() }).eq('id', original.id)
+      if (error) return { ok:false, error: error.message }
+      loadAppointmentsForDay(selectedDay)
+      return { ok: true }
+    }
+
+    if (updated.notes !== undefined && updated.notes !== original.notes) {
+      await supabase.from('appointments').update({ reason_for_visit: updated.notes }).eq('id', original.id)
+      loadAppointmentsForDay(selectedDay)
+      return { ok: true }
+    }
+
+    return { ok: true }
   }
 
   return (
@@ -3386,8 +3512,14 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
         onViewFullRecord={()=>{setActiveTodoPatient(null);onViewFullRecord&&onViewFullRecord()}}
-        onSwitchDoctor={(newDoctorName)=>{
-          setAppts(prev=>prev.map(a=>a===activeTodoPatient?{...a,doctor:newDoctorName}:a))
+        onSwitchDoctor={async(newDoctorName)=>{
+          // Delegates to the same real check-and-write handleReceptionSave
+          // uses - this used to only ever touch local state, so it could
+          // never have been checking the new doctor's actual availability
+          // since there was no real appointment write for a check to gate.
+          const idx = appts.indexOf(activeTodoPatient)
+          if (idx===-1) return { ok:false, error:'Could not find this appointment - try closing and reopening it.' }
+          return handleReceptionSave(idx, {...activeTodoPatient, doctor:newDoctorName})
         }}
         onCancelAppt={async()=>{
           setAppts(prev=>prev.filter(a=>a!==activeTodoPatient))
