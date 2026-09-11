@@ -1459,82 +1459,19 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
 // ── VIDEO CONSULTATION MODAL ─────────────────────────────────────────────────
 // Matches iMeddy's model: video call + medical certificate/referral issuance
-function VideoCallModal({ doc, isEn, dt, onClose }) {
-  const [stage,setStage]=useState('connecting') // connecting | active | ended
-  const [docsIssued,setDocsIssued]=useState([])
-  // `dt` translates specialty/location terms (e.g. "General Practice" ->
-  // "全科") and lives in DoctorsScreen, the only place that builds the
-  // dictionary it needs - passed down as a prop rather than duplicated
-  // here. This component crashed every time a video call became active,
-  // since it called `dt(doc.spec)` without `dt` existing anywhere in its
-  // own scope; falling back to the identity function keeps this safe even
-  // if a future caller forgets to pass it.
-  const translate = dt || ((s)=>s)
-
-  useEffect(() => {
-    if (stage==='connecting') {
-      const t = setTimeout(()=>setStage('active'), 1800)
-      return () => clearTimeout(t)
-    }
-  }, [stage])
-
-  if (!doc) return null
-
-  function requestDoc(type) {
-    if (!docsIssued.includes(type)) setDocsIssued([...docsIssued, type])
-  }
-
-  return (
-    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:400,display:'flex',flexDirection:'column'}}>
-      <div style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff',padding:'24px'}}>
-        {stage==='connecting'&&<>
-          <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green,marginBottom:'16px'}}>{doc.init}</div>
-          <div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px'}}>{doc.name}</div>
-          <div style={{fontSize:'13px',opacity:0.7,marginBottom:'24px'}}>{isEn?'Connecting…':'連接中…'}</div>
-          <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,0.2)',borderTop:'3px solid #fff',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
-          <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-          <div style={{position:'absolute',bottom:40}}>
-            <Btn variant="danger" onClick={onClose}>{isEn?'Cancel':'取消'}</Btn>
-          </div>
-        </>}
-        {stage==='active'&&<>
-          <div style={{width:'100%',maxWidth:360,aspectRatio:'3/4',background:'#1a1a1a',borderRadius:'16px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'16px',position:'relative'}}>
-            <div style={{width:80,height:80,borderRadius:'50%',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:600,color:C.green}}>{doc.init}</div>
-            <div style={{position:'absolute',top:12,right:12,background:'rgba(0,0,0,0.5)',borderRadius:'20px',padding:'4px 10px',fontSize:'11px'}}>● {isEn?'Live':'直播中'}</div>
-            <div style={{position:'absolute',bottom:12,left:12,width:56,height:74,background:'#333',borderRadius:'8px',border:'1.5px solid rgba(255,255,255,0.3)'}}/>
-          </div>
-          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>{doc.name}</div>
-          <div style={{fontSize:'12px',opacity:0.7,marginBottom:'20px'}}>{translate(doc.spec)}</div>
-          <div style={{display:'flex',gap:'16px'}}>
-            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◉</button>
-            <button onClick={()=>setStage('ended')} style={{width:52,height:52,borderRadius:'50%',background:C.red,border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>✕</button>
-            <button style={{width:52,height:52,borderRadius:'50%',background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',fontSize:'20px',cursor:'pointer'}}>◈</button>
-          </div>
-        </>}
-        {stage==='ended'&&<div style={{background:C.cream,borderRadius:'16px',padding:'24px',width:'100%',maxWidth:400,color:C.text}}>
-          <div style={{textAlign:'center',marginBottom:'16px'}}>
-            <div style={{fontSize:'32px',marginBottom:'8px'}}>✓</div>
-            <div style={{fontSize:'16px',fontWeight:700}}>{isEn?'Consultation complete':'問診完成'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginTop:'4px'}}>{doc.name} · {translate(doc.spec)}</div>
-          </div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',fontWeight:600}}>{isEn?'Request documents':'索取文件'}</div>
-          {[
-            {key:'certificate',label:isEn?'Medical certificate':'醫療證明書'},
-            {key:'sickleave',label:isEn?'Sick leave note':'病假紙'},
-            {key:'referral',label:isEn?'Referral letter':'轉介信'},
-          ].map(d=>(
-            <div key={d.key} onClick={()=>requestDoc(d.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'8px',cursor:'pointer'}}>
-              <span style={{fontSize:'13px'}}>{d.label}</span>
-              {docsIssued.includes(d.key)
-                ?<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Issued':'已發出'}</span>
-                :<span style={{fontSize:'11px',color:C.green}}>{isEn?'Request':'索取'} ›</span>}
-            </div>
-          ))}
-          <Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={onClose}>{isEn?'Done':'完成'}</Btn>
-        </div>}
-      </div>
-    </div>
-  )
+// Real, working video call via Jitsi Meet's public server - opens in a new
+// browser tab, same mechanism and exact room-naming formula (medsa-{id}-
+// {today's date}) as the doctor side in ClinicOpsApp.jsx/PractitionerApp.jsx's
+// own startVideoCall - a patient and their doctor calling with the same
+// medsaId on the same day land in the same room. Was a fully simulated
+// "Connecting…" / fake "Live" placeholder before (VideoCallModal, removed) -
+// it never opened a real call, so a patient who booked a video consultation
+// had no actual way to have it.
+function joinPatientVideoCall(patientDisplayName, roomId) {
+  if (!roomId) return
+  const roomName = `medsa-${roomId.toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
+  const name = encodeURIComponent(patientDisplayName || 'Patient')
+  window.open(`https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22${name}%22`, '_blank', 'noopener')
 }
 
 function DoctorsScreen({ isEn, patient={} }) {
@@ -1557,7 +1494,6 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [selTime,setSelTime]=useState('10:30am')
   const [selLang,setSelLang]=useState('廣東話')
   const [booked,setBooked]=useState(false)
-  const [videoCallDoc,setVideoCallDoc]=useState(null)
   const [whatsappReminder,setWhatsappReminder]=useState(true)
   const [selectedDoctor,setSelectedDoctor]=useState(null)
   const [consultType,setConsultType]=useState('in-person') // 'in-person' | 'video'
@@ -2206,8 +2142,8 @@ function DoctorsScreen({ isEn, patient={} }) {
             <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{activeDoctor.name} · {selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} at {selTime}</div>
             {consultType==='video'
               ? <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setVideoCallDoc(activeDoctor);setBooked(false)}}>{isEn?'Join video call now (demo)':'立即加入視像通話（示範）'}</Btn>
-                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'In production, this unlocks at your actual appointment time.':'實際運作時，此按鈕將於預約時間開放。'}</div>
+                  <Btn variant="primary" style={{width:'100%'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>
+                  <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Opens in a new tab - your doctor joins the same call at your appointment time.':'將於新分頁開啟 - 醫生會在預約時間加入同一通話。'}</div>
                   <Btn style={{width:'100%'}} onClick={()=>setBooked(false)}>{isEn?'Close':'關閉'}</Btn>
                 </div>
               : <Btn variant="primary" style={{width:'100%'}} onClick={()=>setBooked(false)}>Done</Btn>}
@@ -2239,7 +2175,6 @@ function DoctorsScreen({ isEn, patient={} }) {
           </Card>
         ))}
       </>}
-      <VideoCallModal doc={videoCallDoc} isEn={isEn} dt={dt} onClose={()=>setVideoCallDoc(null)}/>
     </div>
   )
 }
@@ -2496,6 +2431,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAppt.practitioners?.full_name ? 'Dr '+activeAppt.practitioners.full_name.split(',')[0] : (activeAppt.doctor_name || activeAppt.appointment_type)}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{new Date(activeAppt.scheduled_at).toLocaleString('en-HK',{dateStyle:'full',timeStyle:'short',timeZone:'Asia/Hong_Kong'})}</div>
           {activeAppt.status==='completed'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>{'✓'} {isEn?'This visit is complete.':'此診症已完成。'}</div>}
+          {activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
           {activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
