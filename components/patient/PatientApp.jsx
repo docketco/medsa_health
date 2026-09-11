@@ -3346,21 +3346,66 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [policyLoading,setPolicyLoading]=useState(true)
   const [renewalRequested,setRenewalRequested]=useState(false)
 
+  async function loadPolicy() {
+    const medsaId = patient?.medsa_id
+    if (!medsaId) { setPolicyLoading(false); return }
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setPolicyLoading(false); return }
+    const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
+    setActivePolicy(data||null)
+    setRenewalRequested(!!data?.patient_requested_renewal_at)
+    setPolicyLoading(false)
+  }
   useEffect(() => {
-    async function loadPolicy() {
-      const medsaId = patient?.medsa_id
-      if (!medsaId) { setPolicyLoading(false); return }
-      const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-      if (!patientRow) { setPolicyLoading(false); return }
-      const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
-      setActivePolicy(data||null)
-      setRenewalRequested(!!data?.patient_requested_renewal_at)
-      setPolicyLoading(false)
-    }
     loadPolicy()
     const interval = setInterval(loadPolicy, 30000) // keep renewal status live without a manual reload
     return () => clearInterval(interval)
   }, [patient?.medsa_id])
+
+  // Self-serve link to a plan the patient already holds outside Medsa's
+  // own marketplace flow - the "Compare plans" tab below only ever
+  // surfaces plans that agreed to be sold/matched on Medsa
+  // (self_serve_only:false or sponsored), by design (see
+  // CoverageRulesManager's own comment on the same scope decision). A
+  // patient holding a TPA-claims-only insurer's policy has no other way
+  // to get it linked for real claims processing short of a clinic front
+  // desk doing it during a visit's billing step - this is that same
+  // agent_policies insert, just reachable from the patient's own side,
+  // for a policy that's genuinely already theirs (not a purchase).
+  const [showLinkForm,setShowLinkForm]=useState(false)
+  const [linkSearch,setLinkSearch]=useState('')
+  const [linkResults,setLinkResults]=useState([])
+  const [linkSearching,setLinkSearching]=useState(false)
+  const [linkSelectedPlan,setLinkSelectedPlan]=useState(null)
+  const [linkPolicyNumber,setLinkPolicyNumber]=useState('')
+  const [linking,setLinking]=useState(false)
+  const [linkError,setLinkError]=useState(null)
+
+  async function searchLinkPlans(q) {
+    setLinkSearch(q)
+    if (!q.trim()) { setLinkResults([]); return }
+    setLinkSearching(true)
+    const { data } = await supabase.from('insurance_plans').select('id, plan_name, company_name, self_serve_only')
+      .eq('status','active').or(`plan_name.ilike.%${q.trim()}%,company_name.ilike.%${q.trim()}%`).limit(15)
+    setLinkResults(data||[])
+    setLinkSearching(false)
+  }
+
+  async function handleLinkPlan() {
+    if (!linkSelectedPlan) return
+    setLinking(true); setLinkError(null)
+    const medsaId = patient?.medsa_id
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) { setLinkError(isEn?'Could not find your patient record.':'找不到您的病人記錄。'); setLinking(false); return }
+    const { error } = await supabase.from('agent_policies').insert({
+      patient_id: patientRow.id, plan_id: linkSelectedPlan.id, plan_name: linkSelectedPlan.plan_name,
+      policy_number: linkPolicyNumber.trim()||null, status: 'active', start_date: new Date().toISOString().slice(0,10),
+    })
+    setLinking(false)
+    if (error) { setLinkError(error.message); return }
+    setShowLinkForm(false); setLinkSearch(''); setLinkResults([]); setLinkSelectedPlan(null); setLinkPolicyNumber('')
+    loadPolicy()
+  }
 
   async function handleRequestRenewal() {
     if (!activePolicy) return
@@ -3476,7 +3521,20 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {/* Active plan banner - real data from agent_policies */}
       {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading your plan...':'載入您的計劃中...'}</div>}
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
-      {!policyLoading&&activePolicy&&(() => {
+      {/* A policy linked via "I already have insurance" below (self-serve,
+          out-of-network) has no premium/renewal_date - it was never sold
+          through Medsa, just recorded so claims can process. The full
+          premium/renewal card below assumes a Medsa-issued policy, so a
+          self-linked one gets its own simpler card instead. */}
+      {!policyLoading&&activePolicy&&activePolicy.premium==null&&(
+        <div style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'18px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
+          <div style={{fontSize:'16px',fontWeight:700,marginTop:'6px'}}>{activePolicy.plan_name}</div>
+          {activePolicy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {activePolicy.policy_number}</div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
+        </div>
+      )}
+      {!policyLoading&&activePolicy&&activePolicy.premium!=null&&(() => {
         const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
         const inProgress = activePolicy.status==='renewal_in_progress'
         const readyToSign = inProgress && activePolicy.contract_ready_at && !activePolicy.patient_signed_at
@@ -3515,6 +3573,41 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         </div>
         )
       })()}
+
+      {/* Self-serve link to a plan already held outside Medsa's own
+          marketplace - see comment on handleLinkPlan above. Always
+          offered, not just when there's no active policy, since a
+          patient can hold more than one real policy. */}
+      <div style={{margin:'10px 16px 0'}}>
+        {!showLinkForm&&<div onClick={()=>setShowLinkForm(true)} style={{background:C.card,border:`0.5px dashed ${C.border}`,borderRadius:'14px',padding:'14px 16px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>+ {isEn?'Already insured elsewhere? Add your policy':'已在其他地方投保?新增您的保單'}</div>}
+        {showLinkForm&&<Card style={{margin:0,padding:'16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?'Add a policy you already hold':'新增您已持有的保單'}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?'For an insurer not sold through Medsa (e.g. a TPA-claims-only plan) - this just records it so a Medsa clinic can process claims against it, nothing is purchased.':'適用於並非透過Medsa銷售的保險公司(例如僅處理索償的TPA計劃)- 此操作僅作記錄,以便Medsa診所可根據此保單處理索償,並非購買計劃。'}</div>
+          {!linkSelectedPlan&&<>
+            <input value={linkSearch} onChange={e=>searchLinkPlans(e.target.value)} placeholder={isEn?'Search insurer or plan name':'搜尋保險公司或計劃名稱'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'8px'}}/>
+            {linkSearching&&<div style={{fontSize:'11px',color:C.textMuted,padding:'6px 0'}}>{isEn?'Searching…':'搜尋中…'}</div>}
+            {!linkSearching&&linkSearch.trim()&&linkResults.length===0&&<div style={{fontSize:'11px',color:C.textMuted,padding:'6px 0'}}>{isEn?'No matching plan found.':'找不到相符的計劃。'}</div>}
+            {linkResults.map(p=>(
+              <div key={p.id} onClick={()=>setLinkSelectedPlan(p)} style={{padding:'9px 10px',borderRadius:'8px',cursor:'pointer',fontSize:'12px',background:C.beige,marginBottom:'6px'}}>
+                <div style={{fontWeight:600}}>{p.plan_name}</div>
+                <div style={{color:C.textMuted,fontSize:'11px'}}>{p.company_name}</div>
+              </div>
+            ))}
+          </>}
+          {linkSelectedPlan&&<>
+            <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div><div style={{fontSize:'12px',fontWeight:600}}>{linkSelectedPlan.plan_name}</div><div style={{fontSize:'11px',color:C.textMuted}}>{linkSelectedPlan.company_name}</div></div>
+              <span onClick={()=>setLinkSelectedPlan(null)} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{isEn?'Change':'更改'}</span>
+            </div>
+            <input value={linkPolicyNumber} onChange={e=>setLinkPolicyNumber(e.target.value)} placeholder={isEn?'Your policy number (optional)':'保單編號(選填)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
+          </>}
+          {linkError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{linkError}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>{setShowLinkForm(false);setLinkSearch('');setLinkResults([]);setLinkSelectedPlan(null);setLinkPolicyNumber('');setLinkError(null)}}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleLinkPlan} disabled={!linkSelectedPlan||linking}>{linking?(isEn?'Adding…':'新增中…'):(isEn?'Add policy':'新增保單')}</Btn>
+          </div>
+        </Card>}
+      </div>
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
