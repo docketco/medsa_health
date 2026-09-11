@@ -1562,6 +1562,66 @@ function QaToolsTab() {
         Testing tools that bypass a real Stripe payment - use these to simulate what a successful checkout would have written, so paid-gated flows can be tested end to end without a connected Stripe account.
       </div>
       <SponsorshipTester/>
+      <VideoConsultTester/>
+    </div>
+  )
+}
+
+function VideoConsultTester() {
+  const [query,setQuery]=useState('')
+  const [results,setResults]=useState([])
+  const [searching,setSearching]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function search() {
+    if (!query.trim()) return
+    setSearching(true)
+    const { data } = await supabase.from('institutions')
+      .select('id, name, video_consult_enabled, video_consult_expires_at, video_consult_price_hkd')
+      .ilike('name', `%${query}%`).order('name').limit(20)
+    setResults(data||[])
+    setSearching(false)
+  }
+
+  async function setVideoConsult(inst, enable) {
+    setSaving(inst.id); setNotice(null)
+    const payload = enable
+      ? { video_consult_enabled: true, video_consult_expires_at: (() => { const d=new Date(); d.setFullYear(d.getFullYear()+1); return d.toISOString().slice(0,10) })(), video_consult_price_hkd: 6210 }
+      : { video_consult_enabled: false, video_consult_expires_at: null, video_consult_price_hkd: null }
+    const { error } = await supabase.from('institutions').update(payload).eq('id', inst.id)
+    setSaving(false)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setNotice(enable ? `${inst.name} can now offer video consultations (until ${payload.video_consult_expires_at}).` : `${inst.name}'s video consultations disabled.`)
+    setResults(results.map(r=>r.id===inst.id?{...r,...payload}:r))
+  }
+
+  return (
+    <div style={{background:'#fff',borderRadius:'10px',padding:'16px',border:`0.5px solid ${C.border}`,marginBottom:'16px'}}>
+      <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Video consult tester</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>
+        Enables (or disables) video consultations for a clinic directly - the same fields the Stripe webhook sets on a real payment. Search a clinic, toggle it, done - no need to ask for this by hand each time.
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder="Search clinic name…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px'}}/>
+        <button onClick={search} disabled={searching} style={{padding:'0 16px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{searching?'…':'Search'}</button>
+      </div>
+      {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'10px'}}>{notice}</div>}
+      {results.length>0&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+        {results.map(inst=>{
+          const today = new Date().toISOString().slice(0,10)
+          const active = inst.video_consult_enabled && (!inst.video_consult_expires_at || inst.video_consult_expires_at>=today)
+          return (
+            <div key={inst.id} style={{padding:'10px 12px',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{inst.name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{active?`Enabled until ${inst.video_consult_expires_at}`:'Not enabled'}</div>
+              </div>
+              <button onClick={()=>setVideoConsult(inst, !active)} disabled={saving===inst.id} style={{flexShrink:0,padding:'7px 12px',border:active?`0.5px solid ${C.border}`:'none',borderRadius:'8px',background:active?'#fff':C.green,color:active?C.text:'#fff',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving===inst.id?'…':active?'Disable':'Enable'}</button>
+            </div>
+          )
+        })}
+      </div>}
     </div>
   )
 }
