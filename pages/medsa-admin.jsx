@@ -539,7 +539,12 @@ function PartnersTab() {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('insurance_companies').select('*').order('created_at',{ascending:false})
+    // Explicit column list, not '*' - insurance_companies now locks down
+    // password_hash and verification_api_key from anon the same way
+    // institutions.mims_api_key is locked down (see the migration that
+    // added policy verification); naming even one ungranted column fails
+    // the whole select, and '*' would ask for both.
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
