@@ -4446,6 +4446,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     d.setDate(d.getDate()+i)
     return d
   })
+  // Local YYYY-MM-DD for <input type="date"> - toISOString() would shift
+  // the date across a UTC day boundary depending on the browser's
+  // timezone, which is exactly the kind of off-by-one this app has been
+  // bitten by before.
+  const toDateInputValue = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   const [showNewApptForm,setShowNewApptForm]=useState(false)
   const [newApptSearch,setNewApptSearch]=useState('')
   const [newApptPatient,setNewApptPatient]=useState(null)
@@ -4831,6 +4836,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
             <Btn onClick={handleNewApptSearch}>Search</Btn>
           </div>
           {newApptPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginBottom:'12px',fontSize:'12px',color:C.green}}>✓ {newApptPatient.full_name} ({newApptPatient.medsa_id})</div>}
+          {/* Date was previously only implicit (whatever day the schedule
+              screen happened to be showing behind the modal) - front desk
+              had no way to see or change it while booking. */}
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Date</div>
+          <input type="date" value={toDateInputValue(selectedDay)} min={toDateInputValue(new Date())} onChange={e=>{ if(!e.target.value) return; const [y,mo,da]=e.target.value.split('-').map(Number); setSelectedDay(new Date(y,mo-1,da)) }} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <select value={newApptDoctor} onChange={e=>setNewApptDoctor(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px'}}>
             {clinicDoctors.map(d=><option key={d.name} value={d.name}>{d.name}</option>)}
           </select>

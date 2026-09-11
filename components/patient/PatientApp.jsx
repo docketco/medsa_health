@@ -1773,7 +1773,11 @@ function DoctorsScreen({ isEn, patient={} }) {
     return { label: DAY_LABELS[d.getDay()], date: d.getDate(), fullDate: d }
   })
   const [selDay,setSelDay]=useState(DAYS[0].fullDate)
-  const activeDoctor = selectedDoctor || doctors[0]
+  // No fallback to doctors[0] - that silently put whichever doctor
+  // happened to be first in the list into the booking form if a patient
+  // navigated to the Book tab directly without picking anyone, making it
+  // look like a doctor had already been chosen for them.
+  const activeDoctor = selectedDoctor
 
   // Real availability, synced from what an admin actually set up for this
   // doctor - replacing the previous hardcoded/pseudo-random time list.
@@ -1838,7 +1842,7 @@ function DoctorsScreen({ isEn, patient={} }) {
     setSlotsLoading(false)
   }
 
-  useEffect(() => { loadAvailability(activeDoctor, selDay) }, [activeDoctor?.name, selDay])
+  useEffect(() => { if (activeDoctor) loadAvailability(activeDoctor, selDay) }, [activeDoctor?.name, selDay])
 
   function handleBookClick(doc, type) {
     setSelectedDoctor(doc)
@@ -1964,7 +1968,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       <div style={{background:C.green,padding:'0 16px 14px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
           <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
-          <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
+          <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); setTab('search') } }} style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
         </div>
         <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
           <div onClick={requestLocation} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:userLocation?'#fff':'rgba(255,255,255,0.2)',color:userLocation?C.green:'#fff'}}>
@@ -2061,14 +2065,19 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{dt(activeDoctor.spec)} · {dt(activeDoctor.clinic)}</div></div>
         </Card>
 
-        {activeDoctor.videoAvail&&<Card style={{padding:'14px 16px'}}>
+        {/* Was gated behind doc.videoAvail, a field nothing in the app
+            ever populated - so this toggle, and any way to book a video
+            consultation at all, was permanently dead. Every doctor
+            reachable from here is already a partnered, online-bookable
+            doctor, so the choice is always real to offer. */}
+        <Card style={{padding:'14px 16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
           <div style={{display:'flex',gap:'8px'}}>
             {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
               <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
             ))}
           </div>
-        </Card>}
+        </Card>
 
         <Card>
           <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
@@ -3352,18 +3361,27 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         }
       }
       setPatientConditions(conditionNames)
-      // self_serve_only excludes TPA-claims-only insurers' plans - they
-      // registered coverage rules for claims processing, never agreed to
-      // be sold/browsed on Medsa's marketplace.
-      const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active').eq('self_serve_only',false)
+      // self_serve_only excludes TPA-claims-only insurers' plans from
+      // general browsing - they registered coverage rules for claims
+      // processing, never agreed to be sold on Medsa's marketplace. The
+      // one carved-out exception is a plan they've explicitly paid to
+      // promote (sponsored:true) - that's a deliberate, priced placement,
+      // same as a partnered insurer's sponsored listing.
+      const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active').or('self_serve_only.eq.false,sponsored.eq.true')
 
       // Real age from the patient's actual date of birth - this is what
       // determines which tier's price actually applies to them.
       const patientAge = patient?.date_of_birth
         ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25*24*60*60*1000))
         : null
+      const todayStr = new Date().toISOString().slice(0,10)
 
-      const mapped = (realPlans||[]).map(p => {
+      const mapped = (realPlans||[])
+        // A lapsed sponsorship (sponsored_until in the past) shouldn't keep
+        // a self-serve plan visible - the .or() above can only filter on
+        // the raw sponsored flag, not the date, so re-check the expiry here.
+        .filter(p => !p.self_serve_only || (p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr))
+        .map(p => {
         const coveredLower = (p.covered_conditions||[]).map(c=>c.toLowerCase())
         // Real matching: does the patient have a condition this plan explicitly
         // covers? This is deterministic overlap-checking, not AI - see chat.
@@ -3375,7 +3393,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           price: myTier ? myTier.monthly_premium : null,
           limit: myTier ? myTier.annual_limit : null,
           priceUnavailable: !myTier,
-          sponsored: p.sponsored,
+          sponsored: p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr,
+          sponsorDescription: p.sponsor_description||null, sponsorThumbnailUrl: p.sponsor_thumbnail_url||null,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0,
         }
@@ -3486,6 +3505,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         {!plansLoading&&plans.length>0&&visiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?`No plans match "${planSearch}".`:`沒有符合「${planSearch}」的計劃。`}</div>}
         {!plansLoading&&visiblePlans.map((plan,i)=>(
           <Card key={i} style={{padding:'14px 16px'}}>
+            {plan.sponsored&&plan.sponsorThumbnailUrl&&<img src={plan.sponsorThumbnailUrl} alt="" style={{width:'100%',height:100,objectFit:'cover',borderRadius:'10px',marginBottom:'10px'}}/>}
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
@@ -3505,6 +3525,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                     </>}
               </div>
             </div>
+            {plan.sponsored&&plan.sponsorDescription&&<div style={{fontSize:'12px',color:C.text,marginBottom:'10px',lineHeight:1.5}}>{plan.sponsorDescription}</div>}
             {/* Objective criteria met - no ranking, no score */}
             <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
               {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}

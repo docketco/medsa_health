@@ -51,6 +51,7 @@ function InsuranceDashboard({ onNav, company }) {
         {(company?.relationshipType==='unpartnered' ? [
           {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
+          {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
@@ -66,8 +67,8 @@ function InsuranceDashboard({ onNav, company }) {
       </div>
       {company?.relationshipType==='unpartnered' ? (
         <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'14px',padding:'16px'}}>
-          <div style={{fontSize:'13px',color:'#fff',fontWeight:600,marginBottom:'6px'}}>⬡ Want a sponsored spot in patient search?</div>
-          <div style={{fontSize:'12px',color:'rgba(255,255,255,0.8)',lineHeight:1.6,marginBottom:'12px'}}>Sponsored placements, plan listings, and client management are part of a full Medsa Partnership - a closer, integrated relationship beyond claims processing. Upgrade to get your plans in front of patients directly.</div>
+          <div style={{fontSize:'13px',color:'#fff',fontWeight:600,marginBottom:'6px'}}>⬡ Want your full catalog on Medsa?</div>
+          <div style={{fontSize:'12px',color:'rgba(255,255,255,0.8)',lineHeight:1.6,marginBottom:'12px'}}>You can already promote an individual registered plan into patient search under "Promote a plan" above. A full Medsa Partnership goes further - all your plans listed and sold on Medsa, plus agent/team management.</div>
           <a href="/insurer-signup" style={{display:'block',textAlign:'center',background:'#fff',color:C.navy,borderRadius:'8px',padding:'10px',fontSize:'13px',fontWeight:600,textDecoration:'none'}}>Apply for a Partnership</a>
         </div>
       ) : (
@@ -725,15 +726,22 @@ export function AgentClaimView({ claimRef }) {
 function SponsoredListings({ company }) {
   const [plans,setPlans]=useState([])
   const [loading,setLoading]=useState(true)
-  const [selectedPlanId,setSelectedPlanId]=useState('')
+  const [promotingId,setPromotingId]=useState(null)
+  const [description,setDescription]=useState('')
+  const [thumbnailUrl,setThumbnailUrl]=useState('')
   const [months,setMonths]=useState(3)
+  const [termsAccepted,setTermsAccepted]=useState(false)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
   const RATE = 3000
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('insurance_plans').select('id, plan_name, sponsored, sponsored_until, sponsor_price_hkd').eq('company_name', company.name).order('plan_name')
+    // Not filtered by self_serve_only - a TPA-claims-only insurer's
+    // Coverage Rules plans can be promoted exactly the same way a
+    // partnered insurer's marketplace plans can, at the same per-month
+    // rate. Both land in the same insurance_plans table.
+    const { data } = await supabase.from('insurance_plans').select('id, plan_name, sponsored, sponsored_until, sponsor_price_hkd, sponsor_description, sponsor_thumbnail_url').eq('company_name', company.name).order('plan_name')
     setPlans(data||[])
     setLoading(false)
   }
@@ -742,20 +750,41 @@ function SponsoredListings({ company }) {
   const today = new Date().toISOString().slice(0,10)
   const active = plans.filter(p => p.sponsored && p.sponsored_until >= today)
   const available = plans.filter(p => !(p.sponsored && p.sponsored_until >= today))
+  const promotingPlan = available.find(p=>p.id===promotingId)
+
+  function startPromote(plan) {
+    setPromotingId(plan.id)
+    setDescription(plan.sponsor_description||'')
+    setThumbnailUrl(plan.sponsor_thumbnail_url||'')
+    setMonths(3)
+    setTermsAccepted(false)
+    setError(null)
+  }
 
   async function handleLaunch() {
-    if (!selectedPlanId) return
+    if (!promotingId || !termsAccepted) return
     setStarting(true); setError(null)
     try {
+      // The description/thumbnail and the terms-acceptance timestamp are
+      // real content shown to patients - save them to the plan itself
+      // before checkout, not just passed along as Stripe metadata that
+      // would otherwise be lost. The webhook only ever sets
+      // sponsored/sponsored_until/sponsor_price_hkd once payment clears.
+      const { error: updErr } = await supabase.from('insurance_plans').update({
+        sponsor_description: description.trim() || null,
+        sponsor_thumbnail_url: thumbnailUrl.trim() || null,
+        sponsor_terms_accepted_at: new Date().toISOString(),
+      }).eq('id', promotingId)
+      if (updErr) throw updErr
       const res = await fetch('/api/insurer/create_sponsor_checkout', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ planId: selectedPlanId, companyId: company.id, months }),
+        body: JSON.stringify({ planId: promotingId, companyId: company.id, months }),
       })
       const data = await res.json()
       if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
       setError(data.message || 'Could not start checkout.')
-    } catch {
-      setError('Something went wrong - please try again.')
+    } catch (e) {
+      setError(e.message || 'Something went wrong - please try again.')
     }
     setStarting(false)
   }
@@ -771,30 +800,49 @@ function SponsoredListings({ company }) {
       {!loading&&active.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None right now.</div>}
       {active.map(p=>(
         <Card key={p.id} style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{p.plan_name}</div>
-          <div style={{fontSize:'12px',color:C.textSub}}>Sponsored until {new Date(p.sponsored_until).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{p.sponsor_price_hkd?` · paid HK$${p.sponsor_price_hkd.toLocaleString()}`:''}</div>
+          <div style={{display:'flex',gap:'10px'}}>
+            {p.sponsor_thumbnail_url&&<img src={p.sponsor_thumbnail_url} alt="" style={{width:52,height:52,borderRadius:'10px',objectFit:'cover',flexShrink:0}}/>}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>Sponsored until {new Date(p.sponsored_until).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{p.sponsor_price_hkd?` · paid HK$${p.sponsor_price_hkd.toLocaleString()}`:''}</div>
+              {p.sponsor_description&&<div style={{fontSize:'12px',color:C.text,marginTop:'4px'}}>{p.sponsor_description}</div>}
+            </div>
+          </div>
         </Card>
       ))}
-      <SecLabel>Sponsor a plan</SecLabel>
-      <Card style={{padding:'16px'}}>
-        {available.length===0
-          ? <div style={{fontSize:'12px',color:C.textMuted}}>{plans.length===0?'Add a plan under "Manage plans" first.':'All your plans are already sponsored.'}</div>
-          : <>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Select plan</div>
-            <select value={selectedPlanId} onChange={e=>setSelectedPlanId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}>
-              <option value="">Choose a plan…</option>
-              {available.map(p=><option key={p.id} value={p.id}>{p.plan_name}</option>)}
-            </select>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Duration</div>
-            <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
-              {[1,3,6].map(m=>(
-                <div key={m} onClick={()=>setMonths(m)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:months===m?C.navy:C.beige,color:months===m?'#fff':C.text,border:`0.5px solid ${months===m?C.navy:C.border}`}}>{m} mo · HK${(RATE*m).toLocaleString()}</div>
-              ))}
-            </div>
-            {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
-            <Btn variant="navy" style={{width:'100%'}} onClick={handleLaunch} disabled={!selectedPlanId||starting}>{starting?'Starting checkout…':`Pay HK$${(RATE*months).toLocaleString()} & launch`}</Btn>
-          </>}
-      </Card>
+      <SecLabel>Promote a plan</SecLabel>
+      {available.length===0&&!promotingId&&<Card style={{padding:'16px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{plans.length===0?'Add a plan first.':'All your plans are already sponsored.'}</div></Card>}
+      {!promotingId&&available.map(p=>(
+        <Card key={p.id} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:500}}>{p.plan_name}</div>
+          <Btn variant="navy" onClick={()=>startPromote(p)}>Promote</Btn>
+        </Card>
+      ))}
+      {promotingId&&promotingPlan&&(
+        <Card style={{padding:'16px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>Promote "{promotingPlan.plan_name}"</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Description shown to patients</div>
+          <textarea value={description} onChange={e=>setDescription(e.target.value)} rows={3} placeholder="What makes this plan worth a look?" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box',resize:'none',fontFamily:'inherit'}}/>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Thumbnail image URL</div>
+          <input value={thumbnailUrl} onChange={e=>setThumbnailUrl(e.target.value)} placeholder="https://…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+          {thumbnailUrl.trim()&&<img src={thumbnailUrl} alt="" style={{width:'100%',height:120,objectFit:'cover',borderRadius:'8px',marginBottom:'12px'}} onError={e=>{e.target.style.display='none'}}/>}
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Duration</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+            {[1,3,6].map(m=>(
+              <div key={m} onClick={()=>setMonths(m)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:months===m?C.navy:C.beige,color:months===m?'#fff':C.text,border:`0.5px solid ${months===m?C.navy:C.border}`}}>{m} mo · HK${(RATE*m).toLocaleString()}</div>
+            ))}
+          </div>
+          <div onClick={()=>setTermsAccepted(!termsAccepted)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:termsAccepted?C.greenXLight:C.card,border:`0.5px solid ${termsAccepted?C.green:C.border}`,borderRadius:'10px',cursor:'pointer',marginBottom:'14px'}}>
+            <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${termsAccepted?C.green:C.border}`,background:termsAccepted?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{termsAccepted?'✓':''}</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>I agree this listing must accurately describe the plan's real terms, that Medsa may remove it if it's misleading, and that the sponsorship fee is non-refundable once the placement goes live.</div>
+          </div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setPromotingId(null)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleLaunch} disabled={!termsAccepted||starting}>{starting?'Starting checkout…':`Pay HK$${(RATE*months).toLocaleString()} & launch`}</Btn>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
@@ -1094,7 +1142,7 @@ export default function InsuranceApp({ company, onLogout }) {
   const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
-    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'claims',icon:'◇',label:'Claims'}]
+    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -1114,7 +1162,10 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
-        {screen==='ads'&&isPartnered&&<SponsoredListings company={company}/>}
+        {/* Available to both tiers - a TPA-claims-only insurer can sponsor
+            a registered plan the same way a partnered one sponsors a
+            marketplace listing, at the same per-month rate. */}
+        {screen==='ads'&&<SponsoredListings company={company}/>}
         {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
