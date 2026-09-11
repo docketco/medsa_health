@@ -21,7 +21,7 @@ export default function MedsaAdminPage() {
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -35,6 +35,7 @@ export default function MedsaAdminPage() {
       {tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
+      {tab==='qa' && <QaToolsTab/>}
     </div>
   )
 }
@@ -1543,6 +1544,117 @@ function ForumModerationTab() {
       {bulkProductResult&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'16px',fontSize:'12px',color:C.green}}>
         Imported {bulkProductResult.imported} of {bulkProductResult.total} rows.
         {bulkProductResult.skipped.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkProductResult.skipped.join(', ')}</div>}
+      </div>}
+    </div>
+  )
+}
+
+// ── QA TOOLS ─────────────────────────────────────────────────────────────────
+// A real way to test Stripe-gated states without a connected Stripe
+// account - this is exactly what the webhook itself would write on a
+// successful payment, just triggered by hand instead of a real charge.
+// Never touches anything the webhook doesn't also touch, and every write
+// is scoped to one row the admin explicitly picked.
+function QaToolsTab() {
+  return (
+    <div>
+      <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
+        Testing tools that bypass a real Stripe payment - use these to simulate what a successful checkout would have written, so paid-gated flows can be tested end to end without a connected Stripe account.
+      </div>
+      <SponsorshipTester/>
+    </div>
+  )
+}
+
+function SponsorshipTester() {
+  const [query,setQuery]=useState('')
+  const [results,setResults]=useState([])
+  const [searching,setSearching]=useState(false)
+  const [selected,setSelected]=useState(null)
+  const [months,setMonths]=useState('1')
+  const [customExpiry,setCustomExpiry]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function search() {
+    if (!query.trim()) return
+    setSearching(true)
+    const { data } = await supabase.from('insurance_plans')
+      .select('id, plan_name, company_name, self_serve_only, sponsored, sponsored_until, sponsor_price_hkd, sponsor_description, sponsor_thumbnail_url')
+      .or(`plan_name.ilike.%${query}%,company_name.ilike.%${query}%`)
+      .order('plan_name').limit(20)
+    setResults(data||[])
+    setSearching(false)
+  }
+
+  function selectPlan(p) {
+    setSelected(p)
+    setNotice(null)
+    setCustomExpiry('')
+  }
+
+  async function applySponsorship(enable) {
+    if (!selected) return
+    setSaving(true); setNotice(null)
+    const payload = enable
+      ? {
+          sponsored: true,
+          sponsored_until: customExpiry || (() => { const d=new Date(); d.setMonth(d.getMonth()+parseInt(months||'1')); return d.toISOString().slice(0,10) })(),
+          sponsor_price_hkd: selected.sponsor_price_hkd || 3000*parseInt(months||'1'),
+        }
+      : { sponsored: false, sponsored_until: null, sponsor_price_hkd: null }
+    const { error } = await supabase.from('insurance_plans').update(payload).eq('id', selected.id)
+    setSaving(false)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setNotice(enable ? `Marked sponsored until ${payload.sponsored_until}.` : 'Sponsorship cleared.')
+    setSelected({ ...selected, ...payload })
+    setResults(results.map(r=>r.id===selected.id?{...r,...payload}:r))
+  }
+
+  return (
+    <div style={{background:'#fff',borderRadius:'10px',padding:'16px',border:`0.5px solid ${C.border}`,marginBottom:'16px'}}>
+      <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Sponsorship tester</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>
+        Marks a plan sponsored (or clears it) directly - the same fields the Stripe webhook sets on a real payment (sponsored, sponsored_until, sponsor_price_hkd). Works for both partnered plans and self-serve/Coverage Rules plans. Set a custom expiry a few minutes out to test that a promoted plan actually disappears from patient search once its window lapses, instead of waiting a real month.
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder="Search plan name or company…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px'}}/>
+        <button onClick={search} disabled={searching} style={{padding:'0 16px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{searching?'…':'Search'}</button>
+      </div>
+      {results.length>0&&!selected&&<div style={{maxHeight:220,overflowY:'auto',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'12px'}}>
+        {results.map(p=>(
+          <div key={p.id} onClick={()=>selectPlan(p)} style={{padding:'10px 12px',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:'13px'}}>
+            <div style={{fontWeight:600}}>{p.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{p.company_name}{p.self_serve_only?' · self-serve':''}{p.sponsored?` · sponsored until ${p.sponsored_until}`:''}</div>
+          </div>
+        ))}
+      </div>}
+      {selected&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
+          <div>
+            <div style={{fontSize:'14px',fontWeight:700}}>{selected.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{selected.company_name}{selected.self_serve_only?' · self-serve (Coverage Rules)':' · marketplace plan'}</div>
+          </div>
+          <span onClick={()=>{setSelected(null);setResults([])}} style={{fontSize:'11px',color:C.textSub,cursor:'pointer'}}>Change</span>
+        </div>
+        <div style={{fontSize:'12px',marginBottom:'10px'}}>
+          Current: {selected.sponsored ? <span style={{color:C.green,fontWeight:600}}>Sponsored until {selected.sponsored_until}</span> : <span style={{color:C.textMuted}}>Not sponsored</span>}
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px',alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:'12px',color:C.textSub}}>Quick duration:</span>
+          {[['1','1 mo'],['3','3 mo'],['6','6 mo']].map(([v,l])=>(
+            <div key={v} onClick={()=>{setMonths(v);setCustomExpiry('')}} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:!customExpiry&&months===v?C.green:C.card,color:!customExpiry&&months===v?'#fff':C.textSub}}>{l}</div>
+          ))}
+        </div>
+        <div style={{marginBottom:'12px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Or set a custom expiry date (sponsored_until is date-only, not time-of-day) - set it to yesterday and apply to test that a lapsed sponsorship actually disappears from patient search, or tomorrow to confirm it still shows</div>
+          <input type="date" value={customExpiry} onChange={e=>setCustomExpiry(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'10px'}}>{notice}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>applySponsorship(true)} disabled={saving} style={{flex:1,padding:'9px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Mark sponsored'}</button>
+          <button onClick={()=>applySponsorship(false)} disabled={saving} style={{flex:1,padding:'9px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',color:C.text,fontSize:'13px',cursor:'pointer'}}>Clear sponsorship</button>
+        </div>
       </div>}
     </div>
   )

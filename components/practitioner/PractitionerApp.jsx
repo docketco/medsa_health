@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
+import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 
@@ -912,20 +913,18 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
   const [logSaved,setLogSaved]=useState(false)
   const [diagnosis,setDiagnosis]=useState('')
   const [logSaving,setLogSaving]=useState(false)
-  const [logDraftSaving,setLogDraftSaving]=useState(false)
-  const [logDraftSaved,setLogDraftSaved]=useState(false)
   const [logError,setLogError]=useState(null)
 
-  // Real writes to the patient's medical record - previously these
-  // buttons only set local state and never touched Supabase at all.
-  // "Save" writes a draft (editable, not final); "Submit" writes the
-  // final record - this replaces needing a separate prep-notes feature,
-  // since the same fields work for both pre-visit review and the actual
-  // visit note.
-  async function writeLogEntry(status) {
+  // Real write to the patient's medical record. A separate "Save" (draft)
+  // button used to exist alongside Submit - it genuinely wrote to
+  // Supabase, but as its own new medical_records row with no link back to
+  // the eventual submitted one, so tapping it more than once (or Save
+  // then Submit) littered the patient's real record with orphaned draft
+  // rows nothing ever reconciled or cleaned up. Removed rather than
+  // fixed - there's no actual need for a separate draft state here.
+  async function writeLogEntry() {
     if (!logText.trim() && !diagnosis.trim()) return
-    const isDraft = status==='draft'
-    isDraft ? setLogDraftSaving(true) : setLogSaving(true)
+    setLogSaving(true)
     setLogError(null)
     try {
       const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', patient.id).maybeSingle()
@@ -933,15 +932,14 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
       const { error: insErr } = await supabase.from('medical_records').insert({
         patient_id: patientRow.id, record_type: 'visit', title: diagnosis || 'Consultation note',
         notes: logText || null, diagnosis: diagnosis || null,
-        date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_log', record_status: status,
+        date_of_record: new Date().toISOString().slice(0,10), source: 'practitioner_log', record_status: 'submitted',
       })
       if (insErr) throw insErr
-      if (isDraft) { setLogDraftSaved(true); setTimeout(()=>setLogDraftSaved(false), 2500) }
-      else setLogSaved(true)
+      setLogSaved(true)
     } catch (e) {
       setLogError(e.message)
     } finally {
-      isDraft ? setLogDraftSaving(false) : setLogSaving(false)
+      setLogSaving(false)
     }
   }
   const [showPrescribeModal,setShowPrescribeModal]=useState(false)
@@ -1206,12 +1204,10 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
             <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'6px'}}>Notes</div>
             <textarea value={logText} onChange={e=>setLogText(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'13px',background:C.beige,resize:'none',outline:'none',fontFamily:'inherit',marginBottom:'10px'}} rows={4} placeholder="Log symptoms, observations, or clinical notes for this visit…"/>
             {logError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{logError}</div>}
-            {logDraftSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Draft saved - keep editing, or submit when ready</div>}
             {logSaved&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ Submitted to patient record</div>}
             <div style={{display:'flex',gap:'8px',marginBottom:access.prescribe?'10px':'0'}}>
-              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false);setLogDraftSaved(false)}}>Clear</Btn>
-              <Btn style={{flex:1}} onClick={()=>writeLogEntry('draft')} disabled={logDraftSaving||logSaving}>{logDraftSaving?'Saving…':'Save'}</Btn>
-              <Btn variant="primary" style={{flex:1}} onClick={()=>writeLogEntry('submitted')} disabled={logSaving||logDraftSaving}>{logSaving?'Submitting…':'Submit'}</Btn>
+              <Btn style={{flex:1}} onClick={()=>{setLogText('');setDiagnosis('');setLogSaved(false)}}>Clear</Btn>
+              <Btn variant="primary" style={{flex:1}} onClick={writeLogEntry} disabled={logSaving}>{logSaving?'Submitting…':'Submit'}</Btn>
             </div>
             {access.prescribe&&<Btn variant="amber" style={{width:'100%'}} onClick={()=>setShowPrescribeModal(true)}>+ Add prescription to this visit</Btn>}
           </Card>
@@ -3222,8 +3218,9 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   // booking actually show up here, not just in the old hardcoded lists.
   async function loadAppointmentsForDay(dateObj) {
     setLoadingAppts(true)
-    const dayStart = new Date(dateObj); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(dateObj); dayEnd.setHours(23,59,59,999)
+    // Bounded by the Hong Kong calendar day, not the staff device's own -
+    // scheduled_at is a real UTC instant.
+    const { start: dayStart, end: dayEnd } = hkDayBounds(dateObj)
     // Only this institution's own bookings - ClinicOps and PractitionerApp
     // represent two different institutions and shouldn't see each other's
     // appointments just because they happen to share the same database.
@@ -3235,7 +3232,10 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
 
     const realRows = (data||[]).map(a => ({
       id: a.id, scheduledAt: a.scheduled_at,
-      time: new Date(a.scheduled_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit',hour12:false}),
+      // Hong Kong wall-clock time, not the staff device's own - this
+      // "time" feeds the switch-doctor and reschedule availability checks
+      // below, not just the display.
+      time: hkHHMM(a.scheduled_at),
       name: a.patients?.full_name || 'Unknown patient',
       medsaId: a.patients?.medsa_id || null,
       type: a.appointment_type || 'Consultation',
@@ -3336,16 +3336,21 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
     const original = appts[index]
 
     if (updated.doctor && updated.doctor !== original.doctor) {
-      const apptDay = original.scheduledAt ? new Date(original.scheduledAt) : selectedDay
-      const dayOfWeek = apptDay.getDay()
+      // hkParts, not .getDay()/toLocaleTimeString - original.scheduledAt
+      // is a real UTC instant, and reading it back in the device's own
+      // local timezone (rather than Hong Kong's) was the real reason this
+      // check could pass or fail incorrectly for staff testing from
+      // outside Hong Kong, even though the check itself looked right.
+      const hkAppt = original.scheduledAt ? hkParts(original.scheduledAt) : hkParts(selectedDay)
+      const dayOfWeek = hkAppt.dayOfWeek
+      const dayLabel = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek]
       const { data: avail } = await supabase.from('doctor_availability').select('*')
         .eq('doctor_name', updated.doctor).eq('institution_source','practitioner').eq('day_of_week', dayOfWeek).maybeSingle()
-      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s. Pick a different doctor or time.` }
-      const [h,m] = original.time.split(':').map(Number)
-      const apptMinutes = h*60+(m||0)
+      if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${dayLabel}s. Pick a different doctor or time.` }
+      const apptMinutes = hkAppt.hour*60 + hkAppt.minute
       const [startH,startM] = (avail.start_time||'09:00').split(':').map(Number)
       const [endH,endM] = (avail.end_time||'17:00').split(':').map(Number)
-      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${apptDay.toLocaleDateString('en-HK',{weekday:'long'})}s - ${original.time} is outside that. Pick a different doctor or time.` }
+      if (apptMinutes < startH*60+startM || apptMinutes >= endH*60+endM) return { ok:false, error:`${updated.doctor} only works ${avail.start_time?.slice(0,5)}-${avail.end_time?.slice(0,5)} on ${dayLabel}s - ${original.time} is outside that. Pick a different doctor or time.` }
       if (original.id) {
         const { data: clash } = await supabase.from('appointments').select('id')
           .eq('doctor_name', updated.doctor).eq('institution_source','practitioner')
@@ -3379,9 +3384,12 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
     }
 
     if (updated.time && updated.time !== original.time) {
-      const scheduledAt = new Date(original.scheduledAt)
+      // updated.time is a Hong Kong time - hkWallTimeToUTC, not local
+      // setHours, keeps it anchored to the same real day and timezone
+      // regardless of the staff device's own.
+      const p = hkParts(original.scheduledAt)
       const [h,m] = updated.time.split(':').map(Number)
-      scheduledAt.setHours(h||9, m||0, 0, 0)
+      const scheduledAt = hkWallTimeToUTC(p.year, p.month, p.day, h||9, m||0)
       const { data: clash } = await supabase.from('appointments').select('id')
         .eq('doctor_name', original.doctor).eq('institution_source','practitioner')
         .eq('scheduled_at', scheduledAt.toISOString()).neq('status','cancelled').neq('id', original.id).maybeSingle()
