@@ -365,14 +365,27 @@ function PlanManager({ company }) {
 // claims processed. Same insurance_plans table, same adjudication engine,
 // deliberately smaller form.
 const COVERAGE_RULE_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+const NETWORK_TYPES = [['any_licensed','Any licensed clinic/hospital'],['panel_only','Panel providers only'],['hong_kong_only','Hong Kong only'],['asia_pacific','Asia-Pacific'],['worldwide','Worldwide']]
+const PRE_EXISTING_POLICIES = [['excluded','Excluded permanently'],['covered_after_waiting','Covered after waiting period'],['covered','Covered from day one']]
+const EMPTY_FORM = {
+  plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
+  overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
+  pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
+  policy_document_path:'',
+}
 function CoverageRulesManager({ company }) {
   const [plans,setPlans]=useState([])
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+  const [form,setForm]=useState(EMPTY_FORM)
   const [customCategory,setCustomCategory]=useState('')
+  const [docFile,setDocFile]=useState(null)
+  const [uploadingDoc,setUploadingDoc]=useState(false)
+  const [parsingDoc,setParsingDoc]=useState(false)
+  const [docError,setDocError]=useState(null)
+  const [autoFilledNote,setAutoFilledNote]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -383,38 +396,137 @@ function CoverageRulesManager({ company }) {
   useEffect(() => { load() }, [])
 
   function toggleCategory(cat) {
-    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+    setForm(f => {
+      const has = f.covered_categories.includes(cat)
+      const covered_categories = has ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat]
+      const category_limits = {...f.category_limits}
+      if (has) delete category_limits[cat]
+      else category_limits[cat] = category_limits[cat] || { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
+      return { ...f, covered_categories, category_limits }
+    })
+  }
+  function updateCategoryLimit(cat, key, value) {
+    setForm(f => ({ ...f, category_limits: { ...f.category_limits, [cat]: { ...f.category_limits[cat], [key]: value } } }))
   }
   function addCustomCategory() {
     const val = customCategory.trim()
     if (!val || form.covered_categories.includes(val)) return
-    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
+    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val], category_limits: { ...f.category_limits, [val]: { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false } } }))
     setCustomCategory('')
   }
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setForm(EMPTY_FORM)
+    setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
   }
   function startEdit(plan) {
     setEditingId(plan.id)
+    const category_limits = {}
+    for (const cat of (plan.covered_categories||[])) {
+      const stored = (plan.category_limits||{})[cat] || {}
+      category_limits[cat] = {
+        annual_limit_hkd: stored.annual_limit_hkd!=null ? String(stored.annual_limit_hkd) : '',
+        per_visit_limit_hkd: stored.per_visit_limit_hkd!=null ? String(stored.per_visit_limit_hkd) : '',
+        requires_preauth: !!stored.requires_preauth, requires_referral: !!stored.requires_referral,
+      }
+    }
     setForm({
       plan_name: plan.plan_name||'', copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
       annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
       covered_categories: plan.covered_categories||[],
+      overall_annual_limit_hkd: plan.overall_annual_limit_hkd!=null ? String(plan.overall_annual_limit_hkd) : '',
+      room_board_daily_limit_hkd: plan.room_board_daily_limit_hkd!=null ? String(plan.room_board_daily_limit_hkd) : '',
+      network_type: plan.network_type||'', waiting_period_days: plan.waiting_period_days!=null ? String(plan.waiting_period_days) : '',
+      pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
+      preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
+      category_limits, policy_document_path: plan.policy_document_path||'',
     })
+    setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
+  }
+
+  async function handleUploadDoc() {
+    if (!docFile) return
+    setUploadingDoc(true); setDocError(null); setAutoFilledNote(null)
+    try {
+      const path = `coverage-rules/${company.id}/${Date.now()}-${docFile.name}`
+      const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, docFile)
+      if (upErr) throw upErr
+      setForm(f => ({ ...f, policy_document_path: path }))
+      setParsingDoc(true)
+      const res = await fetch('/api/insurer/parse_plan_document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentPath: path }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Could not read this document')
+      const e = json.extracted
+      setForm(f => {
+        const category_limits = {...f.category_limits}
+        const covered_categories = [...f.covered_categories]
+        for (const cl of (e.category_limits||[])) {
+          if (!covered_categories.includes(cl.category)) covered_categories.push(cl.category)
+          category_limits[cl.category] = {
+            annual_limit_hkd: cl.annual_limit_hkd!=null ? String(cl.annual_limit_hkd) : (category_limits[cl.category]?.annual_limit_hkd||''),
+            per_visit_limit_hkd: cl.per_visit_limit_hkd!=null ? String(cl.per_visit_limit_hkd) : (category_limits[cl.category]?.per_visit_limit_hkd||''),
+            requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
+          }
+        }
+        for (const cat of (e.covered_categories||[])) {
+          if (!covered_categories.includes(cat)) covered_categories.push(cat)
+          if (!category_limits[cat]) category_limits[cat] = { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
+        }
+        return {
+          ...f,
+          plan_name: e.plan_name || f.plan_name,
+          copay_rate: e.copay_rate_pct!=null ? String(e.copay_rate_pct) : f.copay_rate,
+          annual_deductible_hkd: e.annual_deductible_hkd!=null ? String(e.annual_deductible_hkd) : f.annual_deductible_hkd,
+          overall_annual_limit_hkd: e.overall_annual_limit_hkd!=null ? String(e.overall_annual_limit_hkd) : f.overall_annual_limit_hkd,
+          room_board_daily_limit_hkd: e.room_board_daily_limit_hkd!=null ? String(e.room_board_daily_limit_hkd) : f.room_board_daily_limit_hkd,
+          network_type: e.network_type || f.network_type,
+          waiting_period_days: e.waiting_period_days!=null ? String(e.waiting_period_days) : f.waiting_period_days,
+          pre_existing_condition_policy: e.pre_existing_condition_policy || f.pre_existing_condition_policy,
+          preauth_threshold_hkd: e.preauth_threshold_hkd!=null ? String(e.preauth_threshold_hkd) : f.preauth_threshold_hkd,
+          covered_categories, category_limits,
+        }
+      })
+      setAutoFilledNote('Filled in from your document - review every field before saving, nothing here was applied automatically.')
+    } catch (e) {
+      setDocError(e.message)
+    } finally {
+      setUploadingDoc(false); setParsingDoc(false)
+    }
   }
 
   async function handleSubmit() {
     if (!form.plan_name.trim()) return
     setSaving(true)
+    const category_limits = {}
+    for (const cat of form.covered_categories) {
+      const cl = form.category_limits[cat]
+      if (!cl) continue
+      category_limits[cat] = {
+        annual_limit_hkd: cl.annual_limit_hkd!=='' ? parseFloat(cl.annual_limit_hkd) : null,
+        per_visit_limit_hkd: cl.per_visit_limit_hkd!=='' ? parseFloat(cl.per_visit_limit_hkd) : null,
+        requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
+      }
+    }
     const payload = {
       plan_name: form.plan_name.trim(),
       copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
       annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
       covered_categories: form.covered_categories,
+      overall_annual_limit_hkd: form.overall_annual_limit_hkd!=='' ? parseFloat(form.overall_annual_limit_hkd) : null,
+      room_board_daily_limit_hkd: form.room_board_daily_limit_hkd!=='' ? parseFloat(form.room_board_daily_limit_hkd) : null,
+      network_type: form.network_type || null,
+      waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
+      pre_existing_condition_policy: form.pre_existing_condition_policy || null,
+      preauth_threshold_hkd: form.preauth_threshold_hkd!=='' ? parseFloat(form.preauth_threshold_hkd) : null,
+      category_limits,
+      policy_document_path: form.policy_document_path || null,
+      policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
     }
     if (editingId) {
       await supabase.from('insurance_plans').update(payload).eq('id', editingId)
@@ -425,7 +537,7 @@ function CoverageRulesManager({ company }) {
       })
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setForm(EMPTY_FORM); setDocFile(null); setAutoFilledNote(null)
     load()
   }
 
@@ -447,11 +559,30 @@ function CoverageRulesManager({ company }) {
             {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
           </div>
           <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set - claims won\'t match against this plan'}</div>
+          {(p.overall_annual_limit_hkd||p.network_type||p.waiting_period_days!=null)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>
+            {p.overall_annual_limit_hkd&&`HK$${Number(p.overall_annual_limit_hkd).toLocaleString()} annual max`}
+            {p.network_type&&`${p.overall_annual_limit_hkd?' · ':''}${NETWORK_TYPES.find(n=>n[0]===p.network_type)?.[1]||p.network_type}`}
+            {p.waiting_period_days!=null&&`${(p.overall_annual_limit_hkd||p.network_type)?' · ':''}${p.waiting_period_days}d waiting period`}
+          </div>}
+          {p.policy_document_path&&<div style={{fontSize:'11px',color:C.blue,marginTop:'4px',cursor:'pointer'}} onClick={async()=>{const {data}=await supabase.storage.from('policy-contracts').createSignedUrl(p.policy_document_path,300);if(data?.signedUrl)window.open(data.signedUrl,'_blank')}}>📄 View uploaded policy document</div>}
         </Card>
       ))}
       {creating&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan':'New plan'}</div>
+
+          <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',marginBottom:'14px'}}>
+            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>✨ Auto-fill from your policy document</div>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px',lineHeight:1.5}}>Upload the real plan/policy document (PDF or a clear photo) and every field below gets proposed from it - review and edit before saving, nothing is applied automatically.</div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>setDocFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
+              <Btn variant="navy" style={{flexShrink:0}} onClick={handleUploadDoc} disabled={!docFile||uploadingDoc||parsingDoc}>{uploadingDoc?'Uploading…':parsingDoc?'Reading…':'Upload & fill'}</Btn>
+            </div>
+            {docError&&<div style={{fontSize:'11px',color:C.red,marginTop:'8px'}}>{docError}</div>}
+            {autoFilledNote&&<div style={{fontSize:'11px',color:C.green,marginTop:'8px'}}>{autoFilledNote}</div>}
+            {form.policy_document_path&&!docError&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Document on file - will be saved with this plan.</div>}
+          </div>
+
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Standard Outpatient"/>
@@ -488,6 +619,69 @@ function CoverageRulesManager({ company }) {
               </div>
             ))}
           </div>}
+
+          {/* Per-category sub-limits - the single biggest lever for
+              calculation accuracy: a real HK medical plan almost never
+              covers every category at the same rate/cap (e.g. unlimited
+              hospitalisation but a capped physiotherapy allowance), so a
+              flat plan-wide copay+deductible alone under-models most real
+              policies. */}
+          {form.covered_categories.length>0&&<>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Per-category limits (optional - leave blank for uncapped)</div>
+            {form.covered_categories.map(cat=>{
+              const cl = form.category_limits[cat] || { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
+              return (
+                <div key={cat} style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+                  <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>{cat}</div>
+                  <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+                    <input type="number" value={cl.annual_limit_hkd} onChange={e=>updateCategoryLimit(cat,'annual_limit_hkd',e.target.value)} placeholder="Annual cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+                    <input type="number" value={cl.per_visit_limit_hkd} onChange={e=>updateCategoryLimit(cat,'per_visit_limit_hkd',e.target.value)} placeholder="Per-visit cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+                  </div>
+                  <div style={{display:'flex',gap:'14px'}}>
+                    <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_preauth} onChange={e=>updateCategoryLimit(cat,'requires_preauth',e.target.checked)}/>Needs pre-authorization</label>
+                    <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_referral} onChange={e=>updateCategoryLimit(cat,'requires_referral',e.target.checked)}/>Needs doctor referral</label>
+                  </div>
+                </div>
+              )
+            })}
+          </>}
+
+          <div style={{fontSize:'12px',color:C.textSub,margin:'14px 0 6px'}}>Overall plan limits</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Overall annual limit (HK$)</div>
+              <input type="number" value={form.overall_annual_limit_hkd} onChange={e=>setForm(f=>({...f,overall_annual_limit_hkd:e.target.value}))} placeholder="e.g. 2000000" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Room & board (HK$/day)</div>
+              <input type="number" value={form.room_board_daily_limit_hkd} onChange={e=>setForm(f=>({...f,room_board_daily_limit_hkd:e.target.value}))} placeholder="e.g. 1500" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$)</div>
+            <input type="number" value={form.preauth_threshold_hkd} onChange={e=>setForm(f=>({...f,preauth_threshold_hkd:e.target.value}))} placeholder="e.g. 5000 - claims over this need review before auto-settling" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+          </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Network</div>
+              <select value={form.network_type} onChange={e=>setForm(f=>({...f,network_type:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+                <option value="">Not set</option>
+                {NETWORK_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+              </select>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Waiting period (days)</div>
+              <input type="number" value={form.waiting_period_days} onChange={e=>setForm(f=>({...f,waiting_period_days:e.target.value}))} placeholder="e.g. 30" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+          </div>
+          <div style={{marginBottom:'14px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-existing conditions</div>
+            <select value={form.pre_existing_condition_policy} onChange={e=>setForm(f=>({...f,pre_existing_condition_policy:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+              <option value="">Not set</option>
+              {PRE_EXISTING_POLICIES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
             <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name.trim()}>{saving?'Saving…':editingId?'Save changes':'Register plan'}</Btn>
