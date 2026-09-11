@@ -1467,7 +1467,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
         </div>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name, patient.medsaId)}>◈ Video call</Btn>
+          {patient.consultType==='video'&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name, patient.medsaId)}>◈ Video call</Btn>}
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
@@ -3335,6 +3335,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       doctor: a.doctor_name || 'Unassigned',
       department: a.department || 'Internal Medicine',
       status: a.status || 'confirmed',
+      consultType: a.consult_type || 'in-person',
     }))
 
     const isToday = dayStart.toDateString() === new Date().toDateString()

@@ -1250,7 +1250,7 @@ function PatientQueueActionModal({ patient, onClose, onGoToConsultation, onStart
         </div>
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName, patient.patientMedsaId)}>◈ Video call</Btn>
+          {patient.consultType==='video'&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.patientName, patient.patientMedsaId)}>◈ Video call</Btn>}
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           <Btn variant="primary" style={{width:'100%'}} onClick={onGoToConsultation}>📋 Go to full consultation</Btn>
         </div>}
@@ -6899,7 +6899,7 @@ export default function ClinicOpsApp() {
       const queueDayEnd = new Date(); queueDayEnd.setHours(23,59,59,999)
       const { data: queueRows } = await supabase
         .from('clinic_queue')
-        .select('*, patients(medsa_id), appointments(scheduled_at)')
+        .select('*, patients(medsa_id), appointments(scheduled_at, consult_type)')
         .eq('institution_id', institutionId)
         .gte('checked_in_at', queueDayStart.toISOString())
         .lte('checked_in_at', queueDayEnd.toISOString())
@@ -6927,6 +6927,7 @@ export default function ClinicOpsApp() {
         // falling back to a same-name match.
         appointmentId: r.appointment_id || null,
         appointmentTime: r.appointments?.scheduled_at ? new Date(r.appointments.scheduled_at).getTime() : null,
+        consultType: r.appointments?.consult_type || 'in-person',
         department: r.department || 'All departments',
         status: r.status,
         checkinNote: r.checkin_note || null,
