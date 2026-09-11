@@ -1295,18 +1295,15 @@ function PatientSearchScreen({ role, liveData={}, autoOpenLog=false, autoOpenRec
 }
 
 // ── SCHEDULE ──────────────────────────────────────────────────────────────────
-// ── DOCTOR VIDEO CALL (mirrors patient-side VideoCallModal) ────────────────
-function DoctorVideoCallModal({ patientName, onClose }) {
-  if (!patientName) return null
-  return (
-    <div style={{position:'fixed',inset:0,background:'#1a1a1a',zIndex:400,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff'}}>
-      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'8px'}}>Video call (demo)</div>
-      <div style={{width:96,height:96,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700,marginBottom:'16px'}}>{patientName[0]}</div>
-      <div style={{fontSize:'18px',fontWeight:600,marginBottom:'6px'}}>{patientName}</div>
-      <div style={{fontSize:'13px',opacity:0.6,marginBottom:'40px'}}>Calling…</div>
-      <div onClick={onClose} style={{width:56,height:56,borderRadius:'50%',background:C.red,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:'20px'}}>✕</div>
-    </div>
-  )
+// ── DOCTOR VIDEO CALL — real, working call via Jitsi Meet's public server,
+// same mechanism ClinicOps uses (was a fake "Calling…" placeholder here
+// before - not an actual call). Opens in a real new browser tab rather
+// than a full-screen in-app modal, so a doctor can log the consultation
+// while the call is still going instead of it covering the whole app.
+function startVideoCall(patientName, roomId) {
+  if (!patientName) return
+  const roomName = `medsa-${(roomId||patientName).toString().replace(/[^a-zA-Z0-9]/g,'')}-${new Date().toISOString().slice(0,10)}`
+  window.open(`https://meet.jit.si/${roomName}#config.prejoinPageEnabled=false&userInfo.displayName=%22Doctor%22`, '_blank', 'noopener')
 }
 
 // ── PATIENT ACTION MODAL — from the doctor's daily to-do list ──────────────
@@ -1470,7 +1467,7 @@ function PatientTodoActionModal({ patient, onClose, doctorLabel, onStartCall, on
         </div>}
 
         {!mode&&<div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name)}>◈ Video call</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onStartCall(patient.name, patient.medsaId)}>◈ Video call</Btn>
           <Btn style={{width:'100%'}} onClick={()=>setMode('message')}>✉ Message patient</Btn>
           {onSwitchDoctor&&<Btn style={{width:'100%'}} onClick={()=>setMode('switch')}>⇄ Switch doctor</Btn>}
           {onBookFollowup&&<Btn style={{width:'100%'}} onClick={()=>setMode('followup')}>+ Book follow-up</Btn>}
@@ -3386,7 +3383,6 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
   }
 
   const [activeTodoPatient,setActiveTodoPatient]=useState(null)
-  const [callingPatientName,setCallingPatientName]=useState(null)
   const [activeReceptionAppt,setActiveReceptionAppt]=useState(null)
   const [deptDoctors,setDeptDoctors]=useState([])
   const [deptHours,setDeptHours]=useState({}) // doctorName -> {day: row}
@@ -3611,7 +3607,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         doctorLabel={myName}
         role={role}
         doctorName={doctorName}
-        onStartCall={(name)=>{setCallingPatientName(name);setActiveTodoPatient(null)}}
+        onStartCall={(name, medsaId)=>{startVideoCall(name, medsaId);setActiveTodoPatient(null)}}
         onGoToFullDiagnosis={()=>{setActiveTodoPatient(null);onGoToFullDiagnosis&&onGoToFullDiagnosis()}}
         onViewFullRecord={()=>{setActiveTodoPatient(null);onViewFullRecord&&onViewFullRecord()}}
         onSwitchDoctor={async(newDoctorName)=>{
@@ -3673,7 +3669,6 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
           loadAppointmentsForDay(selectedDay)
         }}
       />
-      <DoctorVideoCallModal patientName={callingPatientName} onClose={()=>setCallingPatientName(null)}/>
       <NewAppointmentModal open={showNewApptModal} onClose={()=>setShowNewApptModal(false)} onBooked={()=>loadAppointmentsForDay(selectedDay)}/>
     </div>
   )
