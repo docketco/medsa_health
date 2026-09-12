@@ -3524,13 +3524,19 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
 
   async function handleLinkPlan() {
     if (!linkSelectedPlan) return
+    // Policy number is required, not optional - a patient could otherwise
+    // save a plan with nothing to actually identify their policy, then
+    // reasonably believe they're "linked" when there's no real proof on
+    // file at all. It's also exactly what a roster/API-verified insurer's
+    // claim check needs to have anything to check against later.
+    if (!linkPolicyNumber.trim()) { setLinkError(isEn?'Enter your policy number.':'請輸入您的保單編號。'); return }
     setLinking(true); setLinkError(null)
     const medsaId = patient?.medsa_id
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setLinkError(isEn?'Could not find your patient record.':'找不到您的病人記錄。'); setLinking(false); return }
     const { error } = await supabase.from('agent_policies').insert({
       patient_id: patientRow.id, plan_id: linkSelectedPlan.id, plan_name: linkSelectedPlan.plan_name,
-      policy_number: linkPolicyNumber.trim()||null, status: 'active', start_date: new Date().toISOString().slice(0,10),
+      policy_number: linkPolicyNumber.trim(), status: 'active', start_date: new Date().toISOString().slice(0,10),
     })
     setLinking(false)
     if (error) { setLinkError(error.message); return }
@@ -3730,12 +3736,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               <div><div style={{fontSize:'12px',fontWeight:600}}>{linkSelectedPlan.plan_name}</div><div style={{fontSize:'11px',color:C.textMuted}}>{linkSelectedPlan.company_name}</div></div>
               <span onClick={()=>setLinkSelectedPlan(null)} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{isEn?'Change':'更改'}</span>
             </div>
-            <input value={linkPolicyNumber} onChange={e=>setLinkPolicyNumber(e.target.value)} placeholder={isEn?'Your policy number (optional)':'保單編號(選填)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
+            <input value={linkPolicyNumber} onChange={e=>setLinkPolicyNumber(e.target.value)} placeholder={isEn?'Your policy number (required)':'保單編號(必填)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
           </>}
           {linkError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{linkError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setShowLinkForm(false);setLinkSearch('');setLinkResults([]);setLinkSelectedPlan(null);setLinkPolicyNumber('');setLinkError(null)}}>{isEn?'Cancel':'取消'}</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={handleLinkPlan} disabled={!linkSelectedPlan||linking}>{linking?(isEn?'Adding…':'新增中…'):(isEn?'Add policy':'新增保單')}</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleLinkPlan} disabled={!linkSelectedPlan||!linkPolicyNumber.trim()||linking}>{linking?(isEn?'Adding…':'新增中…'):(isEn?'Add policy':'新增保單')}</Btn>
           </div>
         </Card>}
       </div>
