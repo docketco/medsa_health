@@ -5574,6 +5574,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
                 <Badge text={m.fullyCovered?'Fully covered':'Partial'} type={m.fullyCovered?'ok':'due'}/>
               </div>
+              {/* Roster/API-resolved plans share one link per patient+insurer,
+                  so this card looks identical whether it's currently backed
+                  by a policy number just checked or one left over from an
+                  earlier, unrelated check - showing the real number on file
+                  makes a stale link visible before billing, not just
+                  discoverable afterward from the copay math. */}
+              {m.policyNumber&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>Currently linked to policy: <strong>{m.policyNumber}</strong></div>}
               {m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
             </Card>
           ))}
