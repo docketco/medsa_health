@@ -1,8 +1,26 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Component } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import { supabase } from '../../lib/supabase'
 import { parseCSV } from '../../lib/csvImport'
+
+// A crash while RENDERING (as opposed to a data-fetch error, which
+// AgentClaimView already catches itself) used to unmount the whole
+// claim-detail tree with zero visible trace - from a tester's
+// perspective that looks exactly like "I clicked a claim and it just
+// went back to the list," with nothing in the UI ever explaining why.
+// Scoped to just this one screen so a crash here can't take down the
+// rest of the portal.
+class ClaimDetailErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(error) { return { error } }
+  render() {
+    if (this.state.error) {
+      return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.red}}>Something went wrong showing this claim: {this.state.error.message || String(this.state.error)}</div>
+    }
+    return this.props.children
+  }
+}
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -1706,7 +1724,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
-        {screen==='claim-detail'&&<AgentClaimView claimRef={openClaimRef}/>}
+        {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
