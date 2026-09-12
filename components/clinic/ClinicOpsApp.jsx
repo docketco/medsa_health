@@ -5330,7 +5330,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!billingRecord) return
     setAddingPlan(true)
     const { error } = await supabase.from('agent_policies').insert({
-      patient_id: billingRecord.patient_id, plan_id: plan.id, status: 'active',
+      patient_id: billingRecord.patient_id, plan_id: plan.id, status: 'active', plan_name: plan.plan_name,
     })
     if (error) {
       alert(`Could not link this plan: ${error.message}`)
