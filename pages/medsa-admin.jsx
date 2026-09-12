@@ -1568,6 +1568,69 @@ function QaToolsTab() {
       </div>
       <SponsorshipTester/>
       <VideoConsultTester/>
+      <ClaimsPluginTester/>
+    </div>
+  )
+}
+
+// Same shape as VideoConsultTester - toggles the claims plug-in paid
+// add-on directly (patient-uploaded unverified receipts pushed into an
+// insurer's own system), bypassing a real Stripe charge for testing.
+function ClaimsPluginTester() {
+  const [query,setQuery]=useState('')
+  const [results,setResults]=useState([])
+  const [searching,setSearching]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function search() {
+    if (!query.trim()) return
+    setSearching(true)
+    const { data } = await supabase.from('insurance_companies')
+      .select('id, name, claims_plugin_enabled, claims_plugin_expires_at, claims_plugin_price_hkd')
+      .ilike('name', `%${query}%`).order('name').limit(20)
+    setResults(data||[])
+    setSearching(false)
+  }
+
+  async function setClaimsPlugin(company, enable) {
+    setSaving(company.id); setNotice(null)
+    const payload = enable
+      ? { claims_plugin_enabled: true, claims_plugin_expires_at: (() => { const d=new Date(); d.setFullYear(d.getFullYear()+1); return d.toISOString().slice(0,10) })(), claims_plugin_price_hkd: 4800 }
+      : { claims_plugin_enabled: false, claims_plugin_expires_at: null, claims_plugin_price_hkd: null, claims_webhook_url: null, claims_webhook_key: null }
+    const { error } = await supabase.from('insurance_companies').update(payload).eq('id', company.id)
+    setSaving(false)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setNotice(enable ? `${company.name} can now use the claims plug-in (until ${payload.claims_plugin_expires_at}).` : `${company.name}'s claims plug-in disabled.`)
+    setResults(results.map(r=>r.id===company.id?{...r,...payload}:r))
+  }
+
+  return (
+    <div style={{background:'#fff',borderRadius:'10px',padding:'16px',border:`0.5px solid ${C.border}`,marginBottom:'16px'}}>
+      <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Claims plug-in tester</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>
+        Enables (or disables) the claims plug-in for an insurer directly - lets them push patient-uploaded unverified receipts into their own system (e.g. their own MediConCen connection). Available to any insurer tier, partnered or TPA-only.
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder="Search insurer name…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px'}}/>
+        <button onClick={search} disabled={searching} style={{padding:'0 16px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{searching?'…':'Search'}</button>
+      </div>
+      {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'10px'}}>{notice}</div>}
+      {results.length>0&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+        {results.map(company=>{
+          const today = new Date().toISOString().slice(0,10)
+          const active = company.claims_plugin_enabled && (!company.claims_plugin_expires_at || company.claims_plugin_expires_at>=today)
+          return (
+            <div key={company.id} style={{padding:'10px 12px',borderBottom:`0.5px solid ${C.border}`,display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{company.name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{active?`Enabled until ${company.claims_plugin_expires_at}`:'Not enabled'}</div>
+              </div>
+              <button onClick={()=>setClaimsPlugin(company, !active)} disabled={saving===company.id} style={{flexShrink:0,padding:'7px 12px',border:active?`0.5px solid ${C.border}`:'none',borderRadius:'8px',background:active?'#fff':C.green,color:active?C.text:'#fff',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving===company.id?'…':active?'Disable':'Enable'}</button>
+            </div>
+          )
+        })}
+      </div>}
     </div>
   )
 }
