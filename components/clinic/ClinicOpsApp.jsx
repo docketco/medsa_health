@@ -5349,7 +5349,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     }
     const { error } = await supabase.from('agent_policies').insert({
       patient_id: billingRecord.patient_id, plan_id: result.resolvedPolicyNumber,
-      policy_number: policyLookupNumber.trim(), status: 'active',
+      policy_number: policyLookupNumber.trim(), status: 'active', plan_name: result.planName,
     })
     setCheckingPolicyLookup(false)
     if (error) { setPolicyLookupError(error.message); return }
