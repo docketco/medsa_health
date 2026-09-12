@@ -725,6 +725,26 @@ function PolicyVerificationManager({ company }) {
   const [addingOne,setAddingOne]=useState(false)
   const [savingOne,setSavingOne]=useState(false)
   const [oneForm,setOneForm]=useState(EMPTY_ROSTER_ROW)
+  // Same automatch idea as the patient app's own "add your policy" search
+  // (sanitizeMCHKDisplayData / searchLinkPlans) - a free-typed plan_name
+  // here is easy to get slightly wrong (typo, different casing) since
+  // nothing checks it against anything, unlike the patient-side flow
+  // which only ever lets you pick a real plan row. This doesn't create a
+  // relational link (insurer_policy_roster.plan_name is still plain text,
+  // no plan_id column exists to point at), just removes the typo risk by
+  // suggesting this insurer's own already-registered plan names.
+  const [ownPlans,setOwnPlans]=useState([])
+  const [showPlanSuggestions,setShowPlanSuggestions]=useState(false)
+  useEffect(() => {
+    async function loadOwnPlans() {
+      const { data } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', company.name).eq('status','active')
+      setOwnPlans(data||[])
+    }
+    if (addingOne) loadOwnPlans()
+  }, [addingOne, company.name])
+  const planSuggestions = oneForm.plan_name.trim()
+    ? ownPlans.filter(p => p.plan_name.toLowerCase().includes(oneForm.plan_name.trim().toLowerCase()))
+    : ownPlans
 
   async function load() {
     setLoading(true)
@@ -849,9 +869,16 @@ function PolicyVerificationManager({ company }) {
               <input value={oneForm.policy_number} onChange={e=>setOneForm(f=>({...f,policy_number:e.target.value}))} placeholder="Policy number" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
               <input value={oneForm.hkid} onChange={e=>setOneForm(f=>({...f,hkid:e.target.value}))} placeholder="HKID (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
             </div>
-            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px',position:'relative'}}>
               <input value={oneForm.patient_name} onChange={e=>setOneForm(f=>({...f,patient_name:e.target.value}))} placeholder="Policyholder name" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-              <input value={oneForm.plan_name} onChange={e=>setOneForm(f=>({...f,plan_name:e.target.value}))} placeholder="Plan name (optional)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <div style={{flex:1,position:'relative'}}>
+                <input value={oneForm.plan_name} onChange={e=>setOneForm(f=>({...f,plan_name:e.target.value}))} onFocus={()=>setShowPlanSuggestions(true)} onBlur={()=>setTimeout(()=>setShowPlanSuggestions(false),150)} placeholder="Plan name (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+                {showPlanSuggestions&&planSuggestions.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:5,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:'160px',overflowY:'auto',boxShadow:'0 2px 8px rgba(0,0,0,0.1)'}}>
+                  {planSuggestions.map(p=>(
+                    <div key={p.id} onMouseDown={()=>{setOneForm(f=>({...f,plan_name:p.plan_name}));setShowPlanSuggestions(false)}} style={{padding:'7px 10px',fontSize:'12px',cursor:'pointer'}}>{p.plan_name}</div>
+                  ))}
+                </div>}
+              </div>
             </div>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>This policy's own terms (optional - leave blank to use your registered plan's defaults)</div>
             <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
