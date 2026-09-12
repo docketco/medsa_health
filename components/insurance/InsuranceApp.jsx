@@ -1137,23 +1137,34 @@ export function AgentClaimView({ claimRef }) {
   const [attachments,setAttachments]=useState([])
   const [loading,setLoading]=useState(true)
   const [notFound,setNotFound]=useState(false)
+  const [loadError,setLoadError]=useState(null)
   const REJECT_REASONS=['Not covered under current plan','Pre-existing condition exclusion','Missing supporting documents','Treatment not pre-authorised','Duplicate claim','Other (specify below)']
 
   useEffect(() => {
     async function load() {
       if (!claimRef) { setLoading(false); setNotFound(true); return }
-      const { data: c } = await supabase.from('insurance_claims')
-        .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name)')
-        .eq('claim_ref', claimRef).maybeSingle()
-      if (!c) { setLoading(false); setNotFound(true); return }
-      setClaim(c)
-      const { data: rec } = await supabase.from('medical_records').select('*').eq('insurance_claim_id', c.id).maybeSingle()
-      setMedicalRecord(rec||null)
-      if (rec) {
-        const { data: atts } = await supabase.from('medical_record_attachments').select('*').eq('medical_record_id', rec.id)
-        setAttachments(atts||[])
+      try {
+        const { data: c, error: claimErr } = await supabase.from('insurance_claims')
+          .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name)')
+          .eq('claim_ref', claimRef).maybeSingle()
+        // A real query error (e.g. a column anon can't select) used to
+        // read identically to "no claim" - !c is true either way - which
+        // made an actual bug invisible as a silent, generic "not found"
+        // with no way to tell it apart from a genuinely wrong link.
+        if (claimErr) throw claimErr
+        if (!c) { setLoading(false); setNotFound(true); return }
+        setClaim(c)
+        const { data: rec } = await supabase.from('medical_records').select('*').eq('insurance_claim_id', c.id).maybeSingle()
+        setMedicalRecord(rec||null)
+        if (rec) {
+          const { data: atts } = await supabase.from('medical_record_attachments').select('*').eq('medical_record_id', rec.id)
+          setAttachments(atts||[])
+        }
+      } catch (err) {
+        setLoadError(err.message || 'Could not load this claim.')
+      } finally {
+        setLoading(false)
       }
-      setLoading(false)
     }
     load()
   }, [claimRef])
@@ -1176,6 +1187,7 @@ export function AgentClaimView({ claimRef }) {
   }
 
   if (loading) return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>Loading...</div>
+  if (loadError) return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.red}}>Could not load this claim: {loadError}</div>
   if (notFound) return <div style={{background:C.beige,flex:1,padding:'32px 20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No claim found for this link.</div>
 
   if(submitted) return (
