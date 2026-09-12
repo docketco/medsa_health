@@ -4983,6 +4983,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [policyLookupCompany,setPolicyLookupCompany]=useState('')
   const [policyLookupNumber,setPolicyLookupNumber]=useState('')
   const [policyLookupError,setPolicyLookupError]=useState(null)
+  const [policyLookupSuccess,setPolicyLookupSuccess]=useState(null)
   const [checkingPolicyLookup,setCheckingPolicyLookup]=useState(false)
   // Real bug this fixes: this field required typing an insurer's exact,
   // case-sensitive registered name by hand ("Test Insurer Co" vs the
@@ -5354,7 +5355,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   // copay/deductible/limit terms, those are what actually get used.
   async function handleCheckByPolicyNumber() {
     if (!billingRecord || !policyLookupCompany.trim() || !policyLookupNumber.trim()) return
-    setCheckingPolicyLookup(true); setPolicyLookupError(null)
+    setCheckingPolicyLookup(true); setPolicyLookupError(null); setPolicyLookupSuccess(null)
     const adapter = getInsuranceAdapter(policyLookupCompany.trim())
     const result = await adapter.checkEligibility({
       patientId: billingRecord.patient_id, clinicId: institutionId,
@@ -5366,13 +5367,29 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       setCheckingPolicyLookup(false)
       return
     }
-    const { error } = await supabase.from('agent_policies').insert({
-      patient_id: billingRecord.patient_id, plan_id: result.resolvedPolicyNumber,
-      policy_number: policyLookupNumber.trim(), status: 'active', plan_name: result.planName,
-    })
+    // Every patient's link to one insurer via this flow shares a single
+    // fallback plan row - re-checking a different real number for the
+    // same patient+insurer used to always INSERT a new row rather than
+    // update the existing one, silently piling up duplicate "active"
+    // links (harmless to coverage math, since checkEligibility always
+    // re-verifies whatever was just typed - but confusing clutter, and
+    // exactly what made this flow look like it was silently doing
+    // nothing on a retry).
+    const { data: existingLink } = await supabase.from('agent_policies')
+      .select('id').eq('patient_id', billingRecord.patient_id).eq('plan_id', result.resolvedPolicyNumber).eq('status', 'active').maybeSingle()
+    const { error } = existingLink
+      ? await supabase.from('agent_policies').update({ policy_number: policyLookupNumber.trim(), plan_name: result.planName }).eq('id', existingLink.id)
+      : await supabase.from('agent_policies').insert({
+          patient_id: billingRecord.patient_id, plan_id: result.resolvedPolicyNumber,
+          policy_number: policyLookupNumber.trim(), status: 'active', plan_name: result.planName,
+        })
     setCheckingPolicyLookup(false)
     if (error) { setPolicyLookupError(error.message); return }
-    setPolicyLookupOpen(false); setPolicyLookupCompany(''); setPolicyLookupNumber('')
+    // Real feedback instead of the box just silently closing - that
+    // silence was exactly why a successful check looked identical to
+    // nothing happening at all.
+    setPolicyLookupSuccess(`Verified ${policyLookupNumber.trim()} - added below.`)
+    setPolicyLookupCompany(''); setPolicyLookupNumber('')
     setEligiblePlansLoading(true)
     const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
     setEligiblePlans(matches)
@@ -5545,8 +5562,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
             <input value={policyLookupNumber} onChange={e=>setPolicyLookupNumber(e.target.value)} placeholder="Policy number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
             {policyLookupError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{policyLookupError}</div>}
+            {policyLookupSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ {policyLookupSuccess}</div>}
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1}} onClick={()=>{setPolicyLookupOpen(false);setPolicyLookupCompany('');setPolicyLookupNumber('');setPolicyLookupError(null)}}>Cancel</Btn>
+              <Btn style={{flex:1}} onClick={()=>{setPolicyLookupOpen(false);setPolicyLookupCompany('');setPolicyLookupNumber('');setPolicyLookupError(null);setPolicyLookupSuccess(null)}}>{policyLookupSuccess?'Done':'Cancel'}</Btn>
               <Btn variant="primary" style={{flex:1}} onClick={handleCheckByPolicyNumber} disabled={checkingPolicyLookup||!policyLookupCompany.trim()||!policyLookupNumber.trim()}>{checkingPolicyLookup?'Checking…':'Check & link'}</Btn>
             </div>
           </div>}
