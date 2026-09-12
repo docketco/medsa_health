@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
-import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
+import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { broadcastIncomingCall } from '../../lib/videoCallSignal'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -3273,12 +3273,16 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
 
   // Real upcoming dates starting today, not hardcoded date-string keys
   // like 'Mon 23' that never corresponded to any actual current date.
+  // "Today" (i=0) has to be Hong Kong's today, not the device's - same
+  // root cause and same fix as ClinicOps's own Schedule day-picker and
+  // the patient app's booking/Calendar screens: a device running outside
+  // Hong Kong (or with a misconfigured clock) would otherwise disagree
+  // with every other screen about which day is "today".
   const DAY_LABELS_SHORT=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
-  const dayOptions = Array.from({length:5}, (_,i) => {
-    const d = new Date()
-    d.setDate(d.getDate()+i)
-    return d
-  })
+  const todayHkForDayOptions = hkParts(new Date())
+  const dayOptions = Array.from({length:5}, (_,i) =>
+    new Date(todayHkForDayOptions.year, todayHkForDayOptions.month-1, todayHkForDayOptions.day+i)
+  )
   const [selectedDay,setSelectedDay]=useState(dayOptions[0])
 
   // Demo data only shown on today's view, keyed by real weekday so it
@@ -3343,7 +3347,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       consultType: a.consult_type || 'in-person',
     }))
 
-    const isToday = dayStart.toDateString() === new Date().toDateString()
+    const isToday = isSameHkDay(dayStart, new Date())
     const weekdayShort = DAY_LABELS_SHORT[dateObj.getDay()]
     const demoRowsRaw = isToday ? (demoScheduleByWeekday[weekdayShort] || []) : []
     // If a patient already has a real booked appointment today, don't

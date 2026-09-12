@@ -4482,15 +4482,26 @@ function WorkingHoursScreen() {
 }
 
 function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError, clinicQueues=[] }) {
-  const [selectedDay,setSelectedDay]=useState(() => new Date())
+  // "Today" here has to be Hong Kong's today, not the staff device's own -
+  // same root cause and same fix as the patient app's booking day-picker
+  // and Calendar (see PatientApp.jsx's DAYS/CalendarScreen). Staff running
+  // ClinicOps from outside Hong Kong (or with a misconfigured device
+  // clock) would otherwise see a different "today" here than the patient
+  // app shows, which is exactly what made a same-day video consultation
+  // look like it wasn't on Schedule at all - it was there, just under a
+  // different day than the one this screen defaulted to. hkParts reads
+  // Hong Kong's real current date; the local Date constructor then makes
+  // every later local getter (.getFullYear(), .getDate(), .getDay(),
+  // toDateInputValue below) return that Hong Kong date back regardless of
+  // the device's own timezone.
+  const todayHkForSchedule = hkParts(new Date())
+  const [selectedDay,setSelectedDay]=useState(() => new Date(todayHkForSchedule.year, todayHkForSchedule.month-1, todayHkForSchedule.day))
   // Real current week (today + 6 days ahead) instead of a fixed hardcoded
   // month/week - this is what makes the schedule genuinely testable
   // against real time.
-  const weekDates = Array.from({length:7}, (_,i) => {
-    const d = new Date()
-    d.setDate(d.getDate()+i)
-    return d
-  })
+  const weekDates = Array.from({length:7}, (_,i) =>
+    new Date(todayHkForSchedule.year, todayHkForSchedule.month-1, todayHkForSchedule.day+i)
+  )
   // Local YYYY-MM-DD for <input type="date"> - toISOString() would shift
   // the date across a UTC day boundary depending on the browser's
   // timezone, which is exactly the kind of off-by-one this app has been
@@ -7024,7 +7035,7 @@ export default function ClinicOpsApp() {
     if (!institutionId) return
     const { start: dayStart, end: dayEnd } = hkDayBounds(new Date())
     const { data: videoAppts } = await supabase.from('appointments')
-      .select('id, patient_id, patients(full_name)')
+      .select('id, patient_id, scheduled_at, patients(full_name)')
       .eq('institution_source', 'clinic_ops').eq('consult_type', 'video')
       .neq('status', 'cancelled').neq('status', 'completed')
       .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
@@ -7035,7 +7046,13 @@ export default function ClinicOpsApp() {
     const alreadyQueued = new Set((existingRows||[]).map(r => r.appointment_id))
     for (const appt of videoAppts) {
       if (alreadyQueued.has(appt.id) || !appt.patients?.full_name) continue
-      await handleCheckedIn({ id: appt.patient_id, full_name: appt.patients.full_name }, false, undefined, true, null, appt.id)
+      // Auto-checked-in silently, whenever this screen happens to load -
+      // recording that moment as "checked in at" would show a check-in
+      // time with no relation to the actual visit (often well before it,
+      // sometimes after). Backdated/postdated to the appointment's own
+      // scheduled time instead, which is also what queuePosition already
+      // sorts by for any entry that has one.
+      await handleCheckedIn({ id: appt.patient_id, full_name: appt.patients.full_name }, false, undefined, true, null, appt.id, null, appt.scheduled_at)
     }
   }
 
@@ -7052,7 +7069,7 @@ export default function ClinicOpsApp() {
     if (screen==='mypatients' || screen==='overview') ensureVideoCheckIns().then(loadQueueAndPrescriptions)
   }, [screen])
 
-  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null, explicitDoctor=null) {
+  async function handleCheckedIn(patient, force=false, explicitQueueId=undefined, consentAnswer=true, checkinNote=null, targetAppointmentId=null, explicitDoctor=null, checkedInAtOverride=null) {
     // If we know exactly which appointment is being checked in (the
     // Schedule page always knows this), only treat THAT appointment as
     // active - otherwise a patient with two appointments the same day
@@ -7161,6 +7178,7 @@ export default function ClinicOpsApp() {
       room: '-',
       department: matchingAppt?.department || explicitDoctor?.department || (staffMember?.role==='doctor' ? staffMember.department : null) || 'All departments',
       status: 'waiting',
+      ...(checkedInAtOverride ? { checked_in_at: checkedInAtOverride } : {}),
     }).select().single()
 
     if (error || !data) {
@@ -7208,7 +7226,7 @@ export default function ClinicOpsApp() {
       // the queue. .select() here so a blocked write comes back as
       // 0 rows instead of looking identical to a successful one.
       const { data: updatedAppt, error: apptUpdateErr } = await supabase.from('appointments')
-        .update({ status: 'checked_in', checked_in_at: new Date().toISOString() })
+        .update({ status: 'checked_in', checked_in_at: checkedInAtOverride || new Date().toISOString() })
         .eq('id', matchingAppt.id).select().maybeSingle()
       if (apptUpdateErr || !updatedAppt) {
         setCheckInError(`${patient.full_name} was added to the queue, but the appointment couldn't be marked checked in${apptUpdateErr?.message ? ' (' + apptUpdateErr.message + ')' : ''} - it may still show as Confirmed on the Schedule page. This usually means a database permission is blocking staff from updating appointments.`)

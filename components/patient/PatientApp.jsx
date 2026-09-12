@@ -904,7 +904,42 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
   return y + 10
 }
 
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle }) {
+// Same real PDF the Records tab's own "Download" button produces (the
+// exact clinic receipt when the visit was billed, via lib/receiptPdf.js's
+// shared generator - the same document a clinic would download for it -
+// or the simpler record-only summary when it wasn't). Pulled out so
+// Calendar's "View record" deep link can trigger the real document
+// immediately on arrival, rather than only being reachable by a second
+// click once already on this screen.
+async function downloadRecordPdf(raw, transactions, patient) {
+  const receipt = transactions.find(t => t.medical_record_id === raw.id)
+  if (receipt) {
+    await fetchAndDownloadConsultationReceipt(supabase, receipt)
+    return
+  }
+  const { jsPDF } = await import('jspdf')
+  const doc = new jsPDF()
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Patient Record`
+  drawPdfHeader(doc, pageWidth, subtitle)
+  drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
+    title: raw.title || 'Consultation',
+    dateInstitution: `${raw.date_of_record ? new Date(raw.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : ''}${raw.institutions?.name ? ` · ${raw.institutions.name}` : ''}`,
+    details: [['Diagnosis', raw.diagnosis||'—'], ['Notes', raw.notes||'—'], ['Department', raw.department||'—']],
+    receiptText: null,
+    subtitle,
+  })
+  drawPdfFooter(doc, pageWidth, pageHeight)
+  const blob = doc.output('blob')
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${(raw.title||'Record').replace(/[^a-z0-9]/gi,'_')}.pdf`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
@@ -1147,6 +1182,22 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const hasLiveData = records.length > 0
   const [tab,setTab]=useState('all')
   const [expanded,setExpanded]=useState(null)
+
+  // Deep-link from Calendar's "View record" - land straight on this
+  // record (expanded) and trigger its real PDF, the same download the
+  // button below produces, instead of a second click being needed. Waits
+  // for `records` to actually contain it (this screen's own data can
+  // still be loading on first navigation) rather than firing once and
+  // giving up.
+  useEffect(() => {
+    if (!deepLinkRecordId) return
+    const raw = records.find(r => r.id === deepLinkRecordId)
+    if (!raw) return
+    setTab('all')
+    setExpanded(deepLinkRecordId)
+    downloadRecordPdf(raw, transactions, patient)
+    onConsumeDeepLink?.()
+  }, [deepLinkRecordId, records])
 
   // Real vaccination records, grouped by vaccine name into the same shape
   // the UI already renders - was previously a hardcoded array of 5
@@ -2330,7 +2381,7 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
   )
 }
 
-function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload }) {
+function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload, onViewRecord }) {
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
@@ -2344,7 +2395,6 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   // cancelled appointments, so nothing extra is needed to "reopen" it.
   const [activeAppt,setActiveAppt]=useState(null)
   const [cancelling,setCancelling]=useState(false)
-  const [viewingRecord,setViewingRecord]=useState(null)
 
   // Best match for a completed appointment's consultation record.
   // appointment_id (set going forward - see ClinicOpsApp's consultation
@@ -2510,30 +2560,19 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
           {activeAppt.status==='completed'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>{'✓'} {isEn?'This visit is complete.':'此診症已完成。'}</div>}
           {activeAppt.status==='completed'&&(() => {
             const rec = findRecordForAppt(activeAppt)
+            // Goes straight to the Records tab with this exact record open
+            // and its real PDF triggered - not a second, simplified
+            // knockoff view living here in Calendar. Records is the one
+            // real source for a consultation's PDF (same document a
+            // clinic would download for it), so "view the record" means
+            // landing there, not reading a duplicate summary inline.
             return rec
-              ? <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{setViewingRecord(rec);setActiveAppt(null)}}>{isEn?'View record':'查看記錄'}</Btn>
+              ? <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{onViewRecord?.(rec.id);setActiveAppt(null)}}>{isEn?'View record':'查看記錄'}</Btn>
               : <div style={{fontSize:'11px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No consultation record on file yet.':'暫無此次診症的記錄。'}</div>
           })()}
           {activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
           {activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
-        </div>
-      </div>}
-      {viewingRecord&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setViewingRecord(null)}>
-        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,margin:'0 16px',padding:'24px',maxHeight:'80vh',overflowY:'auto'}}>
-          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>{viewingRecord.title||(isEn?'Consultation':'診症')}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>{viewingRecord.doctor_name||'—'} · {viewingRecord.date_of_record?new Date(viewingRecord.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''}</div>
-          {viewingRecord.diagnosis&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Diagnosis':'診斷'}</div><div style={{fontSize:'13px',fontWeight:500}}>{viewingRecord.diagnosis}</div></div>}
-          {viewingRecord.notes&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Notes':'備註'}</div><div style={{fontSize:'13px'}}>{viewingRecord.notes}</div></div>}
-          {viewingRecord.line_items&&viewingRecord.line_items.length>0&&<div style={{marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Receipt':'收據'}</div>
-            {viewingRecord.line_items.map((li,i)=>(
-              <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span>{li.description||li.name}</span><span>HK${li.amount??li.price}</span></div>
-            ))}
-            {viewingRecord.total_fee!=null&&<div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:600,borderTop:`0.5px solid ${C.border}`,marginTop:'4px',paddingTop:'4px'}}><span>{isEn?'Total':'總計'}</span><span>HK${viewingRecord.total_fee}</span></div>}
-          </div>}
-          {!viewingRecord.diagnosis&&!viewingRecord.notes&&(!viewingRecord.line_items||viewingRecord.line_items.length===0)&&<div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No further detail on file.':'暫無其他詳情。'}</div>}
-          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setViewingRecord(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
@@ -4659,6 +4698,10 @@ export default function PatientApp({ liveData={} }) {
   }, [])
 
   const [screen,setScreen]=useState('home')
+  // Calendar's "View record" deep-links into Records: land on the real
+  // record (expanded, real PDF triggered) instead of a second, weaker
+  // summary living inside Calendar itself.
+  const [deepLinkRecordId,setDeepLinkRecordId]=useState(null)
   const [lang,setLang]=useState('en') // 'en' | 'zh-TW' | 'zh-CN'
   const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
@@ -4791,9 +4834,9 @@ export default function PatientApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
