@@ -896,23 +896,68 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
   const [filter,setFilter]=useState('All')
   const [claims,setClaims]=useState([])
   const [loading,setLoading]=useState(true)
+  const [pluginEnabled,setPluginEnabled]=useState(false)
+  const [pluginConfigured,setPluginConfigured]=useState(false)
+  const [pushingId,setPushingId]=useState(null)
+  const [pushNotice,setPushNotice]=useState(null)
+  const [showPluginSettings,setShowPluginSettings]=useState(false)
 
+  async function load() {
+    setLoading(true)
+    // Scoped to the logged-in company, matching PlanManager's own
+    // company_name filter above - this dashboard is a single insurer's
+    // view, not a cross-insurer one.
+    const { data } = await supabase.from('insurance_claims')
+      .select('*, patients(full_name), insurance_plans!inner(plan_name, company_name)')
+      .eq('insurance_plans.company_name', company.name)
+      .order('submitted_at', { ascending: false })
+      .limit(50)
+    setClaims(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.name])
+
+  // Claims plug-in is a paid add-on (see medsa-admin's Claims plug-in
+  // tester) - available to any insurer tier, partnered or TPA-only, that
+  // wants patient-uploaded unverified receipts pushed straight into their
+  // own system (e.g. their own MediConCen connection) instead of only
+  // being read here.
   useEffect(() => {
-    async function load() {
-      setLoading(true)
-      // Scoped to the logged-in company, matching PlanManager's own
-      // company_name filter above - this dashboard is a single insurer's
-      // view, not a cross-insurer one.
-      const { data } = await supabase.from('insurance_claims')
-        .select('*, patients(full_name), insurance_plans!inner(plan_name, company_name)')
-        .eq('insurance_plans.company_name', company.name)
-        .order('submitted_at', { ascending: false })
-        .limit(50)
-      setClaims(data||[])
-      setLoading(false)
+    async function loadPlugin() {
+      const { data } = await supabase.from('insurance_companies')
+        .select('claims_plugin_enabled, claims_webhook_url').eq('id', company.id).maybeSingle()
+      setPluginEnabled(!!data?.claims_plugin_enabled)
+      setPluginConfigured(!!data?.claims_webhook_url)
     }
-    load()
-  }, [company.name])
+    if (company.id) loadPlugin()
+  }, [company.id])
+
+  async function handlePushClaim(claimId) {
+    setPushingId(claimId); setPushNotice(null)
+    try {
+      const res = await fetch('/api/insurer/push_claim', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ companyId: company.id, claimId }),
+      })
+      const data = await res.json()
+      setPushNotice(res.ok ? { id: claimId, ok: true, text: 'Pushed to your system.' } : { id: claimId, ok: false, text: data.error || 'Push failed.' })
+    } catch {
+      setPushNotice({ id: claimId, ok: false, text: 'Could not reach Medsa - try again.' })
+    }
+    setPushingId(null)
+  }
+
+  function exportCsv() {
+    const header = ['Claim ref','Patient','Plan','Amount HKD','Status','Verification flag','Submitted at']
+    const rows = filtered.map(c => [c.claim_ref, c.patients?.full_name||'', c.insurance_plans?.plan_name||'', c.amount??'', c.status, c.verification_flag||'', c.submitted_at||''])
+    const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Claims-${company.name}-${new Date().toISOString().slice(0,10)}.csv`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 
   const statusMeta = {
     approved: {label:'Approved', type:'ok'},
@@ -921,39 +966,47 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
     pending_review: {label:'Pending review', type:'due'},
     settled: {label:'Settled', type:'ok'},
   }
-  const sourceLabel = { clinic_ops:'ClinicOps', external_clinic:'TPA portal', api_client:'Insurer API' }
+  const sourceLabel = { clinic_ops:'ClinicOps', external_clinic:'TPA portal', api_client:'Insurer API', patient_unverified_upload:'Patient upload' }
   const filtered = filter==='All' ? claims
     : filter==='Pending' ? claims.filter(c=>c.status==='pending_review')
     : filter==='Approved' ? claims.filter(c=>['approved','partially_approved','settled'].includes(c.status))
-    : claims.filter(c=>c.status==='rejected')
+    : filter==='Rejected' ? claims.filter(c=>c.status==='rejected')
+    : claims.filter(c=>c.verification_flag==='patient_unverified_receipt')
   const counts = {
     Pending: claims.filter(c=>c.status==='pending_review').length,
     Approved: claims.filter(c=>['approved','partially_approved','settled'].includes(c.status)).length,
     Rejected: claims.filter(c=>c.status==='rejected').length,
+    Unverified: claims.filter(c=>c.verification_flag==='patient_unverified_receipt').length,
   }
 
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
-        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}><strong>Claims flow:</strong> Submitted via ClinicOps, the TPA portal, or the direct API - all land here. Tap a claim to approve or reject it, same decision an agent makes from their emailed link.</div>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}><strong>Claims flow:</strong> Submitted via ClinicOps, the TPA portal, the direct API, or a patient's own unverified upload - all land here. Tap a claim to approve or reject it, same decision an agent makes from their emailed link.</div>
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',padding:'16px 16px 0'}}>
-        {[{label:'Pending',value:counts.Pending,color:C.amber,bg:C.amberLight},{label:'Approved',value:counts.Approved,color:C.green,bg:C.greenLight},{label:'Rejected',value:counts.Rejected,color:C.red,bg:C.redLight}].map(s=>(
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'8px',padding:'16px 16px 0'}}>
+        {[{label:'Pending',value:counts.Pending,color:C.amber,bg:C.amberLight},{label:'Approved',value:counts.Approved,color:C.green,bg:C.greenLight},{label:'Rejected',value:counts.Rejected,color:C.red,bg:C.redLight},{label:'Unverified',value:counts.Unverified,color:C.navy,bg:C.navyLight}].map(s=>(
           <div key={s.label} style={{background:s.bg,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px',textAlign:'center'}}>
             <div style={{fontSize:'22px',fontWeight:700,color:s.color}}>{s.value}</div>
             <div style={{fontSize:'11px',color:C.textSub}}>{s.label}</div>
           </div>
         ))}
       </div>
-      <div style={{display:'flex',gap:'6px',padding:'12px 16px'}}>
-        {['All','Pending','Approved','Rejected'].map(f=>(
+      <div style={{display:'flex',gap:'6px',padding:'12px 16px',alignItems:'center',flexWrap:'wrap'}}>
+        {['All','Pending','Approved','Rejected','Unverified'].map(f=>(
           <div key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:'5px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:filter===f?C.green:C.card,color:filter===f?'#fff':C.textSub,border:`0.5px solid ${filter===f?C.green:C.border}`}}>{f}</div>
         ))}
+        <div onClick={exportCsv} style={{marginLeft:'auto',fontSize:'12px',color:C.navy,fontWeight:600,cursor:'pointer'}}>⭳ Export CSV</div>
       </div>
+      {pluginEnabled&&<div style={{margin:'0 16px 12px'}}>
+        <div onClick={()=>setShowPluginSettings(s=>!s)} style={{fontSize:'12px',color:C.navy,fontWeight:600,cursor:'pointer'}}>{showPluginSettings?'▾':'▸'} Claims plug-in {pluginConfigured?'(connected)':'(not connected yet)'}</div>
+        {showPluginSettings&&<ClaimsPluginSettings companyId={company.id}/>}
+      </div>}
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No claims here yet.</div>}
       {filtered.map((c)=>{
         const meta = statusMeta[c.status] || {label:c.status, type:'due'}
+        const isUnverifiedReceipt = c.verification_flag==='patient_unverified_receipt'
         return (
           <Card key={c.id} onClick={()=>onOpenClaim(c.claim_ref)} style={{padding:'14px 16px',cursor:'pointer'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
@@ -962,17 +1015,64 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
                 <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name}</div>
               </div>
               <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>HK${c.amount}</div>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>{c.amount!=null?`HK$${c.amount}`:'—'}</div>
                 <Badge text={meta.label} type={meta.type}/>
               </div>
             </div>
+            {isUnverifiedReceipt&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'6px'}}>⚠ Patient-uploaded, not verified by Medsa</div>}
             <div style={{fontSize:'11px',color:C.textMuted}}>
               Submitted {c.submitted_at?new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'} · {c.claim_ref} · via {sourceLabel[c.source_type]||'ClinicOps'}
             </div>
+            {isUnverifiedReceipt&&pluginEnabled&&pluginConfigured&&<div style={{marginTop:'8px'}} onClick={e=>e.stopPropagation()}>
+              <Btn style={{fontSize:'12px'}} onClick={()=>handlePushClaim(c.id)} disabled={pushingId===c.id}>{pushingId===c.id?'Pushing…':'Push to your system'}</Btn>
+              {pushNotice?.id===c.id&&<div style={{fontSize:'11px',marginTop:'4px',color:pushNotice.ok?C.green:C.red}}>{pushNotice.text}</div>}
+            </div>}
           </Card>
         )
       })}
     </div>
+  )
+}
+
+// Webhook config for the claims plug-in - same shape as PolicyVerificationManager's
+// API-mode form, since it's the same underlying pattern (a locked-down
+// credential the browser can't read back, written via a service-role API
+// route). Only rendered once claims_plugin_enabled is true for this company.
+function ClaimsPluginSettings({ companyId }) {
+  const [url,setUrl]=useState('')
+  const [keyInput,setKeyInput]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function save() {
+    setSaving(true); setNotice(null)
+    try {
+      const res = await fetch('/api/insurer/set_claims_plugin_config', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ companyId, claimsWebhookUrl: url, claimsWebhookKey: keyInput }),
+      })
+      const data = await res.json()
+      setNotice(res.ok ? 'Saved.' : (data.error || 'Could not save.'))
+    } catch {
+      setNotice('Could not reach Medsa - try again.')
+    }
+    setSaving(false)
+  }
+
+  return (
+    <Card style={{padding:'14px 16px',marginTop:'8px'}}>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Medsa POSTs each unverified receipt (claim details + short-lived signed document links) to your endpoint when you tap "Push to your system" on it.</div>
+      <div style={{marginBottom:'8px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Your endpoint URL</div>
+        <input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://your-system.example.com/claims-inbox" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
+      <div style={{marginBottom:'10px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>API key (leave blank to keep the current one)</div>
+        <input type="password" value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="Sent as a Bearer token" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
+      {notice&&<div style={{fontSize:'12px',color:notice==='Saved.'?C.green:C.red,marginBottom:'8px'}}>{notice}</div>}
+      <Btn variant="navy" style={{width:'100%'}} onClick={save} disabled={saving||!url.trim()}>{saving?'Saving…':'Save endpoint'}</Btn>
+    </Card>
   )
 }
 
@@ -1056,7 +1156,7 @@ export function AgentClaimView({ claimRef }) {
           <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,textAlign:'right',maxWidth:'60%'}}>{v||'—'}</span></div>
         ))}
       </Card>
-      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {claim.verification_flag==='referral_required'?'referral required, not yet approved':'treating practitioner not verified'}</div>}
+      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {claim.verification_flag==='referral_required'?'referral required, not yet approved':claim.verification_flag==='patient_unverified_receipt'?'patient-uploaded receipt, not verified by Medsa - confirm independently before approving':'treating practitioner not verified'}</div>}
       <SecLabel>Clinical notes</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         {medicalRecord ? <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{medicalRecord.diagnosis&&<div style={{fontWeight:600,marginBottom:'4px'}}>{medicalRecord.diagnosis}</div>}{medicalRecord.notes||'No notes on file.'}</div>

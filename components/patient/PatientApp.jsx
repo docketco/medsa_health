@@ -2330,7 +2330,7 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
   )
 }
 
-function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCancelled, onReload }) {
+function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload }) {
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
@@ -2344,6 +2344,18 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
   // cancelled appointments, so nothing extra is needed to "reopen" it.
   const [activeAppt,setActiveAppt]=useState(null)
   const [cancelling,setCancelling]=useState(false)
+  const [viewingRecord,setViewingRecord]=useState(null)
+
+  // Best match for a completed appointment's consultation record.
+  // appointment_id (set going forward - see ClinicOpsApp's consultation
+  // save) is exact; older rows written before that column existed fall
+  // back to same Hong Kong day + same patient, since medical_records has
+  // no other link back to the appointment that produced it.
+  function findRecordForAppt(appt) {
+    const byId = records.find(r => r.appointment_id === appt.id)
+    if (byId) return byId
+    return records.find(r => r.date_of_record && isSameHkDay(new Date(`${r.date_of_record}T12:00:00+08:00`), new Date(appt.scheduled_at)))
+  }
   const [cancelledMsg,setCancelledMsg]=useState(null)
 
   async function handleCancelAppointment(appt) {
@@ -2496,9 +2508,32 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
           <div style={{fontSize:'16px',fontWeight:700,marginBottom:'6px'}}>{activeAppt.practitioners?.full_name ? 'Dr '+activeAppt.practitioners.full_name.split(',')[0] : (activeAppt.doctor_name || activeAppt.appointment_type)}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px'}}>{new Date(activeAppt.scheduled_at).toLocaleString('en-HK',{dateStyle:'full',timeStyle:'short',timeZone:'Asia/Hong_Kong'})}</div>
           {activeAppt.status==='completed'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>{'✓'} {isEn?'This visit is complete.':'此診症已完成。'}</div>}
+          {activeAppt.status==='completed'&&(() => {
+            const rec = findRecordForAppt(activeAppt)
+            return rec
+              ? <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{setViewingRecord(rec);setActiveAppt(null)}}>{isEn?'View record':'查看記錄'}</Btn>
+              : <div style={{fontSize:'11px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No consultation record on file yet.':'暫無此次診症的記錄。'}</div>
+          })()}
           {activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
           {activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
+        </div>
+      </div>}
+      {viewingRecord&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setViewingRecord(null)}>
+        <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:380,margin:'0 16px',padding:'24px',maxHeight:'80vh',overflowY:'auto'}}>
+          <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>{viewingRecord.title||(isEn?'Consultation':'診症')}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>{viewingRecord.doctor_name||'—'} · {viewingRecord.date_of_record?new Date(viewingRecord.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''}</div>
+          {viewingRecord.diagnosis&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Diagnosis':'診斷'}</div><div style={{fontSize:'13px',fontWeight:500}}>{viewingRecord.diagnosis}</div></div>}
+          {viewingRecord.notes&&<div style={{marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Notes':'備註'}</div><div style={{fontSize:'13px'}}>{viewingRecord.notes}</div></div>}
+          {viewingRecord.line_items&&viewingRecord.line_items.length>0&&<div style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Receipt':'收據'}</div>
+            {viewingRecord.line_items.map((li,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'3px 0'}}><span>{li.description||li.name}</span><span>HK${li.amount??li.price}</span></div>
+            ))}
+            {viewingRecord.total_fee!=null&&<div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:600,borderTop:`0.5px solid ${C.border}`,marginTop:'4px',paddingTop:'4px'}}><span>{isEn?'Total':'總計'}</span><span>HK${viewingRecord.total_fee}</span></div>}
+          </div>}
+          {!viewingRecord.diagnosis&&!viewingRecord.notes&&(!viewingRecord.line_items||viewingRecord.line_items.length===0)&&<div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No further detail on file.':'暫無其他詳情。'}</div>}
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setViewingRecord(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
@@ -2658,9 +2693,14 @@ function MyInquiriesTab({ isEn, patient={} }) {
 // picks real candidates (the patient's own visits, referrals, and
 // documents) but the patient always chooses which ones apply - the
 // checklist stays a guide, not an auto-selector.
-function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
+function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null }) {
   const hasLiveClaims = claims.length > 0
   const [claimType,setClaimType]=useState(null)
+  const [submitSelectedIds,setSubmitSelectedIds]=useState(new Set())
+  const [submitAmount,setSubmitAmount]=useState('')
+  const [submitting,setSubmitting]=useState(false)
+  const [submitError,setSubmitError]=useState(null)
+  const [submitSuccess,setSubmitSuccess]=useState(null)
   const [checklist,setChecklist]=useState({})
   const [bundleReady,setBundleReady]=useState(false)
   const [selections,setSelections]=useState({}) // checklistKey -> [{type,id,label,sublabel,claimedFor}]
@@ -2684,6 +2724,48 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
   }
 
   useEffect(() => { loadClaimDocs() }, [patient?.id])
+
+  // Real claim submission - separate from the "prepare a claim package"
+  // checklist below (which stays a self-serve PDF cover sheet the patient
+  // takes to their insurer directly). This creates an actual insurance_claims
+  // row against the patient's own active policy, purely informational: no
+  // amount is calculated or adjudicated, Medsa never verifies the uploaded
+  // receipt itself, and no coverage math or payout runs against it. The
+  // point is only to flag it and put it in front of the insurer (or, for a
+  // claims-plugin insurer, forward it into their own system) so THEY can
+  // verify it independently - e.g. against their own MediConCen connection -
+  // same "flag and route, don't adjudicate" boundary already drawn for
+  // out-of-network claims elsewhere in this app.
+  async function toggleSubmitCandidate(id) {
+    setSubmitSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  async function handleSubmitUnverifiedClaim() {
+    if (!activePolicy?.plan_id || submitSelectedIds.size===0 || !patient?.id) return
+    setSubmitting(true)
+    setSubmitError(null)
+    const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
+    const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
+      claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
+      claim_type: claimType || 'outpatient', amount: submitAmount.trim() ? Number(submitAmount) : null,
+      status: 'pending_review', submitted_at: new Date().toISOString(),
+      source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
+    }).select().maybeSingle()
+    if (claimErr) { setSubmitError(claimErr.message); setSubmitting(false); return }
+    const ids = Array.from(submitSelectedIds)
+    const { error: linkErr } = await supabase.from('medical_record_attachments')
+      .update({ insurance_claim_id: newClaim.id }).in('id', ids)
+    if (linkErr) { setSubmitError(linkErr.message); setSubmitting(false); return }
+    await loadClaimDocs()
+    setSubmitSelectedIds(new Set())
+    setSubmitAmount('')
+    setSubmitSuccess(claimRef)
+    setSubmitting(false)
+  }
 
   // Real upload for a manual checklist item (e.g. "Consultation receipt")
   // - stores it as a real attachment the same way the Records tab does,
@@ -2859,6 +2941,33 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[] }) {
         </>}
       </div>
       {!hasLiveClaims&&<div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>}
+
+      {/* Submit an unverified receipt for the insurer's own review - a real
+          insurance_claims row, but purely informational: Medsa never checks
+          the receipt or calculates a payout for it, it's only flagged and
+          put in front of the insurer (or their own plugged-in system) to
+          verify independently. Requires an active policy on file (see the
+          "Add your policy" flow above) since a claim has to point at
+          something real. */}
+      <SecLabel>{isEn?'Submit a receipt for review':'提交收據以供審核'}</SecLabel>
+      {!activePolicy&&<div style={{margin:'0 16px 16px',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'Add your policy above first - a claim needs a policy to submit against.':'請先在上方新增您的保單 - 索償需要對應保單。'}</div>}
+      {activePolicy&&<Card style={{padding:'14px 16px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn
+          ?`Upload a receipt in Records first (Records → Upload), then pick it here to submit against ${activePolicy.plan_name}. Medsa flags it as unverified - your insurer checks it independently before anything is approved.`
+          :`請先於「記錄」→「上傳」上傳收據,再於此處選取並提交至${activePolicy.plan_name}。Medsa會將其標記為未經核實 - 您的保險公司將自行核實後才作批核。`}</div>
+        {attachments.filter(a=>!a.insurance_claim_id).length===0
+          ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
+          : attachments.filter(a=>!a.insurance_claim_id).map(a=>(
+            <div key={a.id} onClick={()=>toggleSubmitCandidate(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${submitSelectedIds.has(a.id)?C.green:C.border}`,background:submitSelectedIds.has(a.id)?C.green:'transparent',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0}}>{submitSelectedIds.has(a.id)?'✓':''}</div>
+              <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
+            </div>
+          ))}
+        <input value={submitAmount} onChange={e=>setSubmitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0'}}/>
+        {submitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{submitError}</div>}
+        {submitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${submitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${submitSuccess}。您的保險公司將自行核實。`}</div>}
+        <Btn variant="primary" style={{width:'100%'}} disabled={submitSelectedIds.size===0||submitting} onClick={handleSubmitUnverifiedClaim}>{submitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>
+      </Card>}
 
       {/* Medsa disclaimer */}
       <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
@@ -3705,7 +3814,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient}/>}
 
       {/* ── CLAIMS ── */}
-      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records}/>}
+      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
@@ -4684,7 +4793,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} patient={patient} onCancelled={loadRealData} onReload={loadRealData}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}

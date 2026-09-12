@@ -1835,7 +1835,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
           date_of_record: visitDate, source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
-          doctor_name: staffMember?.name || 'Unknown',
+          doctor_name: staffMember?.name || 'Unknown', appointment_id: queueEntry?.appointmentId || null,
           consultation_started_at: consultationStartedAt, submitted_at: submittedAt,
         })
         if (recErr) throw recErr
