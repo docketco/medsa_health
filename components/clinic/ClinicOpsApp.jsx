@@ -4984,6 +4984,25 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [policyLookupNumber,setPolicyLookupNumber]=useState('')
   const [policyLookupError,setPolicyLookupError]=useState(null)
   const [checkingPolicyLookup,setCheckingPolicyLookup]=useState(false)
+  // Real bug this fixes: this field required typing an insurer's exact,
+  // case-sensitive registered name by hand ("Test Insurer Co" vs the
+  // very natural typo "Test Insurance Co") with zero help - a company
+  // name that doesn't match exactly just silently fails with "not
+  // found", indistinguishable from a genuinely unregistered insurer.
+  // Suggests real registered names as you type instead, same automatch
+  // pattern as the insurer portal's own plan-name field.
+  const [insurerNames,setInsurerNames]=useState([])
+  const [showInsurerSuggestions,setShowInsurerSuggestions]=useState(false)
+  useEffect(() => {
+    async function loadInsurerNames() {
+      const { data } = await supabase.from('insurance_companies').select('name').neq('verification_mode', 'none').not('verification_mode','is',null)
+      setInsurerNames((data||[]).map(c=>c.name))
+    }
+    if (policyLookupOpen) loadInsurerNames()
+  }, [policyLookupOpen])
+  const insurerSuggestions = policyLookupCompany.trim()
+    ? insurerNames.filter(n => n.toLowerCase().includes(policyLookupCompany.trim().toLowerCase()))
+    : insurerNames
   const [treatmentPlans,setTreatmentPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
   const [ledger,setLedger]=useState([])
@@ -5516,7 +5535,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           {!policyLookupOpen&&<div onClick={()=>setPolicyLookupOpen(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer',padding:'10px 0',textAlign:'center'}}>{'+'} Or check by their real policy number</div>}
           {policyLookupOpen&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px',marginBottom:'12px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>For an insurer who's uploaded their real policies to Medsa - no plan needs to already be registered here, Medsa pulls their own coverage terms straight off the policy number.</div>
-            <input value={policyLookupCompany} onChange={e=>setPolicyLookupCompany(e.target.value)} placeholder="Insurer name (exact)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            <div style={{position:'relative',marginBottom:'8px'}}>
+              <input value={policyLookupCompany} onChange={e=>setPolicyLookupCompany(e.target.value)} onFocus={()=>setShowInsurerSuggestions(true)} onBlur={()=>setTimeout(()=>setShowInsurerSuggestions(false),150)} placeholder="Insurer name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+              {showInsurerSuggestions&&insurerSuggestions.length>0&&<div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:5,background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginTop:'4px',maxHeight:'160px',overflowY:'auto',boxShadow:'0 2px 8px rgba(0,0,0,0.1)'}}>
+                {insurerSuggestions.map(n=>(
+                  <div key={n} onMouseDown={()=>{setPolicyLookupCompany(n);setShowInsurerSuggestions(false)}} style={{padding:'7px 10px',fontSize:'12px',cursor:'pointer'}}>{n}</div>
+                ))}
+              </div>}
+            </div>
             <input value={policyLookupNumber} onChange={e=>setPolicyLookupNumber(e.target.value)} placeholder="Policy number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
             {policyLookupError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{policyLookupError}</div>}
             <div style={{display:'flex',gap:'8px'}}>
