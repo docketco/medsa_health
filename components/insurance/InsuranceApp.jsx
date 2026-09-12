@@ -915,7 +915,7 @@ function PolicyVerificationManager({ company }) {
       {displayMode==='api'&&<>
         <SecLabel>Your lookup endpoint</SecLabel>
         <Card style={{padding:'16px'}}>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Medsa POSTs {'{ policyNumber, hkid }'} and expects back JSON with a valid/eligible boolean.</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Medsa POSTs {'{ policyNumber, hkid }'} and expects back JSON with a valid/eligible boolean. Optionally include that policy's own real copayRate (0-1), annualDeductibleHkd, overallAnnualLimitHkd, and categoryLimits - if your system tracks different terms per policy rather than one flat rate, this is how they get used instead of a shared default.</div>
           <div style={{marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Endpoint URL</div>
             <input value={apiUrl} onChange={e=>setApiUrl(e.target.value)} placeholder="https://your-system.example.com/verify" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
