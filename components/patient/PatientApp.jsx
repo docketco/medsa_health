@@ -904,41 +904,6 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
   return y + 10
 }
 
-// Same real PDF the Records tab's own "Download" button produces (the
-// exact clinic receipt when the visit was billed, via lib/receiptPdf.js's
-// shared generator - the same document a clinic would download for it -
-// or the simpler record-only summary when it wasn't). Pulled out so
-// Calendar's "View record" deep link can trigger the real document
-// immediately on arrival, rather than only being reachable by a second
-// click once already on this screen.
-async function downloadRecordPdf(raw, transactions, patient) {
-  const receipt = transactions.find(t => t.medical_record_id === raw.id)
-  if (receipt) {
-    await fetchAndDownloadConsultationReceipt(supabase, receipt)
-    return
-  }
-  const { jsPDF } = await import('jspdf')
-  const doc = new jsPDF()
-  const pageWidth = doc.internal.pageSize.getWidth()
-  const pageHeight = doc.internal.pageSize.getHeight()
-  const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Patient Record`
-  drawPdfHeader(doc, pageWidth, subtitle)
-  drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
-    title: raw.title || 'Consultation',
-    dateInstitution: `${raw.date_of_record ? new Date(raw.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : ''}${raw.institutions?.name ? ` · ${raw.institutions.name}` : ''}`,
-    details: [['Diagnosis', raw.diagnosis||'—'], ['Notes', raw.notes||'—'], ['Department', raw.department||'—']],
-    receiptText: null,
-    subtitle,
-  })
-  drawPdfFooter(doc, pageWidth, pageHeight)
-  const blob = doc.output('blob')
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = `${(raw.title||'Record').replace(/[^a-z0-9]/gi,'_')}.pdf`
-  document.body.appendChild(a); a.click(); document.body.removeChild(a)
-  URL.revokeObjectURL(url)
-}
-
 function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
@@ -1184,18 +1149,17 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [expanded,setExpanded]=useState(null)
 
   // Deep-link from Calendar's "View record" - land straight on this
-  // record (expanded) and trigger its real PDF, the same download the
-  // button below produces, instead of a second click being needed. Waits
-  // for `records` to actually contain it (this screen's own data can
-  // still be loading on first navigation) rather than firing once and
-  // giving up.
+  // record, expanded, with its real "Download" button right there ready
+  // to tap (not auto-triggered - arriving here shouldn't itself start a
+  // download the patient didn't ask for). Waits for `records` to actually
+  // contain it (this screen's own data can still be loading on first
+  // navigation) rather than firing once and giving up.
   useEffect(() => {
     if (!deepLinkRecordId) return
     const raw = records.find(r => r.id === deepLinkRecordId)
     if (!raw) return
     setTab('all')
     setExpanded(deepLinkRecordId)
-    downloadRecordPdf(raw, transactions, patient)
     onConsumeDeepLink?.()
   }, [deepLinkRecordId, records])
 
