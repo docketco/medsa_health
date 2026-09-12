@@ -11,10 +11,20 @@
 //
 // Contract with the insurer's endpoint: POST { policyNumber, hkid },
 // expects back JSON with a `valid` or `eligible` boolean (either name
-// accepted, since real insurer APIs won't agree on naming) and optionally
-// `planName`. An insurer's endpoint being down or slow never hard-fails a
-// real claim - see the try/catch below, same philosophy as every other
-// integration in this app (Twilio, Resend, Stripe) failing soft.
+// accepted, since real insurer APIs won't agree on naming), optionally
+// `planName`, and optionally this exact policy's own real coverage terms
+// - copayRate (0-1, e.g. 0.2 for 20%), annualDeductibleHkd,
+// overallAnnualLimitHkd, categoryLimits (same shape as a roster row's
+// own columns). An insurer's live endpoint is querying their own real
+// policy record - the same source of truth a roster upload is a
+// periodic export of - so it's expected to know a specific policy's own
+// negotiated terms, not just whether it's active; relayed straight
+// through to checkEligibility as coverageOverrides, same as a roster
+// row's coverage columns. Any of these left out just means "use this
+// plan's own default terms", same as an unset roster column. An
+// insurer's endpoint being down or slow never hard-fails a real claim -
+// see the try/catch below, same philosophy as every other integration
+// in this app (Twilio, Resend, Stripe) failing soft.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -51,7 +61,11 @@ export default async function handler(req, res) {
     if (!response.ok) return res.status(200).json({ checked: false, verified: true })
     const json = await response.json()
     const verified = json.valid === true || json.eligible === true
-    return res.status(200).json({ checked: true, verified, planName: json.planName || null })
+    return res.status(200).json({
+      checked: true, verified, planName: json.planName || null,
+      copayRate: json.copayRate ?? null, annualDeductibleHkd: json.annualDeductibleHkd ?? null,
+      overallAnnualLimitHkd: json.overallAnnualLimitHkd ?? null, categoryLimits: json.categoryLimits ?? null,
+    })
   } catch (err) {
     // Network failure/timeout on the insurer's side - not something a
     // real claim should get rejected over.
