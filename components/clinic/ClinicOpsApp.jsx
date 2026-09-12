@@ -5592,6 +5592,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to {selectedEligiblePlan.plan.company_name}
               </div>
               <div style={{fontSize:'12px',color:C.textSub}}>Claim {claimAdjudication.claimId}</div>
+              {/* Without this breakdown, a big visit against a small
+                  annual limit reads as "the deductible ate the whole
+                  amount" - the deductible applied correctly (its own
+                  fixed number), it's the separate annual cap that
+                  actually limited what the insurer paid here. */}
+              {claimAdjudication.deductibleApplied>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
+              {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
             </div>
             <SecLabel>Collect the remaining HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient</SecLabel>
             <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
