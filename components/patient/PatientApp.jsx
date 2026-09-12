@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
-import { hkWallTimeToUTC, hkParts, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
+import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import MedsaLogo from '../shared/MedsaLogo'
