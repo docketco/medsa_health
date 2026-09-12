@@ -713,6 +713,16 @@ const VERIFICATION_MODES = [
 ]
 function PolicyVerificationManager({ company }) {
   const [mode,setMode]=useState('none')
+  // Separate from `mode` (the last actually-saved value) - clicking
+  // "Live lookup API" used to call saveMode('api') immediately, before
+  // the endpoint URL input even existed on screen yet (it only renders
+  // once mode==='api'), so it always failed with "verificationApiUrl is
+  // required" and the mode picker was stuck. Clicking a card now only
+  // switches which section is shown; only the endpoint form's own "Save
+  // endpoint" button (already gated on a non-empty URL) actually saves
+  // API mode. None/Roster still save immediately since they need nothing
+  // else first.
+  const [displayMode,setDisplayMode]=useState('none')
   const [apiUrl,setApiUrl]=useState('')
   const [apiKeyInput,setApiKeyInput]=useState('')
   const [rosterCount,setRosterCount]=useState(0)
@@ -750,6 +760,7 @@ function PolicyVerificationManager({ company }) {
     setLoading(true)
     const { data } = await supabase.from('insurance_companies').select('verification_mode, verification_api_url, roster_updated_at').eq('id', company.id).maybeSingle()
     setMode(data?.verification_mode || 'none')
+    setDisplayMode(data?.verification_mode || 'none')
     setApiUrl(data?.verification_api_url || '')
     setRosterUpdatedAt(data?.roster_updated_at || null)
     const { count } = await supabase.from('insurer_policy_roster').select('id', { count: 'exact', head: true }).eq('insurance_company_id', company.id)
@@ -842,9 +853,16 @@ function PolicyVerificationManager({ company }) {
       </div>
       <SecLabel>How should Medsa verify a policy number?</SecLabel>
       {VERIFICATION_MODES.map(([key,label,desc])=>(
-        <Card key={key} onClick={()=>key!==mode&&saveMode(key)} style={{padding:'14px 16px',cursor:'pointer',...(mode===key?{border:`1.5px solid ${C.navy}`}:{})}}>
+        <Card key={key} onClick={()=>{
+          setDisplayMode(key)
+          // None/Roster need nothing else first, so still save the moment
+          // you pick them. API mode needs a URL typed into the form this
+          // reveals below - that form's own "Save endpoint" button (only
+          // enabled once a URL is entered) is what actually saves it.
+          if (key !== 'api' && key !== mode) saveMode(key)
+        }} style={{padding:'14px 16px',cursor:'pointer',...(displayMode===key?{border:`1.5px solid ${C.navy}`}:{})}}>
           <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'4px'}}>
-            <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${mode===key?C.navy:C.border}`,background:mode===key?C.navy:'transparent',flexShrink:0}}/>
+            <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${displayMode===key?C.navy:C.border}`,background:displayMode===key?C.navy:'transparent',flexShrink:0}}/>
             <div style={{fontSize:'13px',fontWeight:600}}>{label}</div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5,marginLeft:'26px'}}>{desc}</div>
@@ -852,7 +870,7 @@ function PolicyVerificationManager({ company }) {
       ))}
       {notice&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green}}>{notice}</div>}
 
-      {mode==='roster'&&<>
+      {displayMode==='roster'&&<>
         <SecLabel>Your roster</SecLabel>
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{rosterCount>0 ? `${rosterCount} polic${rosterCount===1?'y':'ies'} on file${rosterUpdatedAt?`, last updated ${new Date(rosterUpdatedAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}.` : 'No roster uploaded yet - every claim will be rejected as unverified until one is.'}</div>
@@ -894,7 +912,7 @@ function PolicyVerificationManager({ company }) {
         </Card>
       </>}
 
-      {mode==='api'&&<>
+      {displayMode==='api'&&<>
         <SecLabel>Your lookup endpoint</SecLabel>
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Medsa POSTs {'{ policyNumber, hkid }'} and expects back JSON with a valid/eligible boolean.</div>
