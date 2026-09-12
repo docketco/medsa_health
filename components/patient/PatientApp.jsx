@@ -1766,10 +1766,24 @@ function DoctorsScreen({ isEn, patient={} }) {
   // Real upcoming dates starting today, not a fixed hardcoded month - this
   // is what makes the 48-hour consent window actually testable against
   // the real current time, instead of always landing in the past.
+  //
+  // "Today" (i=0) has to be Hong Kong's today, not the device's - a
+  // patient testing from Canada is often still on their own "yesterday"
+  // by their local clock when it's already tomorrow in Hong Kong (HK is
+  // 12-16 hours ahead of North America). This is exactly how a booking
+  // for "today, 4:30pm" ended up scheduled_at a real Hong Kong day in the
+  // past: hkParts(new Date()) below reads the correct HK calendar date;
+  // new Date(year, month-1, day) then uses the LOCAL Date constructor, so
+  // every later .getFullYear()/.getMonth()/.getDate()/.getDay() read off
+  // this object (handleConfirmBooking, loadAvailability, the confirmation
+  // summary) returns exactly that Hong Kong date back, regardless of the
+  // device's own timezone - unlike building the array from a plain
+  // new Date() and shifting it with setDate(), which starts from
+  // whatever day the device's clock says "today" is.
   const DAY_LABELS=['SUN','MON','TUE','WED','THU','FRI','SAT']
+  const todayHk = hkParts(new Date())
   const DAYS = Array.from({length:5}, (_,i) => {
-    const d = new Date()
-    d.setDate(d.getDate()+i)
+    const d = new Date(todayHk.year, todayHk.month-1, todayHk.day+i)
     return { label: DAY_LABELS[d.getDay()], date: d.getDate(), fullDate: d }
   })
   const [selDay,setSelDay]=useState(DAYS[0].fullDate)
@@ -2380,8 +2394,15 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
     // never actually re-fetched anything.
     onReload?.()
   }
-  const [viewMonth,setViewMonth]=useState(() => { const d=new Date(); d.setDate(1); return d })
-  const [selectedDate,setSelectedDate]=useState(() => new Date())
+  // "Today" for the calendar defaults to Hong Kong's today, not the
+  // device's - same root cause and same fix as the booking day-picker
+  // (see DAYS above): hkParts reads the real HK calendar date, then the
+  // local Date constructor makes every later local getter (.getDate(),
+  // .getMonth(), isSameDay's comparisons) return that HK date back
+  // regardless of the device's own timezone.
+  const todayHkForCalendar = hkParts(new Date())
+  const [viewMonth,setViewMonth]=useState(() => new Date(todayHkForCalendar.year, todayHkForCalendar.month-1, 1))
+  const [selectedDate,setSelectedDate]=useState(() => new Date(todayHkForCalendar.year, todayHkForCalendar.month-1, todayHkForCalendar.day))
 
   function changeMonth(delta) {
     setViewMonth(prev => { const d=new Date(prev); d.setMonth(d.getMonth()+delta); return d })
@@ -2390,7 +2411,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], patient, onCanc
   const monthLabel = viewMonth.toLocaleDateString(isEn?'en-HK':'zh-HK',{month:'long',year:'numeric'})
   const firstWeekday = (viewMonth.getDay()+6)%7 // Monday-first grid
   const daysInMonth = new Date(viewMonth.getFullYear(), viewMonth.getMonth()+1, 0).getDate()
-  const today = new Date()
+  const today = new Date(todayHkForCalendar.year, todayHkForCalendar.month-1, todayHkForCalendar.day)
   const isSameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate()
 
   // Days that have something scheduled - marked with a dot, pulled from
