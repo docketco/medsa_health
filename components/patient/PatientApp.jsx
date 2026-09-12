@@ -1813,6 +1813,7 @@ function DoctorsScreen({ isEn, patient={} }) {
   const [availableSlots,setAvailableSlots]=useState([])
   const [slotsLoading,setSlotsLoading]=useState(true)
   const [dayClosed,setDayClosed]=useState(false)
+  const [slotsLoadError,setSlotsLoadError]=useState(null)
 
   function formatTime12h(timeStr) {
     const [h,m] = timeStr.split(':').map(Number)
@@ -1821,55 +1822,68 @@ function DoctorsScreen({ isEn, patient={} }) {
     return `${h12}:${String(m).padStart(2,'0')}${period}`
   }
 
+  // Wrapped in try/catch/finally - previously any failure partway through
+  // (a network blip, a query erroring) left setSlotsLoading(true) as the
+  // last thing that ran, so the "Loading availability…" spinner spun
+  // forever with no error shown anywhere. Now any failure surfaces a real
+  // message with a retry, and the spinner always resolves one way or the
+  // other.
   async function loadAvailability(doctor, dateObj) {
     setSlotsLoading(true)
     setDayClosed(false)
-    if (!doctor?.institution) {
-      // Specialists outside the two core institutions (TCM, dentist, etc.)
-      // don't yet have admin-configured hours - fall back to a reasonable
-      // fixed default rather than showing nothing at all.
-      setAvailableSlots(['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm'])
-      setSlotsLoading(false)
-      return
-    }
-    const { data: availRow } = await supabase.from('doctor_availability').select('*')
-      .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).eq('day_of_week', dateObj.getDay()).maybeSingle()
+    setSlotsLoadError(null)
+    try {
+      if (!doctor?.institution) {
+        // Specialists outside the two core institutions (TCM, dentist, etc.)
+        // don't yet have admin-configured hours - fall back to a reasonable
+        // fixed default rather than showing nothing at all.
+        setAvailableSlots(['9:00am','9:30am','10:00am','10:30am','11:00am','2:00pm','2:30pm','3:00pm'])
+        return
+      }
+      const { data: availRow, error: availErr } = await supabase.from('doctor_availability').select('*')
+        .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).eq('day_of_week', dateObj.getDay()).maybeSingle()
+      if (availErr) throw availErr
 
-    if (!availRow || availRow.is_off) {
-      setDayClosed(true)
+      if (!availRow || availRow.is_off) {
+        setDayClosed(true)
+        setAvailableSlots([])
+        return
+      }
+
+      // Generate every slot between start and end at the configured duration.
+      const [startH,startM] = availRow.start_time.slice(0,5).split(':').map(Number)
+      const [endH,endM] = availRow.end_time.slice(0,5).split(':').map(Number)
+      const duration = availRow.slot_duration_minutes || 30
+      const slots = []
+      let cur = startH*60+startM
+      const end = endH*60+endM
+      while (cur < end) {
+        slots.push(formatTime12h(`${String(Math.floor(cur/60)).padStart(2,'0')}:${String(cur%60).padStart(2,'0')}`))
+        cur += duration
+      }
+
+      // Exclude times already booked for this doctor on this exact date.
+      // Bounded by the Hong Kong calendar day, and the booked time read back
+      // in Hong Kong wall-clock time - scheduled_at is a real UTC instant,
+      // and reading it apart with the device's own local time (getHours/
+      // getMinutes) silently returns the wrong slot for anyone outside
+      // Hong Kong, both undercounting and overcounting what's actually free.
+      const { start: dayStart, end: dayEnd } = hkDayBounds(dateObj)
+      const { data: existing, error: existingErr } = await supabase.from('appointments').select('scheduled_at')
+        .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).neq('status','cancelled')
+        .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
+      if (existingErr) throw existingErr
+      const bookedTimes = new Set((existing||[]).map(a => formatTime12h(hkHHMM(a.scheduled_at))))
+
+      const finalSlots = slots.filter(s => !bookedTimes.has(s))
+      setAvailableSlots(finalSlots)
+      if (!finalSlots.includes(selTime) && finalSlots.length>0) setSelTime(finalSlots[0])
+    } catch (err) {
+      setSlotsLoadError(err?.message || (isEn ? 'Could not load availability - try again.' : '無法載入可預約時段,請重試。'))
       setAvailableSlots([])
+    } finally {
       setSlotsLoading(false)
-      return
     }
-
-    // Generate every slot between start and end at the configured duration.
-    const [startH,startM] = availRow.start_time.slice(0,5).split(':').map(Number)
-    const [endH,endM] = availRow.end_time.slice(0,5).split(':').map(Number)
-    const duration = availRow.slot_duration_minutes || 30
-    const slots = []
-    let cur = startH*60+startM
-    const end = endH*60+endM
-    while (cur < end) {
-      slots.push(formatTime12h(`${String(Math.floor(cur/60)).padStart(2,'0')}:${String(cur%60).padStart(2,'0')}`))
-      cur += duration
-    }
-
-    // Exclude times already booked for this doctor on this exact date.
-    // Bounded by the Hong Kong calendar day, and the booked time read back
-    // in Hong Kong wall-clock time - scheduled_at is a real UTC instant,
-    // and reading it apart with the device's own local time (getHours/
-    // getMinutes) silently returns the wrong slot for anyone outside
-    // Hong Kong, both undercounting and overcounting what's actually free.
-    const { start: dayStart, end: dayEnd } = hkDayBounds(dateObj)
-    const { data: existing } = await supabase.from('appointments').select('scheduled_at')
-      .eq('doctor_name', doctor.name).eq('institution_source', doctor.institution).neq('status','cancelled')
-      .gte('scheduled_at', dayStart.toISOString()).lte('scheduled_at', dayEnd.toISOString())
-    const bookedTimes = new Set((existing||[]).map(a => formatTime12h(hkHHMM(a.scheduled_at))))
-
-    const finalSlots = slots.filter(s => !bookedTimes.has(s))
-    setAvailableSlots(finalSlots)
-    if (!finalSlots.includes(selTime) && finalSlots.length>0) setSelTime(finalSlots[0])
-    setSlotsLoading(false)
   }
 
   useEffect(() => { if (activeDoctor) loadAvailability(activeDoctor, selDay) }, [activeDoctor?.name, selDay])
@@ -2132,8 +2146,12 @@ function DoctorsScreen({ isEn, patient={} }) {
               })}
             </div>
             {slotsLoading&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading availability…':'載入可預約時段…'}</div>}
-            {!slotsLoading&&dayClosed&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?`${activeDoctor.name} isn't available on this day.`:`${activeDoctor.name}此日不應診。`}</div>}
-            {!slotsLoading&&!dayClosed&&availableSlots.length===0&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'No slots left for this day - try another date.':'此日已無可預約時段,請選擇其他日期。'}</div>}
+            {!slotsLoading&&slotsLoadError&&<div style={{textAlign:'center',padding:'20px'}}>
+              <div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{slotsLoadError}</div>
+              <Btn style={{fontSize:'12px'}} onClick={()=>loadAvailability(activeDoctor, selDay)}>{isEn?'Retry':'重試'}</Btn>
+            </div>}
+            {!slotsLoading&&!slotsLoadError&&dayClosed&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?`${activeDoctor.name} isn't available on this day.`:`${activeDoctor.name}此日不應診。`}</div>}
+            {!slotsLoading&&!slotsLoadError&&!dayClosed&&availableSlots.length===0&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'No slots left for this day - try another date.':'此日已無可預約時段,請選擇其他日期。'}</div>}
             {!slotsLoading&&!dayClosed&&availableSlots.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
               {availableSlots.map(time=>{const s=time===selTime;return(
                 <div key={time} onClick={()=>setSelTime(time)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:s?C.green:C.card,color:s?'#fff':C.text}}>{time}</div>
