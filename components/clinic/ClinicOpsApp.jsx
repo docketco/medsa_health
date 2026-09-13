@@ -5351,9 +5351,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   async function handleLinkNewPlan(plan) {
     if (!billingRecord) return
     setAddingPlan(true)
-    const { error } = await supabase.from('agent_policies').insert({
-      patient_id: billingRecord.patient_id, plan_id: plan.id, status: 'active', plan_name: plan.plan_name,
-    })
+    // Real bug: this always inserted a new row, even when the patient
+    // already had an active link to this exact plan - clicking "add it"
+    // more than once for the same plan (easy to do while testing, or if
+    // someone just double-clicks) piled up duplicate agent_policies rows,
+    // showing the same plan repeated many times over in Eligible plans.
+    const { data: existingLink } = await supabase.from('agent_policies')
+      .select('id').eq('patient_id', billingRecord.patient_id).eq('plan_id', plan.id).eq('status', 'active').maybeSingle()
+    const { error } = existingLink
+      ? await supabase.from('agent_policies').update({ plan_name: plan.plan_name }).eq('id', existingLink.id)
+      : await supabase.from('agent_policies').insert({
+          patient_id: billingRecord.patient_id, plan_id: plan.id, status: 'active', plan_name: plan.plan_name,
+        })
     if (error) {
       alert(`Could not link this plan: ${error.message}`)
       setAddingPlan(false)
