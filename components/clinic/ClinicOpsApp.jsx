@@ -5164,8 +5164,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   // Arrived here via a "Collect in Payment" link from Claims - jump
   // straight to that specific claim instead of making reception search.
+  //
+  // Real bug: this never cleared billingRecord, which - once set by an
+  // unrelated "Proceed to billing" visit earlier in the same session -
+  // is checked first in the render below (`if (preselectRecordId ||
+  // billingRecord)`) and has no way to reset itself short of completing
+  // that entire other billing flow to its "Done" button. Every later
+  // "Collect in Payment" click, for ANY claim, kept silently
+  // re-rendering that same old stuck consultation instead of the claim
+  // actually clicked - looking exactly like "clicking a claim bounces
+  // back to an unrelated payment screen." A fresh claim-collect request
+  // always wins over a leftover, unfinished billing-record flow.
   useEffect(() => {
     if (!preselectClaimRef) return
+    setBillingRecord(null)
     async function findAndSelect() {
       const { data } = await supabase.from('insurance_claims')
         .select('*, patients(full_name), insurance_plans(company_name, plan_name)')
@@ -5179,9 +5191,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   // Arrived here via "Proceed to billing" from the task board - load the
   // real consultation record (diagnosis, itemized line_items, total_fee)
   // and its patient, so the front desk sees the doctor's actual itemized
-  // bill rather than needing to rebuild it.
+  // bill rather than needing to rebuild it. Same reasoning as the claim
+  // preselect above, in reverse: clears any leftover selected claim so a
+  // fresh "Proceed to billing" request isn't shadowed by an old one.
   useEffect(() => {
     if (!preselectRecordId) return
+    setSelectedPayment(null)
     async function loadRecord() {
       setBillingRecordLoading(true)
       const { data } = await supabase.from('medical_records')
@@ -7562,7 +7577,7 @@ export default function ClinicOpsApp() {
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
-        {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
+        {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectRecordId(null);setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
