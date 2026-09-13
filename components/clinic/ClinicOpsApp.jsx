@@ -5554,7 +5554,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <SecLabel>Eligible plans</SecLabel>
           {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>
-            No held plan covers any item in this visit yet.
+            This patient has no insurance plan on file yet.
             <div onClick={()=>{setBillingChoice('direct_payment');setEligiblePlans(null)}} style={{marginTop:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>Bill directly instead (Cash / Card / Octopus) {'→'}</div>
           </div>}
 
@@ -5594,7 +5594,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             <Card key={m.plan.id} onClick={()=>setSelectedEligiblePlan(m)} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
-                <Badge text={m.fullyCovered?'Fully covered':'Partial'} type={m.fullyCovered?'ok':'due'}/>
+                <Badge text={m.fullyCovered?'Fully covered':m.notCovered?'Coverage not verified':'Partial'} type={m.fullyCovered?'ok':m.notCovered?'muted':'due'}/>
               </div>
               {/* Roster/API-resolved plans share one link per patient+insurer,
                   so this card looks identical whether it's currently backed
@@ -5603,7 +5603,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                   makes a stale link visible before billing, not just
                   discoverable afterward from the copay math. */}
               {m.policyNumber&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>Currently linked to policy: <strong>{m.policyNumber}</strong></div>}
-              {m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
+              {m.notCovered&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>None of this visit's items matched this plan's registered categories - select it anyway if you know it covers this visit.</div>}
+              {!m.notCovered&&m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
             </Card>
           ))}
           {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
