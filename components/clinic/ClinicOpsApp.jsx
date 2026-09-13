@@ -1302,7 +1302,14 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh, onMa
               <div style={{width:36,height:36,borderRadius:'8px',background:q.status==='serving'?C.green:C.greenLight,color:q.status==='serving'?'#fff':C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:700,flexShrink:0}}>{q.ticket}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:600}}>{q.patientName}</div>
-                <div style={{fontSize:'12px',color:C.textSub}}>{q.status==='serving'?'Being seen \u00b7 ':''}Checked in {new Date(q.checkedInAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
+                {/* Real bug: toLocaleTimeString('en-HK', ...) only affects
+                    formatting conventions (24h style, comma placement) -
+                    the 'en-HK' locale does NOT mean Hong Kong time zone,
+                    so this still rendered in the browser's own local
+                    time. Same class of bug already fixed for the
+                    underlying booking/queue logic via hkTime.js - this
+                    was just a display spot that got missed. */}
+                <div style={{fontSize:'12px',color:C.textSub}}>{q.status==='serving'?'Being seen \u00b7 ':''}Checked in {hkHHMM(q.checkedInAt)}</div>
               </div>
               <Badge text={hrsLeft>0?`Records ${Math.floor(hrsLeft)}h left`:'Access expired'} type={hrsLeft>0?'ok':'full'}/>
               <span style={{color:C.textMuted,fontSize:'16px'}}>{'\u203a'}</span>
