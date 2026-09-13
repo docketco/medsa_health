@@ -5609,7 +5609,29 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           ))}
           {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
 
-          {claimAdjudication&&!billingResult&&<div style={{marginTop:'16px'}}>
+          {claimAdjudication&&claimAdjudication.status==='REJECTED'&&claimAdjudication.verificationError&&<div style={{marginTop:'16px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
+            {/* A rejected-for-verification claim (e.g. a plan linked via
+                "add it" instead of "check by their real policy number" -
+                that flow never records a real policy number, so an
+                insurer requiring verification always has nothing to
+                check it against) used to still show the same green
+                "HK$0.00 is being directly billed" card as a real
+                success - technically the number was right, but nothing
+                told the front desk the claim was actually rejected and
+                the patient is paying the full amount themselves. */}
+            <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{claimAdjudication.verificationError} The patient is responsible for the full HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)}.</div>
+            {/* No insurance_claims row exists to attach a copay collection
+                to - a rejected/ineligible claim is never written to the
+                database at all (see adjudicateClaim's early return) - so
+                this has to go through direct payment, not the
+                claim-based "Collect remaining copay" path below, which
+                would otherwise crash looking up a claim that was never
+                created. */}
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setClaimAdjudication(null);setBillingChoice('direct_payment');setEligiblePlans(null)}}>Bill directly instead (Cash / Card / Octopus)</Btn>
+          </div>}
+
+          {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&!billingResult&&<div style={{marginTop:'16px'}}>
             <div style={{background:C.greenLight,borderRadius:'10px',padding:'14px 16px',marginBottom:'16px'}}>
               <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'2px'}}>
                 HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to {selectedEligiblePlan.plan.company_name}
