@@ -7021,8 +7021,18 @@ export default function ClinicOpsApp() {
       // real, physical walk-in queue resets every day (same as the ticket
       // numbering already does); a leftover 'waiting' row from weeks ago
       // isn't still waiting.
-      const queueDayStart = new Date(); queueDayStart.setHours(0,0,0,0)
-      const queueDayEnd = new Date(); queueDayEnd.setHours(23,59,59,999)
+      //
+      // Real bug: this used the browser's own local midnight (setHours),
+      // not Hong Kong's - the same class of bug already root-caused and
+      // fixed everywhere else in this file (see hkTime.js), but this one
+      // spot was missed. ensureVideoCheckIns right below already
+      // correctly uses hkDayBounds to find and auto-check-in today's (HK)
+      // video appointments - so for anyone testing from outside Hong
+      // Kong, a video consult could get auto-checked-in with a real
+      // clinic_queue row, then immediately vanish from this exact query
+      // because its checked_in_at (anchored to HK's clinic day) fell
+      // outside the browser's own, different "today."
+      const { start: queueDayStart, end: queueDayEnd } = hkDayBounds(new Date())
       const { data: queueRows } = await supabase
         .from('clinic_queue')
         .select('*, patients(medsa_id), appointments(scheduled_at, consult_type)')
