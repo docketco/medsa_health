@@ -5336,7 +5336,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     async function loadRecord() {
       setBillingRecordLoading(true)
       const { data } = await supabase.from('medical_records')
-        .select('*, patients(id, full_name, medsa_id)')
+        .select('*, patients(id, full_name, medsa_id, hkid)')
         .eq('id', preselectRecordId).maybeSingle()
       setBillingRecord(data || null)
       setBillingRecordLoading(false)
@@ -5533,7 +5533,15 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const result = await adapter.checkEligibility({
       patientId: billingRecord.patient_id, clinicId: institutionId,
       verificationMethod: 'ROSTER_POLICY_NUMBER',
-      verificationPayload: { companyName: policyLookupCompany.trim(), policyNumber: policyLookupNumber.trim() },
+      // Real gap this closes: a policy number by itself only proves
+      // SOME policy with that number is active at this insurer - it
+      // says nothing about whether the patient actually being billed
+      // is the real person that number belongs to. The patient's own
+      // HKID on file goes along with the policy number so
+      // _verifyPolicyAgainstInsurer can cross-check them together,
+      // same as a real insurer would refuse to confirm a card for
+      // someone who isn't its actual policyholder.
+      verificationPayload: { companyName: policyLookupCompany.trim(), policyNumber: policyLookupNumber.trim(), hkid: billingRecord.patients?.hkid || null },
     })
     if (!result.isEligible) {
       setPolicyLookupError(result.verificationError || 'Could not verify this policy.')
@@ -5748,6 +5756,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               </div>}
             </div>
             <input value={policyLookupNumber} onChange={e=>setPolicyLookupNumber(e.target.value)} placeholder="Policy number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>{billingRecord.patients?.hkid?`Also checked against this patient's HKID on file (${billingRecord.patients.hkid}) - the insurer's own records have to agree this policy number belongs to them.`:'⚠ No HKID on file for this patient - the policy number alone will be checked, without confirming it actually belongs to them.'}</div>
             {policyLookupError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{policyLookupError}</div>}
             {policyLookupSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>✓ {policyLookupSuccess}</div>}
             <div style={{display:'flex',gap:'8px'}}>
@@ -5826,6 +5835,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                   actually limited what the insurer paid here. */}
               {claimAdjudication.deductibleApplied>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
+              {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
             </div>
             <SecLabel>Collect the remaining HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient</SecLabel>
             <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
