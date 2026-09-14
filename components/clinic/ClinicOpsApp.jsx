@@ -1844,6 +1844,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
           doctor_name: staffMember?.name || 'Unknown', appointment_id: queueEntry?.appointmentId || null,
           consultation_started_at: consultationStartedAt, submitted_at: submittedAt,
+          institution_id: institutionId,
         })
         if (recErr) throw recErr
         // Separate, standard select rather than chaining .select() off
@@ -5437,6 +5438,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           patient_id: billingRecord.patient_id, plan_id: result.resolvedPolicyNumber,
           policy_number: policyLookupNumber.trim(), status: 'active', plan_name: result.planName,
         })
+    // A verified number checked here could otherwise ONLY ever land on
+    // this shared roster-fallback plan row - a manually-registered named
+    // plan for the same insurer (e.g. one added via "Patient has a plan
+    // not on file - add it") never records a policy number any other
+    // way, so its own category caps/preauth rules were permanently
+    // unreachable through any verified path. Attach the same real number
+    // to any other active link(s) this patient already has under this
+    // company so that plan's own rules become testable/billable too.
+    const { data: sameCompanyLinks } = await supabase.from('agent_policies')
+      .select('id, insurance_plans!inner(company_name)').eq('patient_id', billingRecord.patient_id).eq('status', 'active')
+      .neq('plan_id', result.resolvedPolicyNumber).eq('insurance_plans.company_name', policyLookupCompany.trim())
+    if (sameCompanyLinks?.length > 0) {
+      await supabase.from('agent_policies').update({ policy_number: policyLookupNumber.trim() }).in('id', sameCompanyLinks.map(l=>l.id))
+    }
     setCheckingPolicyLookup(false)
     if (error) { setPolicyLookupError(error.message); return }
     // Real feedback instead of the box just silently closing - that
@@ -5627,18 +5642,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'8px'}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
                 {/* Two SEPARATE checks, shown as two separate badges on
-                    purpose - "Fully covered" only means this visit's
-                    items fall under this plan's registered categories;
-                    it says nothing about whether this specific policy
-                    link has actually been verified with the insurer.
-                    Before this, a plan could show "Fully covered" (true,
-                    about categories) and still get rejected on submit
-                    for a completely different reason (no verified
-                    policy number) - reading as "it said covered, why
-                    did it reject?" with nothing on the card explaining
-                    these are two different gates. */}
+                    purpose. "Eligible" only means this visit's items fall
+                    under this plan's registered categories - it is NOT a
+                    dollar amount and never implies the full bill is
+                    covered (per-item caps, deductibles, and annual limits
+                    still apply at adjudication). It also says nothing
+                    about whether this specific policy link has actually
+                    been verified with the insurer - that's the separate
+                    "Policy verified" badge below it. A plan can be
+                    category-eligible and still get rejected for having
+                    no verified policy number, or vice versa - these are
+                    two different gates, never combined into one claim
+                    like the old "Fully covered" label did. */}
                 <div style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:'flex-end',flexShrink:0}}>
-                  <Badge text={m.fullyCovered?'Fully covered':m.notCovered?'Coverage not verified':'Partial'} type={m.fullyCovered?'ok':m.notCovered?'muted':'due'}/>
+                  {m.coveredItems.length>0&&<Badge text="Eligible" type="ok"/>}
                   {m.verificationRequired&&<Badge text={m.hasVerifiedPolicyNumber?'Policy verified':'No verified policy'} type={m.hasVerifiedPolicyNumber?'ok':'full'}/>}
                 </div>
               </div>
