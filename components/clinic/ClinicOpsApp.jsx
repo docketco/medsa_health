@@ -5888,7 +5888,29 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setClaimAdjudication(null);setBillingChoice('direct_payment');setEligiblePlans(null)}}>Bill directly instead (Cash / Card / Octopus)</Btn>
           </div>}
 
-          {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&!billingResult&&<div style={{marginTop:'16px'}}>
+          {claimAdjudication&&claimAdjudication.status==='PENDING_REVIEW'&&<div style={{marginTop:'16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'14px 16px'}}>
+            {/* Real gap this closes: PENDING_REVIEW used to fall through
+                to the exact same green "success" card as a real approval -
+                the claim IS submitted (a real insurance_claims row
+                exists), but it does NOT auto-settle and nothing is
+                actually confirmed yet, which looked identical to a normal
+                approval with nothing here explaining the difference. A
+                practice manager testing "does this category's own
+                pre-authorization checkbox actually do anything" needs to
+                SEE it took effect, not just infer it from an unrelated
+                green card. */}
+            <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'4px'}}>{'⚠'} Claim {claimAdjudication.claimId} submitted - pending review, not yet settled</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>
+              {claimAdjudication.verificationFlag==='unverified_practitioner'&&'The treating practitioner isn\'t verified/vouched for with this insurer yet.'}
+              {claimAdjudication.verificationFlag==='referral_required'&&'This plan requires a doctor referral on file for this practitioner, and none was found.'}
+              {!claimAdjudication.verificationFlag&&claimAdjudication.categoryPreauthRequired&&'One of this visit\'s categories is configured to always require pre-authorization before it can settle.'}
+              {!claimAdjudication.verificationFlag&&!claimAdjudication.categoryPreauthRequired&&claimAdjudication.preauthRequired&&'This visit\'s total is over the plan\'s configured pre-authorization threshold.'}
+              {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
+              {' '}A person needs to review and settle it manually.
+            </div>
+          </div>}
+
+          {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&claimAdjudication.status!=='PENDING_REVIEW'&&!billingResult&&<div style={{marginTop:'16px'}}>
             <div style={{background:C.greenLight,borderRadius:'10px',padding:'14px 16px',marginBottom:'16px'}}>
               <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'2px'}}>
                 HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to {selectedEligiblePlan.plan.company_name}
