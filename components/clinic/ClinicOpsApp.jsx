@@ -4403,6 +4403,119 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   )
 }
 
+// Every charge that's actually gone through the till, one row per
+// `transactions` row (every billing path - direct payment, insurance
+// copay, treatment plan purchase - writes one), joined back to its
+// medical_records row for the treating doctor and this visit's real
+// line-item categories. The existing "Financial records" tab inside
+// Payment is a front-desk cashier tool (today's till, receipt
+// downloads); this is the practice manager's own view of the same
+// underlying data - who billed it, and what category it falls under -
+// filterable and exportable rather than just a running list.
+function PaymentLogScreen({ institutionId }) {
+  const [loading,setLoading]=useState(true)
+  const [rows,setRows]=useState([])
+  const [doctorFilter,setDoctorFilter]=useState('')
+  const [categoryFilter,setCategoryFilter]=useState('')
+  const [fromDate,setFromDate]=useState('')
+  const [toDate,setToDate]=useState('')
+
+  useEffect(() => { loadRows() }, [institutionId])
+
+  async function loadRows() {
+    setLoading(true)
+    const { data: txns } = await supabase.from('transactions').select('*')
+      .eq('institution_id', institutionId).order('created_at',{ascending:false}).limit(1000)
+    const recordIds = [...new Set((txns||[]).map(t=>t.medical_record_id).filter(Boolean))]
+    const { data: records } = recordIds.length
+      ? await supabase.from('medical_records').select('id, doctor_name, line_items, title').in('id', recordIds)
+      : { data: [] }
+    const recordById = new Map((records||[]).map(r=>[r.id, r]))
+    const merged = (txns||[]).map(t => {
+      const rec = t.medical_record_id ? recordById.get(t.medical_record_id) : null
+      const categories = rec?.line_items?.length
+        ? [...new Set(rec.line_items.map(i=>i.category).filter(Boolean))]
+        : (t.treatment_plan_id ? ['Treatment plan'] : [])
+      return { ...t, doctorName: rec?.doctor_name || null, categories, recordTitle: rec?.title || null }
+    })
+    setRows(merged)
+    setLoading(false)
+  }
+
+  const doctorOptions = [...new Set(rows.map(r=>r.doctorName).filter(Boolean))].sort()
+  const categoryOptions = [...new Set(rows.flatMap(r=>r.categories))].sort()
+
+  const filtered = rows.filter(r => {
+    if (doctorFilter && r.doctorName!==doctorFilter) return false
+    if (categoryFilter && !r.categories.includes(categoryFilter)) return false
+    if (fromDate && new Date(r.created_at) < new Date(fromDate)) return false
+    if (toDate && new Date(r.created_at) > new Date(toDate+'T23:59:59')) return false
+    return true
+  })
+  const totalAmount = filtered.reduce((sum,r)=>sum+(r.patient_pays||0),0)
+
+  function exportCSV() {
+    if (typeof window === 'undefined') return // SSR safety guard
+    const headers = ['Date','Patient','Doctor','Categories','Amount (HK$)','Method','Claim Ref','Collected By']
+    const csvRows = filtered.map(r => [
+      new Date(r.created_at).toLocaleString('en-HK'),
+      r.patient_name, r.doctorName||'-', r.categories.join('; ')||'-',
+      r.patient_pays, r.payment_method, r.claim_ref||'', r.staff_name,
+    ])
+    const csv = [headers, ...csvRows].map(row=>row.map(v=>`"${v}"`).join(',')).join('\n')
+    const blob = new Blob([csv], {type:'text/csv'})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `medsa-payment-log-${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <PageWrap maxWidth={900}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px',flexWrap:'wrap',gap:'8px'}}>
+        <SecLabel>Payment log - every doctor & consultation charge, categorized</SecLabel>
+        <Btn variant="primary" style={{fontSize:'12px'}} onClick={exportCSV} disabled={filtered.length===0}>Export to Excel/CSV</Btn>
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'12px',flexWrap:'wrap'}}>
+        <select value={doctorFilter} onChange={e=>setDoctorFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
+          <option value="">All doctors</option>
+          {doctorOptions.map(d=><option key={d} value={d}>{d}</option>)}
+        </select>
+        <select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
+          <option value="">All categories</option>
+          {categoryOptions.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+        <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        {(doctorFilter||categoryFilter||fromDate||toDate)&&<div onClick={()=>{setDoctorFilter('');setCategoryFilter('');setFromDate('');setToDate('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear filters</div>}
+      </div>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Total HK${totalAmount.toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No transactions match.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {filtered.map((r,i)=>(
+          <Card key={r.id||i} style={{padding:'12px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{r.patient_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
+              </div>
+              <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${r.patient_pays}</div>
+            </div>
+            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
+              <span>Method: {r.payment_method}</span>
+              {r.categories.length>0&&<span>Category: {r.categories.join(', ')}</span>}
+              {r.claim_ref&&<span>Claim: {r.claim_ref}</span>}
+            </div>
+          </Card>
+        ))}
+      </div>
+    </PageWrap>
+  )
+}
+
 function WorkingHoursScreen() {
   const [clinicDoctors,setClinicDoctors]=useState([])
   const [selectedDoctor,setSelectedDoctor]=useState('')
@@ -5080,7 +5193,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadLedger() {
     setLedgerLoading(true)
-    const { data } = await supabase.from('transactions').select('*').order('created_at',{ascending:false}).limit(100)
+    // Real bug: this never filtered by institution_id, so a multi-clinic
+    // Medsa deployment's "Financial records" tab showed every OTHER
+    // clinic's transactions mixed into this one's - the practice manager
+    // review below (PaymentLogScreen) needs its own institution scoping
+    // too, but this cashier-facing tab had never had it at all.
+    const { data } = await supabase.from('transactions').select('*').eq('institution_id', institutionId).order('created_at',{ascending:false}).limit(100)
     setLedger(data||[])
     setLedgerLoading(false)
   }
@@ -7573,6 +7691,7 @@ export default function ClinicOpsApp() {
     {key:'workinghours', icon:'clock', label:'Working Hours', roles:['admin']},
     {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
+    {key:'paymentlog', icon:'slides', label:'Payment Log', roles:['admin']},
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
     {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
@@ -7675,6 +7794,7 @@ export default function ClinicOpsApp() {
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
+        {screen==='paymentlog'&&staffMember?.role==='admin'&&<PaymentLogScreen institutionId={institutionId}/>}
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
