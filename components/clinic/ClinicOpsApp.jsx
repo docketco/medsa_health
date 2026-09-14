@@ -1997,7 +1997,17 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                   {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
                   {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
                   {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
-                  {!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={async()=>{
+                  {/* Real bug: this "request from originating provider,
+                      patient must approve release" flow showed for EVERY
+                      record, including ones from this exact clinic - a
+                      record this clinic already owns has nothing to
+                      request or release; what's shown above already is
+                      everything on file. That gated flow now only makes
+                      sense for a genuinely external record (a different
+                      institution_id), where a real separate provider
+                      would need to release more than what's already
+                      synced to Medsa. */}
+                  {r.institution_id!==institutionId&&(!requested?<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={async()=>{
                     const { error } = await supabase.from('record_access_requests').insert({
                       patient_id: patient.id, requesting_staff: staffMember?.name || 'Unknown',
                       requesting_clinic: r.institutions?.name || null,
@@ -2006,7 +2016,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                     if (error) { alert(`Could not send request: ${error.message}`); return }
                     setReportRequests({...reportRequests,[i]:true})
                   }}>Request full/detailed report</Btn>
-                    :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>}
+                    :<div style={{fontSize:'11px',color:C.amber}}>{'\u25c7'} Requested from {r.institutions?.name||'originating provider'} - patient will be notified to approve release of the complete report.</div>)}
                 </div>}
               </Card>
             )
@@ -5316,7 +5326,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // submitted at this point regardless of whether a copay remains -
     // that's now a separate, immediate collection step below, not
     // something the task board needs to keep tracking.
-    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    //
+    // Real bug: this used to run unconditionally, even when the claim
+    // came back REJECTED - no claim or transaction row exists for a
+    // rejected claim (see adjudicateClaim's early return), so marking
+    // the visit "billed" here meant it vanished from the task board with
+    // zero money actually collected and no trace of what happened, the
+    // instant the front desk navigated away before finishing "Bill
+    // directly instead." Only a genuine claim outcome marks it billed
+    // now; a rejection leaves the visit exactly as it was so it's still
+    // findable to bill properly, and handleDirectPaymentSubmit marks it
+    // billed itself once a real direct payment actually completes.
+    if (result.status !== 'REJECTED') {
+      await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    }
     setClaimAdjudication(result)
     // If nothing is owed (fully covered), we're actually done - skip
     // straight to the completion screen rather than showing an empty
