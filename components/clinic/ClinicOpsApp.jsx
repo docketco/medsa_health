@@ -5624,9 +5624,23 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           </div>}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.map(m=>(
             <Card key={m.plan.id} onClick={()=>setSelectedEligiblePlan(m)} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'8px'}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
-                <Badge text={m.fullyCovered?'Fully covered':m.notCovered?'Coverage not verified':'Partial'} type={m.fullyCovered?'ok':m.notCovered?'muted':'due'}/>
+                {/* Two SEPARATE checks, shown as two separate badges on
+                    purpose - "Fully covered" only means this visit's
+                    items fall under this plan's registered categories;
+                    it says nothing about whether this specific policy
+                    link has actually been verified with the insurer.
+                    Before this, a plan could show "Fully covered" (true,
+                    about categories) and still get rejected on submit
+                    for a completely different reason (no verified
+                    policy number) - reading as "it said covered, why
+                    did it reject?" with nothing on the card explaining
+                    these are two different gates. */}
+                <div style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:'flex-end',flexShrink:0}}>
+                  <Badge text={m.fullyCovered?'Fully covered':m.notCovered?'Coverage not verified':'Partial'} type={m.fullyCovered?'ok':m.notCovered?'muted':'due'}/>
+                  {m.verificationRequired&&<Badge text={m.hasVerifiedPolicyNumber?'Policy verified':'No verified policy'} type={m.hasVerifiedPolicyNumber?'ok':'full'}/>}
+                </div>
               </div>
               {/* Roster/API-resolved plans share one link per patient+insurer,
                   so this card looks identical whether it's currently backed
@@ -5637,6 +5651,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {m.policyNumber&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>Currently linked to policy: <strong>{m.policyNumber}</strong></div>}
               {m.notCovered&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>None of this visit's items matched this plan's registered categories - select it anyway if you know it covers this visit.</div>}
               {!m.notCovered&&m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
+              {m.verificationRequired&&!m.hasVerifiedPolicyNumber&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} requires a verified policy number - this link doesn't have one, so billing will be rejected. Use "check by their real policy number" instead of "add it."</div>}
             </Card>
           ))}
           {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
