@@ -4516,6 +4516,72 @@ function PaymentLogScreen({ institutionId }) {
   )
 }
 
+// Read-only view of insurer_policy_roster - the raw table a real insurer
+// uploads (or Medsa's own test fixtures fill in) to say "this policy
+// number/HKID is active, and here are this specific policyholder's own
+// negotiated terms, if any." A practice manager testing coverage math has
+// no other way to see this - the insurer-side upload screen
+// (InsuranceApp.jsx) only shows a row COUNT, and requires a login this
+// role doesn't have anyway. This is purely a lookup table to answer "why
+// did this claim use that number" without asking someone to go query the
+// database directly - no editing happens here.
+function InsurerTestRosterScreen() {
+  const [loading,setLoading]=useState(true)
+  const [rows,setRows]=useState([])
+  const [companyFilter,setCompanyFilter]=useState('')
+
+  useEffect(() => { loadRows() }, [])
+
+  async function loadRows() {
+    setLoading(true)
+    const { data: companies } = await supabase.from('insurance_companies').select('id, name, verification_mode')
+    const companyById = new Map((companies||[]).map(c=>[c.id, c]))
+    const { data: roster } = await supabase.from('insurer_policy_roster').select('*').order('uploaded_at',{ascending:false}).limit(500)
+    const merged = (roster||[]).map(r => ({ ...r, companyName: companyById.get(r.insurance_company_id)?.name || 'Unknown insurer' }))
+    setRows(merged)
+    setLoading(false)
+  }
+
+  const companyOptions = [...new Set(rows.map(r=>r.companyName))].sort()
+  const filtered = companyFilter ? rows.filter(r=>r.companyName===companyFilter) : rows
+
+  return (
+    <PageWrap maxWidth={900}>
+      <SecLabel>Insurer test roster (read-only)</SecLabel>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>
+        {'◇'} This is the raw list every real policy-number check runs against - what a real insurer's own system would say if we called them. Only insurers with verification turned on (see the mode next to each company below) actually use this; everyone else's plans use their own configured numbers directly, always. Nothing here can be edited from this screen.
+      </div>
+      <div style={{marginBottom:'16px'}}>
+        <select value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
+          <option value="">All insurers</option>
+          {companyOptions.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No roster entries{companyFilter?` for ${companyFilter}`:''}.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+        {filtered.map(r=>(
+          <Card key={r.id} style={{padding:'12px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px',gap:'8px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{r.policy_number||'(no policy number)'} - {r.companyName}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>HKID: {r.hkid||'none on file'}{r.patient_name?` · ${r.patient_name}`:''}{r.plan_name?` · ${r.plan_name}`:''}</div>
+              </div>
+              <Badge text={r.status} type={r.status==='active'?'ok':'muted'}/>
+            </div>
+            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
+              <span>Copay: {r.copay_rate!=null?`${Math.round(r.copay_rate*100)}%`:'not set (uses plan default)'}</span>
+              <span>Annual deductible: {r.annual_deductible_hkd!=null?`HK$${r.annual_deductible_hkd}`:'not set (uses plan default)'}</span>
+              <span>Annual limit: {r.overall_annual_limit_hkd!=null?`HK$${r.overall_annual_limit_hkd}`:'not set (uses plan default)'}</span>
+            </div>
+            {r.category_limits&&Object.keys(r.category_limits).length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Category overrides: {JSON.stringify(r.category_limits)}</div>}
+          </Card>
+        ))}
+      </div>
+    </PageWrap>
+  )
+}
+
 function WorkingHoursScreen() {
   const [clinicDoctors,setClinicDoctors]=useState([])
   const [selectedDoctor,setSelectedDoctor]=useState('')
@@ -7702,6 +7768,7 @@ export default function ClinicOpsApp() {
     {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
     {key:'paymentlog', icon:'slides', label:'Payment Log', roles:['admin']},
+    {key:'insurertestroster', icon:'insurance', label:'Insurer Test Roster', roles:['admin']},
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
     {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
@@ -7805,6 +7872,7 @@ export default function ClinicOpsApp() {
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='paymentlog'&&staffMember?.role==='admin'&&<PaymentLogScreen institutionId={institutionId}/>}
+        {screen==='insurertestroster'&&staffMember?.role==='admin'&&<InsurerTestRosterScreen/>}
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
