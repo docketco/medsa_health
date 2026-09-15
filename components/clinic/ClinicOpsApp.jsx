@@ -125,6 +125,19 @@ async function ensureDepartmentQueues(institutionId) {
   await supabase.from('clinic_queues').insert(rows)
 }
 
+// Every transaction gets a real sequential, year-based receipt number
+// (e.g. R2026-00001) so staff and patients can tell bills apart and see
+// how many consultations happened in a year - the uuid transactions.id
+// and the staff-entered card/Octopus transaction_ref are useless for
+// that. next_receipt_number() is an atomic DB counter (same pattern as
+// next_queue_ticket) so two simultaneous checkouts never collide.
+async function generateReceiptNumber(institutionId) {
+  const year = new Date().getFullYear()
+  const { data: n, error } = await supabase.rpc('next_receipt_number', { p_institution_id: institutionId, p_year: year })
+  if (error || n == null) return null
+  return `R${year}-${String(n).padStart(5,'0')}`
+}
+
 // Cancelling an appointment used to leave any queue ticket tied to it
 // completely untouched - if the patient had already checked in, they'd
 // keep showing as waiting/being seen on both the front desk board and
@@ -4425,6 +4438,7 @@ function PaymentLogScreen({ institutionId }) {
   const [categoryFilter,setCategoryFilter]=useState('')
   const [fromDate,setFromDate]=useState('')
   const [toDate,setToDate]=useState('')
+  const [searchQuery,setSearchQuery]=useState('')
 
   useEffect(() => { loadRows() }, [institutionId])
 
@@ -4456,6 +4470,17 @@ function PaymentLogScreen({ institutionId }) {
     if (categoryFilter && !r.categories.includes(categoryFilter)) return false
     if (fromDate && new Date(r.created_at) < new Date(fromDate)) return false
     if (toDate && new Date(r.created_at) > new Date(toDate+'T23:59:59')) return false
+    // Real gap: there used to be no search at all on this screen - with
+    // filters that only narrow by doctor/category/date, finding one
+    // specific bill (e.g. "did I already bill this visit?") meant
+    // scrolling the whole list by eye. Matches the receipt number, claim
+    // ref, or patient name - the three things staff actually have on
+    // hand when trying to look a transaction up.
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      const haystack = `${r.receipt_number||''} ${r.claim_ref||''} ${r.patient_name||''}`.toLowerCase()
+      if (!haystack.includes(q)) return false
+    }
     return true
   })
   // Real gap: this only ever totaled patient_pays - the actual cash/card/
@@ -4469,9 +4494,9 @@ function PaymentLogScreen({ institutionId }) {
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
-    const headers = ['Date','Patient','Doctor','Categories','Insurer Covers (HK$)','Patient Pays (HK$)','Total (HK$)','Method','Claim Ref','Collected By']
+    const headers = ['Receipt No','Date','Patient','Doctor','Categories','Insurer Covers (HK$)','Patient Pays (HK$)','Total (HK$)','Method','Claim Ref','Collected By']
     const csvRows = filtered.map(r => [
-      new Date(r.created_at).toLocaleString('en-HK'),
+      r.receipt_number||'', new Date(r.created_at).toLocaleString('en-HK'),
       r.patient_name, r.doctorName||'-', r.categories.join('; ')||'-',
       r.insurer_covers||0, r.patient_pays, (r.insurer_covers||0)+(r.patient_pays||0),
       r.payment_method, r.claim_ref||'', r.staff_name,
@@ -4493,6 +4518,7 @@ function PaymentLogScreen({ institutionId }) {
         <Btn variant="primary" style={{fontSize:'12px'}} onClick={exportCSV} disabled={filtered.length===0}>Export to Excel/CSV</Btn>
       </div>
       <div style={{display:'flex',gap:'8px',marginBottom:'12px',flexWrap:'wrap'}}>
+        <input type="text" placeholder="Search receipt no, claim ref, or patient..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',minWidth:'220px'}}/>
         <select value={doctorFilter} onChange={e=>setDoctorFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
           <option value="">All doctors</option>
           {doctorOptions.map(d=><option key={d} value={d}>{d}</option>)}
@@ -4503,7 +4529,7 @@ function PaymentLogScreen({ institutionId }) {
         </select>
         <input type="date" value={fromDate} onChange={e=>setFromDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
         <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
-        {(doctorFilter||categoryFilter||fromDate||toDate)&&<div onClick={()=>{setDoctorFilter('');setCategoryFilter('');setFromDate('');setToDate('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear filters</div>}
+        {(doctorFilter||categoryFilter||fromDate||toDate||searchQuery)&&<div onClick={()=>{setDoctorFilter('');setCategoryFilter('');setFromDate('');setToDate('');setSearchQuery('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear filters</div>}
       </div>
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Patient paid HK${totalPatientPays.toFixed(2)} · Insurers covered HK${totalInsurerCovers.toFixed(2)} · Total HK${(totalPatientPays+totalInsurerCovers).toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
@@ -4514,7 +4540,7 @@ function PaymentLogScreen({ institutionId }) {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{r.patient_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{r.receipt_number&&<span style={{fontWeight:600,color:C.text}}>{r.receipt_number} · </span>}{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
               </div>
               <div style={{textAlign:'right'}}>
                 <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${((r.insurer_covers||0)+(r.patient_pays||0)).toFixed(2)}</div>
@@ -5306,6 +5332,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // itemized charges - the PDF export has nothing to look up without it.
     const { data: linkedRecord } = await supabase.from('medical_records')
       .select('*').eq('insurance_claim_id', selectedPayment.id).maybeSingle()
+    const receiptNumber = await generateReceiptNumber(institutionId)
     // .select() to get the real inserted row back (with its id and
     // created_at) - the "Download receipt" button on the next screen
     // needs the actual saved transaction, not a reconstruction of it,
@@ -5322,6 +5349,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: linkedRecord?.id || null, patient_id: selectedPayment.patient_id || null,
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: txnRef.trim() || null,
+      receipt_number: receiptNumber,
     }).select().maybeSingle()
     setPaidTransaction(txn || null)
     setPaidRecord(linkedRecord || null)
@@ -5333,9 +5361,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
-    const headers = ['Date','Patient','Consultation Fee','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
+    const headers = ['Receipt No','Date','Patient','Consultation Fee','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
     const rows = ledger.map(t => [
-      new Date(t.created_at).toLocaleString('en-HK'),
+      t.receipt_number||'', new Date(t.created_at).toLocaleString('en-HK'),
       t.patient_name, t.consultation_fee, t.insurer_covers, t.patient_pays,
       t.payment_method, t.card_processing_fee, t.claim_ref||'', t.clearinghouse_fee||0, t.staff_name,
     ])
@@ -5503,6 +5531,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       return
     }
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    const receiptNumber = await generateReceiptNumber(institutionId)
     const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -5513,6 +5542,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: shortfall > 0 ? (shortfallTxnRef.trim() || null) : null,
+      receipt_number: receiptNumber,
     }).select().maybeSingle()
     if (txnErr) setBillingTxnError(txnErr.message)
     setBillingTransaction(txn || null)
@@ -5599,6 +5629,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // "collect $0" step. Still needs its own transaction/receipt row -
     // previously this branch recorded nothing at all in the ledger.
     if (!result.fees || result.fees.patientPayableTotal <= 0) {
+      const receiptNumber = await generateReceiptNumber(institutionId)
       const { data: txn } = await supabase.from('transactions').insert({
         institution_id: institutionId,
         patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -5608,6 +5639,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         claim_ref: result.claimId,
         medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
         staff_name: staffMember?.name || 'Unknown',
+        receipt_number: receiptNumber,
       }).select().maybeSingle()
       setBillingTransaction(txn || null)
       setBillingResult(result)
@@ -5730,6 +5762,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setCollectingCopay(true)
     const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
     const fees = await adapter.recordCopayPayment(claimAdjudication.claimId, copayMethod)
+    const receiptNumber = await generateReceiptNumber(institutionId)
     const { data: txn } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -5742,6 +5775,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: copayTxnRef.trim() || null,
+      receipt_number: receiptNumber,
     }).select().maybeSingle()
     setBillingTransaction(txn || null)
     setBillingResult(claimAdjudication)
@@ -5752,6 +5786,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!billingRecord) return
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
+    const receiptNumber = await generateReceiptNumber(institutionId)
     const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -5761,6 +5796,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: txnRef.trim() || null,
+      receipt_number: receiptNumber,
     }).select().maybeSingle()
     // Real bug, same shape as everywhere else on this screen: a failed
     // insert here (e.g. a column this code expects hasn't been added to
@@ -6093,7 +6129,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{t.patient_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{new Date(t.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} - {t.staff_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{t.receipt_number&&<span style={{fontWeight:600,color:C.text}}>{t.receipt_number} · </span>}{new Date(t.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} - {t.staff_name}</div>
               </div>
               <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${t.patient_pays}</div>
             </div>
@@ -6134,12 +6170,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       expiry_date: planExpiry || null,
     }).select().maybeSingle()
     const fee = calculatePaymentProcessingFee(planMethod, parseFloat(planPrice)||0)
+    const receiptNumber = await generateReceiptNumber(institutionId)
     const { data: txn } = await supabase.from('transactions').insert({
       institution_id: institutionId, patient_name: planFoundPatient.full_name,
       consultation_fee: parseFloat(planPrice)||0, insurer_covers: 0, patient_pays: parseFloat(planPrice)||0,
       payment_method: planMethod, card_processing_fee: fee, treatment_plan_id: newPlan?.id,
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: planTxnRef.trim() || null,
+      receipt_number: receiptNumber,
     }).select().maybeSingle()
     setNewPlanReceipt(newPlan && txn ? { plan: newPlan, txn } : null)
     setPlanSaving(false)
