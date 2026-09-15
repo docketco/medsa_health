@@ -5253,6 +5253,36 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [pendingLoading,setPendingLoading]=useState(true)
   const [selectedPayment,setSelectedPayment]=useState(null)
   const [paymentSearch,setPaymentSearch]=useState('')
+  // Real gap this closes: the only way to START billing a visit used to
+  // be "Proceed to billing" buried inside the Prescriptions screen,
+  // mixed in with an unrelated drug-dispensing/label-printing workflow -
+  // a practice manager asked for this to live under Payment instead,
+  // since that's where billing actually happens and where staff look
+  // first when checking "have I billed this already." Lists every
+  // consultation still awaiting billing directly, straight from
+  // medical_records - Prescriptions' own "Proceed to billing" button
+  // still works exactly as before, this is an additional direct route,
+  // not a replacement.
+  const [unbilledVisits,setUnbilledVisits]=useState([])
+  const [unbilledLoading,setUnbilledLoading]=useState(true)
+  const [unbilledSearch,setUnbilledSearch]=useState('')
+
+  async function loadUnbilledVisits() {
+    setUnbilledLoading(true)
+    const { data } = await supabase.from('medical_records')
+      .select('id, doctor_name, total_fee, date_of_record, patients(full_name)')
+      .eq('institution_id', institutionId).eq('source', 'clinic_ops').eq('record_status', 'submitted')
+      .order('date_of_record', { ascending: false }).limit(200)
+    setUnbilledVisits(data || [])
+    setUnbilledLoading(false)
+  }
+
+  function selectVisitForBilling(recordId) {
+    setSelectedPayment(null)
+    setBillingRecordLoading(true)
+    supabase.from('medical_records').select('*, patients(id, full_name, medsa_id, hkid)').eq('id', recordId).maybeSingle()
+      .then(({ data }) => { setBillingRecord(data || null); setBillingRecordLoading(false) })
+  }
   const [showCreatePlan,setShowCreatePlan]=useState(false)
   const [planStep,setPlanStep]=useState('form') // form | payment | done
   const [planPatientQuery,setPlanPatientQuery]=useState('')
@@ -5401,6 +5431,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadPendingPayments()
   }, [])
 
+  useEffect(() => {
+    if (institutionId) loadUnbilledVisits()
+  }, [institutionId])
+
   // Refetch whenever front desk actually switches to this tab, not
   // just once when the screen first mounted - covers billing that
   // happened in a different session/tab since this one opened.
@@ -5548,6 +5582,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setBillingTransaction(txn || null)
     setBillingResult({ status: 'PAID_TREATMENT_PLAN', planName: selectedTreatmentPlan.plan_name, sessionsRemaining: selectedTreatmentPlan.sessions_paid - newUsed, shortfallCollected: shortfall })
     setSubmittingClaim(false)
+    loadUnbilledVisits()
     // The Treatment Plans tab only ever loaded once, on mount - without
     // this, the "X of Y used" count stayed frozen at whatever it was
     // when this screen first opened, even though the database update
@@ -5622,6 +5657,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // resolved, same as a rejection.
     if (result.status !== 'REJECTED' && result.status !== 'PENDING_REVIEW') {
       await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+      loadUnbilledVisits()
     }
     setClaimAdjudication(result)
     // If nothing is owed (fully covered), we're actually done - skip
@@ -5816,6 +5852,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setBillingTransaction(txn || null)
     setBillingResult({ status: 'PAID_DIRECT', fees })
     setSubmittingClaim(false)
+    loadUnbilledVisits()
   }
 
   if (preselectRecordId || billingRecord) {
@@ -6346,6 +6383,24 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         ))}
       </div>
       {!selectedPayment&&<>
+        <SecLabel>Unbilled visits - start billing here</SecLabel>
+        <input value={unbilledSearch} onChange={e=>setUnbilledSearch(e.target.value)} placeholder="Search by patient…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+        {unbilledLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Loading…</div>}
+        {!unbilledLoading&&unbilledVisits.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'12px'}}>No unbilled visits right now.</div>}
+        {!unbilledLoading&&unbilledVisits
+          .filter(v => !unbilledSearch.trim() || (v.patients?.full_name||'').toLowerCase().includes(unbilledSearch.trim().toLowerCase()))
+          .map(v=>(
+            <Card key={v.id} onClick={()=>selectVisitForBilling(v.id)} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{v.patients?.full_name||'Unknown'}</div>
+                  <div style={{fontSize:'11px',color:C.textSub}}>{v.doctor_name?`Dr. ${v.doctor_name} - `:''}{v.date_of_record?new Date(v.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}</div>
+                </div>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${(v.total_fee||0).toFixed(2)}</div>
+              </div>
+            </Card>
+        ))}
+        <div style={{height:'20px'}}/>
         <SecLabel>Pending patient payments</SecLabel>
         <input value={paymentSearch} onChange={e=>setPaymentSearch(e.target.value)} placeholder="Search by patient or insurer…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
         {pendingLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Loading…</div>}
