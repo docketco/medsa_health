@@ -555,6 +555,12 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
           </div>
         </div>
         <Btn style={{width:'100%',fontSize:'12px'}} onClick={onLogout}>Sign out</Btn>
+        {/* Visible proof of which deployed commit this browser tab is
+            actually running, not just when it was last reloaded - a
+            stale tab looks 100% identical to a real bug otherwise. If
+            this doesn't match the SHA of the latest shipped fix, a hard
+            reload (or a brand new tab) is needed before re-testing. */}
+        <div style={{fontSize:'9px',color:C.textMuted,textAlign:'center',marginTop:'8px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       </div>
     </div>
   )
