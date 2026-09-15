@@ -4458,15 +4458,23 @@ function PaymentLogScreen({ institutionId }) {
     if (toDate && new Date(r.created_at) > new Date(toDate+'T23:59:59')) return false
     return true
   })
-  const totalAmount = filtered.reduce((sum,r)=>sum+(r.patient_pays||0),0)
+  // Real gap: this only ever totaled patient_pays - the actual cash/card/
+  // Octopus collected at the till - which understates the real value of
+  // every insurance-billed visit by whatever the insurer itself covered
+  // (a real, separate column on this same row, insurer_covers, just
+  // never read here). A practice manager checking total revenue from
+  // this screen had no way to see the insurer's share at all.
+  const totalPatientPays = filtered.reduce((sum,r)=>sum+(r.patient_pays||0),0)
+  const totalInsurerCovers = filtered.reduce((sum,r)=>sum+(r.insurer_covers||0),0)
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
-    const headers = ['Date','Patient','Doctor','Categories','Amount (HK$)','Method','Claim Ref','Collected By']
+    const headers = ['Date','Patient','Doctor','Categories','Insurer Covers (HK$)','Patient Pays (HK$)','Total (HK$)','Method','Claim Ref','Collected By']
     const csvRows = filtered.map(r => [
       new Date(r.created_at).toLocaleString('en-HK'),
       r.patient_name, r.doctorName||'-', r.categories.join('; ')||'-',
-      r.patient_pays, r.payment_method, r.claim_ref||'', r.staff_name,
+      r.insurer_covers||0, r.patient_pays, (r.insurer_covers||0)+(r.patient_pays||0),
+      r.payment_method, r.claim_ref||'', r.staff_name,
     ])
     const csv = [headers, ...csvRows].map(row=>row.map(v=>`"${v}"`).join(',')).join('\n')
     const blob = new Blob([csv], {type:'text/csv'})
@@ -4497,7 +4505,7 @@ function PaymentLogScreen({ institutionId }) {
         <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
         {(doctorFilter||categoryFilter||fromDate||toDate)&&<div onClick={()=>{setDoctorFilter('');setCategoryFilter('');setFromDate('');setToDate('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear filters</div>}
       </div>
-      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Total HK${totalAmount.toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Patient paid HK${totalPatientPays.toFixed(2)} · Insurers covered HK${totalInsurerCovers.toFixed(2)} · Total HK${(totalPatientPays+totalInsurerCovers).toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No transactions match.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -4508,7 +4516,10 @@ function PaymentLogScreen({ institutionId }) {
                 <div style={{fontSize:'13px',fontWeight:600}}>{r.patient_name}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
               </div>
-              <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${r.patient_pays}</div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${((r.insurer_covers||0)+(r.patient_pays||0)).toFixed(2)}</div>
+                {r.insurer_covers>0&&<div style={{fontSize:'10px',color:C.textMuted}}>{r.patient_pays>0?`Patient HK$${r.patient_pays} · Insurer HK$${r.insurer_covers}`:`Fully insurer-paid`}</div>}
+              </div>
             </div>
             <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
               <span>Method: {r.payment_method}</span>
@@ -5945,7 +5956,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               plan above clears claimAdjudication and brings this back. */}
           {selectedEligiblePlan&&!claimAdjudication&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleCheckClaimAmount} disabled={submittingClaim}>{submittingClaim?'Checking...':'Check amount'}</Btn>}
 
-          {claimAdjudication&&claimAdjudication.status==='REJECTED'&&claimAdjudication.verificationError&&<div style={{marginTop:'16px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
+          {claimAdjudication&&claimAdjudication.status==='REJECTED'&&<div style={{marginTop:'16px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
             {/* A rejected-for-verification claim (e.g. a plan linked via
                 "add it" instead of "check by their real policy number" -
                 that flow never records a real policy number, so an
@@ -5954,16 +5965,29 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 "HK$0.00 is being directly billed" card as a real
                 success - technically the number was right, but nothing
                 told the front desk the claim was actually rejected and
-                the patient is paying the full amount themselves. */}
-            <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{claimAdjudication.verificationError} The patient is responsible for the full HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)}.</div>
+                the patient is paying the full amount themselves.
+                Real second bug this same card used to have: it only ever
+                rendered when verificationError was set - that field only
+                exists for an identity/verification rejection. A claim
+                that reaches REJECTED through the normal coverage MATH
+                instead (every category cap already exhausted, a $0
+                insurable result) has no verificationError at all, so the
+                whole card - and with it any explanation, and the "Check
+                amount" button that had already disappeared once
+                claimAdjudication was set - simply vanished with nothing
+                on screen. Both cases now render, with their own reason. */}
+            <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim {claimAdjudication.dryRun?'would be':'is'} rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>
+              {claimAdjudication.verificationError || 'Nothing is insurable for this visit under this plan\'s current rules - most likely a category or annual cap is already fully used up, or the deductible covers the entire bill.'}
+              {' '}The patient is responsible for the full HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)}.
+            </div>
             {/* No insurance_claims row exists to attach a copay collection
-                to - a rejected/ineligible claim is never written to the
-                database at all (see adjudicateClaim's early return) - so
-                this has to go through direct payment, not the
-                claim-based "Collect remaining copay" path below, which
-                would otherwise crash looking up a claim that was never
-                created. */}
+                to for an identity/verification rejection (see
+                adjudicateClaim's early return) - and even for a math
+                rejection, insurerCoveredAmount is $0, so there's nothing
+                left to collect through the claim either way. Either
+                case goes through direct payment, not the claim-based
+                "Collect remaining copay" path below. */}
             <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setClaimAdjudication(null);setBillingChoice('direct_payment');setEligiblePlans(null)}}>Bill directly instead (Cash / Card / Octopus)</Btn>
           </div>}
 
@@ -5986,6 +6010,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {!claimAdjudication.verificationFlag&&!claimAdjudication.categoryPreauthRequired&&claimAdjudication.preauthRequired&&'This visit\'s total is over the plan\'s configured pre-authorization threshold.'}
               {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
               {' '}A person {claimAdjudication.dryRun?'would need':'needs'} to review and settle it manually.
+            </div>
+            {/* Real gap: the coverage math still runs in full even when
+                the outcome is pending review (a human just has to sign
+                off before it settles) - but this card showed none of it,
+                so a practice manager testing whether a cap/deductible
+                actually applied had no way to see the numbers unless the
+                claim happened to also auto-approve. Same breakdown the
+                green success card shows. */}
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.amber}`}}>
+              Would bill HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} to {selectedEligiblePlan.plan.company_name}, HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} to the patient.
+              {claimAdjudication.deductibleApplied>0&&<div style={{marginTop:'2px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
+              {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
             </div>
             {/* Preview only - nothing has been submitted yet. Confirming
                 here re-runs the exact same calculation for real and
