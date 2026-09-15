@@ -5515,7 +5515,37 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadLedger()
   }
 
-  async function handleDirectBillingSubmit() {
+  // Real gap a practice manager kept hitting: "Submit claim" always
+  // immediately created a real claim (and, on a real outcome, marked the
+  // visit billed) with no way to see the computed amount first - no
+  // chance to catch a wrong plan, a surprise pre-auth flag, or a cap
+  // that's already exhausted before committing to it. Split into two
+  // steps: this one only ever calls checkEligibility/the math (via
+  // adjudicateClaim's dryRun) - nothing is written, nothing is billed,
+  // and checking twice (or switching plans and checking again) is
+  // completely safe. Only handleConfirmClaimSubmit below ever writes
+  // anything.
+  async function handleCheckClaimAmount() {
+    if (!selectedEligiblePlan || !billingRecord) return
+    setSubmittingClaim(true)
+    const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
+    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty }))
+    const result = await adapter.adjudicateClaim({
+      patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
+      clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
+      items, medicalRecordId: billingRecord.id, dryRun: true,
+    })
+    setClaimAdjudication(result)
+    setSubmittingClaim(false)
+  }
+
+  // The real submit - only ever reached from the "Confirm & submit"
+  // button on a just-checked preview (see the dryRun:true call above),
+  // never directly from the plan card. Re-runs the exact same
+  // calculation for real (not trusting the preview's numbers blindly -
+  // re-verifying at commit time, same as a card terminal does) and this
+  // is the one call that actually creates the claim.
+  async function handleConfirmClaimSubmit() {
     if (!selectedEligiblePlan || !billingRecord) return
     setSubmittingClaim(true)
     const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
@@ -5876,7 +5906,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
           </div>}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.map(m=>(
-            <Card key={m.plan.id} onClick={()=>setSelectedEligiblePlan(m)} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
+            <Card key={m.plan.id} onClick={()=>{setSelectedEligiblePlan(m);setClaimAdjudication(null)}} style={{padding:'14px 16px',marginBottom:'8px',border:selectedEligiblePlan?.plan.id===m.plan.id?`1.5px solid ${C.green}`:`0.5px solid ${C.border}`,cursor:'pointer'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'8px'}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{m.plan.plan_name} ({m.plan.company_name})</div>
                 {/* Two SEPARATE checks, shown as two separate badges on
@@ -5909,7 +5939,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {m.verificationRequired&&!m.hasVerifiedPolicyNumber&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} requires a verified policy number - this link doesn't have one, so billing will be rejected. Use "check by their real policy number" instead of "add it."</div>}
             </Card>
           ))}
-          {selectedEligiblePlan&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleDirectBillingSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Submit claim'}</Btn>}
+          {/* "Check amount" only ever runs the calculation (dryRun) - no
+              claim exists yet and nothing is billed. Hidden once a
+              preview or a real result is showing below; re-picking a
+              plan above clears claimAdjudication and brings this back. */}
+          {selectedEligiblePlan&&!claimAdjudication&&<Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={handleCheckClaimAmount} disabled={submittingClaim}>{submittingClaim?'Checking...':'Check amount'}</Btn>}
 
           {claimAdjudication&&claimAdjudication.status==='REJECTED'&&claimAdjudication.verificationError&&<div style={{marginTop:'16px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
             {/* A rejected-for-verification claim (e.g. a plan linked via
@@ -5944,23 +5978,31 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 pre-authorization checkbox actually do anything" needs to
                 SEE it took effect, not just infer it from an unrelated
                 green card. */}
-            <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'4px'}}>{'⚠'} Claim {claimAdjudication.claimId} submitted - pending review, not yet settled</div>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'4px'}}>{'⚠'} {claimAdjudication.dryRun?'This claim would go to pending review, not settle automatically':`Claim ${claimAdjudication.claimId} submitted - pending review, not yet settled`}</div>
             <div style={{fontSize:'12px',color:C.textSub}}>
               {claimAdjudication.verificationFlag==='unverified_practitioner'&&'The treating practitioner isn\'t verified/vouched for with this insurer yet.'}
               {claimAdjudication.verificationFlag==='referral_required'&&'This plan requires a doctor referral on file for this practitioner, and none was found.'}
               {!claimAdjudication.verificationFlag&&claimAdjudication.categoryPreauthRequired&&'One of this visit\'s categories is configured to always require pre-authorization before it can settle.'}
               {!claimAdjudication.verificationFlag&&!claimAdjudication.categoryPreauthRequired&&claimAdjudication.preauthRequired&&'This visit\'s total is over the plan\'s configured pre-authorization threshold.'}
               {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
-              {' '}A person needs to review and settle it manually.
+              {' '}A person {claimAdjudication.dryRun?'would need':'needs'} to review and settle it manually.
             </div>
+            {/* Preview only - nothing has been submitted yet. Confirming
+                here re-runs the exact same calculation for real and
+                creates the claim (see handleConfirmClaimSubmit); a real
+                (already-submitted) pending claim has nothing further to
+                do from this screen. */}
+            {claimAdjudication.dryRun&&<Btn variant="primary" style={{width:'100%',marginTop:'12px'}} onClick={handleConfirmClaimSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Confirm & submit anyway'}</Btn>}
           </div>}
 
           {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&claimAdjudication.status!=='PENDING_REVIEW'&&!billingResult&&<div style={{marginTop:'16px'}}>
             <div style={{background:C.greenLight,borderRadius:'10px',padding:'14px 16px',marginBottom:'16px'}}>
               <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'2px'}}>
-                HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to {selectedEligiblePlan.plan.company_name}
+                {claimAdjudication.dryRun
+                  ? `HK$${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} would be billed to ${selectedEligiblePlan.plan.company_name}`
+                  : `HK$${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} is being directly billed to ${selectedEligiblePlan.plan.company_name}`}
               </div>
-              <div style={{fontSize:'12px',color:C.textSub}}>Claim {claimAdjudication.claimId}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{claimAdjudication.dryRun?'Not submitted yet - review below, then confirm.':`Claim ${claimAdjudication.claimId}`}</div>
               {/* Without this breakdown, a big visit against a small
                   annual limit reads as "the deductible ate the whole
                   amount" - the deductible applied correctly (its own
@@ -5970,6 +6012,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
               {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
             </div>
+            {/* Preview stops here - confirming is what actually creates
+                the claim (see handleConfirmClaimSubmit). Only a REAL
+                result (already submitted) goes on to collect a copay,
+                since only then does a real claim/patientPayableTotal
+                exist to collect against. */}
+            {claimAdjudication.dryRun?<Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmClaimSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Confirm & submit claim'}</Btn>:<>
             <SecLabel>Collect the remaining HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient</SecLabel>
             <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
               {[['card','Card','\u25c8'],['octopus','Octopus','\u25c9'],['cash','Cash','\u25ce']].map(([k,l,icon])=>(
@@ -5980,6 +6028,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
             <TxnRefField method={copayMethod} value={copayTxnRef} onChange={setCopayTxnRef}/>
             <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectRemainingCopay} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.patientPayableTotal.toFixed(2)}`}</Btn>
+            </>}
           </div>}
         </>}
       </PageWrap>
