@@ -5528,7 +5528,15 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // now; a rejection leaves the visit exactly as it was so it's still
     // findable to bill properly, and handleDirectPaymentSubmit marks it
     // billed itself once a real direct payment actually completes.
-    if (result.status !== 'REJECTED') {
+    //
+    // Second real bug, same shape: PENDING_REVIEW still fell through this
+    // check (only REJECTED was excluded) - a claim awaiting human review
+    // is submitted, but nothing has actually been collected or resolved
+    // yet, so marking the visit "billed" made it vanish from the task
+    // board exactly the same way a rejected claim used to, just for a
+    // different reason. Left findable/unbilled until it's genuinely
+    // resolved, same as a rejection.
+    if (result.status !== 'REJECTED' && result.status !== 'PENDING_REVIEW') {
       await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
     }
     setClaimAdjudication(result)
