@@ -5476,8 +5476,21 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       sessions_used: newUsed,
       status: newUsed >= selectedTreatmentPlan.sessions_paid ? 'completed' : 'active',
     }).eq('id', selectedTreatmentPlan.id).select()
-    if (planUpdateErr) setBillingTxnError(planUpdateErr.message)
-    else if (!planUpdateRows || planUpdateRows.length === 0) setBillingTxnError('Sessions used could not be updated on the treatment plan (0 rows matched) - check the plan still exists.')
+    // Real bug, same shape as the two just fixed on the insurance path:
+    // this used to mark the visit "billed" AND show the "Billing
+    // complete" success screen unconditionally, even when the
+    // treatment_plans update itself had just failed (or matched 0 rows)
+    // - the session was never actually consumed, but the visit still
+    // vanished from the task board looking exactly like a real success.
+    // Stops here instead, same as a rejected/pending insurance claim
+    // stays findable rather than being marked done for something that
+    // didn't actually happen.
+    const planUpdateSucceeded = !planUpdateErr && planUpdateRows && planUpdateRows.length > 0
+    if (!planUpdateSucceeded) {
+      setBillingTxnError(planUpdateErr?.message || 'Sessions used could not be updated on the treatment plan (0 rows matched) - check the plan still exists.')
+      setSubmittingClaim(false)
+      return
+    }
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
     const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
@@ -5698,7 +5711,6 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!billingRecord) return
     setSubmittingClaim(true)
     const fees = buildFeeBreakdown(billingRecord.total_fee || 0, 0, billingRecord.total_fee || 0, paymentMethod)
-    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
     const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
       institution_id: institutionId,
       patient_name: billingRecord.patients?.full_name || 'Unknown',
@@ -5709,11 +5721,21 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: txnRef.trim() || null,
     }).select().maybeSingle()
-    // A failed insert here (e.g. a column this code expects hasn't
-    // been added to the database yet) used to be silently swallowed -
-    // the visit was marked billed and the screen said "complete," but
-    // no row ever reached Financial Records. Surface it instead.
-    if (txnErr) setBillingTxnError(txnErr.message)
+    // Real bug, same shape as everywhere else on this screen: a failed
+    // insert here (e.g. a column this code expects hasn't been added to
+    // the database yet) used to be silently swallowed - the visit was
+    // marked billed and the screen said "complete" regardless, so no row
+    // ever reached Financial Records AND the visit vanished from the
+    // task board with nothing to show for it. For a direct cash/card
+    // payment the transaction row IS the entire record of what
+    // happened, so a failed insert now stops here - visit stays
+    // findable/unbilled, same as every other path on this screen.
+    if (txnErr) {
+      setBillingTxnError(txnErr.message)
+      setSubmittingClaim(false)
+      return
+    }
+    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
     setBillingTransaction(txn || null)
     setBillingResult({ status: 'PAID_DIRECT', fees })
     setSubmittingClaim(false)
@@ -5785,6 +5807,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             </div>
             <TxnRefField method={treatmentPlanShortfallMethod} value={shortfallTxnRef} onChange={setShortfallTxnRef}/>
           </div>}
+          {/* Rendered here, not just inside the success screen - a
+              failed session-usage update now stops before ever reaching
+              that screen (see handleBillToTreatmentPlan), so this is the
+              only place the front desk would ever see it. */}
+          {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginTop:'8px',marginBottom:'8px',fontSize:'12px',color:C.red}}>{'⚠'} {billingTxnError}</div>}
           {selectedTreatmentPlan&&<Btn variant="primary" style={{width:'100%',marginTop:'8px'}} onClick={handleBillToTreatmentPlan} disabled={submittingClaim}>{submittingClaim?'Processing...':treatmentPlanShortfall>0?`Collect HK$${treatmentPlanShortfall.toFixed(2)} and use 1 session`:'Use 1 session from this plan'}</Btn>}
         </>}
 
@@ -5799,6 +5826,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             ))}
           </div>
           <TxnRefField method={method} value={txnRef} onChange={setTxnRef}/>
+          {/* A failed transaction insert now stops before ever reaching
+              the success screen (see handleDirectPaymentSubmit) - this is
+              the only place the front desk would see it. */}
+          {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'8px',fontSize:'12px',color:C.red}}>{'⚠'} {billingTxnError}</div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>handleDirectPaymentSubmit(method)} disabled={submittingClaim}>{submittingClaim?'Processing...':`Collect HK$${(billingRecord.total_fee||0).toFixed(2)}`}</Btn>
         </>}
 
