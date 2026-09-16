@@ -1923,6 +1923,14 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           active: true, on_emergency_card: false, start_date: new Date().toISOString().slice(0,10),
           prescribed_by_staff: staffMember?.name || 'Unknown', dispense_status: 'pending',
           prescribed_submitted_at: submittedAt,
+          // Real bug this fixes: this never wrote institution_id at all -
+          // every dispensed medication row in the database has it NULL,
+          // which silently broke any screen trying to scope medications
+          // to one specific clinic (Prescriptions' new dispensing
+          // history among them - it read as "nothing dispensed before
+          // today" when the real cause was every historical row being
+          // unscopable, not actually missing).
+          institution_id: institutionId,
         }))
         const { error: insErr } = await supabase.from('medications').insert(dbRows)
         if (insErr) throw insErr
@@ -6361,16 +6369,16 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 claim happened to also auto-approve. Same breakdown the
                 green success card shows. */}
             <div style={{fontSize:'12px',color:C.textSub,marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.amber}`}}>
-              {/* Real correction: this used to say "Would bill HK$X to
-                  the insurer, HK$Y to the patient" - the same split an
-                  APPROVED claim shows - which implied that split is
-                  already settled and only the patient's share needs
-                  collecting now, same as approved. It isn't - nothing
-                  here is confirmed until a person reviews it, so none of
-                  the computed insurer-covered figure is billable to the
-                  insurer yet - only this app's own estimate of what
-                  review would confirm. */}
-              If approved, this would work out to HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} from {selectedEligiblePlan.plan.company_name} and HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient - but since nothing is confirmed until reviewed, none of that is billable to the insurer yet.
+              {/* Real correction: this used to explain the SPLIT
+                  ("would work out to HK$X from the insurer and HK$Y
+                  from the patient... but none of that is billable yet")
+                  - technically accurate but backwards to lead with,
+                  since it first states numbers that then get taken
+                  away. Leads with the one fact that actually matters at
+                  checkout instead: this plan can't be billed directly,
+                  the patient pays everything now, the claim goes to
+                  review separately. */}
+              This is a reimbursement plan - it can't be billed directly to {selectedEligiblePlan.plan.company_name}. The patient pays the full HK${claimAdjudication.fees.grossAmount.toFixed(2)} now; the claim will be submitted for review and reimbursed accordingly.
               {claimAdjudication.deductibleApplied>0&&<div style={{marginTop:'2px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient regardless of review.</div>}
