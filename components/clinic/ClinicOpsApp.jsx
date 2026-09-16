@@ -5785,7 +5785,16 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!selectedEligiblePlan || !billingRecord) return
     setSubmittingClaim(true)
     const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
-    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty }))
+    // Real bug this fixes: this never carried the consultation's own
+    // ICD-10 code(s) (medical_records.icd10_code, a comma-joined
+    // string set by the doctor) onto the claim at all - adjudicateClaim
+    // only ever writes icd10_codes from each item's own icd10Codes
+    // array (see its `[...new Set((req.items||[]).flatMap(i =>
+    // i.icd10Codes || []))]`), which nothing here ever populated. Every
+    // claim submitted through this screen saved icd10_codes as null,
+    // regardless of what the doctor actually coded the visit as.
+    const recordIcd10Codes = (billingRecord.icd10_code || '').split(',').map(c=>c.trim()).filter(Boolean)
+    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty, icd10Codes: recordIcd10Codes }))
     const result = await adapter.adjudicateClaim({
       patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
       clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
@@ -5805,7 +5814,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (!selectedEligiblePlan || !billingRecord) return
     setSubmittingClaim(true)
     const adapter = getInsuranceAdapter(selectedEligiblePlan.plan.company_name)
-    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty }))
+    const recordIcd10Codes = (billingRecord.icd10_code || '').split(',').map(c=>c.trim()).filter(Boolean)
+    const items = (billingRecord.line_items || []).map(i => ({ code: i.category, description: i.description, amount: i.fee * i.qty, icd10Codes: recordIcd10Codes }))
     const result = await adapter.adjudicateClaim({
       patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
       clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
@@ -6382,6 +6392,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.deductibleApplied>0&&<div style={{marginTop:'2px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient regardless of review.</div>}
+              {/* Real gap this closes: the claim's real ICD-10 code(s)
+                  were being saved (see handleCheckClaimAmount) but never
+                  shown anywhere in this flow - front desk had no way to
+                  confirm the right code actually made it onto the claim
+                  without going to look at the insurer portal separately. */}
+              {claimAdjudication.icd10Codes?.length>0&&<div style={{marginTop:'2px'}}>ICD-10: {claimAdjudication.icd10Codes.join(', ')}</div>}
             </div>
             {/* Preview only - nothing has been submitted yet. Confirming
                 here re-runs the exact same calculation for real and
@@ -6446,6 +6462,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient.</div>}
               {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
+              {claimAdjudication.icd10Codes?.length>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>ICD-10: {claimAdjudication.icd10Codes.join(', ')}</div>}
             </div>
             {/* Preview stops here - confirming is what actually creates
                 the claim (see handleConfirmClaimSubmit). Only a REAL
