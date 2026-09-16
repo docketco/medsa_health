@@ -2924,26 +2924,41 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
 
   return (
     <div>
-      {/* Integration notice — greyed out past claims */}
-      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+      {/* Real claims already sync automatically the moment a clinic on
+          Medsa (or the direct insurer API) adjudicates one - this used
+          to say "coming with insurer integration" unconditionally, even
+          once that was already true and this exact list was showing
+          real, live claims. Only softened, not removed - a genuinely
+          out-of-network claim submitted for insurer review below still
+          needs the insurer's own follow-up before it's fully resolved. */}
+      {hasLiveClaims && <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+        ◈ Claims submitted through a Medsa-connected clinic sync here automatically - status updates and approvals reflect what your insurer has decided.
+      </div>}
+      {!hasLiveClaims && <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
         ◈ <strong>Live claim tracking coming with insurer integration.</strong> Once your insurer connects with Medsa, claim submission, status updates, and approvals will sync here automatically.
-      </div>
+      </div>}
 
-      {/* Greyed out past claims — for reference only */}
-      <SecLabel>{isEn?'Past claims (not yet synced)':'過往索賠（尚未同步）'}</SecLabel>
+      <SecLabel>{isEn?(hasLiveClaims?'Claims':'Past claims (not yet synced)'):(hasLiveClaims?'索賠':'過往索賠（尚未同步）')}</SecLabel>
       <div style={{opacity:hasLiveClaims?1:0.4,pointerEvents:hasLiveClaims?'auto':'none'}}>
         {hasLiveClaims ? claims.map((c,i)=>{
           const statusType = c.status==='approved'?'ok':c.status==='rejected'?'full':'due'
           const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
+          // Real bug this fixes: the real adjudication engine writes
+          // the insurer's covered amount to insurer_covered_amount -
+          // this card read a completely different, never-populated
+          // column (plan_covers, a leftover from before that engine
+          // existed), so every real claim's amount showed blank/NaN
+          // regardless of what the claim actually settled for.
+          const covered = c.insurer_covered_amount ?? c.plan_covers ?? 0
           return(
             <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
-                <div style={{fontSize:'13px',fontWeight:500}}>{c.claim_ref} · {c.institutions?.name||'—'}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{c.insurance_plans?.plan_name||'—'} · {c.claim_type}</div>
+                <div style={{fontSize:'13px',fontWeight:500}}>{c.claim_ref}{c.institutions?.name?` · ${c.institutions.name}`:''}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{[c.insurance_plans?.plan_name||c.insurance_plans?.company_name, c.claim_type].filter(Boolean).join(' · ')}</div>
                 <div style={{fontSize:'11px',color:C.textMuted}}>Submitted {date}</div>
               </div>
               <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${c.plan_covers?.toLocaleString()}</div>
+                <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${covered.toLocaleString()}</div>
                 <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
               </div>
             </Card>
@@ -4721,7 +4736,12 @@ export default function PatientApp({ liveData={} }) {
       supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
       supabase.from('medical_records').select('*,institutions(name)').eq('patient_id', signedInPatient.id).order('date_of_record',{ascending:false}),
       supabase.from('appointments').select('*').eq('patient_id', signedInPatient.id).order('scheduled_at',{ascending:false}),
-      supabase.from('insurance_claims').select('*').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
+      // Real bug this fixes: this never joined institutions or
+      // insurance_plans at all - the claims list card below reads
+      // c.institutions?.name and c.insurance_plans?.plan_name, which
+      // were always undefined regardless of the data, rendering as a
+      // bare "—" for every single claim, clinic-submitted or not.
+      supabase.from('insurance_claims').select('*, institutions(name), insurance_plans(plan_name, company_name)').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
       supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
       supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
     ])
