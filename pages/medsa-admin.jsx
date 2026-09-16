@@ -19,7 +19,14 @@ export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
-      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>Medsa Admin</div>
+      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Medsa Admin</div>
+      {/* Same reasoning as ClinicOpsApp's sidebar build marker - this
+          page has been the site of more than one "is this actually the
+          latest code" confusion (a button/feature that looks missing
+          because of a stale cached bundle reads identical to it never
+          having been built at all), and unlike ClinicOps it had no way
+          to self-check that at all. */}
+      <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
         {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
@@ -1583,14 +1590,26 @@ function ClaimsPluginTester() {
   const [saving,setSaving]=useState(false)
   const [notice,setNotice]=useState(null)
 
+  const [searched,setSearched]=useState(false)
+
   async function search() {
     if (!query.trim()) return
-    setSearching(true)
-    const { data } = await supabase.from('insurance_companies')
+    setSearching(true); setNotice(null)
+    // Real gap this fixes: a query that came back with zero rows (a
+    // typo, a name that doesn't match, or a genuine real error) used to
+    // render nothing at all - the results block only ever appears when
+    // results.length>0 - which looked exactly like a broken button no
+    // matter which of those it actually was. searched (was a search
+    // ever run) and an explicit error surface now make a real zero-
+    // match distinguishable from a network/query failure, instead of
+    // both looking like silence.
+    const { data, error } = await supabase.from('insurance_companies')
       .select('id, name, claims_plugin_enabled, claims_plugin_expires_at, claims_plugin_price_hkd')
-      .ilike('name', `%${query}%`).order('name').limit(20)
+      .ilike('name', `%${query.trim()}%`).order('name').limit(20)
+    if (error) { setNotice(`Error: ${error.message}`); setResults([]); setSearching(false); setSearched(true); return }
     setResults(data||[])
     setSearching(false)
+    setSearched(true)
   }
 
   async function setClaimsPlugin(company, enable) {
@@ -1616,6 +1635,7 @@ function ClaimsPluginTester() {
         <button onClick={search} disabled={searching} style={{padding:'0 16px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{searching?'…':'Search'}</button>
       </div>
       {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'10px'}}>{notice}</div>}
+      {searched&&results.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'10px 0'}}>No insurers matched "{query.trim()}" - check the spelling, or it may not exist yet.</div>}
       {results.length>0&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
         {results.map(company=>{
           const today = new Date().toISOString().slice(0,10)
