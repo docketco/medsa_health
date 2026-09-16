@@ -2392,7 +2392,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, institutionName, onPrinted }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, institutionName, institutionId, onPrinted }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -2400,6 +2400,40 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   const [expandedRundownId,setExpandedRundownId]=useState(null)
   const [addItemOpenId,setAddItemOpenId]=useState(null)
   const [catalog,setCatalog]=useState([])
+  // Real gap this closes: "Printed today" only ever shows what's still
+  // pending IN THIS SESSION's task board (record_status='submitted') -
+  // the moment a visit gets billed, or the day turns over, it vanishes
+  // from this screen completely, with nothing left to check "what did
+  // we actually dispense, to whom, when" against for a same-day
+  // reconciliation. The database already tracks this (medications.
+  // dispensed_by/dispensed_at, already exported as CSV below) - this
+  // just makes it visible in the app instead of only as a download.
+  const [tab,setTab]=useState('queue') // 'queue' | 'history'
+  const [historyLoading,setHistoryLoading]=useState(true)
+  const [historyRows,setHistoryRows]=useState([])
+  const [historySearch,setHistorySearch]=useState('')
+  const [historyDate,setHistoryDate]=useState(new Date().toISOString().slice(0,10))
+
+  async function loadHistory() {
+    if (!institutionId) return
+    setHistoryLoading(true)
+    const dayStart = new Date(historyDate+'T00:00:00').toISOString()
+    const dayEnd = new Date(historyDate+'T23:59:59').toISOString()
+    const { data } = await supabase.from('medications')
+      .select('medication_name,dosage,frequency,quantity,dispensed_by,dispensed_at,patient_id,patients(full_name)')
+      .eq('institution_id', institutionId).not('dispensed_at','is',null)
+      .gte('dispensed_at', dayStart).lte('dispensed_at', dayEnd)
+      .order('dispensed_at',{ascending:false})
+    setHistoryRows(data||[])
+    setHistoryLoading(false)
+  }
+  useEffect(() => { if (tab==='history') loadHistory() }, [tab, historyDate, institutionId])
+
+  const filteredHistory = historyRows.filter(m => {
+    if (!historySearch.trim()) return true
+    const q = historySearch.trim().toLowerCase()
+    return `${m.patients?.full_name||''} ${m.medication_name||''} ${m.dispensed_by||''}`.toLowerCase().includes(q)
+  })
 
   // Real service catalog - same source ConsultationScreen picks from, so
   // front desk adding something (e.g. a sick-leave note the patient asks
@@ -2472,8 +2506,16 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   const [exportMsg,setExportMsg]=useState(null)
   async function handleExportMedicationLog() {
     setExporting(true)
+    // Real bug this fixes: this filtered on institution_source, a
+    // column that doesn't exist on the medications table at all (it
+    // exists on staff_credentials/appointments/etc., not this one) -
+    // Supabase silently returned an error here, `data` came back
+    // undefined, and this export has always downloaded a 0-record CSV
+    // regardless of how much was actually dispensed. institution_id is
+    // the real column, and scopes correctly to this specific clinic
+    // rather than every clinic_ops deployment at once.
     const { data } = await supabase.from('medications').select('medication_name,dosage,dispensed_by,dispensed_at,patient_id,patients(full_name)')
-      .eq('institution_source','clinic_ops').not('dispensed_at','is',null).order('dispensed_at',{ascending:false})
+      .eq('institution_id', institutionId).not('dispensed_at','is',null).order('dispensed_at',{ascending:false})
     const rows = [['Patient','Medication','Dosage','Dispensed By','Dispensed At']]
     ;(data||[]).forEach(m => rows.push([m.patients?.full_name||'Unknown', m.medication_name||'', m.dosage||'', m.dispensed_by||'', m.dispensed_at?new Date(m.dispensed_at).toLocaleString('en-HK'):'']))
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n')
@@ -2490,6 +2532,12 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   return (
     <PageWrap maxWidth={640}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Prescriptions</h2>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',justifyContent:'center'}}>
+        {[['queue','Queue'],['history','Dispensing history']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{fontSize:'13px',padding:'9px 18px',borderRadius:'20px',cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
+        ))}
+      </div>
+      {tab==='queue'&&<>
       <div style={{textAlign:'center',marginBottom:'16px'}}>
         {exportMsg&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{'\u2713'} {exportMsg}</div>}
         <button onClick={handleExportMedicationLog} disabled={exporting} style={{padding:'8px 16px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{exporting?'Preparing…':'Export medication log (CSV)'}</button>
@@ -2582,6 +2630,32 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
               </div>
               {p.dispensedBy&&<div style={{fontSize:'10px',color:C.textMuted}}>Confirmed by {p.dispensedBy} at {new Date(p.dispensedAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>}
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Still unbilled - HK${(p.totalFee||0).toFixed(2)}. Bill it from Payment {'→'} Unbilled visits.</div>
+            </Card>
+          ))}
+        </div>
+      </>}
+      </>}
+      {tab==='history'&&<>
+        <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+          <input type="date" value={historyDate} onChange={e=>setHistoryDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+          <input type="text" placeholder="Search patient, drug, or staff..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)} style={{flex:1,minWidth:'180px',padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        </div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filteredHistory.length} dispensed on {new Date(historyDate+'T00:00:00').toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+        {historyLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+        {!historyLoading&&filteredHistory.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Nothing dispensed on this date.</div>}
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {filteredHistory.map((m,i)=>(
+            <Card key={i} style={{padding:'12px 16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{m.patients?.full_name||'Unknown'}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{m.medication_name}{m.dosage?` - ${m.dosage}`:''}{m.frequency?` - ${m.frequency}`:''}{m.quantity?` - qty ${m.quantity}`:''}</div>
+                </div>
+                <div style={{textAlign:'right',fontSize:'11px',color:C.textMuted}}>
+                  <div>{new Date(m.dispensed_at).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>
+                  <div>{m.dispensed_by||'Unknown'}</div>
+                </div>
+              </div>
             </Card>
           ))}
         </div>
@@ -5579,7 +5653,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (billingChoice !== 'insurance' || !billingRecord) return
     async function loadEligible() {
       setEligiblePlansLoading(true)
-      const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+      const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
       setEligiblePlans(matches)
       setEligiblePlansLoading(false)
     }
@@ -5809,7 +5883,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setAddPlanOpen(false)
     setAddPlanSearch('')
     setEligiblePlansLoading(true)
-    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
     setEligiblePlans(matches)
     setEligiblePlansLoading(false)
     setAddingPlan(false)
@@ -5882,7 +5956,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setPolicyLookupSuccess(`Verified ${policyLookupNumber.trim()} - added below.`)
     setPolicyLookupCompany(''); setPolicyLookupNumber('')
     setEligiblePlansLoading(true)
-    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
     setEligiblePlans(matches)
     setEligiblePlansLoading(false)
   }
@@ -6085,8 +6159,20 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div onClick={()=>{setBillingChoice(null);setSelectedEligiblePlan(null);setEligiblePlans(null);setAddPlanOpen(false);setAddPlanSearch('')}} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{'←'} Choose a different payment method</div>
           <SecLabel>Eligible plans</SecLabel>
           {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
+          {/* Real fix: this used to always say "no insurance plan on
+              file" - but a plan CAN be on file and just excluded from
+              this list because it would need human review for this
+              specific visit (see findEligiblePlans' visitContext
+              precheck) - a claim that isn't confirmed by anyone yet
+              can't be billed to the insurer directly at checkout. That
+              case gets its own message pointing to what actually
+              happens next: bill the patient normally, and they pursue
+              it themselves via the patient app's own self-serve claim
+              submission (Insurance tab). */}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>
-            This patient has no insurance plan on file yet.
+            {eligiblePlans.filteredForReviewCount>0
+              ? `This patient's insurance plan${eligiblePlans.filteredForReviewCount>1?'s all need':' needs'} human review for this visit, so it can't be billed to the insurer directly at checkout. Bill the patient normally - they can submit the claim themselves afterward from their own Insurance tab in the patient app.`
+              : 'This patient has no insurance plan on file yet.'}
             <div onClick={()=>{setBillingChoice('direct_payment');setEligiblePlans(null)}} style={{marginTop:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>Bill directly instead (Cash / Card / Octopus) {'→'}</div>
           </div>}
 
@@ -6182,8 +6268,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 whole card - and with it any explanation, and the "Check
                 amount" button that had already disappeared once
                 claimAdjudication was set - simply vanished with nothing
-                on screen. Both cases now render, with their own reason. */}
-            <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim {claimAdjudication.dryRun?'would be':'is'} rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
+                on screen. Both cases now render, with their own reason.
+
+                Real third fix: this used to hedge with "would be
+                rejected" during a Check (dryRun) and "is rejected" only
+                after a real Confirm - but a REJECTED outcome is a fixed,
+                deterministic result (there's no coverage left to change
+                between checking and confirming, and this card offers no
+                "Confirm & submit anyway" button at all - the only next
+                step is billing directly instead), so the two never
+                actually differ. Always says "is rejected" now - no
+                hedging on a result that was never going to change. */}
+            <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim is rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>
               {claimAdjudication.verificationError || (claimAdjudication.notCoveredOverage>0
                 ? `None of this visit's items are in a category this plan is registered to cover.`
@@ -8287,7 +8383,7 @@ export default function ClinicOpsApp() {
             }
           }}
         />}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName} onPrinted={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName} institutionId={institutionId} onPrinted={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
