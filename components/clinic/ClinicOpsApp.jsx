@@ -2392,7 +2392,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, institutionName }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, institutionName, onPrinted }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -2443,7 +2443,22 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
     const warnings = await onConfirm(p)
     setTimeout(()=>{
       setPrintingId(null); setOpenLabelId(null); setEditedFields({})
-      if (warnings && warnings.length>0) setInventoryWarning(`No inventory match found for: ${warnings.join(', ')} - stock was not deducted. Add these to Inventory or check the spelling matches.`)
+      if (warnings && warnings.length>0) {
+        // An inventory warning needs to stay visible and readable on
+        // THIS screen - jumping straight to Payment would bury it
+        // before front desk ever saw it, so the auto-handoff below is
+        // skipped whenever there's something to show first.
+        setInventoryWarning(`No inventory match found for: ${warnings.join(', ')} - stock was not deducted. Add these to Inventory or check the spelling matches.`)
+      } else {
+        // Real workflow gap this closes: printing labels used to just
+        // drop the visit into "Printed today" and leave it there,
+        // front desk had to remember to separately go to Payment and
+        // find it again under "Unbilled visits" - two manual trips for
+        // what's almost always one continuous action at checkout.
+        // Printing is the natural "this visit is done, go collect
+        // payment" moment, so it hands off there automatically now.
+        onPrinted?.(p)
+      }
     }, 900)
   }
 
@@ -4557,11 +4572,19 @@ function PaymentLogScreen({ institutionId }) {
                 {r.insurer_covers>0&&<div style={{fontSize:'10px',color:C.textMuted}}>{r.patient_pays>0?`Patient HK$${r.patient_pays} · Insurer HK$${r.insurer_covers}`:`Fully insurer-paid`}</div>}
               </div>
             </div>
-            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
+            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted,alignItems:'center'}}>
               <span>Method: {r.payment_method}</span>
               {r.categories.length>0&&<span>Category: {r.categories.join(', ')}</span>}
               {r.insurer_name&&<span>{r.insurer_name}{r.plan_name?` (${r.plan_name})`:''}</span>}
               {r.claim_ref&&<span>Claim: {r.claim_ref}</span>}
+              {/* Real gap: this screen had no way to print/download a
+                  receipt at all - a practice manager reconciling
+                  payments had to go find the same transaction over in
+                  Financial Records just to get a printable copy. Same
+                  shared PDF builder Financial Records and the patient
+                  app both already use, so it's the identical document
+                  either way. */}
+              {r.medical_record_id&&<span onClick={()=>fetchAndDownloadConsultationReceipt(supabase, r)} style={{color:C.green,cursor:'pointer',fontWeight:500}}>{'⬇'} Print</span>}
             </div>
           </Card>
         ))}
@@ -6244,7 +6267,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               <TxnRefField method={copayMethod} value={copayTxnRef} onChange={setCopayTxnRef}/>
               <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectPendingReviewFull} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.grossAmount.toFixed(2)}`}</Btn>
             </div>}
-            {billingResult?.pendingReviewCollectedInFull&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.amber}`,fontSize:'12px',color:C.textSub}}>{'✓'} Collected in full. This visit is now billed - the claim itself stays pending review with {selectedEligiblePlan.plan.company_name} separately.</div>}
+            {/* Real gap this closes: the confirmation used to just say
+                "collected in full" and stop, with nothing telling the
+                patient (via front desk) that they actually hold a real
+                reimbursement claim they need to follow up on themselves
+                once/if it's approved - the receipt PDF carries the same
+                instructions (see receiptPdf.js), but front desk needs
+                to hear this AT checkout, not discover it later by
+                opening a downloaded PDF. */}
+            {billingResult?.pendingReviewCollectedInFull&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.amber}`,fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
+              <div>{'✓'} Collected in full. This visit is now billed - the claim itself stays pending review with {selectedEligiblePlan.plan.company_name} separately.</div>
+              <div style={{marginTop:'6px',fontWeight:600}}>Remind the patient: this is a reimbursement claim. If {selectedEligiblePlan.plan.company_name} approves claim {claimAdjudication.claimId}, they'll need to submit their receipt (download it below) along with their claim reference and any documents the insurer requests - keep the receipt.</div>
+            </div>}
           </div>}
 
           {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&claimAdjudication.status!=='PENDING_REVIEW'&&!billingResult&&<div style={{marginTop:'16px'}}>
@@ -8253,7 +8287,7 @@ export default function ClinicOpsApp() {
             }
           }}
         />}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName} onPrinted={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
