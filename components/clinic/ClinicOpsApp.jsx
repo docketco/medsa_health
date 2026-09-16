@@ -8331,7 +8331,7 @@ export default function ClinicOpsApp() {
     {key:'mypatients', icon:'patients', label:'My Patients', roles:['doctor']},
     {key:'checkin', icon:'scan', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'calendar', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
-    {key:'prescriptions', icon:'prescriptions', label:'Consultations & Charges', roles:['admin','clinic_assistant'], badge: pendingCount},
+    {key:'prescriptions', icon:'prescriptions', label:'Prescription Dispensing', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'inventory', label:'Inventory', roles:['admin','clinic_assistant']},
     {key:'ordersets', icon:'orderset', label:'Order Sets', roles:['admin','doctor']},
     {key:'payment', icon:'payment', label:'Payment', roles:['admin','clinic_assistant']},
