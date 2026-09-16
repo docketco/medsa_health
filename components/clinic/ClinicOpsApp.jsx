@@ -2412,22 +2412,30 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
   const [historyLoading,setHistoryLoading]=useState(true)
   const [historyRows,setHistoryRows]=useState([])
   const [historySearch,setHistorySearch]=useState('')
-  const [historyDate,setHistoryDate]=useState(new Date().toISOString().slice(0,10))
+  // Real bug this fixes: defaulting to "today" only, with no way to see
+  // anything else without picking a date, meant this looked completely
+  // empty on any day nothing had been dispensed yet - "i don't see
+  // anything dispensed from before" was this exact symptom, not a data
+  // problem. Both dates start empty (no filter at all) so the most
+  // recent dispensing history is visible immediately; the date fields
+  // are there to NARROW the list, same optional-range pattern Payment
+  // Log already uses, not to gate it by default.
+  const [historyFromDate,setHistoryFromDate]=useState('')
+  const [historyToDate,setHistoryToDate]=useState('')
 
   async function loadHistory() {
     if (!institutionId) return
     setHistoryLoading(true)
-    const dayStart = new Date(historyDate+'T00:00:00').toISOString()
-    const dayEnd = new Date(historyDate+'T23:59:59').toISOString()
-    const { data } = await supabase.from('medications')
+    let q = supabase.from('medications')
       .select('medication_name,dosage,frequency,quantity,dispensed_by,dispensed_at,patient_id,patients(full_name)')
       .eq('institution_id', institutionId).not('dispensed_at','is',null)
-      .gte('dispensed_at', dayStart).lte('dispensed_at', dayEnd)
-      .order('dispensed_at',{ascending:false})
+    if (historyFromDate) q = q.gte('dispensed_at', new Date(historyFromDate+'T00:00:00').toISOString())
+    if (historyToDate) q = q.lte('dispensed_at', new Date(historyToDate+'T23:59:59').toISOString())
+    const { data } = await q.order('dispensed_at',{ascending:false}).limit(500)
     setHistoryRows(data||[])
     setHistoryLoading(false)
   }
-  useEffect(() => { if (tab==='history') loadHistory() }, [tab, historyDate, institutionId])
+  useEffect(() => { if (tab==='history') loadHistory() }, [tab, historyFromDate, historyToDate, institutionId])
 
   const filteredHistory = historyRows.filter(m => {
     if (!historySearch.trim()) return true
@@ -2629,6 +2637,12 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
                 <Badge text="Printed" type="ok"/>
               </div>
               {p.dispensedBy&&<div style={{fontSize:'10px',color:C.textMuted}}>Confirmed by {p.dispensedBy} at {new Date(p.dispensedAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>}
+              {/* Real gap: this card said a label was printed but never
+                  said what was ON it - useless for a "did we actually
+                  print the right thing" checkback. */}
+              {p.drugs?.length>0&&<div style={{fontSize:'11px',color:C.text,marginTop:'6px'}}>
+                {p.drugs.map((d,i)=><div key={i}>{d.drug}{d.dosage?` - ${d.dosage}`:''}{d.frequency?` - ${d.frequency}`:''}</div>)}
+              </div>}
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Still unbilled - HK${(p.totalFee||0).toFixed(2)}. Bill it from Payment {'→'} Unbilled visits.</div>
             </Card>
           ))}
@@ -2637,12 +2651,14 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
       </>}
       {tab==='history'&&<>
         <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
-          <input type="date" value={historyDate} onChange={e=>setHistoryDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
           <input type="text" placeholder="Search patient, drug, or staff..." value={historySearch} onChange={e=>setHistorySearch(e.target.value)} style={{flex:1,minWidth:'180px',padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+          <input type="date" value={historyFromDate} onChange={e=>setHistoryFromDate(e.target.value)} placeholder="From" style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+          <input type="date" value={historyToDate} onChange={e=>setHistoryToDate(e.target.value)} placeholder="To" style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+          {(historyFromDate||historyToDate)&&<div onClick={()=>{setHistoryFromDate('');setHistoryToDate('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear dates</div>}
         </div>
-        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filteredHistory.length} dispensed on {new Date(historyDate+'T00:00:00').toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filteredHistory.length} dispensed{!historyFromDate&&!historyToDate?' (most recent 500)':''}</div>
         {historyLoading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-        {!historyLoading&&filteredHistory.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Nothing dispensed on this date.</div>}
+        {!historyLoading&&filteredHistory.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>Nothing dispensed yet.</div>}
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
           {filteredHistory.map((m,i)=>(
             <Card key={i} style={{padding:'12px 16px'}}>
@@ -5653,7 +5669,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (billingChoice !== 'insurance' || !billingRecord) return
     async function loadEligible() {
       setEligiblePlansLoading(true)
-      const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
+      const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
       setEligiblePlans(matches)
       setEligiblePlansLoading(false)
     }
@@ -5883,7 +5899,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setAddPlanOpen(false)
     setAddPlanSearch('')
     setEligiblePlansLoading(true)
-    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
     setEligiblePlans(matches)
     setEligiblePlansLoading(false)
     setAddingPlan(false)
@@ -5956,7 +5972,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     setPolicyLookupSuccess(`Verified ${policyLookupNumber.trim()} - added below.`)
     setPolicyLookupCompany(''); setPolicyLookupNumber('')
     setEligiblePlansLoading(true)
-    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [], { totalGrossAmount: billingRecord.total_fee || 0, medicalRecordId: billingRecord.id, clinicId: institutionId })
+    const matches = await findEligiblePlans(billingRecord.patient_id, billingRecord.line_items || [])
     setEligiblePlans(matches)
     setEligiblePlansLoading(false)
   }
@@ -6021,7 +6037,40 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     if (txnErr) { setBillingTxnError(txnErr.message); setCollectingCopay(false); return }
     await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
     setBillingTransaction(txn || null)
-    setBillingResult({ ...claimAdjudication, pendingReviewCollectedInFull: true })
+    // Real distinction this adds: some insurers have a claims plug-in
+    // configured (insurance_companies.claims_plugin_enabled +
+    // claims_webhook_url - a paid tier, see medsa-admin's plug-in
+    // pricing) that lets Medsa push a claim straight into their system
+    // electronically, the same bridge /api/insurer/push_claim already
+    // uses for a patient's own self-uploaded claims. A clinic-adjudicated
+    // claim is even more complete than that (real deductible/copay math,
+    // ICD codes, category breakdown - not just a raw receipt), so for a
+    // plug-in insurer, this claim genuinely HAS been submitted the
+    // moment it's created - front desk can tell the patient exactly
+    // that, a real thing other clinics can't say without this. For an
+    // insurer with no plug-in, nothing was pushed anywhere - the patient
+    // still needs to submit the claim form themselves, receipt in hand.
+    const { data: company } = await supabase.from('insurance_companies')
+      .select('id, claims_plugin_enabled, claims_webhook_url').eq('name', selectedEligiblePlan.plan.company_name).maybeSingle()
+    let claimPushed = false, claimPushError = null
+    const claimPushSupported = !!(company?.claims_plugin_enabled && company.claims_webhook_url)
+    if (claimPushSupported) {
+      const { data: claimRow } = await supabase.from('insurance_claims').select('id').eq('claim_ref', claimAdjudication.claimId).maybeSingle()
+      if (claimRow) {
+        try {
+          const res = await fetch('/api/insurer/push_claim', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ companyId: company.id, claimId: claimRow.id }),
+          })
+          const json = await res.json()
+          claimPushed = res.ok && json.ok
+          if (!claimPushed) claimPushError = json.error || 'Could not submit to insurer.'
+        } catch (e) { claimPushError = 'Could not reach the insurer to submit this claim.' }
+      } else {
+        claimPushError = 'Could not find the claim record to submit.'
+      }
+    }
+    setBillingResult({ ...claimAdjudication, pendingReviewCollectedInFull: true, claimPushSupported, claimPushed, claimPushError })
     setCollectingCopay(false)
     loadUnbilledVisits()
   }
@@ -6159,20 +6208,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           <div onClick={()=>{setBillingChoice(null);setSelectedEligiblePlan(null);setEligiblePlans(null);setAddPlanOpen(false);setAddPlanSearch('')}} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'10px'}}>{'←'} Choose a different payment method</div>
           <SecLabel>Eligible plans</SecLabel>
           {eligiblePlansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Checking coverage...</div>}
-          {/* Real fix: this used to always say "no insurance plan on
-              file" - but a plan CAN be on file and just excluded from
-              this list because it would need human review for this
-              specific visit (see findEligiblePlans' visitContext
-              precheck) - a claim that isn't confirmed by anyone yet
-              can't be billed to the insurer directly at checkout. That
-              case gets its own message pointing to what actually
-              happens next: bill the patient normally, and they pursue
-              it themselves via the patient app's own self-serve claim
-              submission (Insurance tab). */}
           {!eligiblePlansLoading&&eligiblePlans&&eligiblePlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>
-            {eligiblePlans.filteredForReviewCount>0
-              ? `This patient's insurance plan${eligiblePlans.filteredForReviewCount>1?'s all need':' needs'} human review for this visit, so it can't be billed to the insurer directly at checkout. Bill the patient normally - they can submit the claim themselves afterward from their own Insurance tab in the patient app.`
-              : 'This patient has no insurance plan on file yet.'}
+            This patient has no insurance plan on file yet.
             <div onClick={()=>{setBillingChoice('direct_payment');setEligiblePlans(null)}} style={{marginTop:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>Bill directly instead (Cash / Card / Octopus) {'→'}</div>
           </div>}
 
@@ -6364,16 +6401,23 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectPendingReviewFull} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.grossAmount.toFixed(2)}`}</Btn>
             </div>}
             {/* Real gap this closes: the confirmation used to just say
-                "collected in full" and stop, with nothing telling the
-                patient (via front desk) that they actually hold a real
-                reimbursement claim they need to follow up on themselves
-                once/if it's approved - the receipt PDF carries the same
-                instructions (see receiptPdf.js), but front desk needs
-                to hear this AT checkout, not discover it later by
-                opening a downloaded PDF. */}
+                "collected in full" and stop, with nothing telling front
+                desk what to actually say to the patient - and it matters
+                which case this is. A claims-plug-in insurer (see
+                handleCollectPendingReviewFull) has ALREADY received this
+                claim electronically - a real, stronger thing to tell the
+                patient than "go submit it yourself," and one other
+                clinics without this can't offer. An insurer with no
+                plug-in never received anything - the patient genuinely
+                still has to submit the claim form themselves, receipt in
+                hand. Getting these two mixed up is worse than saying
+                nothing, so they're never collapsed into one generic
+                message. */}
             {billingResult?.pendingReviewCollectedInFull&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.amber}`,fontSize:'12px',color:C.textSub,lineHeight:1.5}}>
-              <div>{'✓'} Collected in full. This visit is now billed - the claim itself stays pending review with {selectedEligiblePlan.plan.company_name} separately.</div>
-              <div style={{marginTop:'6px',fontWeight:600}}>Remind the patient: this is a reimbursement claim. If {selectedEligiblePlan.plan.company_name} approves claim {claimAdjudication.claimId}, they'll need to submit their receipt (download it below) along with their claim reference and any documents the insurer requests - keep the receipt.</div>
+              <div>{'✓'} Collected in full. This visit is now billed - the claim itself is a reimbursement claim, separate from this payment.</div>
+              {billingResult.claimPushed&&<div style={{marginTop:'6px',fontWeight:600,color:C.green}}>Tell the patient: this claim has already been submitted to {selectedEligiblePlan.plan.company_name} electronically for reimbursement review - no further action needed from them beyond waiting to hear back. Keep the downloaded receipt as their own record.</div>}
+              {billingResult.claimPushSupported&&!billingResult.claimPushed&&<div style={{marginTop:'6px',fontWeight:600,color:C.red}}>Submitting this claim to {selectedEligiblePlan.plan.company_name} electronically failed{billingResult.claimPushError?` (${billingResult.claimPushError})`:''} - tell the patient to keep the receipt and submit the claim themselves for now; you can try resubmitting later from Claims.</div>}
+              {!billingResult.claimPushSupported&&<div style={{marginTop:'6px',fontWeight:600}}>Tell the patient: {selectedEligiblePlan.plan.company_name} doesn't support electronic claim submission, so they'll need to submit this claim themselves - give them the downloaded receipt and claim reference {claimAdjudication.claimId} as their supporting documentation.</div>}
             </div>}
           </div>}
 
