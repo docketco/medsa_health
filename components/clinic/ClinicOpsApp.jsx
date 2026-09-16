@@ -2392,7 +2392,7 @@ function LabelSticker({ patientName, doctorName, drug, onFieldsChange, medicineT
   )
 }
 
-function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, onProceedToBilling, institutionName }) {
+function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, institutionName }) {
   const [printingId,setPrintingId]=useState(null)
   const [openLabelId,setOpenLabelId]=useState(null)
   const [editedFields,setEditedFields]=useState({}) // drugIndex -> {effects,intake,precautions}
@@ -2545,6 +2545,17 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
           )
         })}
       </div>
+      {/* Real fix: this used to still carry its own "Proceed to billing"
+          button - the same entry point Payment's own "Unbilled visits"
+          list now provides directly - which meant two different
+          "start billing this visit" buttons existed for the same
+          visit, in two unrelated screens, and made this list read as
+          an unpaid-payment queue rather than what it actually is: a
+          history of which labels have been printed. Every entry here
+          genuinely IS still unbilled (this whole screen only ever
+          loads record_status='submitted' visits - see loadTaskBoard -
+          so a billed visit never appears here at all), but billing now
+          starts from Payment - this is read-only history. */}
       {done.length>0&&<>
         <SecLabel>Printed today</SecLabel>
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -2555,9 +2566,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
                 <Badge text="Printed" type="ok"/>
               </div>
               {p.dispensedBy&&<div style={{fontSize:'10px',color:C.textMuted}}>Confirmed by {p.dispensedBy} at {new Date(p.dispensedAt).toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}</div>}
-              <Btn variant="primary" style={{width:'100%',marginTop:'10px'}} onClick={()=>onProceedToBilling(p)}>
-                Proceed to billing (HK${(p.totalFee||0).toFixed(2)})
-              </Btn>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Still unbilled - HK${(p.totalFee||0).toFixed(2)}. Bill it from Payment {'→'} Unbilled visits.</div>
             </Card>
           ))}
         </div>
@@ -4478,7 +4487,7 @@ function PaymentLogScreen({ institutionId }) {
     // hand when trying to look a transaction up.
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase()
-      const haystack = `${r.receipt_number||''} ${r.claim_ref||''} ${r.patient_name||''}`.toLowerCase()
+      const haystack = `${r.receipt_number||''} ${r.claim_ref||''} ${r.patient_name||''} ${r.insurer_name||''} ${r.plan_name||''}`.toLowerCase()
       if (!haystack.includes(q)) return false
     }
     return true
@@ -4494,10 +4503,11 @@ function PaymentLogScreen({ institutionId }) {
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
-    const headers = ['Receipt No','Date','Patient','Doctor','Categories','Insurer Covers (HK$)','Patient Pays (HK$)','Total (HK$)','Method','Claim Ref','Collected By']
+    const headers = ['Receipt No','Date','Patient','Doctor','Categories','Insurer','Plan','Insurer Covers (HK$)','Patient Pays (HK$)','Total (HK$)','Method','Claim Ref','Collected By']
     const csvRows = filtered.map(r => [
       r.receipt_number||'', new Date(r.created_at).toLocaleString('en-HK'),
       r.patient_name, r.doctorName||'-', r.categories.join('; ')||'-',
+      r.insurer_name||'', r.plan_name||'',
       r.insurer_covers||0, r.patient_pays, (r.insurer_covers||0)+(r.patient_pays||0),
       r.payment_method, r.claim_ref||'', r.staff_name,
     ])
@@ -4540,7 +4550,7 @@ function PaymentLogScreen({ institutionId }) {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{r.patient_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{r.receipt_number&&<span style={{fontWeight:600,color:C.text}}>{r.receipt_number} · </span>}{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{r.receipt_number&&<span style={{fontWeight:600,color:C.text}}>Receipt {r.receipt_number} · </span>}{new Date(r.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}{r.doctorName?` · Dr. ${r.doctorName}`:''}{` · collected by ${r.staff_name}`}</div>
               </div>
               <div style={{textAlign:'right'}}>
                 <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${((r.insurer_covers||0)+(r.patient_pays||0)).toFixed(2)}</div>
@@ -4550,6 +4560,7 @@ function PaymentLogScreen({ institutionId }) {
             <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
               <span>Method: {r.payment_method}</span>
               {r.categories.length>0&&<span>Category: {r.categories.join(', ')}</span>}
+              {r.insurer_name&&<span>{r.insurer_name}{r.plan_name?` (${r.plan_name})`:''}</span>}
               {r.claim_ref&&<span>Claim: {r.claim_ref}</span>}
             </div>
           </Card>
@@ -4572,6 +4583,7 @@ function InsurerTestRosterScreen() {
   const [loading,setLoading]=useState(true)
   const [rows,setRows]=useState([])
   const [companyFilter,setCompanyFilter]=useState('')
+  const [search,setSearch]=useState('')
 
   useEffect(() => { loadRows() }, [])
 
@@ -4580,47 +4592,93 @@ function InsurerTestRosterScreen() {
     const { data: companies } = await supabase.from('insurance_companies').select('id, name, verification_mode')
     const companyById = new Map((companies||[]).map(c=>[c.id, c]))
     const { data: roster } = await supabase.from('insurer_policy_roster').select('*').order('uploaded_at',{ascending:false}).limit(500)
-    const merged = (roster||[]).map(r => ({ ...r, companyName: companyById.get(r.insurance_company_id)?.name || 'Unknown insurer' }))
+    // Real gap this closes: this screen used to show each policy's
+    // configured deductible/limit but never what's actually been used
+    // against them - a practice manager testing "did this year's claims
+    // eat into the cap correctly" had to go verify that by asking me to
+    // query the database directly, defeating the whole point of this
+    // being a self-serve lookup. Same year-to-date sum checkEligibility
+    // itself uses (insurance_claims.policy_number, this calendar year),
+    // read straight off the real claims history so it can never drift
+    // from what adjudication actually saw.
+    const policyNumbers = [...new Set((roster||[]).map(r=>r.policy_number).filter(Boolean))]
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString()
+    const { data: claims } = policyNumbers.length
+      ? await supabase.from('insurance_claims').select('policy_number, amount').in('policy_number', policyNumbers).gte('submitted_at', yearStart)
+      : { data: [] }
+    const claimedByPolicy = {}
+    for (const c of (claims||[])) claimedByPolicy[c.policy_number] = (claimedByPolicy[c.policy_number]||0) + (c.amount||0)
+    const merged = (roster||[]).map(r => {
+      const claimedYtd = claimedByPolicy[r.policy_number] || 0
+      const remaining = r.overall_annual_limit_hkd != null ? Math.max(0, r.overall_annual_limit_hkd - claimedYtd) : null
+      return { ...r, companyName: companyById.get(r.insurance_company_id)?.name || 'Unknown insurer', claimedYtd, remaining }
+    })
     setRows(merged)
     setLoading(false)
   }
 
   const companyOptions = [...new Set(rows.map(r=>r.companyName))].sort()
-  const filtered = companyFilter ? rows.filter(r=>r.companyName===companyFilter) : rows
+  const filtered = rows
+    .filter(r => !companyFilter || r.companyName===companyFilter)
+    // Real gap this closes: the only way to narrow this list used to be
+    // the insurer dropdown - finding one specific policy number, HKID,
+    // patient, or plan meant scrolling and reading every row by eye.
+    // Matches across every field a practice manager would actually
+    // search by.
+    .filter(r => {
+      if (!search.trim()) return true
+      const q = search.trim().toLowerCase()
+      const haystack = [r.policy_number, r.companyName, r.hkid, r.patient_name, r.plan_name, r.status].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+
+  const th = {textAlign:'left',padding:'8px 10px',fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',borderBottom:`1px solid ${C.border}`,whiteSpace:'nowrap'}
+  const td = {padding:'8px 10px',fontSize:'12px',borderBottom:`0.5px solid ${C.border}`,whiteSpace:'nowrap'}
 
   return (
-    <PageWrap maxWidth={900}>
+    <PageWrap maxWidth={1100}>
       <SecLabel>Insurer test roster (read-only)</SecLabel>
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>
-        {'◇'} This is the raw list every real policy-number check runs against - what a real insurer's own system would say if we called them. Only insurers with verification turned on (see the mode next to each company below) actually use this; everyone else's plans use their own configured numbers directly, always. Nothing here can be edited from this screen.
+        {'◇'} This is the raw list every real policy-number check runs against - what a real insurer's own system would say if we called them. Only insurers with verification turned on (see the mode next to each company below) actually use this; everyone else's plans use their own configured numbers directly, always. "Claimed YTD" and "Remaining" are computed live from this year's real claims against each policy number - nothing here can be edited from this screen.
       </div>
-      <div style={{marginBottom:'16px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+        <input type="text" placeholder="Search policy no, HKID, patient, plan, status…" value={search} onChange={e=>setSearch(e.target.value)} style={{flex:1,minWidth:'220px',padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
         <select value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
           <option value="">All insurers</option>
           {companyOptions.map(c=><option key={c} value={c}>{c}</option>)}
         </select>
       </div>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No roster entries{companyFilter?` for ${companyFilter}`:''}.</div>}
-      <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-        {filtered.map(r=>(
-          <Card key={r.id} style={{padding:'12px 16px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px',gap:'8px'}}>
-              <div>
-                <div style={{fontSize:'13px',fontWeight:600}}>{r.policy_number||'(no policy number)'} - {r.companyName}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>HKID: {r.hkid||'none on file'}{r.patient_name?` · ${r.patient_name}`:''}{r.plan_name?` · ${r.plan_name}`:''}</div>
-              </div>
-              <Badge text={r.status} type={r.status==='active'?'ok':'muted'}/>
-            </div>
-            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted}}>
-              <span>Copay: {r.copay_rate!=null?`${Math.round(r.copay_rate*100)}%`:'not set (uses plan default)'}</span>
-              <span>Annual deductible: {r.annual_deductible_hkd!=null?`HK$${r.annual_deductible_hkd}`:'not set (uses plan default)'}</span>
-              <span>Annual limit: {r.overall_annual_limit_hkd!=null?`HK$${r.overall_annual_limit_hkd}`:'not set (uses plan default)'}</span>
-            </div>
-            {r.category_limits&&Object.keys(r.category_limits).length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Category overrides: {JSON.stringify(r.category_limits)}</div>}
-          </Card>
-        ))}
-      </div>
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No roster entries match.</div>}
+      {!loading&&filtered.length>0&&
+        <div style={{overflowX:'auto',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+          <table style={{borderCollapse:'collapse',width:'100%'}}>
+            <thead><tr>
+              {['Policy number','Insurer','Status','HKID','Patient','Plan','Copay','Annual deductible','Annual limit','Claimed YTD','Remaining','Category overrides'].map(h=>
+                <th key={h} style={th}>{h}</th>
+              )}
+            </tr></thead>
+            <tbody>
+              {filtered.map(r=>(
+                <tr key={r.id}>
+                  <td style={{...td,fontWeight:600}}>{r.policy_number||'(none)'}</td>
+                  <td style={td}>{r.companyName}</td>
+                  <td style={td}><Badge text={r.status} type={r.status==='active'?'ok':'muted'}/></td>
+                  <td style={td}>{r.hkid||'-'}</td>
+                  <td style={td}>{r.patient_name||'-'}</td>
+                  <td style={td}>{r.plan_name||'-'}</td>
+                  <td style={td}>{r.copay_rate!=null?`${Math.round(r.copay_rate*100)}%`:'plan default'}</td>
+                  <td style={td}>{r.annual_deductible_hkd!=null?`HK$${r.annual_deductible_hkd}`:'plan default'}</td>
+                  <td style={td}>{r.overall_annual_limit_hkd!=null?`HK$${r.overall_annual_limit_hkd}`:'plan default'}</td>
+                  <td style={td}>HK${r.claimedYtd.toFixed(2)}</td>
+                  <td style={{...td,color:r.remaining===0?C.red:C.text}}>{r.remaining!=null?`HK$${r.remaining.toFixed(2)}`:'uncapped'}</td>
+                  <td style={{...td,whiteSpace:'normal',fontFamily:'monospace',fontSize:'10px'}}>{r.category_limits&&Object.keys(r.category_limits).length>0?JSON.stringify(r.category_limits):'-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      }
     </PageWrap>
   )
 }
@@ -5380,6 +5438,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: txnRef.trim() || null,
       receipt_number: receiptNumber,
+      insurer_name: selectedPayment.insurance_plans?.company_name || null, plan_name: selectedPayment.insurance_plans?.plan_name || null,
     }).select().maybeSingle()
     setPaidTransaction(txn || null)
     setPaidRecord(linkedRecord || null)
@@ -5391,10 +5450,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
-    const headers = ['Receipt No','Date','Patient','Consultation Fee','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
+    const headers = ['Receipt No','Date','Patient','Consultation Fee','Insurer','Plan','Insurer Covers','Patient Pays','Method','Processing Fee','Claim Ref','Clearinghouse Fee','Staff']
     const rows = ledger.map(t => [
       t.receipt_number||'', new Date(t.created_at).toLocaleString('en-HK'),
-      t.patient_name, t.consultation_fee, t.insurer_covers, t.patient_pays,
+      t.patient_name, t.consultation_fee, t.insurer_name||'', t.plan_name||'', t.insurer_covers, t.patient_pays,
       t.payment_method, t.card_processing_fee, t.claim_ref||'', t.clearinghouse_fee||0, t.staff_name,
     ])
     const csv = [headers, ...rows].map(r=>r.map(v=>`"${v}"`).join(',')).join('\n')
@@ -5664,7 +5723,18 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // straight to the completion screen rather than showing an empty
     // "collect $0" step. Still needs its own transaction/receipt row -
     // previously this branch recorded nothing at all in the ledger.
-    if (!result.fees || result.fees.patientPayableTotal <= 0) {
+    //
+    // Real bug this excludes PENDING_REVIEW for: a pending-review claim
+    // that happens to compute out to $0 patient-payable (fully
+    // insurer-covered, on paper) used to hit this exact branch anyway
+    // and record a transaction crediting the insurer's full share right
+    // now - before any actual review has confirmed anything. Nothing
+    // about a pending claim is certain yet, so this "settle immediately"
+    // shortcut only applies to a real, already-final outcome; a pending
+    // one goes through the "Collect the full amount from the patient
+    // now, reconcile later" step below instead (see
+    // handleCollectPendingReviewFull).
+    if (result.status !== 'PENDING_REVIEW' && (!result.fees || result.fees.patientPayableTotal <= 0)) {
       const receiptNumber = await generateReceiptNumber(institutionId)
       const { data: txn } = await supabase.from('transactions').insert({
         institution_id: institutionId,
@@ -5676,6 +5746,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
         medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
         staff_name: staffMember?.name || 'Unknown',
         receipt_number: receiptNumber,
+        insurer_name: selectedEligiblePlan.plan.company_name, plan_name: selectedEligiblePlan.plan.plan_name,
       }).select().maybeSingle()
       setBillingTransaction(txn || null)
       setBillingResult(result)
@@ -5812,10 +5883,50 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
       staff_name: staffMember?.name || 'Unknown',
       transaction_ref: copayTxnRef.trim() || null,
       receipt_number: receiptNumber,
+      insurer_name: selectedEligiblePlan.plan.company_name, plan_name: selectedEligiblePlan.plan.plan_name,
     }).select().maybeSingle()
     setBillingTransaction(txn || null)
     setBillingResult(claimAdjudication)
     setCollectingCopay(false)
+  }
+
+  // Real gap this closes: a PENDING_REVIEW claim - one that needs a
+  // human/insurer sign-off before ANYTHING about it is certain - used to
+  // collect $0 from anyone at checkout and just sit there until
+  // "someone" reviewed it, with the visit left unbilled indefinitely.
+  // That's backwards for how this actually works in practice: since the
+  // insurer hasn't confirmed its share yet, the clinic can't bill it
+  // directly the way an APPROVED claim can - the patient pays the FULL
+  // amount now (same as a real reimbursement-style claim), and if/when
+  // the claim is later approved, that's reconciled with the insurer
+  // separately, outside this checkout step. This is what actually lets
+  // the visit close out and the money get collected today, instead of
+  // leaving a real charge in limbo waiting on a review step this app
+  // has no workflow for yet.
+  async function handleCollectPendingReviewFull() {
+    if (!claimAdjudication || !billingRecord) return
+    setCollectingCopay(true)
+    const fees = buildFeeBreakdown(claimAdjudication.fees.grossAmount, 0, claimAdjudication.fees.grossAmount, copayMethod)
+    const receiptNumber = await generateReceiptNumber(institutionId)
+    const { data: txn, error: txnErr } = await supabase.from('transactions').insert({
+      institution_id: institutionId,
+      patient_name: billingRecord.patients?.full_name || 'Unknown',
+      consultation_fee: billingRecord.total_fee || 0,
+      insurer_covers: 0, patient_pays: claimAdjudication.fees.grossAmount,
+      payment_method: copayMethod, card_processing_fee: fees.paymentProcessingFee,
+      claim_ref: claimAdjudication.claimId,
+      medical_record_id: billingRecord.id, patient_id: billingRecord.patient_id,
+      staff_name: staffMember?.name || 'Unknown',
+      transaction_ref: copayTxnRef.trim() || null,
+      receipt_number: receiptNumber,
+      insurer_name: selectedEligiblePlan.plan.company_name, plan_name: selectedEligiblePlan.plan.plan_name,
+    }).select().maybeSingle()
+    if (txnErr) { setBillingTxnError(txnErr.message); setCollectingCopay(false); return }
+    await supabase.from('medical_records').update({ record_status: 'billed' }).eq('id', billingRecord.id)
+    setBillingTransaction(txn || null)
+    setBillingResult({ ...claimAdjudication, pendingReviewCollectedInFull: true })
+    setCollectingCopay(false)
+    loadUnbilledVisits()
   }
 
   async function handleDirectPaymentSubmit(paymentMethod) {
@@ -6051,7 +6162,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 on screen. Both cases now render, with their own reason. */}
             <div style={{fontSize:'13px',fontWeight:600,color:C.red,marginBottom:'4px'}}>{'⚠'} Claim {claimAdjudication.dryRun?'would be':'is'} rejected - not billed to {selectedEligiblePlan.plan.company_name}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>
-              {claimAdjudication.verificationError || 'Nothing is insurable for this visit under this plan\'s current rules - most likely a category or annual cap is already fully used up, or the deductible covers the entire bill.'}
+              {claimAdjudication.verificationError || (claimAdjudication.notCoveredOverage>0
+                ? `None of this visit's items are in a category this plan is registered to cover.`
+                : 'Nothing is insurable for this visit under this plan\'s current rules - most likely a category or annual cap is already fully used up, or the deductible covers the entire bill.')}
               {' '}The patient is responsible for the full HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)}.
             </div>
             {/* No insurance_claims row exists to attach a copay collection
@@ -6092,16 +6205,46 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 claim happened to also auto-approve. Same breakdown the
                 green success card shows. */}
             <div style={{fontSize:'12px',color:C.textSub,marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.amber}`}}>
-              Would bill HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} to {selectedEligiblePlan.plan.company_name}, HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} to the patient.
+              {/* Real correction: this used to say "Would bill HK$X to
+                  the insurer, HK$Y to the patient" - the same split an
+                  APPROVED claim shows - which implied that split is
+                  already settled and only the patient's share needs
+                  collecting now, same as approved. It isn't - nothing
+                  here is confirmed until a person reviews it, so none of
+                  the computed insurer-covered figure is billable to the
+                  insurer yet - only this app's own estimate of what
+                  review would confirm. */}
+              If approved, this would work out to HK${claimAdjudication.fees.insurerCoveredAmount.toFixed(2)} from {selectedEligiblePlan.plan.company_name} and HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)} from the patient - but since nothing is confirmed until reviewed, none of that is billable to the insurer yet.
               {claimAdjudication.deductibleApplied>0&&<div style={{marginTop:'2px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
+              {claimAdjudication.notCoveredOverage>0&&<div style={{marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient regardless of review.</div>}
             </div>
             {/* Preview only - nothing has been submitted yet. Confirming
                 here re-runs the exact same calculation for real and
-                creates the claim (see handleConfirmClaimSubmit); a real
-                (already-submitted) pending claim has nothing further to
-                do from this screen. */}
+                creates the claim (see handleConfirmClaimSubmit). */}
             {claimAdjudication.dryRun&&<Btn variant="primary" style={{width:'100%',marginTop:'12px'}} onClick={handleConfirmClaimSubmit} disabled={submittingClaim}>{submittingClaim?'Submitting...':'Confirm & submit anyway'}</Btn>}
+            {/* Real fix - see handleCollectPendingReviewFull: since the
+                insurer's share isn't billable until reviewed, the clinic
+                collects the FULL visit cost from the patient now, same
+                as a real reimbursement-style claim - the patient (or
+                clinic) is made whole by the insurer separately once/if
+                review approves it, not blocked on that review happening
+                first. Without this, a claim landing here just sat
+                unbilled indefinitely with nothing collected from anyone. */}
+            {!claimAdjudication.dryRun&&!billingResult&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.amber}`}}>
+              <SecLabel>Collect the full HK${claimAdjudication.fees.grossAmount.toFixed(2)} from the patient now</SecLabel>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Since nothing here is confirmed by {selectedEligiblePlan.plan.company_name} yet, the clinic can't bill them directly the way an approved claim can - the patient pays the full amount today, and the insurer's share (if this is approved) gets reconciled separately once the review clears.</div>
+              <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+                {[['card','Card','◈'],['octopus','Octopus','◉'],['cash','Cash','◎']].map(([k,l,icon])=>(
+                  <div key={k} onClick={()=>setCopayMethod(k)} style={{flex:1,padding:'14px 8px',borderRadius:'8px',textAlign:'center',cursor:'pointer',background:copayMethod===k?C.green:C.card,color:copayMethod===k?'#fff':C.text}}>
+                    <div style={{fontSize:'18px',marginBottom:'4px'}}>{icon}</div><div style={{fontSize:'12px',fontWeight:500}}>{l}</div>
+                  </div>
+                ))}
+              </div>
+              <TxnRefField method={copayMethod} value={copayTxnRef} onChange={setCopayTxnRef}/>
+              <Btn variant="primary" style={{width:'100%'}} onClick={handleCollectPendingReviewFull} disabled={collectingCopay}>{collectingCopay?'Processing...':`Collect HK$${claimAdjudication.fees.grossAmount.toFixed(2)}`}</Btn>
+            </div>}
+            {billingResult?.pendingReviewCollectedInFull&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.amber}`,fontSize:'12px',color:C.textSub}}>{'✓'} Collected in full. This visit is now billed - the claim itself stays pending review with {selectedEligiblePlan.plan.company_name} separately.</div>}
           </div>}
 
           {claimAdjudication&&claimAdjudication.status!=='REJECTED'&&claimAdjudication.status!=='PENDING_REVIEW'&&!billingResult&&<div style={{marginTop:'16px'}}>
@@ -6119,6 +6262,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                   actually limited what the insurer paid here. */}
               {claimAdjudication.deductibleApplied>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
+              {claimAdjudication.notCoveredOverage>0&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient.</div>}
               {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
             </div>
             {/* Preview stops here - confirming is what actually creates
@@ -6166,13 +6310,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{t.patient_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{t.receipt_number&&<span style={{fontWeight:600,color:C.text}}>{t.receipt_number} · </span>}{new Date(t.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} - {t.staff_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{t.receipt_number&&<span style={{fontWeight:600,color:C.text}}>Receipt {t.receipt_number} · </span>}{new Date(t.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} - {t.staff_name}</div>
               </div>
               <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${t.patient_pays}</div>
             </div>
-            <div style={{display:'flex',gap:'12px',fontSize:'11px',color:C.textMuted,marginBottom:t.medical_record_id?'8px':0}}>
+            <div style={{display:'flex',gap:'12px',flexWrap:'wrap',fontSize:'11px',color:C.textMuted,marginBottom:t.medical_record_id?'8px':0}}>
               <span>Method: {t.payment_method}</span>
               {t.transaction_ref&&<span>Ref: {t.transaction_ref}</span>}
+              {t.insurer_name&&<span>{t.insurer_name}{t.plan_name?` (${t.plan_name})`:''}</span>}
               {t.card_processing_fee>0&&<span>Processing fee (Medsa): HK${t.card_processing_fee}</span>}
               {t.clearinghouse_fee>0&&<span>Clearinghouse fee (Medsa): HK${t.clearinghouse_fee}</span>}
             </div>
@@ -8108,7 +8253,7 @@ export default function ClinicOpsApp() {
             }
           }}
         />}
-        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} onProceedToBilling={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}} institutionName={institutionName}/>}
+        {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
