@@ -1231,7 +1231,23 @@ export function AgentClaimView({ claimRef }) {
           <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px'}}><span style={{color:C.textSub}}>{l}</span><span style={{fontWeight:500,textAlign:'right',maxWidth:'60%'}}>{v||'—'}</span></div>
         ))}
       </Card>
-      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {claim.verification_flag==='referral_required'?'referral required, not yet approved':claim.verification_flag==='patient_unverified_receipt'?'patient-uploaded receipt, not verified by Medsa - confirm independently before approving':'treating practitioner not verified'}</div>}
+      {/* Real bug this fixes: this ternary had no case at all for
+          'preauth_required' (see insuranceAdapter.js's
+          effectiveVerificationFlag - set whenever a plan/category needs
+          pre-authorization regardless of the practitioner) - it fell
+          straight through to the catch-all "treating practitioner not
+          verified" text, which is simply wrong for a claim that never
+          had a practitioner-verification problem at all. Reviewing this
+          flag correctly matters: the two causes need completely
+          different follow-up (chase a credential vs. get insurer
+          sign-off on the procedure), not the same generic warning. */}
+      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {
+        claim.verification_flag==='referral_required'?'referral required, not yet approved'
+        :claim.verification_flag==='patient_unverified_receipt'?'patient-uploaded receipt, not verified by Medsa - confirm independently before approving'
+        :claim.verification_flag==='preauth_required'?'this visit needs pre-authorization before it can settle (over the plan/category\'s configured threshold) - not a practitioner issue'
+        :claim.verification_flag==='unverified_practitioner'?'treating practitioner not verified'
+        :claim.verification_flag
+      }</div>}
       <SecLabel>Clinical notes</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         {medicalRecord ? <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{medicalRecord.diagnosis&&<div style={{fontWeight:600,marginBottom:'4px'}}>{medicalRecord.diagnosis}</div>}{medicalRecord.notes||'No notes on file.'}</div>
