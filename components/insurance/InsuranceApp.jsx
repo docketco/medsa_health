@@ -691,16 +691,18 @@ function CoverageRulesManager({ company }) {
           <div style={{marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Billing model</div>
             <select value={form.billing_model} onChange={e=>setForm(f=>({...f,billing_model:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
-              <option value="direct">Direct billing - clinic bills us, patient pays copay only</option>
+              <option value="direct">Direct billing (default) - clinic bills us, patient pays copay only</option>
               <option value="reimbursement">Reimbursement only - patient always pays in full and claims it back</option>
             </select>
-            {/* Real distinction a practice manager flagged: pre-authorization
-                (a GOP obtained BEFORE treatment) only means anything for a
-                direct-billing plan. A reimbursement-only plan is submitted
-                AFTER the patient already paid in full, so there's nothing to
-                pre-authorize - it always goes to review, on its own terms,
-                never through the preauth-threshold/GOP language below. */}
-            {form.billing_model==='reimbursement'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Reimbursement-only plans are never pre-authorized or billed directly - every claim goes straight to review after the patient has already paid. The pre-authorization threshold below won't apply.</div>}
+            {/* Real gap this closes: only the reimbursement case explained
+                itself here - "Direct billing" on its own reads like "bills
+                automatically, nothing else applies," when a direct-billing
+                plan is exactly the one where the pre-authorization/high-
+                value threshold below still gates settlement. Both options
+                now say plainly what they do and don't control. */}
+            {form.billing_model==='reimbursement'
+              ? <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Reimbursement-only plans are never pre-authorized or billed directly - every claim goes straight to review after the patient has already paid. The pre-authorization threshold below won't apply.</div>
+              : <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>This only decides who pays upfront and who submits the claim - it doesn't mean claims settle automatically. The pre-authorization threshold and per-category rules below still apply and can still send a claim to review.</div>}
           </div>
           <div style={{marginBottom:'10px',opacity:form.billing_model==='reimbursement'?0.5:1}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$){form.billing_model==='reimbursement'?' - not used for reimbursement-only plans':''}</div>
