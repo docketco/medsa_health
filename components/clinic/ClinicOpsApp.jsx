@@ -6354,6 +6354,22 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 : 'Nothing is insurable for this visit under this plan\'s current rules - most likely a category or annual cap is already fully used up, or the deductible covers the entire bill.')}
               {' '}The patient is responsible for the full HK${claimAdjudication.fees.patientPayableTotal.toFixed(2)}.
             </div>
+            {/* Real gap this closes: a $0-insurer-coverage rejection could
+                come from a category cap, an uncovered category, or the
+                deductible swallowing the whole bill - three genuinely
+                different reasons collapsed into one vague sentence above,
+                with none of the actual numbers shown. The PENDING_REVIEW
+                and approved cards already surface this breakdown; a
+                rejection deserves the same, since "why" is exactly what a
+                front desk needs to explain this to a patient (or catch
+                that a real policy's own verified deductible, not the
+                plan's configured default, is what's actually biting). */}
+            {(claimAdjudication.deductibleApplied>0||claimAdjudication.policyTermsOverride||claimAdjudication.usingDefaultDeductible||claimAdjudication.annualLimitReached)&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>
+              {claimAdjudication.deductibleApplied>0&&<div>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
+              {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
+              {claimAdjudication.policyTermsOverride&&<div style={{color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
+              {claimAdjudication.usingDefaultDeductible&&<div style={{color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.usingDefaultDeductible}</div>}
+            </div>}
             {/* No insurance_claims row exists to attach a copay collection
                 to for an identity/verification rejection (see
                 adjudicateClaim's early return) - and even for a math
