@@ -1179,7 +1179,7 @@ export function AgentClaimView({ claimRef }) {
       if (!claimRef) { setLoading(false); setNotFound(true); return }
       try {
         const { data: c, error: claimErr } = await supabase.from('insurance_claims')
-          .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name)')
+          .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name), institutions(name)')
           .eq('claim_ref', claimRef).maybeSingle()
         // A real query error (e.g. a column anon can't select) used to
         // read identically to "no claim" - !c is true either way - which
@@ -1276,6 +1276,44 @@ export function AgentClaimView({ claimRef }) {
       <Card style={{padding:'14px 16px'}}>
         {medicalRecord ? <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{medicalRecord.diagnosis&&<div style={{fontWeight:600,marginBottom:'4px'}}>{medicalRecord.diagnosis}</div>}{medicalRecord.notes||'No notes on file.'}</div>
           : <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>No linked consultation record.</div>}
+      </Card>
+      {/* Real gap this closes: a reviewer had nothing here but a single
+          gross amount and a diagnosis - no itemized charges, no provider/
+          date, nothing laid out the way a real medical claim form is
+          (provider, date of service, diagnosis + ICD-10, itemized
+          charges by category, total charged vs. amount claimed). Built
+          from data already captured at billing (medical_records.line_items,
+          the claim's own category_breakdown) - nothing new to fill in by
+          hand, and this is also what a future auto-approval match would
+          compare against. */}
+      <SecLabel>Claim form</SecLabel>
+      <Card style={{padding:'14px 16px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',fontSize:'12px',marginBottom:medicalRecord?.line_items?.length>0?'12px':0}}>
+          <div><div style={{color:C.textMuted}}>Provider</div><div style={{fontWeight:500}}>{claim.institutions?.name||'—'}</div></div>
+          <div><div style={{color:C.textMuted}}>Treating doctor</div><div style={{fontWeight:500}}>{medicalRecord?.doctor_name||'—'}</div></div>
+          <div><div style={{color:C.textMuted}}>Date of service</div><div style={{fontWeight:500}}>{medicalRecord?.date_of_record ? new Date(medicalRecord.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : '—'}</div></div>
+          <div><div style={{color:C.textMuted}}>Diagnosis codes</div><div style={{fontWeight:500}}>{claim.icd10_codes||'—'}</div></div>
+        </div>
+        {medicalRecord?.line_items?.length>0&&<div style={{borderTop:`0.5px solid ${C.border}`,paddingTop:'10px'}}>
+          {medicalRecord.line_items.map((li,i)=>(
+            <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'4px 0'}}>
+              <span style={{color:C.textSub}}>{li.description||li.category}{li.qty>1?` ×${li.qty}`:''}</span>
+              <span style={{fontWeight:500}}>HK${(li.fee*li.qty).toFixed(2)}</span>
+            </div>
+          ))}
+        </div>}
+        {claim.category_breakdown&&Object.keys(claim.category_breakdown).length>0&&<div style={{borderTop:`0.5px solid ${C.border}`,marginTop:'10px',paddingTop:'10px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>By benefit category</div>
+          {Object.entries(claim.category_breakdown).map(([cat,amt])=>(
+            <div key={cat} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'2px 0'}}><span style={{color:C.textSub}}>{cat}</span><span>HK${Number(amt).toFixed(2)}</span></div>
+          ))}
+        </div>}
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:600,borderTop:`0.5px solid ${C.border}`,marginTop:'10px',paddingTop:'10px'}}>
+          <span>Total charged</span><span>HK${claim.amount}</span>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:600,color:C.green}}>
+          <span>Amount claimed</span><span>HK${claim.insurer_covered_amount}</span>
+        </div>
       </Card>
       <SecLabel>Supporting documents</SecLabel>
       <Card style={{padding:'12px 16px'}}>
