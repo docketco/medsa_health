@@ -178,6 +178,7 @@ function PlanExtrasManager({ plan, onChanged }) {
 const PLAN_MANAGER_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
 function PlanManager({ company }) {
   const [plans,setPlans]=useState([])
+  const [search,setSearch]=useState('')
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
@@ -275,38 +276,22 @@ function PlanManager({ company }) {
     load()
   }
 
+  // Real gap this closes: the only way to register a new plan was a
+  // button buried under the full list of existing ones - scroll past
+  // everything already listed just to add another. Moved to the top,
+  // with the create form opening right there too (not left pointing at
+  // a form that would render far below where the tap happened).
+  const filteredPlans = plans.filter(p => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return [p.plan_name, p.plan_type].filter(Boolean).some(s => s.toLowerCase().includes(q))
+  })
+
   return (
     <div style={{background:C.beige,flex:1}}>
-      <SecLabel>Your listed plans</SecLabel>
-      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans listed yet.</div>}
-      {!loading&&plans.map((p)=>(
-        <Card key={p.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedPlanId(expandedPlanId===p.id?null:p.id)}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
-            <div>
-              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
-            </div>
-            <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
-              {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
-              <span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>
-            </div>
-          </div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'}
-          </div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {(p.insurance_plan_pricing_tiers||[]).length===0
-              ? <span style={{color:C.red}}>No pricing tiers entered</span>
-              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>`Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`).join(' · ')}
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No covered categories set - claims won\'t match against this plan'}</div>
-          <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
-          {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
-        </Card>
-      ))}
+      {!creating&&<div style={{padding:'16px 16px 0'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
       {creating&&(
-        <Card style={{padding:'16px'}}>
+        <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
@@ -343,10 +328,6 @@ function PlanManager({ company }) {
             <div style={{flex:1}}>
               <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
               <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
-              {/* Real gap this closes: leaving this blank silently applied a
-                  HK$500/year platform default at claim time - nothing on
-                  this form ever said so, only a placeholder that disappears
-                  the moment you focus the field. Enter 0 for no deductible. */}
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
             </div>
           </div>
@@ -373,7 +354,37 @@ function PlanManager({ company }) {
           </div>
         </Card>
       )}
-      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
+      <SecLabel>Your listed plans</SecLabel>
+      <div style={{padding:'0 16px 10px'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search plans by name or type…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filteredPlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{plans.length===0?'No plans listed yet.':'No plans match your search.'}</div>}
+      {!loading&&filteredPlans.map((p)=>(
+        <Card key={p.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedPlanId(expandedPlanId===p.id?null:p.id)}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
+              {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+              <span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>
+            </div>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'}
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
+            {(p.insurance_plan_pricing_tiers||[]).length===0
+              ? <span style={{color:C.red}}>No pricing tiers entered</span>
+              : p.insurance_plan_pricing_tiers.sort((a,b)=>a.age_min-b.age_min).map(t=>`Age ${t.age_min}-${t.age_max}: HK$${t.monthly_premium}/mo`).join(' · ')}
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No covered categories set - claims won\'t match against this plan'}</div>
+          <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
+          {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
+        </Card>
+      ))}
     </div>
   )
 }
@@ -399,6 +410,7 @@ const EMPTY_FORM = {
 }
 function CoverageRulesManager({ company }) {
   const [plans,setPlans]=useState([])
+  const [search,setSearch]=useState('')
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
@@ -567,32 +579,17 @@ function CoverageRulesManager({ company }) {
     load()
   }
 
+  // Real gap this closes: registering a new plan meant scrolling past
+  // every already-registered one first to find the button. Moved to the
+  // top, form opening right there too.
+  const filteredPlans = plans.filter(p => !search.trim() || (p.plan_name||'').toLowerCase().includes(search.trim().toLowerCase()))
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Register your plans' coverage rules so a claim from any Medsa-network clinic (or the direct API) calculates the right deductible/copay for your policyholders. This isn't a marketplace listing - your plans aren't shown to patients or sold by agents, they're only used to process real claims.</div>
       </div>
-      <SecLabel>Your registered plans</SecLabel>
-      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans registered yet.</div>}
-      {!loading&&plans.map((p)=>(
-        <Card key={p.id} style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
-            <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
-            <span onClick={()=>startEdit(p)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',flexShrink:0}}>Edit</span>
-          </div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set - claims won\'t match against this plan'}</div>
-          {(p.overall_annual_limit_hkd||p.network_type||p.waiting_period_days!=null)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>
-            {p.overall_annual_limit_hkd&&`HK$${Number(p.overall_annual_limit_hkd).toLocaleString()} annual max`}
-            {p.network_type&&`${p.overall_annual_limit_hkd?' · ':''}${NETWORK_TYPES.find(n=>n[0]===p.network_type)?.[1]||p.network_type}`}
-            {p.waiting_period_days!=null&&`${(p.overall_annual_limit_hkd||p.network_type)?' · ':''}${p.waiting_period_days}d waiting period`}
-          </div>}
-          {p.policy_document_path&&<div style={{fontSize:'11px',color:C.blue,marginTop:'4px',cursor:'pointer'}} onClick={async()=>{const {data}=await supabase.storage.from('policy-contracts').createSignedUrl(p.policy_document_path,300);if(data?.signedUrl)window.open(data.signedUrl,'_blank')}}>📄 View uploaded policy document</div>}
-        </Card>
-      ))}
+      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Register a plan</Btn></div>}
       {creating&&(
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan':'New plan'}</div>
@@ -735,7 +732,30 @@ function CoverageRulesManager({ company }) {
           </div>
         </Card>
       )}
-      {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Register a plan</Btn></div>}
+      <SecLabel>Your registered plans</SecLabel>
+      <div style={{padding:'0 16px 10px'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search plans by name…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filteredPlans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{plans.length===0?'No plans registered yet.':'No plans match your search.'}</div>}
+      {!loading&&filteredPlans.map((p)=>(
+        <Card key={p.id} style={{padding:'14px 16px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+            <span onClick={()=>startEdit(p)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',flexShrink:0}}>Edit</span>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set - claims won\'t match against this plan'}</div>
+          {(p.overall_annual_limit_hkd||p.network_type||p.waiting_period_days!=null)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>
+            {p.overall_annual_limit_hkd&&`HK$${Number(p.overall_annual_limit_hkd).toLocaleString()} annual max`}
+            {p.network_type&&`${p.overall_annual_limit_hkd?' · ':''}${NETWORK_TYPES.find(n=>n[0]===p.network_type)?.[1]||p.network_type}`}
+            {p.waiting_period_days!=null&&`${(p.overall_annual_limit_hkd||p.network_type)?' · ':''}${p.waiting_period_days}d waiting period`}
+          </div>}
+          {p.policy_document_path&&<div style={{fontSize:'11px',color:C.blue,marginTop:'4px',cursor:'pointer'}} onClick={async()=>{const {data}=await supabase.storage.from('policy-contracts').createSignedUrl(p.policy_document_path,300);if(data?.signedUrl)window.open(data.signedUrl,'_blank')}}>📄 View uploaded policy document</div>}
+        </Card>
+      ))}
     </div>
   )
 }
@@ -985,6 +1005,7 @@ function PolicyVerificationManager({ company }) {
 // via a link, so this dashboard isn't a second, disconnected surface.
 function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
   const [filter,setFilter]=useState('All')
+  const [search,setSearch]=useState('')
   const [claims,setClaims]=useState([])
   const [loading,setLoading]=useState(true)
   const [pluginEnabled,setPluginEnabled]=useState(false)
@@ -1058,11 +1079,20 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
     settled: {label:'Settled', type:'ok'},
   }
   const sourceLabel = { clinic_ops:'ClinicOps', external_clinic:'TPA portal', api_client:'Insurer API', patient_unverified_upload:'Patient upload' }
-  const filtered = filter==='All' ? claims
+  const statusFiltered = filter==='All' ? claims
     : filter==='Pending' ? claims.filter(c=>c.status==='pending_review')
     : filter==='Approved' ? claims.filter(c=>['approved','partially_approved','settled'].includes(c.status))
     : filter==='Rejected' ? claims.filter(c=>c.status==='rejected')
     : claims.filter(c=>c.verification_flag==='patient_unverified_receipt')
+  // Real gap this closes: with the plugin/CSV-export additions this list
+  // routinely runs to 50 claims and there was no way to jump to one
+  // patient or claim ref without scrolling the whole thing - the status
+  // chips filter by outcome, not by who or what.
+  const filtered = statusFiltered.filter(c => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return [c.patients?.full_name, c.insurance_plans?.plan_name, c.claim_ref].filter(Boolean).some(s => s.toLowerCase().includes(q))
+  })
   const counts = {
     Pending: claims.filter(c=>c.status==='pending_review').length,
     Approved: claims.filter(c=>['approved','partially_approved','settled'].includes(c.status)).length,
@@ -1083,6 +1113,9 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
           </div>
         ))}
       </div>
+      <div style={{padding:'12px 16px 0'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by patient, plan, or claim ref…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
       <div style={{display:'flex',gap:'6px',padding:'12px 16px',alignItems:'center',flexWrap:'wrap'}}>
         {['All','Pending','Approved','Rejected','Unverified'].map(f=>(
           <div key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:'5px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:filter===f?C.green:C.card,color:filter===f?'#fff':C.textSub,border:`0.5px solid ${filter===f?C.green:C.border}`}}>{f}</div>
@@ -1094,7 +1127,7 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
         {showPluginSettings&&<ClaimsPluginSettings companyId={company.id}/>}
       </div>}
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No claims here yet.</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{search.trim()?'No claims match your search.':'No claims here yet.'}</div>}
       {filtered.map((c)=>{
         const meta = statusMeta[c.status] || {label:c.status, type:'due'}
         const isUnverifiedReceipt = c.verification_flag==='patient_unverified_receipt'
@@ -1143,6 +1176,7 @@ function generateGopCode() {
 }
 function PreauthRequestsManager({ company }) {
   const [filter,setFilter]=useState('Pending')
+  const [search,setSearch]=useState('')
   const [requests,setRequests]=useState([])
   const [loading,setLoading]=useState(true)
   const [decidingId,setDecidingId]=useState(null)
@@ -1197,7 +1231,12 @@ function PreauthRequestsManager({ company }) {
     denied: {label:'Denied', type:'full'},
     expired: {label:'Expired', type:'full'},
   }
-  const filtered = filter==='All' ? requests : requests.filter(r => r.status === filter.toLowerCase())
+  const statusFiltered = filter==='All' ? requests : requests.filter(r => r.status === filter.toLowerCase())
+  const filtered = statusFiltered.filter(r => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return [r.patients?.full_name, r.insurance_plans?.plan_name, r.institutions?.name, r.policy_number, r.category].filter(Boolean).some(s => s.toLowerCase().includes(q))
+  })
   const counts = {
     Pending: requests.filter(r=>r.status==='pending').length,
     Approved: requests.filter(r=>r.status==='approved').length,
@@ -1217,13 +1256,16 @@ function PreauthRequestsManager({ company }) {
           </div>
         ))}
       </div>
+      <div style={{padding:'12px 16px 0'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by patient, plan, clinic, or category…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
       <div style={{display:'flex',gap:'6px',padding:'12px 16px',flexWrap:'wrap'}}>
         {['All','Pending','Approved','Denied'].map(f=>(
           <div key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:'5px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:filter===f?C.green:C.card,color:filter===f?'#fff':C.textSub,border:`0.5px solid ${filter===f?C.green:C.border}`}}>{f}</div>
         ))}
       </div>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No pre-authorization requests here yet.</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{search.trim()?'No requests match your search.':'No pre-authorization requests here yet.'}</div>}
       {filtered.map(r=>{
         const meta = statusMeta[r.status] || {label:r.status, type:'due'}
         return (
@@ -1530,6 +1572,7 @@ export function AgentClaimView({ claimRef }) {
 // sponsorship" button that submitted nothing.
 function SponsoredListings({ company }) {
   const [plans,setPlans]=useState([])
+  const [search,setSearch]=useState('')
   const [loading,setLoading]=useState(true)
   const [promotingId,setPromotingId]=useState(null)
   const [description,setDescription]=useState('')
@@ -1554,8 +1597,9 @@ function SponsoredListings({ company }) {
 
   const today = new Date().toISOString().slice(0,10)
   const active = plans.filter(p => p.sponsored && p.sponsored_until >= today)
-  const available = plans.filter(p => !(p.sponsored && p.sponsored_until >= today))
-  const promotingPlan = available.find(p=>p.id===promotingId)
+  const availableAll = plans.filter(p => !(p.sponsored && p.sponsored_until >= today))
+  const available = availableAll.filter(p => !search.trim() || p.plan_name.toLowerCase().includes(search.trim().toLowerCase()))
+  const promotingPlan = availableAll.find(p=>p.id===promotingId)
 
   function startPromote(plan) {
     setPromotingId(plan.id)
@@ -1616,7 +1660,11 @@ function SponsoredListings({ company }) {
         </Card>
       ))}
       <SecLabel>Promote a plan</SecLabel>
-      {available.length===0&&!promotingId&&<Card style={{padding:'16px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{plans.length===0?'Add a plan first.':'All your plans are already sponsored.'}</div></Card>}
+      {!promotingId&&availableAll.length>0&&<div style={{padding:'0 16px 10px'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search your plans…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>}
+      {availableAll.length===0&&!promotingId&&<Card style={{padding:'16px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{plans.length===0?'Add a plan first.':'All your plans are already sponsored.'}</div></Card>}
+      {!promotingId&&availableAll.length>0&&available.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No plans match your search.</div>}
       {!promotingId&&available.map(p=>(
         <Card key={p.id} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px'}}>
           <div style={{fontSize:'13px',fontWeight:500}}>{p.plan_name}</div>

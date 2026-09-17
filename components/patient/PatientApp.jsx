@@ -2719,6 +2719,20 @@ function MyInquiriesTab({ isEn, patient={} }) {
 //    initiated from the patient's side instead of the clinic's.
 function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null, heldPolicies=[] }) {
   const hasLiveClaims = claims.length > 0
+  const [claimSearch,setClaimSearch]=useState('')
+  const [claimPlanFilter,setClaimPlanFilter]=useState('')
+  // Real gap this closes: with claims now syncing automatically from
+  // every submission path (ClinicOps, TPA portal, patient upload), a
+  // patient holding more than one policy had no way to find one claim,
+  // or narrow the list down to just one plan, without scrolling past
+  // everything else.
+  const claimPlanOptions = [...new Map(claims.filter(c=>c.insurance_plans).map(c=>[c.plan_id, c.insurance_plans.plan_name])).entries()]
+  const visibleClaims = claims.filter(c => {
+    if (claimPlanFilter && c.plan_id !== claimPlanFilter) return false
+    const q = claimSearch.trim().toLowerCase()
+    if (!q) return true
+    return [c.claim_ref, c.institutions?.name, c.insurance_plans?.plan_name, c.claim_type].filter(Boolean).some(s => s.toLowerCase().includes(q))
+  })
 
   const [attachments,setAttachments]=useState([])
   const [uploadingReceipt,setUploadingReceipt]=useState(false)
@@ -2876,8 +2890,16 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
       </div>
 
       <SecLabel>{isEn?'Claims':'索賠'}</SecLabel>
+      {hasLiveClaims&&<div style={{margin:'0 16px 10px',display:'flex',gap:'8px'}}>
+        <input value={claimSearch} onChange={e=>setClaimSearch(e.target.value)} placeholder={isEn?'Search claims…':'搜尋索償…'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        {claimPlanOptions.length>1&&<select value={claimPlanFilter} onChange={e=>setClaimPlanFilter(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12px',background:'#fff',outline:'none',fontFamily:'inherit',flexShrink:0,maxWidth:'40%'}}>
+          <option value="">{isEn?'All plans':'所有計劃'}</option>
+          {claimPlanOptions.map(([planId,name])=><option key={planId} value={planId}>{name}</option>)}
+        </select>}
+      </div>}
       {!hasLiveClaims&&<div style={{margin:'0 16px 8px',textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px 0'}}>{isEn?'No claims yet.':'暫無索償記錄。'}</div>}
-      {hasLiveClaims && claims.map((c,i)=>{
+      {hasLiveClaims&&visibleClaims.length===0&&<div style={{margin:'0 16px 8px',textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px 0'}}>{isEn?'No claims match your search.':'沒有符合搜尋的索償。'}</div>}
+      {hasLiveClaims && visibleClaims.map((c,i)=>{
         const statusType = c.status==='approved'||c.status==='settled'?'ok':c.status==='rejected'?'full':'due'
         const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
         const covered = c.insurer_covered_amount ?? c.plan_covers ?? 0
