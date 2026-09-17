@@ -2707,32 +2707,38 @@ function MyInquiriesTab({ isEn, patient={} }) {
 }
 
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-// Real redesign: this used to be three overlapping, half-working ways to
-// submit a claim - a single-attachment "submit a receipt" card that
-// required a detour to the Records tab to upload anything first, and a
-// "prepare a claim package" guided checklist that routed EVERY document
-// (including "Patient ID copy" and "Policy number", which are never in
-// the pool) through the same generic records picker, ending in a
-// permanently disabled "Submit directly via Medsa" stub. None of the
-// three actually let a patient submit a visit Medsa already has full
-// receipt/diagnosis data for without re-uploading it.
-//
-// Down to two real paths instead:
-// 1) A visit already on file at a Medsa-connected clinic - line items,
-//    diagnosis, ICD-10 are already real structured data here (medical_records)
-//    - nothing to upload, just pick the visit and confirm the amount.
-// 2) An out-of-network receipt - genuinely nothing on file for it, so the
-//    patient uploads it directly, right here, no detour to another tab.
-// "Patient ID copy" is gone entirely - identity isn't a claims document,
-// it's what plan purchase/KYC needs, not a payout review.
-function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null }) {
+// Two real submission paths:
+// 1) A visit already on file at a Medsa-connected clinic - receipt and
+//    diagnosis are already real structured data (medical_records), so
+//    submitting is just picking the visit and confirming the amount.
+// 2) An out-of-network receipt - genuinely nothing on file, so the
+//    patient uploads it directly, right here, and can name the clinic
+//    so it's checked against clinics Medsa already knows about (network
+//    partners, TPA-registered clinics, HK-government-registered
+//    clinics) - the same trust check the TPA portal itself runs, just
+//    initiated from the patient's side instead of the clinic's.
+function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null, heldPolicies=[] }) {
   const hasLiveClaims = claims.length > 0
 
   const [attachments,setAttachments]=useState([])
   const [uploadingReceipt,setUploadingReceipt]=useState(false)
   const [uploadError,setUploadError]=useState(null)
 
-  const [selectedVisitId,setSelectedVisitId]=useState(null)
+  // Every claim already on file for this patient, keyed by id, so a
+  // visit already claimed under one plan can still show that plan's
+  // name instead of just vanishing - and so submitting the SAME visit
+  // again under a DIFFERENT plan (coordination of benefits between two
+  // insurers) is a warned choice, not a silent duplicate.
+  const [existingClaimsById,setExistingClaimsById]=useState({})
+  useEffect(() => {
+    const claimIds = [...new Set(records.map(r=>r.insurance_claim_id).filter(Boolean))]
+    if (claimIds.length===0) { setExistingClaimsById({}); return }
+    supabase.from('insurance_claims').select('id, plan_id, insurance_plans(plan_name)').in('id', claimIds)
+      .then(({data}) => setExistingClaimsById(Object.fromEntries((data||[]).map(c=>[c.id,c]))))
+  }, [records])
+
+  const [selectedVisitId,setSelectedVisitId]=useState('')
+  const [visitPlanId,setVisitPlanId]=useState(activePolicy?.plan_id || '')
   const [visitAmount,setVisitAmount]=useState('')
   const [visitSubmitting,setVisitSubmitting]=useState(false)
   const [visitSubmitError,setVisitSubmitError]=useState(null)
@@ -2740,6 +2746,9 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
 
   const [manualSelectedIds,setManualSelectedIds]=useState(new Set())
   const [manualAmount,setManualAmount]=useState('')
+  const [manualClinicName,setManualClinicName]=useState('')
+  const [manualClinicCheck,setManualClinicCheck]=useState(null) // null=not checked, 'checking', {verified,label}
+  const [manualPlanId,setManualPlanId]=useState(activePolicy?.plan_id || '')
   const [manualSubmitting,setManualSubmitting]=useState(false)
   const [manualSubmitError,setManualSubmitError]=useState(null)
   const [manualSubmitSuccess,setManualSubmitSuccess]=useState(null)
@@ -2753,36 +2762,49 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
   }
   useEffect(() => { loadAttachments() }, [patient?.id])
 
-  // Any visit that already has real receipt/diagnosis data on file and
-  // hasn't already been claimed - the same medical_records this patient
-  // sees under Records, source doesn't matter (a Medsa clinic writes
-  // line_items/total_fee/diagnosis the same way regardless).
-  const unclaimedVisits = records.filter(r => !r.insurance_claim_id && (r.total_fee!=null || r.diagnosis))
+  // Visits with real receipt/diagnosis data - shown regardless of prior
+  // claim status now (the dropdown itself explains why an already-claimed
+  // one needs care), rather than silently disappearing once claimed.
+  const visitsWithData = records.filter(r => r.total_fee!=null || r.diagnosis)
+  const selectedVisit = records.find(r=>r.id===selectedVisitId) || null
+  const selectedVisitExistingClaim = selectedVisit?.insurance_claim_id ? existingClaimsById[selectedVisit.insurance_claim_id] : null
+  // A true duplicate only when the SAME plan is picked again - a
+  // different plan than the one already on the claim is a real,
+  // legitimate coordination-of-benefits submission to a second insurer,
+  // not a duplicate, so it's warned rather than blocked.
+  const isDuplicateForSelectedPlan = selectedVisitExistingClaim && selectedVisitExistingClaim.plan_id === visitPlanId
+
+  function pickVisit(id) {
+    setSelectedVisitId(id)
+    setVisitSubmitSuccess(null); setVisitSubmitError(null)
+    const v = records.find(r=>r.id===id)
+    setVisitAmount(v?.total_fee!=null ? String(v.total_fee) : '')
+  }
 
   async function handleSubmitFromVisit() {
-    const visit = records.find(r=>r.id===selectedVisitId)
-    if (!activePolicy?.plan_id || !visit || !patient?.id) return
+    if (!selectedVisit || !visitPlanId || !patient?.id || isDuplicateForSelectedPlan) return
     setVisitSubmitting(true); setVisitSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
-      claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
-      claim_type: visit.record_type || 'outpatient',
-      amount: visitAmount.trim() ? Number(visitAmount) : (visit.total_fee ?? null),
+      claim_ref: claimRef, patient_id: patient.id, plan_id: visitPlanId,
+      claim_type: selectedVisit.record_type || 'outpatient',
+      amount: visitAmount.trim() ? Number(visitAmount) : (selectedVisit.total_fee ?? null),
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
-      institution_id: visit.institution_id || null,
+      institution_id: selectedVisit.institution_id || null,
     }).select().maybeSingle()
     if (claimErr) { setVisitSubmitError(claimErr.message); setVisitSubmitting(false); return }
-    const { error: linkErr } = await supabase.from('medical_records').update({ insurance_claim_id: newClaim.id }).eq('id', visit.id)
-    if (linkErr) { setVisitSubmitError(linkErr.message); setVisitSubmitting(false); return }
+    // Only overwrites the visit's OWN claim link when this is its first
+    // claim - a second claim under a different plan (coordination of
+    // benefits) is real, but medical_records can only point at one claim
+    // at a time, so the newest one wins for "what does Records show."
+    await supabase.from('medical_records').update({ insurance_claim_id: newClaim.id }).eq('id', selectedVisit.id)
     setVisitSubmitSuccess(claimRef)
-    setSelectedVisitId(null); setVisitAmount('')
     setVisitSubmitting(false)
   }
 
-  // Real upload, right on this screen - stores it the same way Records'
-  // own upload does, then it's immediately selectable below. No more
-  // "go upload it somewhere else first."
+  // Real upload, right on this screen - no more "go upload it somewhere
+  // else first."
   async function handleUploadReceipt(file) {
     if (!file || !patient?.id) return
     setUploadingReceipt(true); setUploadError(null)
@@ -2803,22 +2825,44 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
     setManualSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
 
+  // Same trust check the TPA portal's own onboarding runs, just against
+  // what the patient typed instead of what a clinic registered with -
+  // a name that matches a real Medsa-network clinic, a TPA-registered
+  // clinic, or an HK-government-registered clinic (business registration/
+  // ORPHF) is a real signal for the reviewer, not just the patient's word.
+  async function checkClinicName(name) {
+    const q = name.trim()
+    if (!q) { setManualClinicCheck(null); return }
+    setManualClinicCheck('checking')
+    const [{data:inst},{data:ext},{data:ver}] = await Promise.all([
+      supabase.from('institutions').select('id, name').ilike('name', `%${q}%`).limit(1),
+      supabase.from('external_clinics').select('id, clinic_name').eq('status','active').ilike('clinic_name', `%${q}%`).limit(1),
+      supabase.from('verified_clinics').select('id, clinic_name_declared').or(`clinic_name_declared.ilike.%${q}%,clinic_name_matched_br.ilike.%${q}%`).limit(1),
+    ])
+    if (inst?.length) setManualClinicCheck({verified:true, label:'Matches a Medsa-network clinic'})
+    else if (ext?.length) setManualClinicCheck({verified:true, label:'Matches a TPA-registered clinic'})
+    else if (ver?.length) setManualClinicCheck({verified:true, label:'Matches an HK-government-registered clinic'})
+    else setManualClinicCheck({verified:false, label:'Not found in our clinic records'})
+  }
+
   async function handleSubmitManualClaim() {
-    if (!activePolicy?.plan_id || manualSelectedIds.size===0 || !patient?.id) return
+    if (!manualPlanId || manualSelectedIds.size===0 || !patient?.id) return
     setManualSubmitting(true); setManualSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
-      claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
+      claim_ref: claimRef, patient_id: patient.id, plan_id: manualPlanId,
       claim_type: 'outpatient', amount: manualAmount.trim() ? Number(manualAmount) : null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
+      claimed_clinic_name: manualClinicName.trim() || null,
+      claimed_clinic_verified: manualClinicCheck?.verified ?? null,
     }).select().maybeSingle()
     if (claimErr) { setManualSubmitError(claimErr.message); setManualSubmitting(false); return }
     const ids = Array.from(manualSelectedIds)
     const { error: linkErr } = await supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', ids)
     if (linkErr) { setManualSubmitError(linkErr.message); setManualSubmitting(false); return }
     await loadAttachments()
-    setManualSelectedIds(new Set()); setManualAmount('')
+    setManualSelectedIds(new Set()); setManualAmount(''); setManualClinicName(''); setManualClinicCheck(null)
     setManualSubmitSuccess(claimRef)
     setManualSubmitting(false)
   }
@@ -2836,12 +2880,6 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
       {hasLiveClaims && claims.map((c,i)=>{
         const statusType = c.status==='approved'||c.status==='settled'?'ok':c.status==='rejected'?'full':'due'
         const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
-        // Real bug this fixes: the real adjudication engine writes
-        // the insurer's covered amount to insurer_covered_amount -
-        // this card read a completely different, never-populated
-        // column (plan_covers, a leftover from before that engine
-        // existed), so every real claim's amount showed blank/NaN
-        // regardless of what the claim actually settled for.
         const covered = c.insurer_covered_amount ?? c.plan_covers ?? 0
         return(
           <Card key={i} style={{padding:'14px 16px'}}>
@@ -2863,46 +2901,62 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
 
       {!activePolicy&&<div style={{margin:'16px 16px 0',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'Add your policy above first - a claim needs a policy to submit against.':'請先在上方新增您的保單 - 索償需要對應保單。'}</div>}
 
-      {/* Path 1: a visit Medsa already has real data for - a Medsa-network
-          clinic's receipt, diagnosis, and ICD-10 are already structured
-          data here, not a piece of paper to photograph. Nothing to
-          upload - pick the visit, confirm the amount, done. */}
-      {activePolicy&&<>
-        <SecLabel>{isEn?'Submit a claim from a visit on file':'從已存檔的診症提交索償'}</SecLabel>
-        <div style={{margin:'0 16px 10px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
-        {unclaimedVisits.length===0
-          ? <div style={{margin:'0 16px 16px',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'No unclaimed visits on file yet.':'暫無未提交索償的已存檔診症。'}</div>
-          : <div style={{padding:'0 16px 10px',display:'flex',flexDirection:'column',gap:'8px'}}>
-              {unclaimedVisits.map(v=>(
-                <Card key={v.id} onClick={()=>{setSelectedVisitId(v.id);setVisitAmount(v.total_fee!=null?String(v.total_fee):'')}} style={{padding:'12px 16px',cursor:'pointer',border:selectedVisitId===v.id?`1.5px solid ${C.green}`:undefined}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                    <div>
-                      <div style={{fontSize:'13px',fontWeight:500}}>{v.diagnosis||v.title||'Visit'}{v.institutions?.name?` · ${v.institutions.name}`:''}</div>
-                      <div style={{fontSize:'11px',color:C.textSub}}>{v.doctor_name?`${v.doctor_name} · `:''}{v.date_of_record?new Date(v.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''}</div>
-                      {v.icd10_code&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>ICD-10: {v.icd10_code}</div>}
-                    </div>
-                    {v.total_fee!=null&&<div style={{fontSize:'14px',fontWeight:600,color:C.green,flexShrink:0}}>HK${v.total_fee}</div>}
-                  </div>
-                </Card>
-              ))}
-            </div>}
-        {selectedVisitId&&<Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{isEn?`Submitting against ${activePolicy.plan_name}`:`提交至 ${activePolicy.plan_name}`}</div>
-          <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
-          {visitSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{visitSubmitError}</div>}
-          {visitSubmitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>}
-          <Btn variant="primary" style={{width:'100%'}} disabled={visitSubmitting} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>
-        </Card>}
-      </>}
+      {/* Path 1: a visit Medsa already has real data for. The headline
+          action on this tab - a highlighted card, not a plain section,
+          since this covers the common case (a Medsa-network visit) with
+          nothing to upload at all. */}
+      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit a claim from a visit on file':'從已存檔的診症提交索償'}</div>
+        <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
 
-      {/* Path 2: genuinely out-of-network - nothing on file, so the patient
-          uploads it directly, right here. */}
+        {visitsWithData.length===0
+          ? <div style={{fontSize:'12px',opacity:0.8,fontStyle:'italic'}}>{isEn?'No visits on file yet.':'暫無已存檔的診症記錄。'}</div>
+          : <select value={selectedVisitId} onChange={e=>pickVisit(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'11px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:selectedVisitId?'12px':0,background:'#fff',color:C.text}}>
+              <option value="">{isEn?'Select a visit…':'選擇診症…'}</option>
+              {visitsWithData.map(v=>{
+                const claimed = v.insurance_claim_id ? existingClaimsById[v.insurance_claim_id] : null
+                const label = `${v.date_of_record?new Date(v.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''} · ${v.diagnosis||v.title||'Visit'}${v.total_fee!=null?` · HK$${v.total_fee}`:''}${claimed?` · already claimed (${claimed.insurance_plans?.plan_name||'a plan'})`:''}`
+                return <option key={v.id} value={v.id}>{label}</option>
+              })}
+            </select>}
+
+        {selectedVisit&&<div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
+          {selectedVisit.icd10_code&&<div style={{fontSize:'11px',opacity:0.8,marginBottom:'8px'}}>ICD-10: {selectedVisit.icd10_code}</div>}
+
+          {heldPolicies.length>1
+            ? <>
+                <div style={{fontSize:'11px',opacity:0.8,marginBottom:'4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
+                <select value={visitPlanId} onChange={e=>setVisitPlanId(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}>
+                  {heldPolicies.map(p=><option key={p.id} value={p.plan_id}>{p.plan_name}</option>)}
+                </select>
+              </>
+            : <div style={{fontSize:'12px',opacity:0.85,marginBottom:'10px'}}>{isEn?`Submitting against ${activePolicy.plan_name}`:`提交至 ${activePolicy.plan_name}`}</div>}
+
+          {selectedVisitExistingClaim&&(isDuplicateForSelectedPlan
+            ? <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'⚠'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'this plan'} - can't submit the same visit twice under the same plan.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'此計劃'}提交索償 - 不能就同一計劃重複提交。`}</div>
+            : <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'◇'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'another plan'} - only continue if you're also claiming this from a second insurer.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'另一計劃'}提交索償 - 僅在您同時向第二間保險公司申請索償時才繼續。`}</div>)}
+
+          <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
+          {visitSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{visitSubmitError}</div>}
+          {visitSubmitSuccess
+            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
+        </div>}
+      </div>}
+
+      {/* Path 2: genuinely out-of-network. */}
       {activePolicy&&<>
         <SecLabel>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</SecLabel>
         <Card style={{padding:'14px 16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn
-            ?`Upload a receipt (and diagnosis letter, if it's a separate document) from a clinic not on Medsa. Medsa flags it as unverified - your insurer checks it independently before anything is approved.`
-            :`上傳非Medsa診所的收據(如診斷證明為獨立文件,請一併上傳)。Medsa會將其標記為未經核實 - 您的保險公司將自行核實後才作批核。`}</div>
+            ?'Upload a receipt (and diagnosis letter, if it\'s a separate document) from a clinic not on Medsa.'
+            :'上傳非Medsa診所的收據(如診斷證明為獨立文件,請一併上傳)。'}</div>
+
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
+          <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital':'例如:明德國際醫院'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px'}}/>
+          {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
+          {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',color:manualClinicCheck.verified?C.green:C.textMuted,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
+
           <label style={{display:'block',textAlign:'center',border:`1.5px dashed ${C.border}`,borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',color:uploadingReceipt?C.textMuted:C.green,fontWeight:500}}>
             {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a receipt or document':'+ 上傳收據或文件')}
             <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
@@ -2916,6 +2970,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
                 <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
               </div>
             ))}
+
+          {heldPolicies.length>1&&<>
+            <div style={{fontSize:'11px',color:C.textMuted,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
+            <select value={manualPlanId} onChange={e=>setManualPlanId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+              {heldPolicies.map(p=><option key={p.id} value={p.plan_id}>{p.plan_name}</option>)}
+            </select>
+          </>}
+
           <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0'}}/>
           {manualSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{manualSubmitError}</div>}
           {manualSubmitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>}
@@ -3288,6 +3350,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     setFeedbackSubmitted(true)
   }
   const [activePolicy,setActivePolicy]=useState(null)
+  const [heldPolicies,setHeldPolicies]=useState([]) // every held policy, not just the one shown up top - a patient can hold more than one, and ClaimsTab needs all of them to let the patient pick which to bill
   const [policyLoading,setPolicyLoading]=useState(true)
   const [renewalRequested,setRenewalRequested]=useState(false)
 
@@ -3296,7 +3359,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!medsaId) { setPolicyLoading(false); return }
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setPolicyLoading(false); return }
-    const { data } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
+    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
+    setHeldPolicies(all||[])
+    const data = (all||[])[0]
     setActivePolicy(data||null)
     setRenewalRequested(!!data?.patient_requested_renewal_at)
     setPolicyLoading(false)
@@ -3669,7 +3734,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient}/>}
 
       {/* ── CLAIMS ── */}
-      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy}/>}
+      {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
