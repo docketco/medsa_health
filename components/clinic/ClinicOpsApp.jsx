@@ -6412,6 +6412,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.deductibleApplied>0&&<div style={{marginTop:'2px'}}>Deductible applied: HK${claimAdjudication.deductibleApplied.toFixed(2)}</div>}
               {claimAdjudication.annualLimitReached&&<div style={{marginTop:'2px'}}>{'⚠'} This policy's annual limit is already fully used for the year.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient regardless of review.</div>}
+              {claimAdjudication.usingDefaultDeductible&&<div style={{marginTop:'2px'}}>{'⚠'} {claimAdjudication.usingDefaultDeductible}</div>}
               {/* Real gap this closes: the claim's real ICD-10 code(s)
                   were being saved (see handleCheckClaimAmount) but never
                   shown anywhere in this flow - front desk had no way to
@@ -6482,6 +6483,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient.</div>}
               {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
+              {claimAdjudication.usingDefaultDeductible&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.usingDefaultDeductible}</div>}
               {claimAdjudication.preauthCleared&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>{'✓'} Pre-authorized via GOP code - settled without a review hold.</div>}
               {claimAdjudication.icd10Codes?.length>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>ICD-10: {claimAdjudication.icd10Codes.join(', ')}</div>}
             </div>
@@ -7537,9 +7539,17 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
   const [patients,setPatients]=useState([])
   const [patientSearch,setPatientSearch]=useState('')
   const [selectedPatient,setSelectedPatient]=useState(null)
-  const [plans,setPlans]=useState([])
-  const [planSearch,setPlanSearch]=useState('')
-  const [selectedPlan,setSelectedPlan]=useState(null)
+  // Real gap this closes: a first version of this screen let front desk
+  // pick ANY active plan for ANY patient, with nothing checking the
+  // patient actually holds that policy - a GOP could be requested (and
+  // matched at billing) for coverage that doesn't exist. Pre-authorization
+  // is meaningless without a real policy behind it, so this now only ever
+  // offers the patient's own held, active policies (agent_policies - the
+  // same table findEligiblePlans/checkEligibility already treat as the
+  // real source of truth for "this patient actually has this coverage"),
+  // never a free search across every plan on the platform.
+  const [heldPolicies,setHeldPolicies]=useState(null) // null = not loaded yet, [] = loaded, none held
+  const [selectedPolicy,setSelectedPolicy]=useState(null)
   const [category,setCategory]=useState('')
   const [description,setDescription]=useState('')
   const [estimatedAmount,setEstimatedAmount]=useState('')
@@ -7562,25 +7572,40 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
     async function load() {
       const { data } = await supabase.from('patients').select('id, full_name, medsa_id').order('full_name').limit(500)
       setPatients(data||[])
-      const { data: pl } = await supabase.from('insurance_plans').select('id, plan_name, company_name').eq('status','active').order('company_name')
-      setPlans(pl||[])
     }
     if (step==='new') load()
   }, [step])
 
+  // Loaded fresh per patient - the same real held-policy source ClaimsScreen
+  // already uses (agent_policies, status active), joined to the plan for
+  // display. No line items to match categories against here (this is
+  // BEFORE the visit, nothing's been billed yet), so this is a simpler,
+  // direct query rather than routing through findEligiblePlans.
+  useEffect(() => {
+    if (!selectedPatient) { setHeldPolicies(null); return }
+    async function loadPolicies() {
+      setHeldPolicies(null)
+      const { data } = await supabase.from('agent_policies')
+        .select('*, insurance_plans(id, plan_name, company_name)')
+        .eq('patient_id', selectedPatient.id).eq('status', 'active')
+      setHeldPolicies((data||[]).filter(p => p.insurance_plans))
+    }
+    loadPolicies()
+  }, [selectedPatient?.id])
+
   const filteredPatients = patientSearch.trim() ? patients.filter(p => p.full_name?.toLowerCase().includes(patientSearch.trim().toLowerCase())) : []
-  const filteredPlans = planSearch.trim() ? plans.filter(p => `${p.plan_name} ${p.company_name}`.toLowerCase().includes(planSearch.trim().toLowerCase())) : plans.slice(0,20)
 
   function resetForm() {
-    setSelectedPatient(null); setSelectedPlan(null); setCategory(''); setDescription('')
-    setEstimatedAmount(''); setNotes(''); setPatientSearch(''); setPlanSearch(''); setSubmitError(null)
+    setSelectedPatient(null); setSelectedPolicy(null); setCategory(''); setDescription('')
+    setEstimatedAmount(''); setNotes(''); setPatientSearch(''); setSubmitError(null)
   }
 
   async function handleSubmit() {
-    if (!selectedPatient || !selectedPlan) return
+    if (!selectedPatient || !selectedPolicy) return
     setSubmitting(true); setSubmitError(null)
     const { error } = await supabase.from('preauth_requests').insert({
-      patient_id: selectedPatient.id, plan_id: selectedPlan.id, institution_id: institutionId,
+      patient_id: selectedPatient.id, plan_id: selectedPolicy.insurance_plans.id, institution_id: institutionId,
+      agent_policy_id: selectedPolicy.id, policy_number: selectedPolicy.policy_number || null,
       requested_by: staffMember?.name || null, category: category || null,
       description: description || null,
       estimated_amount_hkd: estimatedAmount!=='' ? parseFloat(estimatedAmount) : null,
@@ -7608,7 +7633,7 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
       {selectedPatient ? (
         <Card style={{padding:'12px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div><div style={{fontSize:'13px',fontWeight:500}}>{selectedPatient.full_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{selectedPatient.medsa_id}</div></div>
-          <span onClick={()=>setSelectedPatient(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+          <span onClick={()=>{setSelectedPatient(null);setSelectedPolicy(null)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
         </Card>
       ) : <>
         <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search patient by name…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
@@ -7622,21 +7647,28 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
         </div>
       </>}
 
-      <SecLabel>Insurance plan</SecLabel>
-      {selectedPlan ? (
-        <Card style={{padding:'12px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div><div style={{fontSize:'13px',fontWeight:500}}>{selectedPlan.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{selectedPlan.company_name}</div></div>
-          <span onClick={()=>setSelectedPlan(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
-        </Card>
-      ) : <>
-        <input value={planSearch} onChange={e=>setPlanSearch(e.target.value)} placeholder="Search plan or insurer…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
-        <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'16px'}}>
-          {filteredPlans.map(p=>(
-            <Card key={p.id} onClick={()=>setSelectedPlan(p)} style={{padding:'10px 16px',cursor:'pointer'}}>
-              <div style={{fontSize:'13px',fontWeight:500}}>{p.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{p.company_name}</div>
+      {/* Only the patient's own real, active policies - never a free
+          search across every plan on the platform. A GOP means nothing
+          without a real policy behind it. */}
+      {selectedPatient&&<>
+        <SecLabel>Insurance policy on file</SecLabel>
+        {heldPolicies===null&&<div style={{fontSize:'12px',color:C.textMuted,padding:'8px 0 16px'}}>Loading…</div>}
+        {heldPolicies&&heldPolicies.length===0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber}}>{'⚠'} No active insurance policy on file for this patient - link one (Create Plan, or have the patient add it themselves) before requesting pre-authorization. A GOP can't be issued against coverage that isn't on record.</div>}
+        {heldPolicies&&heldPolicies.length>0&&!selectedPolicy&&<div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'16px'}}>
+          {heldPolicies.map(pol=>(
+            <Card key={pol.id} onClick={()=>setSelectedPolicy(pol)} style={{padding:'10px 16px',cursor:'pointer'}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{pol.insurance_plans.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{pol.insurance_plans.company_name}{pol.policy_number?` · Policy ${pol.policy_number}`:' · No policy number on file'}</div>
             </Card>
           ))}
-        </div>
+        </div>}
+        {selectedPolicy&&<Card style={{padding:'12px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:500}}>{selectedPolicy.insurance_plans.plan_name}</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>{selectedPolicy.insurance_plans.company_name}{selectedPolicy.policy_number?` · Policy ${selectedPolicy.policy_number}`:' · No policy number on file'}</div>
+          </div>
+          <span onClick={()=>setSelectedPolicy(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+        </Card>}
       </>}
 
       <SecLabel>Category</SecLabel>
@@ -7657,7 +7689,7 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
 
       {submitError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'12px'}}>{submitError}</div>}
       <div style={{textAlign:'center'}}>
-        <Btn variant="primary" onClick={handleSubmit} disabled={!selectedPatient||!selectedPlan||submitting}>{submitting?'Submitting…':'Submit request'}</Btn>
+        <Btn variant="primary" onClick={handleSubmit} disabled={!selectedPatient||!selectedPolicy||submitting}>{submitting?'Submitting…':'Submit request'}</Btn>
       </div>
     </PageWrap>
   )
@@ -7678,7 +7710,7 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
                 <div>
                   <div style={{fontSize:'13px',fontWeight:600}}>{r.patients?.full_name||'Unknown patient'}</div>
-                  <div style={{fontSize:'12px',color:C.textSub}}>{r.insurance_plans?.plan_name} · {r.insurance_plans?.company_name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{r.insurance_plans?.plan_name} · {r.insurance_plans?.company_name}{r.policy_number?` · Policy ${r.policy_number}`:''}</div>
                 </div>
                 <Badge text={meta.label} type={meta.type}/>
               </div>
