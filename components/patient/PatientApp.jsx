@@ -3525,6 +3525,13 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           price: myTier ? myTier.monthly_premium : null,
           limit: myTier ? myTier.annual_limit : null,
           priceUnavailable: !myTier,
+          // A self-serve/Coverage-Rules plan (a TPA-tier insurer's, never
+          // sold on the marketplace) has zero pricing tiers on principle -
+          // it will NEVER have a price here, for any patient of any age.
+          // "No pricing for your age" told every patient this was an
+          // age-tier gap specific to them, when it's really "Medsa
+          // doesn't sell this plan at all, sponsored or not."
+          noTiersAtAll: tiers.length===0,
           sponsored: p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr,
           sponsorDescription: p.sponsor_description||null, sponsorThumbnailUrl: p.sponsor_thumbnail_url||null,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
@@ -3723,7 +3730,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
                 {plan.priceUnavailable
-                  ? <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No pricing for your age':'無您年齡的價格'}</div>
+                  ? <div style={{fontSize:'11px',color:C.textMuted}}>{plan.noTiersAtAll
+                      ? (isEn?'Not sold through Medsa - contact the insurer directly':'Medsa不銷售此計劃 - 請直接聯絡保險公司')
+                      : (isEn?'No pricing for your age':'無您年齡的價格')}</div>
                   : <>
                       <div style={{fontSize:'14px',fontWeight:700,color:C.navy}}>HK${plan.price}{isEn?'/mo':'/月'}</div>
                       <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'Annual limit':'年度限額'}: HK${plan.limit}</div>
