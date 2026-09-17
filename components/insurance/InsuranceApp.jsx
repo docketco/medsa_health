@@ -342,7 +342,12 @@ function PlanManager({ company }) {
             </div>
             <div style={{flex:1}}>
               <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
-              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500 (defaults to $500)"/>
+              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
+              {/* Real gap this closes: leaving this blank silently applied a
+                  HK$500/year platform default at claim time - nothing on
+                  this form ever said so, only a placeholder that disappears
+                  the moment you focus the field. Enter 0 for no deductible. */}
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
             </div>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
@@ -616,6 +621,11 @@ function CoverageRulesManager({ company }) {
             <div style={{flex:1}}>
               <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
               <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
+              {/* Real gap this closes: leaving this blank silently applied a
+                  HK$500/year platform default at claim time - nothing on
+                  this form ever said so, only a placeholder that disappears
+                  the moment you focus the field. Enter 0 for no deductible. */}
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
             </div>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>

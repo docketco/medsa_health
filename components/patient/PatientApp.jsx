@@ -2732,6 +2732,10 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
   const [uploadingKey,setUploadingKey]=useState(null)
   const [uploadErrorByKey,setUploadErrorByKey]=useState({})
   const [bundlingPdf,setBundlingPdf]=useState(false)
+  const [packageAmount,setPackageAmount]=useState('')
+  const [packageSubmitting,setPackageSubmitting]=useState(false)
+  const [packageSubmitError,setPackageSubmitError]=useState(null)
+  const [packageSubmitSuccess,setPackageSubmitSuccess]=useState(null)
 
   async function loadClaimDocs() {
     if (!patient?.id) return
@@ -2858,6 +2862,47 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
     setBundlingPdf(false)
   }
 
+  // Real mechanism this replaces: "Submit directly via Medsa" here used to
+  // be a permanently disabled placeholder ("Available once your insurer
+  // integrates with Medsa") even though a real, working patient-claim
+  // submission already exists in this same file (see
+  // handleSubmitUnverifiedClaim above) - it just wasn't wired to the fuller
+  // checklist flow. Same real mechanism (a genuine insurance_claims row,
+  // flagged patient_unverified_receipt for the insurer to verify
+  // independently - Medsa never adjudicates it), but built from everything
+  // gathered across the whole checklist instead of a single upload: every
+  // attachment, record, and referral picked for any line item gets linked
+  // to the new claim.
+  async function handleSubmitClaimPackage() {
+    if (!activePolicy?.plan_id || !allChecked || !patient?.id) return
+    setPackageSubmitting(true)
+    setPackageSubmitError(null)
+    const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
+    const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
+      claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
+      claim_type: claimType, amount: packageAmount.trim() ? Number(packageAmount) : null,
+      status: 'pending_review', submitted_at: new Date().toISOString(),
+      source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
+    }).select().maybeSingle()
+    if (claimErr) { setPackageSubmitError(claimErr.message); setPackageSubmitting(false); return }
+
+    const picked = Object.values(selections).flat()
+    const attachmentIds = picked.filter(p=>p.type==='attachment').map(p=>p.id)
+    const recordIds = picked.filter(p=>p.type==='record').map(p=>p.id)
+    const referralIds = picked.filter(p=>p.type==='referral').map(p=>p.id)
+    const [attErr, recErr, refErr] = await Promise.all([
+      attachmentIds.length ? supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', attachmentIds).then(r=>r.error) : null,
+      recordIds.length ? supabase.from('medical_records').update({ insurance_claim_id: newClaim.id }).in('id', recordIds).then(r=>r.error) : null,
+      referralIds.length ? supabase.from('referrals').update({ insurance_claim_id: newClaim.id }).in('id', referralIds).then(r=>r.error) : null,
+    ])
+    const linkErr = attErr || recErr || refErr
+    if (linkErr) { setPackageSubmitError(linkErr.message); setPackageSubmitting(false); return }
+
+    await loadClaimDocs()
+    setPackageSubmitSuccess(claimRef)
+    setPackageSubmitting(false)
+  }
+
   // One combined, real candidate pool - visits, referrals, and uploaded
   // documents - the patient picks from this for any checklist line
   // marked medsa:true, instead of the app guessing a match.
@@ -2879,37 +2924,37 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
     {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:[
       {name:'Consultation receipt',medsa:false},
       {name:'Doctor diagnosis letter or stamp',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
+      {name:'Patient ID copy',medsa:false},
+      {name:'Policy number',policyNumber:true},
     ]},
     {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:[
       {name:'Hospital admission & discharge summary',medsa:false},
       {name:'All receipts and invoices',medsa:false},
       {name:'Doctor report',medsa:false},
       {name:'Lab & imaging reports (if any)',medsa:true},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
+      {name:'Patient ID copy',medsa:false},
+      {name:'Policy number',policyNumber:true},
     ]},
     {key:'specialist',label:'Specialist consultation',icon:'◈',docs:[
       {name:'Specialist consultation receipt',medsa:false},
       {name:'Referral letter from GP if required',medsa:false},
       {name:'Diagnosis and treatment notes',medsa:true},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
+      {name:'Patient ID copy',medsa:false},
+      {name:'Policy number',policyNumber:true},
     ]},
     {key:'lab',label:'Lab & imaging',icon:'◉',docs:[
       {name:'Lab or imaging receipt',medsa:false},
       {name:'Test results report',medsa:true},
       {name:'Doctor referral or order',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
+      {name:'Patient ID copy',medsa:false},
+      {name:'Policy number',policyNumber:true},
     ]},
     {key:'prescription',label:'Prescription / medication',icon:'◇',docs:[
       {name:'Pharmacy receipt',medsa:false},
       {name:'Prescription copy',medsa:true},
       {name:'Doctor diagnosis (if required)',medsa:false},
-      {name:'Patient ID copy',medsa:true},
-      {name:'Policy number',medsa:true},
+      {name:'Patient ID copy',medsa:false},
+      {name:'Policy number',policyNumber:true},
     ]},
   ]
 
@@ -2917,7 +2962,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
   // Medsa docs need at least one real record picked; manual docs need
   // patient confirmation - neither happens automatically.
   const getKey = (type,i) => `${type}_${i}`
-  const isReady = (doc,key) => doc.medsa ? (selections[key]?.length > 0) : (checklist[key] || (selections[key]?.length > 0))
+  // Real bug this fixes: "Policy number" was marked medsa:true - a real
+  // Medsa record to pick - but candidatePool only ever holds visits,
+  // referrals, and uploaded attachments, never a bare policy number.
+  // Every claim type's policy-number line was permanently unsatisfiable
+  // through the picker it was routed to. It's already known (the active
+  // policy's own number), so it's auto-ready whenever one's on file,
+  // with nothing for the patient to pick or upload.
+  const isReady = (doc,key) => doc.policyNumber ? !!activePolicy?.policy_number : doc.medsa ? (selections[key]?.length > 0) : (checklist[key] || (selections[key]?.length > 0))
   const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
   const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
   const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
@@ -2931,27 +2983,32 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
           real, live claims. Only softened, not removed - a genuinely
           out-of-network claim submitted for insurer review below still
           needs the insurer's own follow-up before it's fully resolved. */}
-      {hasLiveClaims && <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
-        ◈ Claims submitted through a Medsa-connected clinic sync here automatically - status updates and approvals reflect what your insurer has decided.
-      </div>}
-      {!hasLiveClaims && <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
-        ◈ <strong>Live claim tracking coming with insurer integration.</strong> Once your insurer connects with Medsa, claim submission, status updates, and approvals will sync here automatically.
-      </div>}
+      {/* Real gap this closes: this used to show fabricated demo claims
+          (a fake "Matilda International" card, made-up AIA reference
+          numbers) whenever the patient had none yet, greyed out and
+          labelled "coming with insurer integration" - copy that was
+          already stale, since claim submission (both clinic-side and the
+          patient's own upload below) is real and live today, not
+          upcoming. An honest empty state instead of invented data. */}
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+        ◈ Claims submitted through a Medsa-connected clinic sync here automatically - status updates and approvals reflect what your insurer has decided. You can also submit a claim yourself below.
+      </div>
 
-      <SecLabel>{isEn?(hasLiveClaims?'Claims':'Past claims (not yet synced)'):(hasLiveClaims?'索賠':'過往索賠（尚未同步）')}</SecLabel>
-      <div style={{opacity:hasLiveClaims?1:0.4,pointerEvents:hasLiveClaims?'auto':'none'}}>
-        {hasLiveClaims ? claims.map((c,i)=>{
-          const statusType = c.status==='approved'?'ok':c.status==='rejected'?'full':'due'
-          const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
-          // Real bug this fixes: the real adjudication engine writes
-          // the insurer's covered amount to insurer_covered_amount -
-          // this card read a completely different, never-populated
-          // column (plan_covers, a leftover from before that engine
-          // existed), so every real claim's amount showed blank/NaN
-          // regardless of what the claim actually settled for.
-          const covered = c.insurer_covered_amount ?? c.plan_covers ?? 0
-          return(
-            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <SecLabel>{isEn?'Claims':'索賠'}</SecLabel>
+      {!hasLiveClaims&&<div style={{margin:'0 16px 8px',textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px 0'}}>{isEn?'No claims yet.':'暫無索償記錄。'}</div>}
+      {hasLiveClaims && claims.map((c,i)=>{
+        const statusType = c.status==='approved'||c.status==='settled'?'ok':c.status==='rejected'?'full':'due'
+        const date = new Date(c.submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})
+        // Real bug this fixes: the real adjudication engine writes
+        // the insurer's covered amount to insurer_covered_amount -
+        // this card read a completely different, never-populated
+        // column (plan_covers, a leftover from before that engine
+        // existed), so every real claim's amount showed blank/NaN
+        // regardless of what the claim actually settled for.
+        const covered = c.insurer_covered_amount ?? c.plan_covers ?? 0
+        return(
+          <Card key={i} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:500}}>{c.claim_ref}{c.institutions?.name?` · ${c.institutions.name}`:''}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{[c.insurance_plans?.plan_name||c.insurance_plans?.company_name, c.claim_type].filter(Boolean).join(' · ')}</div>
@@ -2961,22 +3018,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
                 <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${covered.toLocaleString()}</div>
                 <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
               </div>
-            </Card>
-          )
-        }) : <>
-          <Card style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><div style={{fontSize:'14px',fontWeight:500}}>Matilda International · May 3</div><div style={{fontSize:'12px',color:C.textSub}}>Check-up · HK$680 · Filed directly with AIA</div></div>
-            <Badge text="Pending" type="due"/>
+            </div>
+            {/* Same distinction now surfaced on the active-policy card
+                above - repeated here per claim since a patient can hold
+                more than one policy over time. */}
+            {c.verification_flag==='patient_unverified_receipt'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{isEn?'Submitted by you - your insurer verifies this independently.':'由您提交 - 您的保險公司將自行核實此索償。'}</div>}
           </Card>
-          {[{title:'AIA #44821 · Ruttonjee Hospital',amount:'HK$1,200',date:'Feb 18'},{title:'AIA #43910 · Dr Chan consult',amount:'HK$300',date:'Jan 12'}].map((c,i)=>(
-            <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div><div style={{fontSize:'13px',fontWeight:500}}>{c.title}</div><div style={{fontSize:'11px',color:C.textSub}}>{c.date}</div></div>
-              <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{c.amount}</div><Badge text="Approved" type="ok"/></div>
-            </Card>
-          ))}
-        </>}
-      </div>
-      {!hasLiveClaims&&<div style={{margin:'-4px 16px 0',fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'8px'}}>These records will sync automatically once your insurer integrates with Medsa</div>}
+        )
+      })}
 
       {/* Submit an unverified receipt for the insurer's own review - a real
           insurance_claims row, but purely informational: Medsa never checks
@@ -3044,6 +3093,22 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
             const key=getKey(claimType,i)
             const ready=isReady(doc,key)
             const picked=selections[key]||[]
+            // Real gap this fixes: this used to route to the same generic
+            // "select from your records" picker as everything else, which
+            // has no concept of a bare policy number and could never be
+            // satisfied. It's already on file (the active policy above) -
+            // shown directly, nothing to pick or upload.
+            if (doc.policyNumber) return (
+              <div key={i} style={{padding:'12px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+                <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}>
+                  {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
+                  <div style={{fontSize:'11px',color:ready?C.textSub:C.amber,marginTop:'2px'}}>{ready?activePolicy.policy_number:'No policy on file - add one at the top of this tab first.'}</div>
+                </div>
+              </div>
+            )
             return(
               <div key={i} style={{padding:doc.medsa?'12px 16px':'12px 0',margin:doc.medsa?'0 -16px':undefined,borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent'}}>
                 <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
@@ -3113,15 +3178,23 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
           </Btn>
           {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Your documents have been bundled. Download the package and submit it directly to your insurer, or hold it ready for when direct submission via Medsa is available.</div>
-            <Btn style={{width:'100%',marginBottom:'6px'}} disabled={bundlingPdf} onClick={downloadClaimBundle}>{bundlingPdf?'Preparing…':'Download claim checklist (PDF)'}</Btn>
-            <div style={{textAlign:'center'}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>or</div>
-              <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px',textAlign:'center',opacity:0.5}}>
-                <div style={{fontSize:'12px',color:C.textSub,fontWeight:500}}>Submit directly via Medsa</div>
-                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Available once your insurer integrates with Medsa</div>
-              </div>
-            </div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Download a cover sheet to submit yourself, or submit the whole package to your insurer directly through Medsa now.</div>
+            <Btn style={{width:'100%',marginBottom:'10px'}} disabled={bundlingPdf} onClick={downloadClaimBundle}>{bundlingPdf?'Preparing…':'Download claim checklist (PDF)'}</Btn>
+            <div style={{textAlign:'center',marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>or</div></div>
+            {/* Real fix: this used to be a permanently disabled stub -
+                "Available once your insurer integrates with Medsa" - even
+                though the exact same real submission mechanism already
+                existed elsewhere on this tab (see the "Submit a receipt
+                for review" card above). Same real insurance_claims row,
+                flagged for the insurer's own independent verification -
+                just built from everything gathered in this checklist
+                (every attachment, record, and referral picked above)
+                instead of a single upload. */}
+            {!packageSubmitSuccess ? <>
+              <input value={packageAmount} onChange={e=>setPackageAmount(e.target.value)} type="number" placeholder="Amount you're claiming, HK$ (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'8px'}}/>
+              {packageSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{packageSubmitError}</div>}
+              <Btn variant="primary" style={{width:'100%'}} disabled={packageSubmitting} onClick={handleSubmitClaimPackage}>{packageSubmitting?'Submitting…':'Submit this claim package to your insurer'}</Btn>
+            </> : <div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green}}>✓ Submitted as {packageSubmitSuccess}. Your insurer will verify it independently.</div>}
           </div>}
         </div>
 
@@ -3497,7 +3570,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!medsaId) { setPolicyLoading(false); return }
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setPolicyLoading(false); return }
-    const { data } = await supabase.from('agent_policies').select('*, institutions(name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
+    const { data } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1).maybeSingle()
     setActivePolicy(data||null)
     setRenewalRequested(!!data?.patient_requested_renewal_at)
     setPolicyLoading(false)
@@ -3683,7 +3756,16 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
           <div style={{fontSize:'16px',fontWeight:700,marginTop:'6px'}}>{activePolicy.plan_name}</div>
           {activePolicy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {activePolicy.policy_number}</div>}
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
+          {/* Real gap this closes: nothing on this screen ever told a
+              patient whether their own plan bills the clinic directly or
+              requires them to pay in full and claim it back - the single
+              biggest thing that changes what happens at checkout. */}
+          <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:activePolicy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
+            {activePolicy.insurance_plans?.billing_model==='reimbursement'
+              ? (isEn?'Reimbursement plan - you pay in full at the clinic, then claim it back':'自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
+              : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
         </div>
       )}
       {!policyLoading&&activePolicy&&activePolicy.premium!=null&&(() => {
@@ -3696,6 +3778,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
           <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
+          <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',opacity:0.9}}>
+            {activePolicy.insurance_plans?.billing_model==='reimbursement'
+              ? (isEn?'⚠ Reimbursement plan - you pay in full at the clinic, then claim it back':'⚠ 自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
+              : (isEn?'✓ Direct billing - your clinic bills this plan, you pay only the copay':'✓ 直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
+          </div>
 
           {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
             {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}
