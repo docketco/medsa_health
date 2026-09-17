@@ -1212,7 +1212,7 @@ function PreauthRequestsManager({ company }) {
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{r.patients?.full_name||'Unknown patient'}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{r.insurance_plans?.plan_name}{r.institutions?.name?` · ${r.institutions.name}`:''}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{r.insurance_plans?.plan_name}{r.institutions?.name?` · ${r.institutions.name}`:''}{r.policy_number?` · Policy ${r.policy_number}`:''}</div>
               </div>
               <div style={{textAlign:'right'}}>
                 <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>{r.estimated_amount_hkd!=null?`HK$${r.estimated_amount_hkd}`:'—'}</div>
