@@ -1113,6 +1113,142 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
   )
 }
 
+// ── PRE-AUTHORIZATION REQUESTS (real GOP flow) ─────────────────────────────
+// Real gap this closes: "pre-authorization" used to just mean an amber
+// warning on an already-submitted claim, decided with the exact same
+// Approve/Reject a reviewer uses on anything else - not a real GOP
+// (Guarantee of Payment) obtained BEFORE the visit happens, which is what
+// pre-authorization actually means in insurance. This is that real,
+// separate, pre-treatment protocol: ClinicOps submits a request (patient,
+// plan, category, estimated cost, description) before billing anything,
+// an insurer decides it here, and only an APPROVED request generates a
+// GOP code the clinic can enter at billing time to clear the preauth gate
+// (see adjudicateClaim's gopCode matching). Reimbursement claims never
+// need this at all - see isReimbursementOnly - since the visit (and
+// payment) already happened by the time those are ever submitted.
+function generateGopCode() {
+  return `GOP-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+}
+function PreauthRequestsManager({ company }) {
+  const [filter,setFilter]=useState('Pending')
+  const [requests,setRequests]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [decidingId,setDecidingId]=useState(null)
+  const [denyReasonFor,setDenyReasonFor]=useState(null)
+  const [denyReason,setDenyReason]=useState('')
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('preauth_requests')
+      .select('*, patients(full_name, medsa_id), insurance_plans!inner(plan_name, company_name), institutions(name)')
+      .eq('insurance_plans.company_name', company.name)
+      .order('requested_at', { ascending: false })
+      .limit(100)
+    setRequests(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.name])
+
+  async function handleApprove(req) {
+    setDecidingId(req.id)
+    await supabase.from('preauth_requests').update({
+      status: 'approved', gop_code: generateGopCode(),
+      decided_at: new Date().toISOString(), decided_by: company.name,
+      // A GOP that stays valid forever would defeat the point of tying it
+      // to a specific visit - 30 days covers the normal gap between
+      // requesting authorization and the patient actually coming in.
+      expires_at: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
+    }).eq('id', req.id)
+    setDecidingId(null)
+    load()
+  }
+  async function handleDeny(req) {
+    setDecidingId(req.id)
+    await supabase.from('preauth_requests').update({
+      status: 'denied', decided_at: new Date().toISOString(), decided_by: company.name,
+      denial_reason: denyReason.trim() || null,
+    }).eq('id', req.id)
+    setDecidingId(null); setDenyReasonFor(null); setDenyReason('')
+    load()
+  }
+
+  const statusMeta = {
+    pending: {label:'Pending', type:'due'},
+    approved: {label:'Approved', type:'ok'},
+    denied: {label:'Denied', type:'full'},
+    expired: {label:'Expired', type:'full'},
+  }
+  const filtered = filter==='All' ? requests : requests.filter(r => r.status === filter.toLowerCase())
+  const counts = {
+    Pending: requests.filter(r=>r.status==='pending').length,
+    Approved: requests.filter(r=>r.status==='approved').length,
+    Denied: requests.filter(r=>r.status==='denied').length,
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1}}>
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}><strong>Pre-authorization:</strong> a clinic requests this BEFORE billing a visit that needs your sign-off. Approving issues a one-time GOP code, valid 30 days, that clears this exact request's preauth gate when the clinic bills - separate from claim review, which still happens after.</div>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px',padding:'16px 16px 0'}}>
+        {[{label:'Pending',value:counts.Pending,color:C.amber,bg:C.amberLight},{label:'Approved',value:counts.Approved,color:C.green,bg:C.greenLight},{label:'Denied',value:counts.Denied,color:C.red,bg:C.redLight}].map(s=>(
+          <div key={s.label} style={{background:s.bg,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px',textAlign:'center'}}>
+            <div style={{fontSize:'22px',fontWeight:700,color:s.color}}>{s.value}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:'6px',padding:'12px 16px',flexWrap:'wrap'}}>
+        {['All','Pending','Approved','Denied'].map(f=>(
+          <div key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:'5px 14px',borderRadius:'20px',cursor:'pointer',fontSize:'12px',fontWeight:500,background:filter===f?C.green:C.card,color:filter===f?'#fff':C.textSub,border:`0.5px solid ${filter===f?C.green:C.border}`}}>{f}</div>
+        ))}
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No pre-authorization requests here yet.</div>}
+      {filtered.map(r=>{
+        const meta = statusMeta[r.status] || {label:r.status, type:'due'}
+        return (
+          <Card key={r.id} style={{padding:'14px 16px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{r.patients?.full_name||'Unknown patient'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{r.insurance_plans?.plan_name}{r.institutions?.name?` · ${r.institutions.name}`:''}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:'15px',fontWeight:700,color:C.navy}}>{r.estimated_amount_hkd!=null?`HK$${r.estimated_amount_hkd}`:'—'}</div>
+                <Badge text={meta.label} type={meta.type}/>
+              </div>
+            </div>
+            <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>{r.category?`${r.category} - `:''}{r.description||'No description given.'}</div>
+            {r.notes&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>{r.notes}</div>}
+            <div style={{fontSize:'11px',color:C.textMuted}}>Requested {r.requested_at?new Date(r.requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}{r.requested_by?` by ${r.requested_by}`:''}</div>
+            {r.status==='approved'&&<div style={{marginTop:'8px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.green}}>
+              GOP code: <strong>{r.gop_code}</strong>{r.used_at?' · already used on a claim':` · valid until ${new Date(r.expires_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`}
+            </div>}
+            {r.status==='denied'&&r.denial_reason&&<div style={{marginTop:'8px',fontSize:'12px',color:C.red}}>Denied: {r.denial_reason}</div>}
+            {r.status==='pending'&&<div style={{marginTop:'10px'}}>
+              {denyReasonFor===r.id ? (
+                <div>
+                  <textarea value={denyReason} onChange={e=>setDenyReason(e.target.value)} placeholder="Reason for denial…" rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box',marginBottom:'6px'}}/>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setDenyReasonFor(null);setDenyReason('')}}>Cancel</Btn>
+                    <button onClick={()=>handleDeny(r)} disabled={decidingId===r.id} style={{flex:1,border:'none',background:C.red,color:'#fff',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{decidingId===r.id?'Saving…':'Confirm deny'}</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{display:'flex',gap:'8px'}}>
+                  <button onClick={()=>handleApprove(r)} disabled={decidingId===r.id} style={{flex:1,border:'none',background:C.green,color:'#fff',borderRadius:'8px',padding:'10px',fontSize:'12px',fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{decidingId===r.id?'Saving…':'✓ Approve'}</button>
+                  <button onClick={()=>setDenyReasonFor(r.id)} disabled={decidingId===r.id} style={{flex:1,border:`0.5px solid ${C.red}`,background:'transparent',color:C.red,borderRadius:'8px',padding:'10px',fontSize:'12px',fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>◎ Deny</button>
+                </div>
+              )}
+            </div>}
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
 // Webhook config for the claims plug-in - same shape as PolicyVerificationManager's
 // API-mode form, since it's the same underlying pattern (a locked-down
 // credential the browser can't read back, written via a service-role API
@@ -1779,10 +1915,10 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations'}
   const isPartnered = company?.relationshipType!=='unpartnered'
-  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
-    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
+  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
+    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -1801,6 +1937,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
         {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
+        {screen==='preauth'&&<PreauthRequestsManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor

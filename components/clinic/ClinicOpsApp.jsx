@@ -5388,6 +5388,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
   const [eligiblePlansLoading,setEligiblePlansLoading]=useState(false)
   const [selectedEligiblePlan,setSelectedEligiblePlan]=useState(null)
   const [submittingClaim,setSubmittingClaim]=useState(false)
+  // A real GOP (Guarantee of Payment) obtained ahead of time via the
+  // Pre-authorizations screen - optional, only matters if this specific
+  // visit actually needs preauth (adjudicateClaim ignores it otherwise).
+  // Left blank, billing behaves exactly as before.
+  const [gopCode,setGopCode]=useState('')
   const [billingResult,setBillingResult]=useState(null)
   const [billingTxnError,setBillingTxnError]=useState(null)
   const [claimAdjudication,setClaimAdjudication]=useState(null) // the raw adjudicateClaim result, kept separate from billingResult so we know whether a copay still needs collecting
@@ -5798,7 +5803,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const result = await adapter.adjudicateClaim({
       patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
       clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
-      items, medicalRecordId: billingRecord.id, dryRun: true,
+      items, medicalRecordId: billingRecord.id, dryRun: true, gopCode: gopCode.trim() || undefined,
     })
     setClaimAdjudication(result)
     setSubmittingClaim(false)
@@ -5819,7 +5824,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     const result = await adapter.adjudicateClaim({
       patientId: billingRecord.patient_id, policyNumber: selectedEligiblePlan.plan.id,
       clinicId: institutionId, totalGrossAmount: billingRecord.total_fee || 0,
-      items, medicalRecordId: billingRecord.id,
+      items, medicalRecordId: billingRecord.id, gopCode: gopCode.trim() || undefined,
     })
     // Real completion signal - marks this consultation as billed so it
     // correctly disappears from the task board. The claim itself is
@@ -6144,7 +6149,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
           {billingResult.status==='PAID_TREATMENT_PLAN'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>1 session used from {billingResult.planName} - {billingResult.sessionsRemaining} remaining{billingResult.shortfallCollected>0?` · HK$${billingResult.shortfallCollected.toFixed(2)} collected for the difference not covered by the plan`:''}</div>}
           {billingTxnError&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.red,textAlign:'left'}}>{'⚠'} The visit is marked billed, but recording it failed: {billingTxnError}. It won't appear in Financial Records - let Medsa support know.</div>}
           {billingTransaction&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>handleDownloadReceipt(billingTransaction)}>Download receipt (PDF)</Btn>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setCopayTxnRef('');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null);setTreatmentPlanShortfallMethod('card');setShortfallTxnRef('');setTxnRef('')}}>Done</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setBillingRecord(null);setBillingChoice(null);setEligiblePlans(null);setSelectedEligiblePlan(null);setBillingResult(null);setBillingTxnError(null);setClaimAdjudication(null);setCopayMethod('card');setCopayTxnRef('');setAddPlanOpen(false);setAddPlanSearch('');setEligibleTreatmentPlans(null);setSelectedTreatmentPlan(null);setBillingTransaction(null);setTreatmentPlanShortfallMethod('card');setShortfallTxnRef('');setTxnRef('');setGopCode('')}}>Done</Btn>
         </Card>
       </PageWrap>
     )
@@ -6298,6 +6303,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {m.verificationRequired&&!m.hasVerifiedPolicyNumber&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} requires a verified policy number - this link doesn't have one, so billing will be rejected. Use "check by their real policy number" instead of "add it."</div>}
             </Card>
           ))}
+          {/* Optional - only matters if this visit actually needs
+              pre-authorization (adjudicateClaim ignores it otherwise).
+              Get the code from the Pre-authorizations screen once the
+              insurer approves a request made before this visit. */}
+          {selectedEligiblePlan&&!claimAdjudication&&<div style={{marginTop:'10px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>GOP code (if this visit was pre-authorized)</div>
+            <input value={gopCode} onChange={e=>setGopCode(e.target.value)} placeholder="e.g. GOP-ABC123 - leave blank if none" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          </div>}
           {/* "Check amount" only ever runs the calculation (dryRun) - no
               claim exists yet and nothing is billed. Hidden once a
               preview or a real result is showing below; re-picking a
@@ -6372,6 +6385,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&!claimAdjudication.isReimbursementOnly&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
               {' '}A person {claimAdjudication.dryRun?'would need':'needs'} to review and settle it manually.
             </div>
+            {/* A GOP that was typed in but didn't clear the gate above
+                (wrong code, wrong patient/plan, expired, already used on
+                another claim) would otherwise fail completely silently -
+                front desk would have no way to tell "no GOP entered" apart
+                from "GOP entered but rejected." */}
+            {gopCode.trim()&&(claimAdjudication.preauthRequired||claimAdjudication.categoryPreauthRequired)&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{'⚠'} GOP code "{gopCode.trim()}" didn't clear this - check it's approved, for this exact patient and plan, and not expired or already used.</div>}
             {/* Real gap: the coverage math still runs in full even when
                 the outcome is pending review (a human just has to sign
                 off before it settles) - but this card showed none of it,
@@ -6463,6 +6482,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.annualLimitReached&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} This policy's annual limit is now fully used for the year - the rest of this visit's cost falls to the patient.</div>}
               {claimAdjudication.notCoveredOverage>0&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} HK${claimAdjudication.notCoveredOverage.toFixed(2)} of this visit is in a category this plan isn't registered to cover, and falls to the patient.</div>}
               {claimAdjudication.policyTermsOverride&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.policyTermsOverride} A real, verified policy's own terms always take priority over the plan's configured defaults.</div>}
+              {claimAdjudication.preauthCleared&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>{'✓'} Pre-authorized via GOP code - settled without a review hold.</div>}
               {claimAdjudication.icd10Codes?.length>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>ICD-10: {claimAdjudication.icd10Codes.join(', ')}</div>}
             </div>
             {/* Preview stops here - confirming is what actually creates
@@ -7496,6 +7516,187 @@ function AnomalyFlagsScreen({ staffMember }) {
   )
 }
 
+// ── PRE-AUTHORIZATION REQUESTS (real GOP protocol) ──────────────────────────
+// Real gap this closes: pre-authorization used to only ever show up as a
+// warning on a claim already submitted AFTER a visit happened, decided
+// with the same Approve/Reject as any other claim review - not a real GOP
+// (Guarantee of Payment) obtained from the insurer BEFORE the visit,
+// which is what pre-authorization actually means. This screen is that
+// separate, earlier step: front desk requests it here (patient, plan,
+// category, estimated cost) before ever billing anything; the insurer
+// decides on their own Pre-authorizations tab and, if approved, issues a
+// one-time GOP code back. That code gets entered at billing time (see
+// PaymentScreen's GOP field below) and clears the preauth gate in
+// adjudicateClaim - a genuine pre-treatment protocol, not a rubber stamp
+// on the same claim it was meant to gate.
+const PREAUTH_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+function PreauthRequestsScreen({ institutionId, staffMember }) {
+  const [step,setStep]=useState('list')
+  const [requests,setRequests]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [patients,setPatients]=useState([])
+  const [patientSearch,setPatientSearch]=useState('')
+  const [selectedPatient,setSelectedPatient]=useState(null)
+  const [plans,setPlans]=useState([])
+  const [planSearch,setPlanSearch]=useState('')
+  const [selectedPlan,setSelectedPlan]=useState(null)
+  const [category,setCategory]=useState('')
+  const [description,setDescription]=useState('')
+  const [estimatedAmount,setEstimatedAmount]=useState('')
+  const [notes,setNotes]=useState('')
+  const [submitting,setSubmitting]=useState(false)
+  const [submitError,setSubmitError]=useState(null)
+
+  async function loadRequests() {
+    setLoading(true)
+    const { data } = await supabase.from('preauth_requests')
+      .select('*, patients(full_name, medsa_id), insurance_plans(plan_name, company_name)')
+      .eq('institution_id', institutionId)
+      .order('requested_at', { ascending: false }).limit(50)
+    setRequests(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { loadRequests() }, [institutionId])
+
+  useEffect(() => {
+    async function load() {
+      const { data } = await supabase.from('patients').select('id, full_name, medsa_id').order('full_name').limit(500)
+      setPatients(data||[])
+      const { data: pl } = await supabase.from('insurance_plans').select('id, plan_name, company_name').eq('status','active').order('company_name')
+      setPlans(pl||[])
+    }
+    if (step==='new') load()
+  }, [step])
+
+  const filteredPatients = patientSearch.trim() ? patients.filter(p => p.full_name?.toLowerCase().includes(patientSearch.trim().toLowerCase())) : []
+  const filteredPlans = planSearch.trim() ? plans.filter(p => `${p.plan_name} ${p.company_name}`.toLowerCase().includes(planSearch.trim().toLowerCase())) : plans.slice(0,20)
+
+  function resetForm() {
+    setSelectedPatient(null); setSelectedPlan(null); setCategory(''); setDescription('')
+    setEstimatedAmount(''); setNotes(''); setPatientSearch(''); setPlanSearch(''); setSubmitError(null)
+  }
+
+  async function handleSubmit() {
+    if (!selectedPatient || !selectedPlan) return
+    setSubmitting(true); setSubmitError(null)
+    const { error } = await supabase.from('preauth_requests').insert({
+      patient_id: selectedPatient.id, plan_id: selectedPlan.id, institution_id: institutionId,
+      requested_by: staffMember?.name || null, category: category || null,
+      description: description || null,
+      estimated_amount_hkd: estimatedAmount!=='' ? parseFloat(estimatedAmount) : null,
+      notes: notes || null,
+    })
+    setSubmitting(false)
+    if (error) { setSubmitError(error.message); return }
+    setStep('list'); resetForm(); loadRequests()
+  }
+
+  const statusMeta = {
+    pending: {label:'Pending', type:'waiting'},
+    approved: {label:'Approved', type:'ok'},
+    denied: {label:'Denied', type:'off'},
+    expired: {label:'Expired', type:'off'},
+  }
+
+  if (step==='new') return (
+    <PageWrap maxWidth={560}>
+      <div onClick={()=>{setStep('list');resetForm()}} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>Back</div>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Request Pre-authorization</h2>
+      <div style={{fontSize:'12px',color:C.textSub,textAlign:'center',marginBottom:'20px'}}>Submit this BEFORE billing the visit - the insurer needs to sign off first. Once approved, they'll issue a GOP code to enter when you bill.</div>
+
+      <SecLabel>Patient</SecLabel>
+      {selectedPatient ? (
+        <Card style={{padding:'12px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'13px',fontWeight:500}}>{selectedPatient.full_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{selectedPatient.medsa_id}</div></div>
+          <span onClick={()=>setSelectedPatient(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+        </Card>
+      ) : <>
+        <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search patient by name…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'16px'}}>
+          {filteredPatients.map(p=>(
+            <Card key={p.id} onClick={()=>setSelectedPatient(p)} style={{padding:'10px 16px',cursor:'pointer'}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{p.full_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{p.medsa_id}</div>
+            </Card>
+          ))}
+          {patientSearch.trim()&&filteredPatients.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'4px 0'}}>No patient matched.</div>}
+        </div>
+      </>}
+
+      <SecLabel>Insurance plan</SecLabel>
+      {selectedPlan ? (
+        <Card style={{padding:'12px 16px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'13px',fontWeight:500}}>{selectedPlan.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{selectedPlan.company_name}</div></div>
+          <span onClick={()=>setSelectedPlan(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+        </Card>
+      ) : <>
+        <input value={planSearch} onChange={e=>setPlanSearch(e.target.value)} placeholder="Search plan or insurer…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'16px'}}>
+          {filteredPlans.map(p=>(
+            <Card key={p.id} onClick={()=>setSelectedPlan(p)} style={{padding:'10px 16px',cursor:'pointer'}}>
+              <div style={{fontSize:'13px',fontWeight:500}}>{p.plan_name}</div><div style={{fontSize:'12px',color:C.textSub}}>{p.company_name}</div>
+            </Card>
+          ))}
+        </div>
+      </>}
+
+      <SecLabel>Category</SecLabel>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'20px'}}>
+        {PREAUTH_CATEGORIES.map(c=>(
+          <div key={c} onClick={()=>setCategory(c)} style={{padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:category===c?C.green:C.card,color:category===c?'#fff':C.text}}>{c}</div>
+        ))}
+      </div>
+
+      <SecLabel>What's being requested</SecLabel>
+      <textarea value={description} onChange={e=>setDescription(e.target.value)} placeholder="e.g. MRI of the left knee, suspected ACL tear" rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'13px',boxSizing:'border-box',marginBottom:'16px',fontFamily:'inherit',resize:'none'}}/>
+
+      <SecLabel>Estimated cost (HK$)</SecLabel>
+      <input value={estimatedAmount} onChange={e=>setEstimatedAmount(e.target.value)} type="number" placeholder="HK$" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+
+      <SecLabel>Notes for the insurer (optional)</SecLabel>
+      <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'13px',boxSizing:'border-box',marginBottom:'20px',fontFamily:'inherit',resize:'none'}}/>
+
+      {submitError&&<div style={{fontSize:'12px',color:C.red,textAlign:'center',marginBottom:'12px'}}>{submitError}</div>}
+      <div style={{textAlign:'center'}}>
+        <Btn variant="primary" onClick={handleSubmit} disabled={!selectedPatient||!selectedPlan||submitting}>{submitting?'Submitting…':'Submit request'}</Btn>
+      </div>
+    </PageWrap>
+  )
+
+  return (
+    <PageWrap maxWidth={680}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'16px',textAlign:'center'}}>Pre-authorizations</h2>
+      <div style={{background:C.blueLight,borderRadius:'10px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.blue,lineHeight:1.5}}>
+        Request this BEFORE billing a visit that needs the insurer's sign-off. Once approved here they'll issue a GOP code - enter it in Payment when you bill this visit to skip the pending-review hold. This is separate from claim review, which still happens after the visit.
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&requests.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No pre-authorization requests yet.</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px'}}>
+        {requests.map(r=>{
+          const meta = statusMeta[r.status]||{label:r.status,type:'waiting'}
+          return (
+            <Card key={r.id} style={{padding:'14px 18px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{r.patients?.full_name||'Unknown patient'}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{r.insurance_plans?.plan_name} · {r.insurance_plans?.company_name}</div>
+                </div>
+                <Badge text={meta.label} type={meta.type}/>
+              </div>
+              <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>{r.category?`${r.category} - `:''}{r.description||'No description given.'}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Requested {r.requested_at?new Date(r.requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}</div>
+              {r.status==='approved'&&<div style={{marginTop:'8px',background:C.greenLight,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.green}}>
+                GOP code: <strong>{r.gop_code}</strong>{r.used_at?' · already used':` · valid until ${new Date(r.expires_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`}
+              </div>}
+              {r.status==='denied'&&r.denial_reason&&<div style={{marginTop:'8px',fontSize:'12px',color:C.red}}>Denied: {r.denial_reason}</div>}
+            </Card>
+          )
+        })}
+      </div>
+      <div style={{textAlign:'center'}}><Btn variant="primary" onClick={()=>setStep('new')}>+ Request pre-authorization</Btn></div>
+    </PageWrap>
+  )
+}
+
 // ── CLAIMS CLEARINGHOUSE ─────────────────────────────────────────────────────
 // Validates claims before they leave the clinic, calculates the per-claim
 // Medsa clearinghouse fee, and tracks status through the pipeline. Actual
@@ -8354,6 +8555,7 @@ export default function ClinicOpsApp() {
     {key:'ordersets', icon:'orderset', label:'Order Sets', roles:['admin','doctor']},
     {key:'payment', icon:'payment', label:'Payment', roles:['admin','clinic_assistant']},
     {key:'claims', icon:'claims', label:'Claims', roles:['admin','clinic_assistant']},
+    {key:'preauth', icon:'shield', label:'Pre-authorizations', roles:['admin','clinic_assistant']},
     {key:'workinghours', icon:'clock', label:'Working Hours', roles:['admin']},
     {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
@@ -8458,6 +8660,7 @@ export default function ClinicOpsApp() {
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectRecordId(null);setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
+        {screen==='preauth'&&<PreauthRequestsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
