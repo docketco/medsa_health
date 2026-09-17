@@ -2707,289 +2707,126 @@ function MyInquiriesTab({ isEn, patient={} }) {
 }
 
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
-// The "auto-attach" version of this tab used to be a stub (MEDSA_RECORDS
-// was always {}) - matching a real record to a generic checklist line
-// like "Diagnosis and treatment notes" by guessing isn't reliable, and
-// every insurer/plan/claim actually wants something different. So this
-// picks real candidates (the patient's own visits, referrals, and
-// documents) but the patient always chooses which ones apply - the
-// checklist stays a guide, not an auto-selector.
+// Real redesign: this used to be three overlapping, half-working ways to
+// submit a claim - a single-attachment "submit a receipt" card that
+// required a detour to the Records tab to upload anything first, and a
+// "prepare a claim package" guided checklist that routed EVERY document
+// (including "Patient ID copy" and "Policy number", which are never in
+// the pool) through the same generic records picker, ending in a
+// permanently disabled "Submit directly via Medsa" stub. None of the
+// three actually let a patient submit a visit Medsa already has full
+// receipt/diagnosis data for without re-uploading it.
+//
+// Down to two real paths instead:
+// 1) A visit already on file at a Medsa-connected clinic - line items,
+//    diagnosis, ICD-10 are already real structured data here (medical_records)
+//    - nothing to upload, just pick the visit and confirm the amount.
+// 2) An out-of-network receipt - genuinely nothing on file for it, so the
+//    patient uploads it directly, right here, no detour to another tab.
+// "Patient ID copy" is gone entirely - identity isn't a claims document,
+// it's what plan purchase/KYC needs, not a payout review.
 function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null }) {
   const hasLiveClaims = claims.length > 0
-  const [claimType,setClaimType]=useState(null)
-  const [submitSelectedIds,setSubmitSelectedIds]=useState(new Set())
-  const [submitAmount,setSubmitAmount]=useState('')
-  const [submitting,setSubmitting]=useState(false)
-  const [submitError,setSubmitError]=useState(null)
-  const [submitSuccess,setSubmitSuccess]=useState(null)
-  const [checklist,setChecklist]=useState({})
-  const [bundleReady,setBundleReady]=useState(false)
-  const [selections,setSelections]=useState({}) // checklistKey -> [{type,id,label,sublabel,claimedFor}]
-  const [pickerOpenFor,setPickerOpenFor]=useState(null)
-  const [pickerFilter,setPickerFilter]=useState('')
-  const [referrals,setReferrals]=useState([])
+
   const [attachments,setAttachments]=useState([])
-  const [uploadingKey,setUploadingKey]=useState(null)
-  const [uploadErrorByKey,setUploadErrorByKey]=useState({})
-  const [bundlingPdf,setBundlingPdf]=useState(false)
-  const [packageAmount,setPackageAmount]=useState('')
-  const [packageSubmitting,setPackageSubmitting]=useState(false)
-  const [packageSubmitError,setPackageSubmitError]=useState(null)
-  const [packageSubmitSuccess,setPackageSubmitSuccess]=useState(null)
+  const [uploadingReceipt,setUploadingReceipt]=useState(false)
+  const [uploadError,setUploadError]=useState(null)
 
-  async function loadClaimDocs() {
+  const [selectedVisitId,setSelectedVisitId]=useState(null)
+  const [visitAmount,setVisitAmount]=useState('')
+  const [visitSubmitting,setVisitSubmitting]=useState(false)
+  const [visitSubmitError,setVisitSubmitError]=useState(null)
+  const [visitSubmitSuccess,setVisitSubmitSuccess]=useState(null)
+
+  const [manualSelectedIds,setManualSelectedIds]=useState(new Set())
+  const [manualAmount,setManualAmount]=useState('')
+  const [manualSubmitting,setManualSubmitting]=useState(false)
+  const [manualSubmitError,setManualSubmitError]=useState(null)
+  const [manualSubmitSuccess,setManualSubmitSuccess]=useState(null)
+
+  async function loadAttachments() {
     if (!patient?.id) return
-    const [{ data: refs }, { data: atts }] = await Promise.all([
-      supabase.from('referrals').select('id, reason, referred_to_practitioner_name, referring_doctor_name, created_at, insurance_claim_id').eq('patient_id', patient.id),
-      supabase.from('medical_record_attachments').select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id),
-    ])
-    setReferrals(refs || [])
-    setAttachments(atts || [])
-    return atts || []
+    const { data } = await supabase.from('medical_record_attachments')
+      .select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id)
+      .is('insurance_claim_id', null).order('uploaded_at',{ascending:false})
+    setAttachments(data||[])
   }
+  useEffect(() => { loadAttachments() }, [patient?.id])
 
-  useEffect(() => { loadClaimDocs() }, [patient?.id])
+  // Any visit that already has real receipt/diagnosis data on file and
+  // hasn't already been claimed - the same medical_records this patient
+  // sees under Records, source doesn't matter (a Medsa clinic writes
+  // line_items/total_fee/diagnosis the same way regardless).
+  const unclaimedVisits = records.filter(r => !r.insurance_claim_id && (r.total_fee!=null || r.diagnosis))
 
-  // Real claim submission - separate from the "prepare a claim package"
-  // checklist below (which stays a self-serve PDF cover sheet the patient
-  // takes to their insurer directly). This creates an actual insurance_claims
-  // row against the patient's own active policy, purely informational: no
-  // amount is calculated or adjudicated, Medsa never verifies the uploaded
-  // receipt itself, and no coverage math or payout runs against it. The
-  // point is only to flag it and put it in front of the insurer (or, for a
-  // claims-plugin insurer, forward it into their own system) so THEY can
-  // verify it independently - e.g. against their own MediConCen connection -
-  // same "flag and route, don't adjudicate" boundary already drawn for
-  // out-of-network claims elsewhere in this app.
-  async function toggleSubmitCandidate(id) {
-    setSubmitSelectedIds(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
-  async function handleSubmitUnverifiedClaim() {
-    if (!activePolicy?.plan_id || submitSelectedIds.size===0 || !patient?.id) return
-    setSubmitting(true)
-    setSubmitError(null)
+  async function handleSubmitFromVisit() {
+    const visit = records.find(r=>r.id===selectedVisitId)
+    if (!activePolicy?.plan_id || !visit || !patient?.id) return
+    setVisitSubmitting(true); setVisitSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
-      claim_type: claimType || 'outpatient', amount: submitAmount.trim() ? Number(submitAmount) : null,
+      claim_type: visit.record_type || 'outpatient',
+      amount: visitAmount.trim() ? Number(visitAmount) : (visit.total_fee ?? null),
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
+      institution_id: visit.institution_id || null,
     }).select().maybeSingle()
-    if (claimErr) { setSubmitError(claimErr.message); setSubmitting(false); return }
-    const ids = Array.from(submitSelectedIds)
-    const { error: linkErr } = await supabase.from('medical_record_attachments')
-      .update({ insurance_claim_id: newClaim.id }).in('id', ids)
-    if (linkErr) { setSubmitError(linkErr.message); setSubmitting(false); return }
-    await loadClaimDocs()
-    setSubmitSelectedIds(new Set())
-    setSubmitAmount('')
-    setSubmitSuccess(claimRef)
-    setSubmitting(false)
+    if (claimErr) { setVisitSubmitError(claimErr.message); setVisitSubmitting(false); return }
+    const { error: linkErr } = await supabase.from('medical_records').update({ insurance_claim_id: newClaim.id }).eq('id', visit.id)
+    if (linkErr) { setVisitSubmitError(linkErr.message); setVisitSubmitting(false); return }
+    setVisitSubmitSuccess(claimRef)
+    setSelectedVisitId(null); setVisitAmount('')
+    setVisitSubmitting(false)
   }
 
-  // Real upload for a manual checklist item (e.g. "Consultation receipt")
-  // - stores it as a real attachment the same way the Records tab does,
-  // then attaches it to this checklist line. Nothing here is a fake
-  // "Upload" pill anymore.
-  async function handleChecklistUpload(key, docName, file) {
+  // Real upload, right on this screen - stores it the same way Records'
+  // own upload does, then it's immediately selectable below. No more
+  // "go upload it somewhere else first."
+  async function handleUploadReceipt(file) {
     if (!file || !patient?.id) return
-    setUploadingKey(key)
-    setUploadErrorByKey(prev => ({ ...prev, [key]: null }))
+    setUploadingReceipt(true); setUploadError(null)
     const path = `${patient.medsa_id || patient.id}/claim-${Date.now()}-${file.name}`
-    const { error: uploadErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
-    if (uploadErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: uploadErr.message })); setUploadingKey(null); return }
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setUploadError(upErr.message); setUploadingReceipt(false); return }
     const { data: newAtt, error: insErr } = await supabase.from('medical_record_attachments').insert({
-      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: `${docName}: ${file.name}`,
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: file.name,
       verification_status: 'unverified',
     }).select().maybeSingle()
-    if (insErr) { setUploadErrorByKey(prev => ({ ...prev, [key]: insErr.message })); setUploadingKey(null); return }
-    await loadClaimDocs()
-    if (newAtt) {
-      const item = { type:'attachment', id:newAtt.id, label:newAtt.file_name, sublabel:newAtt.category, claimedFor:null }
-      setSelections(prev => ({ ...prev, [key]: [...(prev[key]||[]), item] }))
-    }
-    setUploadingKey(null)
+    if (insErr) { setUploadError(insErr.message); setUploadingReceipt(false); return }
+    await loadAttachments()
+    if (newAtt) setManualSelectedIds(prev => new Set(prev).add(newAtt.id))
+    setUploadingReceipt(false)
   }
 
-  // Real PDF summary of the checklist - what's selected/confirmed for
-  // each item - same jsPDF approach already used for the Records tab's
-  // bundle export. This isn't the source documents themselves (those are
-  // files/attachments, not text), it's a cover sheet listing what's
-  // included, for the patient to submit alongside them.
-  async function downloadClaimBundle() {
-    if (!selectedType) return
-    setBundlingPdf(true)
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    const pageWidth = doc.internal.pageSize.getWidth()
-    let y = 20
-    doc.setFontSize(16)
-    doc.text(`Medsa Claim Checklist — ${selectedType.label}`, 14, y)
-    y += 8
-    doc.setFontSize(10)
-    doc.text(`${patient.full_name || ''} - ${patient.medsa_id || ''} - Generated ${new Date().toLocaleDateString('en-HK')}`, 14, y)
-    y += 4
-    doc.line(14, y, pageWidth-14, y)
-    y += 10
-    selectedType.docs.forEach((d,i) => {
-      const key = getKey(claimType,i)
-      const picked = selections[key]||[]
-      if (y > 260) { doc.addPage(); y = 20 }
-      doc.setFontSize(11)
-      doc.setFont(undefined, 'bold')
-      doc.text(`${i+1}. ${d.name}`, 14, y)
-      y += 6
-      doc.setFont(undefined, 'normal')
-      doc.setFontSize(9)
-      if (picked.length > 0) {
-        picked.forEach(p => { doc.text(`- ${p.label}${p.sublabel?' ('+p.sublabel+')':''}`, 18, y); y += 5 })
-      } else {
-        doc.text('- Confirmed ready (not stored in Medsa)', 18, y); y += 5
-      }
-      y += 4
-    })
-    const blob = doc.output('blob')
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url; a.download = `Medsa-Claim-Checklist-${selectedType.key}-${patient.medsa_id || 'export'}.pdf`
-    document.body.appendChild(a); a.click(); document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    setBundlingPdf(false)
+  function toggleManualAttachment(id) {
+    setManualSelectedIds(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
 
-  // Real mechanism this replaces: "Submit directly via Medsa" here used to
-  // be a permanently disabled placeholder ("Available once your insurer
-  // integrates with Medsa") even though a real, working patient-claim
-  // submission already exists in this same file (see
-  // handleSubmitUnverifiedClaim above) - it just wasn't wired to the fuller
-  // checklist flow. Same real mechanism (a genuine insurance_claims row,
-  // flagged patient_unverified_receipt for the insurer to verify
-  // independently - Medsa never adjudicates it), but built from everything
-  // gathered across the whole checklist instead of a single upload: every
-  // attachment, record, and referral picked for any line item gets linked
-  // to the new claim.
-  async function handleSubmitClaimPackage() {
-    if (!activePolicy?.plan_id || !allChecked || !patient?.id) return
-    setPackageSubmitting(true)
-    setPackageSubmitError(null)
+  async function handleSubmitManualClaim() {
+    if (!activePolicy?.plan_id || manualSelectedIds.size===0 || !patient?.id) return
+    setManualSubmitting(true); setManualSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: activePolicy.plan_id,
-      claim_type: claimType, amount: packageAmount.trim() ? Number(packageAmount) : null,
+      claim_type: 'outpatient', amount: manualAmount.trim() ? Number(manualAmount) : null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
     }).select().maybeSingle()
-    if (claimErr) { setPackageSubmitError(claimErr.message); setPackageSubmitting(false); return }
-
-    const picked = Object.values(selections).flat()
-    const attachmentIds = picked.filter(p=>p.type==='attachment').map(p=>p.id)
-    const recordIds = picked.filter(p=>p.type==='record').map(p=>p.id)
-    const referralIds = picked.filter(p=>p.type==='referral').map(p=>p.id)
-    const [attErr, recErr, refErr] = await Promise.all([
-      attachmentIds.length ? supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', attachmentIds).then(r=>r.error) : null,
-      recordIds.length ? supabase.from('medical_records').update({ insurance_claim_id: newClaim.id }).in('id', recordIds).then(r=>r.error) : null,
-      referralIds.length ? supabase.from('referrals').update({ insurance_claim_id: newClaim.id }).in('id', referralIds).then(r=>r.error) : null,
-    ])
-    const linkErr = attErr || recErr || refErr
-    if (linkErr) { setPackageSubmitError(linkErr.message); setPackageSubmitting(false); return }
-
-    await loadClaimDocs()
-    setPackageSubmitSuccess(claimRef)
-    setPackageSubmitting(false)
+    if (claimErr) { setManualSubmitError(claimErr.message); setManualSubmitting(false); return }
+    const ids = Array.from(manualSelectedIds)
+    const { error: linkErr } = await supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', ids)
+    if (linkErr) { setManualSubmitError(linkErr.message); setManualSubmitting(false); return }
+    await loadAttachments()
+    setManualSelectedIds(new Set()); setManualAmount('')
+    setManualSubmitSuccess(claimRef)
+    setManualSubmitting(false)
   }
-
-  // One combined, real candidate pool - visits, referrals, and uploaded
-  // documents - the patient picks from this for any checklist line
-  // marked medsa:true, instead of the app guessing a match.
-  const candidatePool = [
-    ...records.map(r => ({ type:'record', id:r.id, label:r.title||r.diagnosis||'Visit record', sublabel:r.date_of_record, claimedFor:r.insurance_claim_id })),
-    ...referrals.map(r => ({ type:'referral', id:r.id, label:`Referral to ${r.referred_to_practitioner_name}`, sublabel:r.reason, claimedFor:r.insurance_claim_id })),
-    ...attachments.map(a => ({ type:'attachment', id:a.id, label:a.file_name||a.category, sublabel:a.category, claimedFor:a.insurance_claim_id })),
-  ]
-
-  function toggleCandidate(key, item) {
-    setSelections(prev => {
-      const current = prev[key] || []
-      const exists = current.some(c=>c.type===item.type && c.id===item.id)
-      return { ...prev, [key]: exists ? current.filter(c=>!(c.type===item.type&&c.id===item.id)) : [...current, item] }
-    })
-  }
-
-  const CLAIM_TYPES=[
-    {key:'outpatient',label:'Outpatient visit',icon:'◎',docs:[
-      {name:'Consultation receipt',medsa:false},
-      {name:'Doctor diagnosis letter or stamp',medsa:false},
-      {name:'Patient ID copy',medsa:false},
-      {name:'Policy number',policyNumber:true},
-    ]},
-    {key:'hospitalisation',label:'Hospitalisation',icon:'▣',docs:[
-      {name:'Hospital admission & discharge summary',medsa:false},
-      {name:'All receipts and invoices',medsa:false},
-      {name:'Doctor report',medsa:false},
-      {name:'Lab & imaging reports (if any)',medsa:true},
-      {name:'Patient ID copy',medsa:false},
-      {name:'Policy number',policyNumber:true},
-    ]},
-    {key:'specialist',label:'Specialist consultation',icon:'◈',docs:[
-      {name:'Specialist consultation receipt',medsa:false},
-      {name:'Referral letter from GP if required',medsa:false},
-      {name:'Diagnosis and treatment notes',medsa:true},
-      {name:'Patient ID copy',medsa:false},
-      {name:'Policy number',policyNumber:true},
-    ]},
-    {key:'lab',label:'Lab & imaging',icon:'◉',docs:[
-      {name:'Lab or imaging receipt',medsa:false},
-      {name:'Test results report',medsa:true},
-      {name:'Doctor referral or order',medsa:false},
-      {name:'Patient ID copy',medsa:false},
-      {name:'Policy number',policyNumber:true},
-    ]},
-    {key:'prescription',label:'Prescription / medication',icon:'◇',docs:[
-      {name:'Pharmacy receipt',medsa:false},
-      {name:'Prescription copy',medsa:true},
-      {name:'Doctor diagnosis (if required)',medsa:false},
-      {name:'Patient ID copy',medsa:false},
-      {name:'Policy number',policyNumber:true},
-    ]},
-  ]
-
-  const selectedType = CLAIM_TYPES.find(t=>t.key===claimType)
-  // Medsa docs need at least one real record picked; manual docs need
-  // patient confirmation - neither happens automatically.
-  const getKey = (type,i) => `${type}_${i}`
-  // Real bug this fixes: "Policy number" was marked medsa:true - a real
-  // Medsa record to pick - but candidatePool only ever holds visits,
-  // referrals, and uploaded attachments, never a bare policy number.
-  // Every claim type's policy-number line was permanently unsatisfiable
-  // through the picker it was routed to. It's already known (the active
-  // policy's own number), so it's auto-ready whenever one's on file,
-  // with nothing for the patient to pick or upload.
-  const isReady = (doc,key) => doc.policyNumber ? !!activePolicy?.policy_number : doc.medsa ? (selections[key]?.length > 0) : (checklist[key] || (selections[key]?.length > 0))
-  const allChecked = selectedType && selectedType.docs.every((doc,i)=>isReady(doc,getKey(claimType,i)))
-  const medsaCount = selectedType ? selectedType.docs.filter(d=>d.medsa).length : 0
-  const manualCount = selectedType ? selectedType.docs.filter(d=>!d.medsa).length : 0
 
   return (
     <div>
       {/* Real claims already sync automatically the moment a clinic on
-          Medsa (or the direct insurer API) adjudicates one - this used
-          to say "coming with insurer integration" unconditionally, even
-          once that was already true and this exact list was showing
-          real, live claims. Only softened, not removed - a genuinely
-          out-of-network claim submitted for insurer review below still
-          needs the insurer's own follow-up before it's fully resolved. */}
-      {/* Real gap this closes: this used to show fabricated demo claims
-          (a fake "Matilda International" card, made-up AIA reference
-          numbers) whenever the patient had none yet, greyed out and
-          labelled "coming with insurer integration" - copy that was
-          already stale, since claim submission (both clinic-side and the
-          patient's own upload below) is real and live today, not
-          upcoming. An honest empty state instead of invented data. */}
+          Medsa (or the direct insurer API) adjudicates one. */}
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
         ◈ Claims submitted through a Medsa-connected clinic sync here automatically - status updates and approvals reflect what your insurer has decided. You can also submit a claim yourself below.
       </div>
@@ -3019,190 +2856,79 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null 
                 <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
               </div>
             </div>
-            {/* Same distinction now surfaced on the active-policy card
-                above - repeated here per claim since a patient can hold
-                more than one policy over time. */}
             {c.verification_flag==='patient_unverified_receipt'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{isEn?'Submitted by you - your insurer verifies this independently.':'由您提交 - 您的保險公司將自行核實此索償。'}</div>}
           </Card>
         )
       })}
 
-      {/* Submit an unverified receipt for the insurer's own review - a real
-          insurance_claims row, but purely informational: Medsa never checks
-          the receipt or calculates a payout for it, it's only flagged and
-          put in front of the insurer (or their own plugged-in system) to
-          verify independently. Requires an active policy on file (see the
-          "Add your policy" flow above) since a claim has to point at
-          something real. */}
-      <SecLabel>{isEn?'Submit a receipt for review':'提交收據以供審核'}</SecLabel>
-      {!activePolicy&&<div style={{margin:'0 16px 16px',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'Add your policy above first - a claim needs a policy to submit against.':'請先在上方新增您的保單 - 索償需要對應保單。'}</div>}
-      {activePolicy&&<Card style={{padding:'14px 16px'}}>
-        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn
-          ?`Upload a receipt in Records first (Records → Upload), then pick it here to submit against ${activePolicy.plan_name}. Medsa flags it as unverified - your insurer checks it independently before anything is approved.`
-          :`請先於「記錄」→「上傳」上傳收據,再於此處選取並提交至${activePolicy.plan_name}。Medsa會將其標記為未經核實 - 您的保險公司將自行核實後才作批核。`}</div>
-        {attachments.filter(a=>!a.insurance_claim_id).length===0
-          ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
-          : attachments.filter(a=>!a.insurance_claim_id).map(a=>(
-            <div key={a.id} onClick={()=>toggleSubmitCandidate(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer'}}>
-              <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${submitSelectedIds.has(a.id)?C.green:C.border}`,background:submitSelectedIds.has(a.id)?C.green:'transparent',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0}}>{submitSelectedIds.has(a.id)?'✓':''}</div>
-              <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
-            </div>
-          ))}
-        <input value={submitAmount} onChange={e=>setSubmitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0'}}/>
-        {submitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{submitError}</div>}
-        {submitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${submitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${submitSuccess}。您的保險公司將自行核實。`}</div>}
-        <Btn variant="primary" style={{width:'100%'}} disabled={submitSelectedIds.size===0||submitting} onClick={handleSubmitUnverifiedClaim}>{submitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>
-      </Card>}
+      {!activePolicy&&<div style={{margin:'16px 16px 0',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'Add your policy above first - a claim needs a policy to submit against.':'請先在上方新增您的保單 - 索償需要對應保單。'}</div>}
+
+      {/* Path 1: a visit Medsa already has real data for - a Medsa-network
+          clinic's receipt, diagnosis, and ICD-10 are already structured
+          data here, not a piece of paper to photograph. Nothing to
+          upload - pick the visit, confirm the amount, done. */}
+      {activePolicy&&<>
+        <SecLabel>{isEn?'Submit a claim from a visit on file':'從已存檔的診症提交索償'}</SecLabel>
+        <div style={{margin:'0 16px 10px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
+        {unclaimedVisits.length===0
+          ? <div style={{margin:'0 16px 16px',fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'No unclaimed visits on file yet.':'暫無未提交索償的已存檔診症。'}</div>
+          : <div style={{padding:'0 16px 10px',display:'flex',flexDirection:'column',gap:'8px'}}>
+              {unclaimedVisits.map(v=>(
+                <Card key={v.id} onClick={()=>{setSelectedVisitId(v.id);setVisitAmount(v.total_fee!=null?String(v.total_fee):'')}} style={{padding:'12px 16px',cursor:'pointer',border:selectedVisitId===v.id?`1.5px solid ${C.green}`:undefined}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                    <div>
+                      <div style={{fontSize:'13px',fontWeight:500}}>{v.diagnosis||v.title||'Visit'}{v.institutions?.name?` · ${v.institutions.name}`:''}</div>
+                      <div style={{fontSize:'11px',color:C.textSub}}>{v.doctor_name?`${v.doctor_name} · `:''}{v.date_of_record?new Date(v.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''}</div>
+                      {v.icd10_code&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>ICD-10: {v.icd10_code}</div>}
+                    </div>
+                    {v.total_fee!=null&&<div style={{fontSize:'14px',fontWeight:600,color:C.green,flexShrink:0}}>HK${v.total_fee}</div>}
+                  </div>
+                </Card>
+              ))}
+            </div>}
+        {selectedVisitId&&<Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{isEn?`Submitting against ${activePolicy.plan_name}`:`提交至 ${activePolicy.plan_name}`}</div>
+          <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
+          {visitSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{visitSubmitError}</div>}
+          {visitSubmitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>}
+          <Btn variant="primary" style={{width:'100%'}} disabled={visitSubmitting} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>
+        </Card>}
+      </>}
+
+      {/* Path 2: genuinely out-of-network - nothing on file, so the patient
+          uploads it directly, right here. */}
+      {activePolicy&&<>
+        <SecLabel>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn
+            ?`Upload a receipt (and diagnosis letter, if it's a separate document) from a clinic not on Medsa. Medsa flags it as unverified - your insurer checks it independently before anything is approved.`
+            :`上傳非Medsa診所的收據(如診斷證明為獨立文件,請一併上傳)。Medsa會將其標記為未經核實 - 您的保險公司將自行核實後才作批核。`}</div>
+          <label style={{display:'block',textAlign:'center',border:`1.5px dashed ${C.border}`,borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',color:uploadingReceipt?C.textMuted:C.green,fontWeight:500}}>
+            {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a receipt or document':'+ 上傳收據或文件')}
+            <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
+          </label>
+          {uploadError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{uploadError}</div>}
+          {attachments.length===0
+            ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
+            : attachments.map(a=>(
+              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?C.green:C.border}`,background:manualSelectedIds.has(a.id)?C.green:'transparent',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
+                <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
+              </div>
+            ))}
+          <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0'}}/>
+          {manualSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{manualSubmitError}</div>}
+          {manualSubmitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>}
+          <Btn variant="primary" style={{width:'100%'}} disabled={manualSelectedIds.size===0||manualSubmitting} onClick={handleSubmitManualClaim}>{manualSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>
+        </Card>
+      </>}
 
       {/* Medsa disclaimer */}
-      <div style={{margin:'12px 16px 0',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
+      <div style={{margin:'12px 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
         ⚠ <strong>{isEn?'Important:':'重要提示:'}</strong> {isEn
-          ? 'Document requirements vary by insurer, plan type, and individual claim. The checklist below covers standard requirements — your insurer or agent may request additional documents. Medsa is not liable for incomplete or rejected claims. When in doubt, contact your assigned agent or insurer directly before submitting.'
-          : '所需文件因保險公司、方案類型及個別索償而異。以下清單涵蓋一般標準要求——您的保險公司或代理人可能要求提供額外文件。Medsa對不完整或被拒的索償概不負責。如有疑問,請於提交前直接聯絡您的代理人或保險公司。'}
+          ? 'Medsa flags what you submit and passes it to your insurer - it never verifies the receipt or calculates a payout itself. Requirements vary by insurer and plan; when in doubt, contact your assigned agent or insurer directly before submitting.'
+          : 'Medsa會標記您提交的內容並轉交您的保險公司 - Medsa本身不會核實收據或計算賠付金額。要求因保險公司及計劃而異;如有疑問,請於提交前直接聯絡您的代理人或保險公司。'}
       </div>
-
-      {/* Claim preparation flow */}
-      <SecLabel>{isEn?'Prepare a claim package':'準備索賠文件包'}</SecLabel>
-
-      {!claimType&&<>
-        <div style={{padding:'0 16px 6px',fontSize:'12px',color:C.textSub}}>Select the type of claim you are preparing:</div>
-        {CLAIM_TYPES.map(t=>(
-          <Card key={t.key} onClick={()=>{setClaimType(t.key);setChecklist({});setBundleReady(false);setSelections({});setPickerOpenFor(null)}} style={{padding:'14px 16px',display:'flex',alignItems:'center',gap:'14px',cursor:'pointer'}}>
-            <div style={{width:40,height:40,background:C.greenLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{t.icon}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{t.label}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{t.docs.length} documents typically required</div></div>
-            <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
-          </Card>
-        ))}
-      </>}
-
-      {claimType&&selectedType&&<>
-        <div style={{padding:'0 16px 10px',display:'flex',alignItems:'center',gap:'10px'}}>
-          <div onClick={()=>{setClaimType(null);setChecklist({});setBundleReady(false);setSelections({});setPickerOpenFor(null)}} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>← Change claim type</div>
-          <span style={{fontSize:'12px',color:C.textMuted}}>· {selectedType.label}</span>
-        </div>
-
-        {/* Checklist summary */}
-        <div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'12px',padding:'12px 14px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◎ {medsaCount} item{medsaCount!==1?'s':''} can be picked from your real Medsa records</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{allChecked ? 'All documents are ready. You can bundle your claim now.' : `${selectedType.docs.length - selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length} item${selectedType.docs.length - selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length!==1?'s':''} still need your action — marked below.`}</div>
-        </div>
-        <Card style={{padding:'16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>Documents checklist</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>This is a guide, not an auto-selector — pick which of your real Medsa records apply to each item yourself. Upload or confirm the rest.</div>
-          {selectedType.docs.map((doc,i)=>{
-            const key=getKey(claimType,i)
-            const ready=isReady(doc,key)
-            const picked=selections[key]||[]
-            // Real gap this fixes: this used to route to the same generic
-            // "select from your records" picker as everything else, which
-            // has no concept of a bare policy number and could never be
-            // satisfied. It's already on file (the active policy above) -
-            // shown directly, nothing to pick or upload.
-            if (doc.policyNumber) return (
-              <div key={i} style={{padding:'12px 0',borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-                <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}>
-                  {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                  <div style={{fontSize:'11px',color:ready?C.textSub:C.amber,marginTop:'2px'}}>{ready?activePolicy.policy_number:'No policy on file - add one at the top of this tab first.'}</div>
-                </div>
-              </div>
-            )
-            return(
-              <div key={i} style={{padding:doc.medsa?'12px 16px':'12px 0',margin:doc.medsa?'0 -16px':undefined,borderBottom:i<selectedType.docs.length-1?`0.5px solid ${C.border}`:'none',background:doc.medsa?C.greenXLight:'transparent'}}>
-                <div style={{display:'flex',gap:'12px',alignItems:'flex-start'}}>
-                  <div style={{width:22,height:22,borderRadius:6,border:`1.5px solid ${ready?C.green:C.border}`,background:ready?C.green:'transparent',cursor:doc.medsa?'default':'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px'}}
-                    onClick={()=>!doc.medsa&&setChecklist(prev=>({...prev,[key]:!prev[key]}))}>
-                    {ready&&<span style={{color:'#fff',fontSize:'12px',fontWeight:700}}>✓</span>}
-                  </div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{doc.name}</div>
-                    {!doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Upload it, select an existing record, or confirm you have this ready</div>}
-                    {doc.medsa&&picked.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Not selected yet</div>}
-                    {picked.map(p=>(
-                      <div key={`${p.type}_${p.id}`} style={{background:'rgba(74,124,89,0.08)',borderRadius:'8px',padding:'8px 10px',marginTop:'6px'}}>
-                        <div style={{fontSize:'12px',fontWeight:500,color:C.text}}>{p.label}</div>
-                        <div style={{fontSize:'11px',color:C.textSub,marginTop:'1px'}}>{p.sublabel}{p.claimedFor?' · already used in a previous claim':''}</div>
-                      </div>
-                    ))}
-                    {uploadErrorByKey[key]&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{uploadErrorByKey[key]}</div>}
-                  </div>
-                  <div style={{display:'flex',flexDirection:'column',gap:'6px',flexShrink:0}}>
-                    <div onClick={()=>setPickerOpenFor(pickerOpenFor===key?null:key)} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${C.green}`,borderRadius:'8px',textAlign:'center'}}>{picked.length>0?'Change':'Select'}</div>
-                    {!doc.medsa&&<label style={{fontSize:'12px',color:uploadingKey===key?C.textMuted:C.green,cursor:'pointer',fontWeight:500,padding:'4px 10px',border:`0.5px solid ${uploadingKey===key?C.border:C.green}`,borderRadius:'8px',textAlign:'center'}}>
-                      {uploadingKey===key?'Uploading…':'Upload'}
-                      <input type="file" style={{display:'none'}} disabled={uploadingKey===key} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleChecklistUpload(key, doc.name, f)}}/>
-                    </label>}
-                  </div>
-                </div>
-                {pickerOpenFor===key&&<div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
-                  <input value={pickerFilter} onChange={e=>setPickerFilter(e.target.value)} placeholder="Filter your records…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'6px 8px',fontSize:'12px',boxSizing:'border-box',marginBottom:'8px'}}/>
-                  {candidatePool.length===0&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',padding:'10px'}}>No records on file yet.</div>}
-                  {candidatePool.filter(c=>c.label.toLowerCase().includes(pickerFilter.toLowerCase())).map(c=>{
-                    const isPicked = picked.some(p=>p.type===c.type&&p.id===c.id)
-                    return (
-                      <div key={`${c.type}_${c.id}`} onClick={()=>toggleCandidate(key,c)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'8px 6px',cursor:'pointer',borderRadius:'6px',background:isPicked?C.greenXLight:'transparent'}}>
-                        <div style={{width:16,height:16,borderRadius:4,border:`1.5px solid ${isPicked?C.green:C.border}`,background:isPicked?C.green:'transparent',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center'}}>{isPicked&&<span style={{color:'#fff',fontSize:'10px'}}>✓</span>}</div>
-                        <div style={{flex:1}}>
-                          <div style={{fontSize:'12px',color:C.text}}>{c.label}</div>
-                          <div style={{fontSize:'10px',color:C.textMuted}}>{c.sublabel}{c.claimedFor?' · already used in a previous claim':''}</div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>}
-              </div>
-            )
-          })}
-        </Card>
-
-        {/* Progress indicator */}
-        <div style={{padding:'0 16px 10px'}}>
-          <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>
-            <span style={{color:C.green}}>{medsaCount} auto-attached from Medsa</span>
-            {allChecked
-              ?<span style={{color:C.green,fontWeight:600}}>All documents ready ✓</span>
-              :<span>{manualCount - Object.values(checklist).filter(Boolean).length} still needed</span>}
-          </div>
-          <div style={{height:6,background:C.card,borderRadius:6,overflow:'hidden'}}>
-            <div style={{height:'100%',width:`${(selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length/selectedType.docs.length)*100}%`,background:allChecked?C.green:C.amber,borderRadius:6,transition:'width 0.3s'}}/>
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{selectedType.docs.filter((doc,i)=>isReady(doc,getKey(claimType,i))).length} of {selectedType.docs.length} documents ready</div>
-        </div>
-
-        {/* Bundle and submit */}
-        <div style={{padding:'0 16px 8px'}}>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} disabled={!allChecked} onClick={()=>setBundleReady(true)}>
-            {allChecked?'Bundle claim package for download':'Complete checklist to bundle'}
-          </Btn>
-          {bundleReady&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'8px'}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Claim package ready</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>Download a cover sheet to submit yourself, or submit the whole package to your insurer directly through Medsa now.</div>
-            <Btn style={{width:'100%',marginBottom:'10px'}} disabled={bundlingPdf} onClick={downloadClaimBundle}>{bundlingPdf?'Preparing…':'Download claim checklist (PDF)'}</Btn>
-            <div style={{textAlign:'center',marginBottom:'10px'}}><div style={{fontSize:'11px',color:C.textMuted}}>or</div></div>
-            {/* Real fix: this used to be a permanently disabled stub -
-                "Available once your insurer integrates with Medsa" - even
-                though the exact same real submission mechanism already
-                existed elsewhere on this tab (see the "Submit a receipt
-                for review" card above). Same real insurance_claims row,
-                flagged for the insurer's own independent verification -
-                just built from everything gathered in this checklist
-                (every attachment, record, and referral picked above)
-                instead of a single upload. */}
-            {!packageSubmitSuccess ? <>
-              <input value={packageAmount} onChange={e=>setPackageAmount(e.target.value)} type="number" placeholder="Amount you're claiming, HK$ (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'8px'}}/>
-              {packageSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{packageSubmitError}</div>}
-              <Btn variant="primary" style={{width:'100%'}} disabled={packageSubmitting} onClick={handleSubmitClaimPackage}>{packageSubmitting?'Submitting…':'Submit this claim package to your insurer'}</Btn>
-            </> : <div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green}}>✓ Submitted as {packageSubmitSuccess}. Your insurer will verify it independently.</div>}
-          </div>}
-        </div>
-
-        {/* Final disclaimer */}
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
-          ◇ This checklist covers standard requirements. Your insurer or agent may request additional documents specific to your plan or claim. Medsa is a preparation tool only — submission, review, and approval are handled entirely by your insurer. For plan-specific guidance, contact your assigned agent.
-        </div>
-      </>}
     </div>
   )
 }
