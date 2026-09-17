@@ -1439,12 +1439,22 @@ export function AgentClaimView({ claimRef }) {
       </div>
     </div>
   )
+  // Real gap this closes: reopening an already-decided claim (via the
+  // insurer portal's Claims tab) landed on the exact same "Your decision"
+  // Approve/Reject screen as a claim that had never been touched -
+  // nothing here said a decision already existed, so overriding one read
+  // as deciding it for the first time. A reviewer needs to know they're
+  // about to CHANGE a standing decision, not make one.
+  const alreadyDecided = claim.status !== 'pending_review'
+  const decidedStatusLabel = {approved:'Approved',partially_approved:'Partially approved',rejected:'Rejected',settled:'Settled'}[claim.status] || claim.status
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{background:C.navy,padding:'20px 16px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.6,letterSpacing:'1px',textTransform:'uppercase',marginBottom:'4px'}}>Claim review · {claim.claim_ref}</div>
         <div style={{fontSize:'18px',fontWeight:700}}>{claim.patients?.full_name||'Unknown patient'}</div>
         <div style={{fontSize:'12px',opacity:0.8,marginTop:'2px'}}>{claim.insurance_plans?.plan_name} · Submitted {new Date(claim.submitted_at).toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+        {alreadyDecided&&<div style={{display:'inline-block',marginTop:'8px',background:'rgba(255,255,255,0.15)',borderRadius:'20px',padding:'4px 12px',fontSize:'11px',fontWeight:600}}>Current decision: {decidedStatusLabel}</div>}
       </div>
       <SecLabel>Claim details</SecLabel>
       <Card style={{padding:'0 16px'}}>
@@ -1537,7 +1547,8 @@ export function AgentClaimView({ claimRef }) {
           <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text}}>{doc.file_name||doc.category}</div>
         ))}
       </Card>
-      <SecLabel>Your decision</SecLabel>
+      <SecLabel>{alreadyDecided?`Override decision (currently ${decidedStatusLabel})`:'Your decision'}</SecLabel>
+      {alreadyDecided&&<div style={{margin:'0 16px 12px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} This claim already has a decision. Choosing below replaces it, not a first-time decision.</div>}
       <div style={{padding:'0 16px',display:'flex',gap:'10px',marginBottom:'12px'}}>
         <div onClick={()=>setDecision('approve')} style={{flex:1,border:`1.5px solid ${decision==='approve'?C.green:C.border}`,background:decision==='approve'?C.greenXLight:C.cream,borderRadius:'12px',padding:'14px',textAlign:'center',cursor:'pointer'}}>
           <div style={{fontSize:'20px',marginBottom:'4px'}}>✓</div>
@@ -1564,7 +1575,7 @@ export function AgentClaimView({ claimRef }) {
       {decision&&(
         <div style={{padding:'0 16px 24px'}}>
           <button onClick={handleDecide} disabled={submitting||(decision==='reject'&&!reason)} style={{width:'100%',border:'none',background:decision==='approve'?C.green:C.red,borderRadius:'10px',padding:'14px',fontSize:'14px',fontWeight:500,cursor:'pointer',color:'#fff',fontFamily:'inherit',opacity:submitting||(decision==='reject'&&!reason)?0.6:1}}>
-            {submitting?'Saving...':decision==='approve'?`Approve · HK$${claim.insurer_covered_amount}`:'Reject claim'}
+            {submitting?'Saving...':decision==='approve'?`${alreadyDecided?'Override → Approve':'Approve'} · HK$${claim.insurer_covered_amount}`:alreadyDecided?'Override → Reject claim':'Reject claim'}
           </button>
           {decision==='reject'&&!reason&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginTop:'8px'}}>Please select a rejection reason before submitting.</div>}
         </div>
