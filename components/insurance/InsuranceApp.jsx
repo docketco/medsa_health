@@ -1373,6 +1373,14 @@ export function AgentClaimView({ claimRef }) {
 
   useEffect(() => {
     async function load() {
+      // Real bug this fixes: notFound/loadError only ever got set to
+      // true, never reset - so a first run that concluded "not found"
+      // (e.g. claimRef was momentarily undefined before the page's own
+      // router finished hydrating - see pages/claim-review.jsx) left the
+      // component stuck on that screen forever, even once a later run of
+      // this same effect (claimRef change triggers it, see the deps
+      // array below) successfully loaded a real claim into state.
+      setLoading(true); setNotFound(false); setLoadError(null)
       if (!claimRef) { setLoading(false); setNotFound(true); return }
       try {
         const { data: c, error: claimErr } = await supabase.from('insurance_claims')

@@ -3531,8 +3531,19 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           matchedConditions, isMatched: matchedConditions.length > 0,
         }
       })
-      // Matched plans surface first - genuine personalisation now, not just a claim
-      mapped.sort((a,b) => (b.isMatched?1:0) - (a.isMatched?1:0))
+      // Real bug this fixes: every insurer-facing screen (Sponsored
+      // Listings, the self-serve Promote tab) promises a sponsored plan
+      // "priority placement in patient searches" - what an insurer is
+      // actually paying HK$3,000/month for - but this sort never once
+      // checked the sponsored flag, only isMatched. A sponsored-but-
+      // unmatched plan landed wherever the database happened to return
+      // it, mixed in with everything else, same as if nothing was ever
+      // paid for. Sponsored now wins first (that's the paid placement),
+      // matched breaks ties within each group second.
+      mapped.sort((a,b) => {
+        if (a.sponsored !== b.sponsored) return b.sponsored ? 1 : -1
+        return (b.isMatched?1:0) - (a.isMatched?1:0)
+      })
       setPlans(mapped)
       setPlansLoading(false)
     }
