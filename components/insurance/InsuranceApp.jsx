@@ -390,7 +390,7 @@ const EMPTY_FORM = {
   plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
   overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
   pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
-  policy_document_path:'',
+  policy_document_path:'', billing_model:'direct',
 }
 function CoverageRulesManager({ company }) {
   const [plans,setPlans]=useState([])
@@ -461,6 +461,7 @@ function CoverageRulesManager({ company }) {
       pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
       preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
       category_limits, policy_document_path: plan.policy_document_path||'',
+      billing_model: plan.billing_model||'direct',
     })
     setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
@@ -546,6 +547,7 @@ function CoverageRulesManager({ company }) {
       category_limits,
       policy_document_path: form.policy_document_path || null,
       policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
+      billing_model: form.billing_model || 'direct',
     }
     if (editingId) {
       await supabase.from('insurance_plans').update(payload).eq('id', editingId)
@@ -677,8 +679,22 @@ function CoverageRulesManager({ company }) {
             </div>
           </div>
           <div style={{marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$)</div>
-            <input type="number" value={form.preauth_threshold_hkd} onChange={e=>setForm(f=>({...f,preauth_threshold_hkd:e.target.value}))} placeholder="e.g. 5000 - claims over this need review before auto-settling" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Billing model</div>
+            <select value={form.billing_model} onChange={e=>setForm(f=>({...f,billing_model:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+              <option value="direct">Direct billing - clinic bills us, patient pays copay only</option>
+              <option value="reimbursement">Reimbursement only - patient always pays in full and claims it back</option>
+            </select>
+            {/* Real distinction a practice manager flagged: pre-authorization
+                (a GOP obtained BEFORE treatment) only means anything for a
+                direct-billing plan. A reimbursement-only plan is submitted
+                AFTER the patient already paid in full, so there's nothing to
+                pre-authorize - it always goes to review, on its own terms,
+                never through the preauth-threshold/GOP language below. */}
+            {form.billing_model==='reimbursement'&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Reimbursement-only plans are never pre-authorized or billed directly - every claim goes straight to review after the patient has already paid. The pre-authorization threshold below won't apply.</div>}
+          </div>
+          <div style={{marginBottom:'10px',opacity:form.billing_model==='reimbursement'?0.5:1}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$){form.billing_model==='reimbursement'?' - not used for reimbursement-only plans':''}</div>
+            <input type="number" disabled={form.billing_model==='reimbursement'} value={form.preauth_threshold_hkd} onChange={e=>setForm(f=>({...f,preauth_threshold_hkd:e.target.value}))} placeholder="e.g. 5000 - claims over this need review before auto-settling" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
           </div>
           <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
             <div style={{flex:1}}>
@@ -1241,7 +1257,15 @@ export function AgentClaimView({ claimRef }) {
           flag correctly matters: the two causes need completely
           different follow-up (chase a credential vs. get insurer
           sign-off on the procedure), not the same generic warning. */}
-      {claim.verification_flag&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {
+      {/* Real bug this fixes: this showed unconditionally whenever
+          verification_flag was set, with no check on claim.status -
+          approving a flagged claim (see handleDecide, which correctly
+          sets status to approved/settled) never cleared
+          verification_flag itself, so reopening the SAME already-
+          approved claim later kept showing "needs pre-authorization"
+          as if it were still an open blocker. Only shown while the
+          claim is genuinely still awaiting a decision. */}
+      {claim.verification_flag&&claim.status==='pending_review'&&<div style={{margin:'0 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} Flagged: {
         claim.verification_flag==='referral_required'?'referral required, not yet approved'
         :claim.verification_flag==='patient_unverified_receipt'?'patient-uploaded receipt, not verified by Medsa - confirm independently before approving'
         :claim.verification_flag==='preauth_required'?'this visit needs pre-authorization before it can settle (over the plan/category\'s configured threshold) - not a practitioner issue'

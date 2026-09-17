@@ -6368,7 +6368,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.verificationFlag==='referral_required'&&'This plan requires a doctor referral on file for this practitioner, and none was found.'}
               {!claimAdjudication.verificationFlag&&claimAdjudication.categoryPreauthRequired&&'One of this visit\'s categories is configured to always require pre-authorization before it can settle.'}
               {!claimAdjudication.verificationFlag&&!claimAdjudication.categoryPreauthRequired&&claimAdjudication.preauthRequired&&'This visit\'s total is over the plan\'s configured pre-authorization threshold.'}
-              {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
+              {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&claimAdjudication.isReimbursementOnly&&'This plan is reimbursement-only - it\'s never billed or pre-authorized directly, the patient pays and claims it back.'}
+              {!claimAdjudication.verificationFlag&&!claimAdjudication.preauthRequired&&!claimAdjudication.categoryPreauthRequired&&!claimAdjudication.isReimbursementOnly&&'This visit is over HK$1,000, which always needs review before auto-settling.'}
               {' '}A person {claimAdjudication.dryRun?'would need':'needs'} to review and settle it manually.
             </div>
             {/* Real gap: the coverage math still runs in full even when
