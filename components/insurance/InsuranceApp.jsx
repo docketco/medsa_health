@@ -1172,6 +1172,12 @@ function PreauthRequestsManager({ company }) {
       expires_at: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
     }).eq('id', req.id)
     setDecidingId(null)
+    // Real bug this fixes: the default filter is Pending, so the instant
+    // a request was approved, reloading the list made its own card
+    // vanish from view mid-action - no chance to actually read the GOP
+    // code that just appeared, it just "popped out." Switching the
+    // filter to match keeps the same card in view with its new code.
+    setFilter('Approved')
     load()
   }
   async function handleDeny(req) {
@@ -1181,6 +1187,7 @@ function PreauthRequestsManager({ company }) {
       denial_reason: denyReason.trim() || null,
     }).eq('id', req.id)
     setDecidingId(null); setDenyReasonFor(null); setDenyReason('')
+    setFilter('Denied')
     load()
   }
 
