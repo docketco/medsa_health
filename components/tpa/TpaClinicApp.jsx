@@ -23,6 +23,12 @@ import { getInsuranceAdapter, calculatePlatformClaimFee } from '../../lib/insura
 // thing they're already good at isn't worth it; Medsa's real advantage is
 // the native, in-network path (a live structured encounter beats OCR off
 // a photographed receipt every time) - that's where to keep building.
+//
+// Receipt attachment (added per your request): optional, not required to
+// submit - the clinic's own itemized entry above is still what actually
+// gets adjudicated. This exists so a reviewer has something to open
+// alongside the numbers, matching the patient's own out-of-network
+// upload path, which always attaches one since THAT source is unverified.
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -136,6 +142,17 @@ function SubmitClaimScreen({ clinic }) {
     }
   }
 
+  // Real gap reported live-testing: this screen submitted a claim purely
+  // off whatever the clinic typed in (category/amount/ICD-10) with
+  // nothing supporting it - unlike the patient's own out-of-network
+  // upload path (ClaimsTab), which always attaches a receipt. A TPA
+  // clinic is a Medsa-verified submitter (see the file-level note above),
+  // so its own itemized entry is still trusted as the claim record
+  // itself - this isn't required to submit, just optional supporting
+  // documentation an insurer reviewer can open alongside the numbers.
+  const [receiptFile,setReceiptFile]=useState(null)
+  const [uploadingReceipt,setUploadingReceipt]=useState(false)
+
   const [submitting,setSubmitting]=useState(false)
   const [result,setResult]=useState(null) // {status, fees, ...} | {error}
 
@@ -181,10 +198,30 @@ function SubmitClaimScreen({ clinic }) {
       verificationMethod: 'HKID_LOOKUP',
       verificationPayload: { hkid: hkid.trim() },
     })
+    // A REJECTED result from an identity/verification failure (see
+    // adjudicateClaim's early return) never creates a claim row at all -
+    // adjudication.fees only exists on a real, inserted claim, same
+    // check the existing reset logic below already relies on. Nothing to
+    // attach a receipt to otherwise.
+    if (receiptFile && (adjudication.status !== 'REJECTED' || adjudication.fees) && adjudication.claimId) {
+      setUploadingReceipt(true)
+      const { data: claimRow } = await supabase.from('insurance_claims').select('id').eq('claim_ref', adjudication.claimId).maybeSingle()
+      if (claimRow) {
+        const path = `tpa/${clinic.id}/${adjudication.claimId}-${receiptFile.name}`
+        const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, receiptFile)
+        if (!upErr) {
+          await supabase.from('medical_record_attachments').insert({
+            patient_id: patient.id, category: 'claim_document', file_url: path, file_name: receiptFile.name,
+            verification_status: 'unverified', insurance_claim_id: claimRow.id,
+          })
+        }
+      }
+      setUploadingReceipt(false)
+    }
     setSubmitting(false)
     setResult(adjudication)
     if (adjudication.status !== 'REJECTED' || adjudication.fees) {
-      setAmount(''); setDescription(''); setIcd10Codes([]); setIcd10Suggestions([])
+      setAmount(''); setDescription(''); setIcd10Codes([]); setIcd10Suggestions([]); setReceiptFile(null)
       loadRecentClaims()
     }
   }
@@ -256,6 +293,13 @@ function SubmitClaimScreen({ clinic }) {
           </div>
 
           <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="Amount (HK$)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
+
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',textTransform:'uppercase',fontWeight:600}}>Receipt (optional)</div>
+          <label style={{display:'block',textAlign:'center',border:`1.5px dashed ${C.border}`,borderRadius:'8px',padding:'12px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'12px',fontSize:'12px',color:uploadingReceipt?C.textMuted:C.green,fontWeight:500}}>
+            {uploadingReceipt?'Attaching…':receiptFile?`✓ ${receiptFile.name} - tap to change`:'+ Attach a receipt for this claim'}
+            <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>setReceiptFile(e.target.files?.[0]||null)}/>
+          </label>
+
           {amount&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'12px'}}>Medsa's processing fee if approved: <strong>HK${calculatePlatformClaimFee(amount)}</strong> (2% + HK$10), charged to the insurer, never deducted from the clinic.</div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={submitting||!amount}>{submitting?'Submitting…':'Submit claim'}</Btn>
         </>}
