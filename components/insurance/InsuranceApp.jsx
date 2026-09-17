@@ -1435,11 +1435,21 @@ export function AgentClaimView({ claimRef }) {
       <SecLabel>Claim form</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',fontSize:'12px',marginBottom:medicalRecord?.line_items?.length>0?'12px':0}}>
-          <div><div style={{color:C.textMuted}}>Provider</div><div style={{fontWeight:500}}>{claim.institutions?.name||'—'}</div></div>
+          <div><div style={{color:C.textMuted}}>Provider</div><div style={{fontWeight:500}}>{claim.institutions?.name||claim.claimed_clinic_name||'—'}</div></div>
           <div><div style={{color:C.textMuted}}>Treating doctor</div><div style={{fontWeight:500}}>{medicalRecord?.doctor_name||'—'}</div></div>
           <div><div style={{color:C.textMuted}}>Date of service</div><div style={{fontWeight:500}}>{medicalRecord?.date_of_record ? new Date(medicalRecord.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) : '—'}</div></div>
           <div><div style={{color:C.textMuted}}>Diagnosis codes</div><div style={{fontWeight:500}}>{claim.icd10_codes||'—'}</div></div>
         </div>
+        {/* Real signal this adds: a patient submitting an out-of-network
+            receipt now types the clinic's name, checked client-side
+            against institutions/external_clinics/verified_clinics (see
+            PatientApp.jsx's ClaimsTab) - this tells the reviewer whether
+            that check found a real clinic on file, not just "the patient
+            says so." Separate from the generic unverified-receipt flag
+            below since this is reassuring information, not a warning. */}
+        {claim.claimed_clinic_name&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,fontSize:'12px',color:claim.claimed_clinic_verified?C.green:C.textMuted}}>
+          {claim.claimed_clinic_verified?'✓':'◇'} {claim.claimed_clinic_name} - {claim.claimed_clinic_verified?'matched a clinic on file (Medsa network, TPA-registered, or HK-registered)':'not found in our clinic records - verify independently'}
+        </div>}
         {medicalRecord?.line_items?.length>0&&<div style={{borderTop:`0.5px solid ${C.border}`,paddingTop:'10px'}}>
           {medicalRecord.line_items.map((li,i)=>(
             <div key={i} style={{display:'flex',justifyContent:'space-between',fontSize:'12px',padding:'4px 0'}}>
