@@ -2944,46 +2944,54 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
         </div>}
       </div>}
 
-      {/* Path 2: genuinely out-of-network. */}
-      {activePolicy&&<>
-        <SecLabel>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</SecLabel>
-        <Card style={{padding:'14px 16px'}}>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn
-            ?'Upload a receipt (and diagnosis letter, if it\'s a separate document) from a clinic not on Medsa.'
-            :'上傳非Medsa診所的收據(如診斷證明為獨立文件,請一併上傳)。'}</div>
+      {/* Path 2: genuinely out-of-network. Same headline-card treatment as
+          Path 1 above (colored background, white content box for the
+          form) - a plain white Card sitting right under a bold gradient
+          one read as "the real option and the afterthought," when both
+          are equally legitimate, equally common ways to submit a claim.
+          A different gradient (green, not navy) keeps the two visually
+          distinguishable as different flows without one outranking the
+          other. */}
+      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</div>
+        <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn
+          ?'For a clinic not on Medsa - upload a receipt (and diagnosis letter, if it\'s a separate document).'
+          :'適用於非Medsa診所 - 上傳收據(如診斷證明為獨立文件,請一併上傳)。'}</div>
 
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
-          <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital':'例如:明德國際醫院'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px'}}/>
-          {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
-          {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',color:manualClinicCheck.verified?C.green:C.textMuted,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
+        <div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
+          <div style={{fontSize:'11px',opacity:0.8,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
+          <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital':'例如:明德國際醫院'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px',background:'#fff',color:C.text}}/>
+          {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',opacity:0.75,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
+          {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',opacity:manualClinicCheck.verified?1:0.75,fontWeight:manualClinicCheck.verified?600:400,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
 
-          <label style={{display:'block',textAlign:'center',border:`1.5px dashed ${C.border}`,borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',color:uploadingReceipt?C.textMuted:C.green,fontWeight:500}}>
+          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.5)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',fontWeight:500,opacity:uploadingReceipt?0.6:1}}>
             {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a receipt or document':'+ 上傳收據或文件')}
             <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
           </label>
-          {uploadError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{uploadError}</div>}
+          {uploadError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{uploadError}</div>}
           {attachments.length===0
-            ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
+            ? <div style={{fontSize:'12px',opacity:0.7,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
             : attachments.map(a=>(
-              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?C.green:C.border}`,background:manualSelectedIds.has(a.id)?C.green:'transparent',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
+              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'0.5px solid rgba(255,255,255,0.25)',cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.5)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
                 <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
               </div>
             ))}
 
           {heldPolicies.length>1&&<>
-            <div style={{fontSize:'11px',color:C.textMuted,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
-            <select value={manualPlanId} onChange={e=>setManualPlanId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+            <div style={{fontSize:'11px',opacity:0.8,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
+            <select value={manualPlanId} onChange={e=>setManualPlanId(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',background:'#fff',color:C.text}}>
               {heldPolicies.map(p=><option key={p.id} value={p.plan_id}>{p.plan_name}</option>)}
             </select>
           </>}
 
-          <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0'}}/>
-          {manualSubmitError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{manualSubmitError}</div>}
-          {manualSubmitSuccess&&<div style={{fontSize:'12px',color:C.green,marginBottom:'8px'}}>{isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>}
-          <Btn variant="primary" style={{width:'100%'}} disabled={manualSelectedIds.size===0||manualSubmitting} onClick={handleSubmitManualClaim}>{manualSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>
-        </Card>
-      </>}
+          <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0',background:'#fff',color:C.text}}/>
+          {manualSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{manualSubmitError}</div>}
+          {manualSubmitSuccess
+            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.green}} disabled={manualSelectedIds.size===0||manualSubmitting} onClick={handleSubmitManualClaim}>{manualSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>}
+        </div>
+      </div>}
 
       {/* Medsa disclaimer */}
       <div style={{margin:'12px 16px 16px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
