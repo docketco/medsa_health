@@ -263,10 +263,15 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [status,setStatus]=useState('quote')
   // Referral fee to Medsa - only relevant when this policy converts a
   // real inquiry (an unsolicited manually-entered policy has no referral
-  // to pay a fee for). broker_commission_hkd is self-reported - Medsa's
-  // system has no way to know an insurer's real commission - but once
-  // entered, referral_fee_hkd is capped at 50% of it, matching the
-  // Insurance Authority's published referral-fee benchmark.
+  // to pay a fee for). broker_commission_hkd used to be a number the
+  // agent typed themselves - backwards, since commission is the
+  // insurer's own rate, not the agent's to declare. For a real basket
+  // plan it's now computed from the plan's own commission_rate_pct
+  // (below) and this field just displays it; it only stays free-text
+  // for the fully-manual "plan not in basket" path, where Medsa has no
+  // record of that plan's rate at all. referral_fee_hkd is still capped
+  // at 50% of whichever commission applies, per the Insurance
+  // Authority's published referral-fee benchmark.
   const [brokerCommission,setBrokerCommission]=useState('')
   const [referralFee,setReferralFee]=useState('')
   const [saving,setSaving]=useState(false)
@@ -311,7 +316,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); return }
-      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
@@ -363,6 +368,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       planId: builderPlan.id, planName: builderPlan.plan_name, institutionId: builderInsurer,
       deductibleId: builderDeductibleId||null, deductibleHkd: builderDeductible?.deductible_hkd??null,
       riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
+      commissionRatePct: builderPlan.commission_rate_pct,
     }])
     setBuilderPlanId('')
   }
@@ -371,6 +377,18 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   }
   const lineItemsTotal = lineItems.reduce((s,l)=>s+l.premium,0)
   const bundleDiscountNum = parseFloat(bundleDiscount) || 0
+  // Commission is the insurer's own published rate (set in Plan Manager),
+  // never something an agent gets to declare - computed from each line
+  // item's plan automatically. A plan the basket picked up before an
+  // insurer set a rate shows as unset rather than silently defaulting to
+  // 0, since 0% and "not set yet" mean very different things here.
+  const anyLineItemMissingCommissionRate = lineItems.length>0 && lineItems.some(l=>l.commissionRatePct==null)
+  const computedCommission = lineItems.length===0 ? null : (anyLineItemMissingCommissionRate ? null
+    : lineItems.reduce((s,l)=>s+(l.premium*(l.commissionRatePct||0)/100),0))
+
+  useEffect(() => {
+    if (computedCommission!=null) setBrokerCommission(computedCommission.toFixed(2))
+  }, [computedCommission])
 
   const commissionNum = parseFloat(brokerCommission) || 0
   const referralFeeNum = parseFloat(referralFee) || 0
@@ -545,9 +563,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
 
       {prefillInquiry&&<>
         <SecLabel>Referral fee owed to Medsa (optional)</SecLabel>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>Enter your real commission on this policy and Medsa's fee, if you're ready to - the fee is capped at 50% of commission (the Insurance Authority's own referral-fee benchmark). Leave blank to sort out later; Medsa admin can also fill this in from their side.</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
+          {lineItems.length>0
+            ? "Commission is the insurer's own rate for this plan, not something you enter - Medsa's fee is capped at 50% of it (the Insurance Authority's own referral-fee benchmark)."
+            : "No basket plan on this policy, so Medsa has no commission rate on file for it - enter your real commission below if you're ready to. The fee is capped at 50% of it. Leave blank to sort out later; Medsa admin can also fill this in from their side."}
+        </div>
         <div style={{display:'flex',gap:'10px',marginBottom:'8px'}}>
-          <input value={brokerCommission} onChange={e=>setBrokerCommission(e.target.value)} type="number" placeholder="Your commission (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={brokerCommission} onChange={e=>setBrokerCommission(e.target.value)} disabled={lineItems.length>0} type="number" placeholder={lineItems.length>0&&anyLineItemMissingCommissionRate?'Not set by insurer yet':'Your commission (HK$)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:lineItems.length>0?C.beige:'#fff',color:lineItems.length>0?C.textSub:C.text}}/>
           <input value={referralFee} onChange={e=>setReferralFee(e.target.value)} type="number" placeholder="Referral fee to Medsa (HK$)" style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         </div>
         {referralFeeExceedsCap&&<div style={{fontSize:'11px',color:C.red,marginBottom:'12px'}}>That's more than 50% of the commission entered (HK${(commissionNum*0.5).toFixed(0)} max) - the IA's referral-fee benchmark.</div>}
