@@ -324,6 +324,16 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     loadBasket()
   }, [builderInsurer, agent.team_id])
 
+  // Converting a specific inquiry already tells us exactly which plan the
+  // patient asked about - re-showing an empty "Select plan" dropdown and
+  // making the agent pick it again from the whole basket was pure friction
+  // (and confusing: why ask again when it's already known?). Auto-select
+  // it the moment it shows up in the loaded basket.
+  useEffect(() => {
+    if (!prefillInquiry?.plan_id || builderPlanId) return
+    if (basketPlans.some(p=>p.id===prefillInquiry.plan_id)) setBuilderPlanId(prefillInquiry.plan_id)
+  }, [basketPlans, prefillInquiry, builderPlanId])
+
   useEffect(() => {
     setBuilderDeductibleId(''); setBuilderSelectedRiderIds(new Set())
     if (!builderPlanId) { setBuilderRiders([]); setBuilderDeductibles([]); return }
