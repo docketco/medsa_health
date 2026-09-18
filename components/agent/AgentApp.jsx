@@ -1129,6 +1129,7 @@ function TeamLeadScreen({ agent, team }) {
   const [authorizedPlanIds,setAuthorizedPlanIds]=useState(new Set())
   const [pendingAssignments,setPendingAssignments]=useState([])
   const [transferRequests,setTransferRequests]=useState([])
+  const [transferPicks,setTransferPicks]=useState({})
   const [loading,setLoading]=useState(true)
   const [showAddMember,setShowAddMember]=useState(false)
   const [memberForm,setMemberForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
@@ -1189,12 +1190,21 @@ function TeamLeadScreen({ agent, team }) {
     load()
   }
 
-  async function decideTransfer(reqRow, approve) {
+  // Real bug found here: a request left "Any teammate" (to_agent_id null,
+  // meaning "team lead, you pick") approved with status='approved' but
+  // never actually reassigned the policy - the guard below only ever ran
+  // for a request that already named someone. Approving looked like it
+  // worked (the card disappeared) while silently doing nothing to
+  // agent_policies.agent_id. Now requires picking someone at approval
+  // time when the request didn't already name one.
+  async function decideTransfer(reqRow, approve, pickedAgentId) {
+    const targetAgentId = reqRow.to_agent_id || pickedAgentId || null
+    if (approve && !targetAgentId) return
     await supabase.from('agent_client_transfer_requests').update({
       status: approve?'approved':'rejected', decided_at: new Date().toISOString(), decided_by_agent_id: agent.id,
     }).eq('id', reqRow.id)
-    if (approve && reqRow.to_agent_id) {
-      await supabase.from('agent_policies').update({ agent_id: reqRow.to_agent_id }).eq('id', reqRow.policy_id)
+    if (approve && targetAgentId) {
+      await supabase.from('agent_policies').update({ agent_id: targetAgentId }).eq('id', reqRow.policy_id)
     }
     load()
   }
@@ -1240,16 +1250,25 @@ function TeamLeadScreen({ agent, team }) {
 
       {transferRequests.length>0&&<>
         <SecLabel>Transfer requests</SecLabel>
-        {transferRequests.map(r=>(
+        {transferRequests.map(r=>{
+          const needsPick = !r.to_agent_id
+          const picked = transferPicks[r.id] || ''
+          const eligible = members.filter(m=>m.id!==r.from_agent_id)
+          return (
           <Card key={r.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
             <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{r.from?.full_name||'Agent'} wants to hand this to {r.to?.full_name||'another member'}{r.reason?`: ${r.reason}`:''}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{r.from?.full_name||'Agent'} wants to hand this to {r.to?.full_name||'another member (your pick)'}{r.reason?`: ${r.reason}`:''}</div>
+            {needsPick&&<select value={picked} onChange={e=>setTransferPicks(prev=>({...prev,[r.id]:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',marginTop:'8px',boxSizing:'border-box'}}>
+              <option value="">Pick who gets this client</option>
+              {eligible.map(m=><option key={m.id} value={m.id}>{m.full_name}</option>)}
+            </select>}
             <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
-              <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>decideTransfer(r, true)}>Approve</Btn>
+              <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>decideTransfer(r, true, picked)} disabled={needsPick&&!picked}>Approve</Btn>
               <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>decideTransfer(r, false)}>Reject</Btn>
             </div>
           </Card>
-        ))}
+          )
+        })}
       </>}
 
       <SecLabel>Members</SecLabel>
