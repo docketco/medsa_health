@@ -183,7 +183,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
   const [customCategory,setCustomCategory]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
@@ -217,7 +217,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
   }
@@ -229,6 +229,7 @@ function PlanManager({ company }) {
       annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
       covered_categories: plan.covered_categories||[],
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
+      requires_agent: !!plan.requires_agent,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -257,6 +258,7 @@ function PlanManager({ company }) {
       // the insurer's own rate, not something an agent gets to declare.
       // Set once here, it now feeds every quote/policy for this plan.
       commission_rate_pct: form.commission_rate_pct!=='' ? parseFloat(form.commission_rate_pct) : null,
+      requires_agent: form.requires_agent,
     }
     let planId = editingId
     if (editingId) {
@@ -278,7 +280,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -343,6 +345,13 @@ function PlanManager({ company }) {
             <input type="number" value={form.commission_rate_pct} onChange={e=>setForm(f=>({...f,commission_rate_pct:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 20"/>
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Set by you, not the agent - it now computes automatically on every quote for this plan, and Medsa's referral fee is capped at 50% of it. Leave blank if not set yet; an agent quoting this plan sees "not set by insurer" until it is.</div>
           </div>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <input type="checkbox" checked={form.requires_agent} onChange={e=>setForm(f=>({...f,requires_agent:e.target.checked}))}/>
+            <div>
+              <div style={{fontSize:'12px',color:C.text}}>Requires talking to an agent</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
+            </div>
+          </label>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
             {PLAN_MANAGER_CATEGORIES.map(cat=>(
@@ -385,7 +394,7 @@ function PlanManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0

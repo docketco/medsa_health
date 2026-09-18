@@ -3315,28 +3315,58 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
+  const [suitabilityResults,setSuitabilityResults]=useState({}) // index -> {verdict, summary, quotedPremium, usedAI, mode}
+
+  // Bowtie's whole pitch is that most people don't need an agent to find
+  // out whether a plan suits them - a real read against their own health
+  // info, computed instantly, gets them most of the way there. This form
+  // is shared by BOTH paths below (auto and agent) for the same reason
+  // you asked for: whether or not an agent ends up involved, the same
+  // suitability analysis should run so nobody - patient or agent - starts
+  // from a blank slate.
+  const [inquiryForm,setInquiryForm]=useState(null) // {index, mode}
+  const [formConsent,setFormConsent]=useState(false)
+  const [formConditions,setFormConditions]=useState([])
+  const [formNoneApply,setFormNoneApply]=useState(false)
+
+  function openInquiryForm(i, mode) {
+    setInquiryForm({ index: i, mode })
+    setFormConsent(false); setFormConditions([]); setFormNoneApply(false)
+  }
+  function toggleFormCondition(c) {
+    setFormNoneApply(false)
+    setFormConditions(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
+  }
 
   // Real save - and a real snapshot, not just two foreign keys. This
   // claimed "forwarded to the insurer" but plan_inquiries was never
   // read anywhere else in the app - nobody, human or system, ever saw
-  // an inquiry after it was written. The engine was designed to prefill
-  // the applicant's real details for whoever picks this up (an agent,
-  // or Medsa relaying on the insurer's behalf until they have a live
-  // login) - this is that prefill actually happening, plus giving the
-  // row somewhere real to be seen (Medsa Admin's Insurers tab).
+  // an inquiry after it was written. Now runs the same suitability
+  // engine an agent's own pre-analysis uses (lib/planSuitability.js via
+  // /api/patient/match_plan_suitability) for both paths - "auto" shows
+  // the result straight to the patient, "agent" still routes to an
+  // agent but attaches the same read so they aren't starting cold.
   async function handleInquire(i, plan) {
-    if (!patient?.id || !plan.id) return
+    if (!patient?.id || !plan.id || !inquiryForm) return
     setInquiring(i)
-    const { data: fullPatient } = await supabase.from('patients').select('full_name, hkid, date_of_birth, phone, email').eq('id', patient.id).maybeSingle()
-    await supabase.from('plan_inquiries').insert({
-      patient_id: patient.id, plan_id: plan.id,
-      applicant_full_name: fullPatient?.full_name || null, applicant_hkid: fullPatient?.hkid || null,
-      applicant_dob: fullPatient?.date_of_birth || null, applicant_phone: fullPatient?.phone || null,
-      applicant_email: fullPatient?.email || null, consent_given: true, consent_given_at: new Date().toISOString(),
-      status: 'new',
-    })
-    setInquiring(null)
-    setInquired(i)
+    try {
+      const res = await fetch('/api/patient/match_plan_suitability', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          patientId: patient.id, planId: plan.id, mode: inquiryForm.mode,
+          consentHistoryShared: formConsent,
+          declaredConditions: formNoneApply ? [] : formConditions,
+        }),
+      })
+      const data = await res.json()
+      if (data.status === 'OK') {
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode } }))
+        setInquired(i)
+        setInquiryForm(null)
+      }
+    } finally {
+      setInquiring(null)
+    }
   }
   const [anonRating,setAnonRating]=useState(null)
   const [feedbackText,setFeedbackText]=useState('')
@@ -3536,6 +3566,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           sponsorDescription: p.sponsor_description||null, sponsorThumbnailUrl: p.sponsor_thumbnail_url||null,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0,
+          requiresAgent: !!p.requires_agent,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
@@ -3747,18 +3778,55 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
-            {inquired!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
-            <div style={{display:'flex',gap:'8px'}}>
+            {inquired!==i&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
+            {inquired!==i&&<div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              {inquired===i
-                ?<div style={{flex:1,background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:500}}>✓ Enquiry sent</div>
-                :<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleInquire(i,plan)} disabled={inquiring===i}>{inquiring===i?'Sending…':'Inquire about plan'}</Btn>}
-            </div>
-            {/* Post-inquiry confirmation */}
-            {inquired===i&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
+              {!plan.requiresAgent&&<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>Get details automatically</Btn>}
+              <Btn variant={plan.requiresAgent?'primary':undefined} style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>
+            </div>}
+
+            {/* Shared consent + self-declared conditions form - same
+                mechanism for both paths, so an agent-routed inquiry gets
+                the same suitability pre-analysis a patient sees instantly
+                on the automated path, instead of starting cold. */}
+            {inquiryForm?.index===i&&<div style={{marginTop:'10px',background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{inquiryForm.mode==='auto'?'Quick check before your automated quote':'Quick check before this reaches an agent'}</div>
+              <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
+                <input type="checkbox" checked={formConsent} onChange={e=>setFormConsent(e.target.checked)} style={{marginTop:'2px'}}/>
+                Let Medsa check my own visit history on this platform against this plan's coverage (optional - you can still declare conditions below either way)
+              </label>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Do any of these apply to you? (used only to check this plan's coverage, never shared beyond this inquiry)</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+                {[...plan.covers,'Other pre-existing condition'].map(c=>(
+                  <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formConditions.includes(c)?C.green:C.card,color:formConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${formConditions.includes(c)?C.green:C.border}`}}>{c}</span>
+                ))}
+                <span onClick={()=>{setFormNoneApply(true);setFormConditions([])}} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formNoneApply?C.green:C.card,color:formNoneApply?'#fff':C.textSub,border:`0.5px solid ${formNoneApply?C.green:C.border}`}}>None of these apply</span>
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setInquiryForm(null)}>Cancel</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleInquire(i,plan)} disabled={inquiring===i||(!formNoneApply&&formConditions.length===0)}>{inquiring===i?'Checking…':(inquiryForm.mode==='auto'?'See my quote':'Send to an agent')}</Btn>
+              </div>
+            </div>}
+
+            {/* Post-inquiry confirmation - shape differs by mode: auto
+                shows the real verdict/quote right here, agent mode shows
+                the forwarding confirmation as before (plus a note that
+                the same read now travels with it). */}
+            {inquired===i&&suitabilityResults[i]?.mode==='auto'&&<div style={{marginTop:'10px',background:suitabilityResults[i].verdict==='needs_review'?C.amberLight:C.greenXLight,border:`0.5px solid ${suitabilityResults[i].verdict==='needs_review'?C.amber:C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
+                {suitabilityResults[i].verdict==='suitable'&&'✓ Looks suitable for you'}
+                {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Likely suitable - a couple of things to confirm'}
+                {suitabilityResults[i].verdict==='needs_review'&&'⚠ Worth a closer look before relying on this'}
+              </div>
+              {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'14px',fontWeight:700,color:C.navy,marginBottom:'6px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
+              <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
+              {suitabilityResults[i].usedAI===false&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>}
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',fontStyle:'italic'}}>This is an estimate, not a bound quote or advice. Ready to proceed, or want a second opinion? You can still reach out to a licensed agent from "My inquiries".</div>
+            </div>}
+            {inquired===i&&suitabilityResults[i]?.mode==='agent'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
               <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Not sure which plans to combine? A licensed agent can help structure your coverage once assigned.</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up already has your declared conditions checked against this plan, so you shouldn't need to repeat yourself.</div>
             </div>}
           </Card>
         ))}
