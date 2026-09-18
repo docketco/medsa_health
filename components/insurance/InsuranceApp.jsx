@@ -2042,7 +2042,13 @@ export default function InsuranceApp({ company, onLogout }) {
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
   return (
-    <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
+    // Real gap reported live-testing: minHeight let this column grow
+    // taller than the viewport whenever a screen's content ran long -
+    // the whole column (bottom nav included) scrolled off with the page,
+    // so the nav only reappeared once scrolled all the way down instead
+    // of staying pinned. Fixed height locks this column to the viewport;
+    // only the inner content div (overflowY:auto, below) scrolls.
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <div style={{background:C.navy,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='dashboard'&&<button onClick={()=>setScreen(screen==='claim-detail'?'claims':'dashboard')} style={{background:'rgba(255,255,255,0.15)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>}
         <MedsaLogo height={20}/>
@@ -2065,7 +2071,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='ads'&&<SponsoredListings company={company}/>}
         {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
-      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px'}}>
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{
           const active = screen===item.key||(screen==='claim-detail'&&item.key==='claims')
           return (

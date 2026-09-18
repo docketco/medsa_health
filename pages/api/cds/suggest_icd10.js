@@ -42,28 +42,32 @@ export default async function handler(req, res) {
 
   // Real question this answers: does this have to call an LLM at all, or
   // can plain keyword matching against icd10_reference.label do the job
-  // for free? When there's no API key configured, rank the same
-  // keyword-narrowed candidates by how many of the typed words their
-  // label actually contains, instead of a hard 503 - a genuinely useful,
-  // zero-cost result for the common case (the description already names
-  // the condition close to how the reference table spells it), just
-  // without the AI's synonym/clinical-reasoning judgment or its one-line
-  // "why" explanation.
-  if (!process.env.ANTHROPIC_API_KEY) {
-    const scored = candidates
-      .map(c => {
-        const labelLower = c.label.toLowerCase()
-        const hits = keywords.filter(k => labelLower.includes(k))
-        return { code: c.code, label: c.label, reasoning: hits.length>0 ? `Matched keyword(s): ${hits.join(', ')}` : null, score: hits.length }
-      })
-      .filter(s => s.score > 0)
-      .sort((a,b) => b.score - a.score)
-      .slice(0, 5)
-    return res.status(200).json({
-      suggestions: scored.map(({code,label,reasoning})=>({code,label,reasoning})),
-      usedAI: false,
-      note: scored.length===0 ? 'No keyword match in the reference set - search or enter a code manually.' : undefined,
+  // for free? Tiered, not either/or - rank the same keyword-narrowed
+  // candidates by how many of the typed words their label actually
+  // contains first, every time, key configured or not:
+  //   - a confident keyword match returns immediately, free, even when
+  //     AI IS available - the easy/common case (the description already
+  //     names the condition close to how the reference table spells it)
+  //     never needs to spend a model call at all.
+  //   - only when keyword matching finds NOTHING does this escalate to
+  //     AI, and only if a key is configured - that's exactly the harder
+  //     case free matching can't handle (synonyms, clinical phrasing the
+  //     label doesn't literally contain), which is what the AI path is
+  //     actually for.
+  const scored = candidates
+    .map(c => {
+      const labelLower = c.label.toLowerCase()
+      const hits = keywords.filter(k => labelLower.includes(k))
+      return { code: c.code, label: c.label, reasoning: hits.length>0 ? `Matched keyword(s): ${hits.join(', ')}` : null, score: hits.length }
     })
+    .filter(s => s.score > 0)
+    .sort((a,b) => b.score - a.score)
+    .slice(0, 5)
+  if (scored.length > 0) {
+    return res.status(200).json({ suggestions: scored.map(({code,label,reasoning})=>({code,label,reasoning})), usedAI: false })
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(200).json({ suggestions: [], usedAI: false, note: 'No keyword match in the reference set - search or enter a code manually.' })
   }
 
   try {

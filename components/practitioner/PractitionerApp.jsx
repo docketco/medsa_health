@@ -3961,7 +3961,13 @@ export default function PractitionerApp({ liveData={} }) {
   const r=ROLES[role]
   const navItems=[{key:'id',icon:'◈',label:'My ID'},role==='receptionist'&&{key:'checkin',icon:'⬢',label:'Check-in'},role!=='hr'&&{key:'patients',icon:'◎',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},(WORKING_ROLES.includes(role)||role==='dept_head')&&{key:'shifts',icon:'⬢',label:'Shifts'},(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&{key:'openings',icon:'⬒',label:'Openings'},(role==='doctor'&&specialtyType==='surgeon')&&{key:'booksurgery',icon:'✚',label:'Book Surgery'},(role==='doctor'||role==='nurse'||role==='clinic_nurse')&&{key:'escalations',icon:'⚠',label:'Escalations'},(role==='dept_head'||role==='admin')&&{key:'postcall',icon:'⚠',label:'Post-Call'},(role==='hr'||role==='admin')&&{key:'taskboard',icon:'☑',label:'Tasks'},(role==='hr'||role==='admin')&&{key:'staffsearch',icon:'⌕',label:'Search'},role==='dept_head'&&{key:'coverage',icon:'▤',label:'Coverage'},role==='admin'&&{key:'adminhome',icon:'⬢',label:'Admin'},{key:'messages',icon:'◇',label:'Messages'},role==='admin'&&{key:'permissions',icon:'⬡',label:'Perms'},role==='hr'&&{key:'workinghours',icon:'⬟',label:'Hours'},{key:'help',icon:'◌',label:'Help'}].filter(Boolean)
   return (
-    <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
+    // Real gap reported live-testing: minHeight let this column grow
+    // taller than the viewport whenever a screen's content ran long -
+    // the whole column (bottom nav included) scrolled off with the page,
+    // so the nav only reappeared once scrolled all the way down instead
+    // of staying pinned. Fixed height locks this column to the viewport;
+    // only the inner content div (overflowY:auto, below) scrolls.
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         <MedsaLogo height={20}/>
@@ -3988,7 +3994,7 @@ export default function PractitionerApp({ liveData={} }) {
         {screen==='openings'&&(WORKING_ROLES.includes(role)||role==='hr'||role==='admin')&&<ShiftOpeningsScreen role={role} department={department} doctorName={doctorName} specialty={specialty}/>}
         {screen==='help'&&<HelpScreen/>}
       </div>
-      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
           <div key={item.key} onClick={()=>{setScreen(item.key);setJumpToLog(false);setJumpToRecord(false)}} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
             <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>

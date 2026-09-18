@@ -353,7 +353,13 @@ export default function InstitutionApp() {
   const titles={dashboard:'Institution admin',practitioners:'Practitioners',patients:'Patients',schedule:'Schedule',occupancy:'Occupancy',portals:'Portal management'}
   const navItems=[{key:'dashboard',icon:'◈',label:'Overview'},{key:'practitioners',icon:'◎',label:'Staff'},{key:'patients',icon:'◇',label:'Patients'},{key:'schedule',icon:'▣',label:'Schedule'},{key:'occupancy',icon:'◉',label:'Occupancy'}]
   return (
-    <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
+    // Real gap reported live-testing: minHeight let this column grow
+    // taller than the viewport whenever a screen's content ran long -
+    // the whole column (bottom nav included) scrolled off with the page,
+    // so the nav only reappeared once scrolled all the way down instead
+    // of staying pinned. Fixed height locks this column to the viewport;
+    // only the inner content div (overflowY:auto, below) scrolls.
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='dashboard'&&<button onClick={()=>setScreen('dashboard')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center'}}>←</button>}
         <MedsaLogo height={20}/>
@@ -368,7 +374,7 @@ export default function InstitutionApp() {
         {screen==='occupancy'&&<OccupancyScreen/>}
         {screen==='portals'&&<PortalManagement/>}
       </div>
-      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
           <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
             <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
