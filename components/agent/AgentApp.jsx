@@ -850,8 +850,22 @@ function PlanInquiriesScreen({ agent, onConvert }) {
 
   async function load() {
     setLoading(true)
-    const { data: unclaimedRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
-      .is('claimed_by_agent_id', null).order('created_at',{ascending:false})
+    // Real gap found live-testing: this used to show every unclaimed
+    // inquiry across every insurer to every agent, regardless of who
+    // they actually work for - a Bupa agent could see an AIA applicant's
+    // real name/HKID/DOB/phone/email. Scope to insurers this agent can
+    // actually work with: their one employer if captive, or whichever
+    // insurers they're actively appointed to if independent.
+    let myCompanyNames = []
+    if (agent.agent_type === 'captive') {
+      myCompanyNames = agent.institutions?.name ? [agent.institutions.name] : []
+    } else {
+      const { data: appts } = await supabase.from('agent_institution_appointments')
+        .select('institutions(name)').eq('agent_id', agent.id).eq('status','active')
+      myCompanyNames = [...new Set((appts||[]).map(a=>a.institutions?.name).filter(Boolean))]
+    }
+    const { data: unclaimedRows } = myCompanyNames.length===0 ? { data: [] } : await supabase.from('plan_inquiries').select('*, insurance_plans!inner(plan_name, company_name)')
+      .is('claimed_by_agent_id', null).in('insurance_plans.company_name', myCompanyNames).order('created_at',{ascending:false})
     setUnclaimed(unclaimedRows||[])
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
@@ -931,26 +945,35 @@ function PlanInquiriesScreen({ agent, onConvert }) {
 
       <SecLabel>Unclaimed - first to claim gets the lead</SecLabel>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
-      {!loading&&unclaimed.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries right now.</div>}
+      {!loading&&unclaimed.filter(i=>{
+        const authTeams = planTeamAuth[i.plan_id]
+        const isTeamGated = authTeams && authTeams.length > 0
+        return !isTeamGated || (agent.team_id && authTeams.includes(agent.team_id))
+      }).length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries you're eligible to work right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'24px'}}>
         {unclaimed.map(i=>{
           const authTeams = planTeamAuth[i.plan_id]
           const isTeamGated = authTeams && authTeams.length > 0
           const myTeamEligible = isTeamGated && agent.team_id && authTeams.includes(agent.team_id)
+          // An inquiry this agent structurally cannot work (gated to
+          // teams they're not on) isn't shown at all any more, not just
+          // disabled - "Not your team's plan" used to still surface the
+          // applicant's real name/HKID/DOB/phone/email to someone who
+          // could never legitimately act on it.
+          if (isTeamGated && !myTeamEligible) return null
           return (
           <Card key={i.id} style={{padding:'14px 16px'}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'8px'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
-                {isTeamGated&&<div style={{fontSize:'11px',color:C.blue,marginTop:'2px'}}>Only authorized teams can take this one - competing branches, first to confirm wins the lead</div>}
+                {isTeamGated&&<div style={{fontSize:'11px',color:C.blue,marginTop:'2px'}}>Team-gated - claim it yourself, or confirm it for your team to distribute by its own rule</div>}
               </div>
-              {isTeamGated
-                ? (myTeamEligible
-                  ? <Btn variant="primary" onClick={()=>handleTeamConfirm(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Confirming…':'Confirm for team'}</Btn>
-                  : <span style={{fontSize:'11px',color:C.textMuted}}>Not your team's plan</span>)
-                : <Btn variant="primary" onClick={()=>handleClaim(i)} disabled={claimingId===i.id}>{claimingId===i.id?'Claiming…':'Claim'}</Btn>}
+              <div style={{display:'flex',gap:'6px'}}>
+                <Btn onClick={()=>handleClaim(i)} disabled={claimingId===i.id} style={{fontSize:'12px'}}>{claimingId===i.id?'Claiming…':'Claim for myself'}</Btn>
+                {isTeamGated&&<Btn variant="primary" onClick={()=>handleTeamConfirm(i)} disabled={claimingId===i.id} style={{fontSize:'12px'}}>{claimingId===i.id?'Confirming…':'Confirm for team'}</Btn>}
+              </div>
             </div>
           </Card>
           )
