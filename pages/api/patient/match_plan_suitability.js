@@ -65,7 +65,8 @@ export default async function handler(req, res) {
   let historyConditions = []
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
-      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null).limit(50)
+      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
+      .order('created_at', { ascending: false }).limit(15)
     historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
   }
   const allConditions = [...new Set([...(declaredConditions || []), ...historyConditions])]

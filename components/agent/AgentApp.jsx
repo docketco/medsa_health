@@ -1463,7 +1463,21 @@ export default function AgentApp() {
     const { data: inquiryRows } = await supabase.from('agent_claim_inquiries').select('*').eq('agent_id', a.id).order('created_at',{ascending:false})
     setInquiries(inquiryRows||[])
 
-    const { count } = await supabase.from('plan_inquiries').select('id', {count:'exact', head:true}).is('claimed_by_agent_id', null)
+    // Same insurer-scoping PlanInquiriesScreen.load() applies to the actual
+    // list - this badge counted every unclaimed inquiry system-wide before,
+    // so an agent with nothing to claim (wrong insurer) still saw a nonzero
+    // count with an empty list behind it.
+    let myCompanyNames = []
+    if (a.agent_type === 'captive') {
+      myCompanyNames = a.institutions?.name ? [a.institutions.name] : []
+    } else {
+      const { data: appts } = await supabase.from('agent_institution_appointments')
+        .select('institutions(name)').eq('agent_id', a.id).eq('status','active')
+      myCompanyNames = [...new Set((appts||[]).map(x=>x.institutions?.name).filter(Boolean))]
+    }
+    const { count } = myCompanyNames.length===0 ? { count: 0 } : await supabase.from('plan_inquiries')
+      .select('id, insurance_plans!inner(company_name)', {count:'exact', head:true})
+      .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames)
     setNewInquiryCount(count||0)
     setLoading(false)
   }
