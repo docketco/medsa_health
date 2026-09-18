@@ -2013,8 +2013,14 @@ export default function InsuranceApp({ company, onLogout }) {
   const [openClaimRef,setOpenClaimRef]=useState(null)
   const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations'}
   const isPartnered = company?.relationshipType!=='unpartnered'
-  const navItems=isPartnered ? [{key:'dashboard',icon:'◈',label:'Overview'},{key:'plans',icon:'▣',label:'Plans'},{key:'teams',icon:'◆',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Sponsored'},{key:'analytics',icon:'◎',label:'Analytics'}]
-    : [{key:'dashboard',icon:'◈',label:'Overview'},{key:'planrules',icon:'▣',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'◇',label:'Claims'},{key:'ads',icon:'⬡',label:'Promote'}]
+  // Real gap reported live-testing: these were arbitrary geometric
+  // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
+  // is - swapped for shapes that at least gesture at the real meaning
+  // (a house for Overview, a document for Plans/Coverage, people for
+  // Teams, a shield for Verify, a stamp for Preauth, a clipboard for
+  // Claims, a star for Sponsored/Promote, a bar chart for Analytics).
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'},{key:'analytics',icon:'▲',label:'Analytics'}]
+    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2042,13 +2048,23 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='ads'&&<SponsoredListings company={company}/>}
         {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
-      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px'}}>
-        {navItems.map(item=>(
-          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key||(screen==='claim-detail'&&item.key==='claims')?C.navy:C.textMuted,fontSize:'10px'}}>
-            <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
-            <span>{item.label}</span>
-          </div>
-        ))}
+      <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px'}}>
+        {navItems.map(item=>{
+          const active = screen===item.key||(screen==='claim-detail'&&item.key==='claims')
+          return (
+            // Real gap reported live-testing: the active tab was only a
+            // subtle text-color change (navy vs. muted grey) with the
+            // same background as everything else - easy to miss which
+            // screen you were actually on. Now gets a real filled pill
+            // behind it, same pattern used for active state everywhere
+            // else in the app (e.g. the green pill on a selected filter
+            // chip).
+            <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',padding:'6px 2px',borderRadius:'10px',background:active?C.navyLight:'transparent',color:active?C.navy:C.textMuted,fontSize:'10px',fontWeight:active?600:400,transition:'background 0.12s,color 0.12s'}}>
+              <span style={{fontSize:'18px',lineHeight:1}}>{item.icon}</span>
+              <span>{item.label}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

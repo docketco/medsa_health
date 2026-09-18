@@ -157,10 +157,18 @@ function SubmitClaimScreen({ clinic }) {
   const [recentClaims,setRecentClaims]=useState([])
   const [loadingClaims,setLoadingClaims]=useState(true)
 
+  // Real gap reported live-testing: these cards had no onClick at all -
+  // a clinic could see what they'd billed but never the actual outcome
+  // (insurer's share, patient's, ICD-10 on file). Expands in place with
+  // a read-only breakdown - NOT the insurer's Approve/Reject screen
+  // (AgentClaimView), since a clinic deciding its own claim would be a
+  // real conflict of interest, not a UI shortcut worth taking.
+  const [expandedClaimRef,setExpandedClaimRef]=useState(null)
+
   async function loadRecentClaims() {
     setLoadingClaims(true)
     const { data } = await supabase.from('insurance_claims')
-      .select('claim_ref, amount, status, platform_claim_fee, submitted_at, patients(full_name)')
+      .select('claim_ref, amount, status, platform_claim_fee, submitted_at, insurer_covered_amount, patient_copay_amount, icd10_codes, patients(full_name)')
       .eq('source_type','external_clinic').eq('external_clinic_id', clinic.id)
       .order('submitted_at',{ascending:false}).limit(20)
     setRecentClaims(data||[])
@@ -320,15 +328,29 @@ function SubmitClaimScreen({ clinic }) {
       <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,marginBottom:'10px'}}>Recent claims from {clinic.name}</div>
       {loadingClaims&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>Loading…</div>}
       {!loadingClaims&&recentClaims.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No claims submitted yet.</div>}
-      {recentClaims.map(c=>(
-        <Card key={c.claim_ref} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div>
-            <div style={{fontSize:'13px',fontWeight:500}}>{c.patients?.full_name||'Unknown patient'}</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>{c.claim_ref} · HK${c.amount} · fee HK${c.platform_claim_fee||0}</div>
-          </div>
-          <StatusBadge status={(c.status||'').toUpperCase()}/>
-        </Card>
-      ))}
+      {recentClaims.map(c=>{
+        const expanded = expandedClaimRef===c.claim_ref
+        return (
+          <Card key={c.claim_ref} style={{padding:'12px 16px',marginBottom:'8px',cursor:'pointer'}} onClick={()=>setExpandedClaimRef(expanded?null:c.claim_ref)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:500}}>{c.patients?.full_name||'Unknown patient'}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{c.claim_ref} · HK${c.amount} · fee HK${c.platform_claim_fee||0}</div>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <StatusBadge status={(c.status||'').toUpperCase()}/>
+                <span style={{fontSize:'11px',color:C.textMuted}}>{expanded?'▾':'▸'}</span>
+              </div>
+            </div>
+            {expanded&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,fontSize:'12px',color:C.textSub}}>
+              <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Insurer covers</span><strong style={{color:C.green}}>HK${c.insurer_covered_amount??'—'}</strong></div>
+              <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Patient pays</span><strong>HK${c.patient_copay_amount??'—'}</strong></div>
+              <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Submitted</span><strong>{new Date(c.submitted_at).toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</strong></div>
+              {c.icd10_codes&&<div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>ICD-10</span><strong>{c.icd10_codes}</strong></div>}
+            </div>}
+          </Card>
+        )
+      })}
     </PageWrap>
   )
 }
