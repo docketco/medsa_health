@@ -886,8 +886,12 @@ function PlanInquiriesScreen({ agent, onConvert }) {
         .select('institutions(name)').eq('agent_id', agent.id).eq('status','active')
       myCompanyNames = [...new Set((appts||[]).map(a=>a.institutions?.name).filter(Boolean))]
     }
+    // An 'auto' inquiry already got its answer instantly on the patient's
+    // own screen - it was never meant to sit in a claim queue for an
+    // agent to work, so it's excluded here rather than showing up as a
+    // dead lead nobody needs to act on.
     const { data: unclaimedRows } = myCompanyNames.length===0 ? { data: [] } : await supabase.from('plan_inquiries').select('*, insurance_plans!inner(plan_name, company_name)')
-      .is('claimed_by_agent_id', null).in('insurance_plans.company_name', myCompanyNames).order('created_at',{ascending:false})
+      .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames).order('created_at',{ascending:false})
     setUnclaimed(unclaimedRows||[])
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
@@ -1020,6 +1024,20 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                   : <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>}
               </div>
             </div>
+            {/* Pre-computed suitability read (lib/planSuitability.js), run
+                the moment the patient submitted this inquiry - lower
+                agent workload was the whole point: this isn't a blank
+                lead, it's already checked against the plan's own terms. */}
+            {i.suitability_verdict&&<div style={{marginTop:'8px',padding:'8px 10px',borderRadius:'8px',fontSize:'11px',lineHeight:1.5,background:i.suitability_verdict==='needs_review'?C.amberLight:C.greenXLight,color:C.textSub}}>
+              <span style={{fontWeight:600,color:i.suitability_verdict==='needs_review'?C.amber:C.green}}>
+                {i.suitability_verdict==='suitable'&&'✓ Pre-checked: suitable'}
+                {i.suitability_verdict==='suitable_with_notes'&&'◇ Pre-checked: likely suitable'}
+                {i.suitability_verdict==='needs_review'&&'⚠ Pre-checked: needs a closer look'}
+              </span>
+              {i.quoted_premium_hkd!=null&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
+              <div style={{marginTop:'2px'}}>{i.suitability_summary}</div>
+              {(i.declared_conditions||[]).length>0&&<div style={{marginTop:'2px',color:C.textMuted}}>Declared: {i.declared_conditions.join(', ')}</div>}
+            </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
         ))}
