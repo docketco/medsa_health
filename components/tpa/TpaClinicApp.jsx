@@ -123,8 +123,15 @@ function SubmitClaimScreen({ clinic }) {
   const [icd10Suggestions,setIcd10Suggestions]=useState([])
   const [icd10Suggesting,setIcd10Suggesting]=useState(false)
   const [icd10SuggestError,setIcd10SuggestError]=useState(null)
+  // Real question this answers: is "Suggest codes" always calling an LLM,
+  // or is there a free path? It's keyword-matched against icd10_reference
+  // (same table the manual search box hits) whenever ANTHROPIC_API_KEY
+  // isn't configured - zero AI cost, just less judgment than the real
+  // thing. usedAI says which one actually ran, shown below so it's never
+  // silently ambiguous which mode produced a given suggestion.
+  const [icd10UsedAI,setIcd10UsedAI]=useState(null)
   async function suggestIcd10() {
-    setIcd10Suggesting(true); setIcd10SuggestError(null); setIcd10Suggestions([])
+    setIcd10Suggesting(true); setIcd10SuggestError(null); setIcd10Suggestions([]); setIcd10UsedAI(null)
     try {
       const res = await fetch('/api/cds/suggest_icd10', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -133,9 +140,10 @@ function SubmitClaimScreen({ clinic }) {
       const data = await res.json()
       if (!res.ok) { setIcd10SuggestError(data.error || 'Suggestion failed.'); return }
       setIcd10Suggestions(data.suggestions || [])
+      setIcd10UsedAI(!!data.usedAI)
       if ((data.suggestions||[]).length===0) setIcd10SuggestError(data.note || 'No confident match found - search or enter manually.')
     } catch {
-      setIcd10SuggestError('AI coding suggestion unavailable right now - pick codes manually.')
+      setIcd10SuggestError('Coding suggestion unavailable right now - pick codes manually.')
     } finally {
       setIcd10Suggesting(false)
     }
@@ -266,6 +274,7 @@ function SubmitClaimScreen({ clinic }) {
             <span onClick={category||description?suggestIcd10:undefined} style={{fontSize:'11px',fontWeight:600,color:C.green,cursor:'pointer',whiteSpace:'nowrap'}}>{icd10Suggesting?'Thinking…':'✨ Suggest codes'}</span>
           </div>
           {icd10SuggestError&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',fontStyle:'italic'}}>{icd10SuggestError}</div>}
+          {icd10Suggestions.length>0&&icd10UsedAI===false&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',fontStyle:'italic'}}>Keyword match, not AI - no ANTHROPIC_API_KEY configured</div>}
           {icd10Suggestions.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
             {icd10Suggestions.filter(s=>!icd10Codes.some(x=>x.code===s.code)).map(s=>(
               <div key={s.code} onClick={()=>{setIcd10Codes(prev=>[...prev,{code:s.code,label:s.label}]);setIcd10Suggestions(prev=>prev.filter(x=>x.code!==s.code))}} title={s.reasoning} style={{display:'flex',alignItems:'center',gap:'6px',background:C.blueLight||'#eef4ff',border:`0.5px dashed ${C.blue}`,borderRadius:'20px',padding:'6px 10px',cursor:'pointer'}}>

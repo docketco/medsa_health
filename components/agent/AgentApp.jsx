@@ -90,7 +90,12 @@ function Sidebar({ screen, setScreen, agent, onLogout, navItems }) {
       <div style={{padding:'20px 18px',borderBottom:`0.5px solid ${C.border}`}}>
         <div style={{fontSize:'16px',fontWeight:700}}>Medsa Agent</div>
         <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{agent.agent_type==='captive'?agent.institutions?.name||'Insurer':'Independent'}</div>
-        {agent.medsa_id&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>{agent.medsa_id}</div>}
+        {/* Real gap reported live-testing: this was here, but as 10px
+            muted grey text easy to miss entirely against everything else
+            in the sidebar header - a real ID with nothing marking it as
+            one. Same small-badge treatment used for a company's own
+            Medsa ID elsewhere in the app. */}
+        {agent.medsa_id&&<div style={{display:'inline-block',marginTop:'6px',fontSize:'10px',fontWeight:600,color:C.green,background:C.greenXLight,padding:'2px 8px',borderRadius:'20px'}}>{agent.medsa_id}</div>}
       </div>
       <div style={{flex:1,padding:'12px 10px',overflowY:'auto'}}>
         {navItems.map(item=>(
