@@ -551,7 +551,7 @@ function PartnersTab() {
     // institutions.mims_api_key is locked down (see the migration that
     // added policy verification); naming even one ungranted column fails
     // the whole select, and '*' would ask for both.
-    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
@@ -612,6 +612,16 @@ function PartnersTab() {
   async function toggleStatus(company) {
     await supabase.from('insurance_companies').update({ status: company.status==='active'?'inactive':'active' }).eq('id', company.id)
     load()
+  }
+
+  // Medsa's own referral-fee rate on this partnership - a contract term
+  // Medsa sets, never something an agent (or the insurer) gets to declare.
+  // An agent's real referral_fee_hkd on a given policy is computed from
+  // this rate against their commission (see AgentApp.jsx), same pattern
+  // as the insurer-set commission rate on a plan.
+  async function saveReferralFeeRate(company, value) {
+    const pct = value==='' ? null : parseFloat(value)
+    await supabase.from('insurance_companies').update({ referral_fee_rate_pct: pct }).eq('id', company.id)
   }
 
   // Self-serve partnered applications (see /insurer-signup) land as
@@ -707,6 +717,11 @@ function PartnersTab() {
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
             : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Medsa's referral fee rate (contract term):</div>
+            <input type="number" defaultValue={c.referral_fee_rate_pct??''} onBlur={e=>saveReferralFeeRate(c,e.target.value)} placeholder="%" style={{width:60,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            <div style={{fontSize:'10px',color:C.textMuted}}>of the agent's commission on this insurer's plans</div>
+          </div>
           {renewingId===c.id
             ? <div style={{marginBottom:'8px'}}>
                 <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
