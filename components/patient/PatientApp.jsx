@@ -2658,7 +2658,7 @@ function MyInquiriesTab({ isEn, patient={} }) {
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
-    const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(name)')
+    const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(full_name)')
       .eq('patient_id', patient.id).order('created_at',{ascending:false})
     setInquiries(data||[])
     // Real gap: an agent building a policy directly (Issue Policy / Quote)
@@ -2720,12 +2720,12 @@ function MyInquiriesTab({ isEn, patient={} }) {
                   <div style={{fontSize:'14px',fontWeight:500}}>{i.insurance_plans?.plan_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
                 </div>
-                {i.agents?.name
-                  ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.name}</span>
+                {i.agents?.full_name
+                  ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
                   : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>}
               </div>
               {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}>
-                {i.agents?.name
+                {i.agents?.full_name
                   ? <>
                     <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
@@ -3362,14 +3362,27 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [formConsent,setFormConsent]=useState(false)
   const [formConditions,setFormConditions]=useState([])
   const [formNoneApply,setFormNoneApply]=useState(false)
+  const [formOtherText,setFormOtherText]=useState('')
 
   function openInquiryForm(i, mode) {
     setInquiryForm({ index: i, mode })
-    setFormConsent(false); setFormConditions([]); setFormNoneApply(false)
+    setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText('')
   }
   function toggleFormCondition(c) {
     setFormNoneApply(false)
     setFormConditions(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
+  }
+  // Free-text add, for a condition not already offered as a quick-pick
+  // chip below - the chips only ever list what THIS plan has an explicit
+  // covered_conditions stance on, so anything else needs somewhere to go
+  // (previously there was none: a static "Other pre-existing condition"
+  // chip got submitted as if it were a real condition name).
+  function addOtherCondition() {
+    const v = formOtherText.trim()
+    if (!v) return
+    setFormNoneApply(false)
+    setFormConditions(prev => prev.includes(v) ? prev : [...prev, v])
+    setFormOtherText('')
   }
 
   // Real save - and a real snapshot, not just two foreign keys. This
@@ -3831,10 +3844,17 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               </label>
               <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Do any of these apply to you? (used only to check this plan's coverage, never shared beyond this inquiry)</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-                {[...plan.covers,'Other pre-existing condition'].map(c=>(
+                {plan.criteria.map(c=>(
                   <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formConditions.includes(c)?C.green:C.card,color:formConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${formConditions.includes(c)?C.green:C.border}`}}>{c}</span>
                 ))}
-                <span onClick={()=>{setFormNoneApply(true);setFormConditions([])}} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formNoneApply?C.green:C.card,color:formNoneApply?'#fff':C.textSub,border:`0.5px solid ${formNoneApply?C.green:C.border}`}}>None of these apply</span>
+                {formConditions.filter(c=>!plan.criteria.includes(c)).map(c=>(
+                  <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:C.green,color:'#fff',border:`0.5px solid ${C.green}`}}>{c} ✕</span>
+                ))}
+                <span onClick={()=>{setFormNoneApply(true);setFormConditions([]);setFormOtherText('')}} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formNoneApply?C.green:C.card,color:formNoneApply?'#fff':C.textSub,border:`0.5px solid ${formNoneApply?C.green:C.border}`}}>None of these apply</span>
+              </div>
+              <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+                <input type="text" value={formOtherText} onChange={e=>setFormOtherText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addOtherCondition()}}} placeholder="Have another condition? Type it here" style={{flex:1,fontSize:'11px',padding:'7px 10px',borderRadius:'8px',border:`0.5px solid ${C.border}`,boxSizing:'border-box'}}/>
+                <Btn style={{fontSize:'11px',padding:'7px 12px'}} onClick={addOtherCondition}>Add</Btn>
               </div>
               <div style={{display:'flex',gap:'8px'}}>
                 <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setInquiryForm(null)}>Cancel</Btn>
