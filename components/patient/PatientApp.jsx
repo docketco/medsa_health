@@ -4756,7 +4756,15 @@ export default function PatientApp({ liveData={} }) {
   const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群'}
   const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
-    <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
+    // Real gap reported live-testing: minHeight let this column grow
+    // TALLER than the viewport whenever a screen's content ran long -
+    // the whole column (bottom nav included) then scrolled off with the
+    // page itself, so the nav only reappeared once you'd scrolled all
+    // the way down, instead of staying pinned like a real tab bar. Fixed
+    // height + overflow:hidden keeps this column locked to exactly the
+    // viewport; only the inner content div (overflowY:auto, below)
+    // scrolls internally, so the nav never leaves.
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}

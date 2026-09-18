@@ -95,7 +95,7 @@ function Sidebar({ screen, setScreen, agent, onLogout, navItems }) {
             in the sidebar header - a real ID with nothing marking it as
             one. Same small-badge treatment used for a company's own
             Medsa ID elsewhere in the app. */}
-        {agent.medsa_id&&<div style={{display:'inline-block',marginTop:'6px',fontSize:'10px',fontWeight:600,color:C.green,background:C.greenXLight,padding:'2px 8px',borderRadius:'20px'}}>{agent.medsa_id}</div>}
+        {agent.medsa_id&&<div style={{display:'inline-block',marginTop:'6px',fontSize:'10px',fontWeight:600,color:C.green,background:C.greenXLight,padding:'2px 8px',borderRadius:'20px'}}>Medsa ID: {agent.medsa_id}</div>}
       </div>
       <div style={{flex:1,padding:'12px 10px',overflowY:'auto'}}>
         {navItems.map(item=>(
@@ -1054,7 +1054,12 @@ function TeamLeadScreen({ agent, team }) {
       .select('agent_id, agents(id, full_name, email, medsa_id)').eq('team_id', team.id).eq('status','active')
     setMembers((appts||[]).map(a=>a.agents).filter(Boolean))
     const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', agent.institutions?.name||'').eq('status','active').eq('self_serve_only',false)
-    setPlans(planRows||[])
+    // Same dedupe as the insurer-side Teams screen (InsuranceApp.jsx) -
+    // this is a separate, parallel implementation of the same "Plans
+    // this team is authorized to sell" screen for the team-lead view,
+    // and hit the exact same leftover-duplicate-seed-row bug independently.
+    const dedupedPlans = Array.from(new Map((planRows||[]).map(p=>[p.plan_name, p])).values())
+    setPlans(dedupedPlans)
     const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', team.id)
     setAuthorizedPlanIds(new Set((auths||[]).map(a=>a.plan_id)))
     // Inquiries this team won but that need a human to hand them to one
@@ -1071,13 +1076,17 @@ function TeamLeadScreen({ agent, team }) {
   }
   useEffect(() => { load() }, [team.id])
 
-  async function toggleAuthorization(planId) {
+  const [savedNotice,setSavedNotice]=useState(null)
+  async function toggleAuthorization(planId, planName) {
     if (authorizedPlanIds.has(planId)) {
       await supabase.from('team_plan_authorizations').delete().eq('team_id', team.id).eq('plan_id', planId)
+      setSavedNotice(`✓ Saved - ${planName} no longer authorized`)
     } else {
       await supabase.from('team_plan_authorizations').insert({ team_id: team.id, plan_id: planId })
+      setSavedNotice(`✓ Saved - ${planName} authorized`)
     }
     load()
+    setTimeout(() => setSavedNotice(null), 2500)
   }
 
   async function setAssignmentMode(mode) {
@@ -1190,11 +1199,12 @@ function TeamLeadScreen({ agent, team }) {
       <SecLabel>Plans this team is authorized to sell</SecLabel>
       {plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>No plans in your insurer's basket yet.</div>}
       {plans.map(p=>(
-        <div key={p.id} onClick={()=>toggleAuthorization(p.id)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',cursor:'pointer'}}>
+        <div key={p.id} onClick={()=>toggleAuthorization(p.id, p.plan_name)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 0',cursor:'pointer'}}>
           <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${authorizedPlanIds.has(p.id)?C.green:C.border}`,background:authorizedPlanIds.has(p.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{authorizedPlanIds.has(p.id)?'✓':''}</div>
           <span style={{fontSize:'13px'}}>{p.plan_name}</span>
         </div>
       ))}
+      {savedNotice&&<div style={{fontSize:'11px',color:C.green,fontWeight:500,marginTop:'6px'}}>{savedNotice}</div>}
     </PageWrap>
   )
 }
