@@ -2651,6 +2651,7 @@ function PatientInquiryThread({ inquiry, patientName }) {
 
 function MyInquiriesTab({ isEn, patient={} }) {
   const [inquiries,setInquiries]=useState([])
+  const [agentQuotes,setAgentQuotes]=useState([])
   const [loading,setLoading]=useState(true)
   const [expandedId,setExpandedId]=useState(null)
   const [switching,setSwitching]=useState(null)
@@ -2660,6 +2661,20 @@ function MyInquiriesTab({ isEn, patient={} }) {
     const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(name)')
       .eq('patient_id', patient.id).order('created_at',{ascending:false})
     setInquiries(data||[])
+    // Real gap: an agent building a policy directly (Issue Policy / Quote,
+    // not converting a plan_inquiries row) never showed up anywhere in
+    // the patient's own app - no inquiry was ever created for it, so
+    // there was nothing for this tab to find. A "quote" (not yet active)
+    // built this way now shows here too, distinct from a real inquiry.
+    // Once "talk to an agent" vs the automated path (lib/planSuitability.js)
+    // gets its own upload/matching rebuild, this should be revisited -
+    // an auto-issued policy is meant to land under a real "My plans" view
+    // instead, not this list.
+    const { data: quotes } = await supabase.from('agent_policies')
+      .select('*, institutions(name), agents(full_name)')
+      .eq('patient_id', patient.id).eq('status', 'quote').is('inquiry_id', null)
+      .order('created_at', { ascending: false })
+    setAgentQuotes(quotes || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
@@ -2676,7 +2691,23 @@ function MyInquiriesTab({ isEn, patient={} }) {
   return (
     <div style={{padding:'16px'}}>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
-      {!loading&&inquiries.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No plan inquiries yet - ask about a plan from Compare plans.':'暫無計劃查詢 - 請於「比較計劃」查詢。'}</div>}
+      {!loading&&inquiries.length===0&&agentQuotes.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No plan inquiries yet - ask about a plan from Compare plans.':'暫無計劃查詢 - 請於「比較計劃」查詢。'}</div>}
+      {agentQuotes.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:inquiries.length>0?'16px':0}}>
+        {agentQuotes.map(q=>(
+          <Card key={q.id}>
+            <div style={{padding:'14px 16px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                <div>
+                  <div style={{fontSize:'14px',fontWeight:500}}>{q.plan_name}</div>
+                  <div style={{fontSize:'12px',color:C.textSub}}>{q.institutions?.name||''}{q.premium?` - HK$${q.premium}/mo`:''}</div>
+                </div>
+                <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {q.agents?.full_name||'—'}</span>
+              </div>
+              <div style={{fontSize:'12px',color:C.textMuted,marginTop:'8px'}}>{isEn?'A licensed agent has quoted this plan for you - not active yet, still a quote.':'持牌代理已為您報價此計劃 - 尚未生效,仍為報價階段。'}</div>
+            </div>
+          </Card>
+        ))}
+      </div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
         {inquiries.map(i=>(
           <Card key={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
