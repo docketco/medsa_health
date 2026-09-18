@@ -1756,6 +1756,7 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
   const [memberForm,setMemberForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
   const [saving,setSaving]=useState(false)
   const [notice,setNotice]=useState(null)
+  const [credentialNotice,setCredentialNotice]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -1793,7 +1794,7 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
 
   async function handleAddMember() {
     if (!memberForm.email.trim()) return
-    setSaving(true); setNotice(null)
+    setSaving(true); setNotice(null); setCredentialNotice(null)
     try {
       const res = await fetch('/api/agent/onboard', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1801,7 +1802,8 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
       })
       const data = await res.json()
       if (data.status !== 'OK') { setNotice(data.message||'Could not add member.'); setSaving(false); return }
-      setNotice(data.isNew ? `Added - temp password ${data.emailSent?'emailed':data.tempPassword}.` : 'Existing agent appointed to this team.')
+      if (data.isNew) setCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      else setNotice('Existing agent appointed to this team.')
       setMemberForm({ fullName:'', email:'', phone:'', licenseNumber:'' })
       setShowAddMember(false)
       load()
@@ -1844,6 +1846,13 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
       {savedNotice&&<div style={{fontSize:'11px',color:C.green,fontWeight:500,marginTop:'6px'}}>{savedNotice}</div>}
 
       {notice&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'10px'}}>{notice}</div>}
+      {credentialNotice&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginTop:'10px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Added - agent account created</div>
+        {credentialNotice.emailSent
+          ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to the agent.</div>
+          : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{credentialNotice.password}</strong></div>}
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this to the agent directly - not shown again.</div>
+      </div>}
       {showAddMember ? (
         <div style={{marginTop:'12px',background:C.beige,borderRadius:'8px',padding:'12px'}}>
           {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
@@ -1875,6 +1884,7 @@ function TeamsAndAgents({ company }) {
   const [indyForm,setIndyForm]=useState({ fullName:'', email:'', phone:'', licenseNumber:'' })
   const [saving,setSaving]=useState(false)
   const [notice,setNotice]=useState(null)
+  const [credentialNotice,setCredentialNotice]=useState(null)
   // Bulk CSV onboarding - only real path for onboarding at any volume,
   // since there's no real HK agent-license registry to self-serve
   // signup against (same reasoning as leaving license_number
@@ -1959,7 +1969,7 @@ function TeamsAndAgents({ company }) {
 
   async function handleAddIndependent() {
     if (!indyForm.email.trim()) return
-    setSaving(true); setNotice(null)
+    setSaving(true); setNotice(null); setCredentialNotice(null)
     try {
       const res = await fetch('/api/agent/onboard', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1967,7 +1977,8 @@ function TeamsAndAgents({ company }) {
       })
       const data = await res.json()
       if (data.status !== 'OK') { setNotice(data.message||'Could not appoint agent.'); setSaving(false); return }
-      setNotice(data.isNew ? `Appointed - temp password ${data.emailSent?'emailed':data.tempPassword}.` : 'Existing agent appointed.')
+      if (data.isNew) setCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      else setNotice('Existing agent appointed.')
       setIndyForm({ fullName:'', email:'', phone:'', licenseNumber:'' })
       setShowAddIndependent(false)
       load()
@@ -2026,6 +2037,13 @@ function TeamsAndAgents({ company }) {
         </Card>
       ))}
       {notice&&<div style={{fontSize:'11px',color:C.textSub,padding:'0 16px'}}>{notice}</div>}
+      {credentialNotice&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',margin:'0 16px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Appointed - agent account created</div>
+        {credentialNotice.emailSent
+          ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to the agent.</div>
+          : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{credentialNotice.password}</strong></div>}
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this to the agent directly - not shown again.</div>
+      </div>}
       {showAddIndependent ? (
         <Card style={{padding:'16px'}}>
           {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
