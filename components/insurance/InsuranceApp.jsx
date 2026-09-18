@@ -1744,13 +1744,22 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
   }
   useEffect(() => { load() }, [team.id])
 
-  async function toggleAuthorization(planId) {
+  // Real gap reported live-testing: this already wrote to the database
+  // immediately on click (there's nothing further to "confirm") - but
+  // nothing on screen ever said so, so a toggle looked like it might not
+  // have taken. Brief on-screen confirmation, same pattern used for
+  // other one-tap saves in this app.
+  const [savedNotice,setSavedNotice]=useState(null)
+  async function toggleAuthorization(planId, planName) {
     if (authorizedPlanIds.has(planId)) {
       await supabase.from('team_plan_authorizations').delete().eq('team_id', team.id).eq('plan_id', planId)
+      setSavedNotice(`✓ Saved - ${planName} no longer authorized`)
     } else {
       await supabase.from('team_plan_authorizations').insert({ team_id: team.id, plan_id: planId })
+      setSavedNotice(`✓ Saved - ${planName} authorized`)
     }
     load()
+    setTimeout(() => setSavedNotice(null), 2500)
   }
 
   async function setAssignmentMode(mode) {
@@ -1803,21 +1812,22 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
       <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,margin:'14px 0 6px'}}>Plans this team is authorized to sell</div>
       {plans.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No plans in your basket yet - add one under "Manage plans".</div>}
       {plans.map(p=>(
-        <div key={p.id} onClick={()=>toggleAuthorization(p.id)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
+        <div key={p.id} onClick={()=>toggleAuthorization(p.id, p.plan_name)} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
           <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${authorizedPlanIds.has(p.id)?C.green:C.border}`,background:authorizedPlanIds.has(p.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{authorizedPlanIds.has(p.id)?'✓':''}</div>
           <span style={{fontSize:'12px'}}>{p.plan_name}</span>
         </div>
       ))}
+      {savedNotice&&<div style={{fontSize:'11px',color:C.green,fontWeight:500,marginTop:'6px'}}>{savedNotice}</div>}
 
       {notice&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'10px'}}>{notice}</div>}
       {showAddMember ? (
         <div style={{marginTop:'12px',background:C.beige,borderRadius:'8px',padding:'12px'}}>
-          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number']].map(([k,ph])=>(
+          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
             <input key={k} value={memberForm[k]} onChange={e=>setMemberForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box'}}/>
           ))}
           <div style={{display:'flex',gap:'6px'}}>
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setShowAddMember(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1,fontSize:'12px'}} onClick={handleAddMember} disabled={saving||!memberForm.email.trim()}>{saving?'Saving…':'Add / appoint'}</Btn>
+            <Btn variant="navy" style={{flex:1,fontSize:'12px'}} onClick={handleAddMember} disabled={saving||!memberForm.email.trim()||(!!memberForm.fullName.trim()&&!memberForm.licenseNumber.trim())}>{saving?'Saving…':'Add / appoint'}</Btn>
           </div>
         </div>
       ) : (
@@ -1894,7 +1904,14 @@ function TeamsAndAgents({ company }) {
     const { data: teamRows } = await supabase.from('insurance_teams').select('*').eq('institution_id', company.institutionRefId).order('created_at')
     setTeams(teamRows||[])
     const { data: planRows } = await supabase.from('insurance_plans').select('id, plan_name').eq('company_name', company.name).eq('status','active')
-    setPlans(planRows||[])
+    // Real gap reported live-testing: leftover duplicate seed rows (same
+    // plan_name, different id, from an earlier round of test data) made
+    // "Plans this team is authorized to sell" show the exact same plan
+    // name twice with two separate checkboxes - confusing, and no way to
+    // tell which one a click actually toggled. Shown once per name here;
+    // toggling still only ever writes the one id kept.
+    const dedupedPlans = Array.from(new Map((planRows||[]).map(p=>[p.plan_name, p])).values())
+    setPlans(dedupedPlans)
     const { data: apptRows } = await supabase.from('agent_institution_appointments')
       .select('agent_id, agents(id, full_name, email, medsa_id, agent_type)').eq('institution_id', company.institutionRefId).is('team_id', null).eq('status','active')
     setIndependents((apptRows||[]).map(a=>a.agents).filter(Boolean))
@@ -1984,12 +2001,12 @@ function TeamsAndAgents({ company }) {
       {notice&&<div style={{fontSize:'11px',color:C.textSub,padding:'0 16px'}}>{notice}</div>}
       {showAddIndependent ? (
         <Card style={{padding:'16px'}}>
-          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number']].map(([k,ph])=>(
+          {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
             <input key={k} value={indyForm[k]} onChange={e=>setIndyForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
           ))}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setShowAddIndependent(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}} onClick={handleAddIndependent} disabled={saving||!indyForm.email.trim()}>{saving?'Saving…':'Appoint agent'}</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleAddIndependent} disabled={saving||!indyForm.email.trim()||(!!indyForm.fullName.trim()&&!indyForm.licenseNumber.trim())}>{saving?'Saving…':'Appoint agent'}</Btn>
           </div>
         </Card>
       ) : (

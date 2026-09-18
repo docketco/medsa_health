@@ -18,9 +18,6 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(503).json({ error: 'AI coding suggestions are not set up yet - ANTHROPIC_API_KEY is missing.', suggestions: [] })
-  }
 
   const { text } = req.body || {}
   if (!text?.trim()) return res.status(400).json({ error: 'text is required' })
@@ -41,6 +38,32 @@ export default async function handler(req, res) {
   }
   if (candidates.length === 0) {
     return res.status(200).json({ suggestions: [], note: 'No ICD-10 codes in the reference set yet - add some under Diagnosis Codes first.' })
+  }
+
+  // Real question this answers: does this have to call an LLM at all, or
+  // can plain keyword matching against icd10_reference.label do the job
+  // for free? When there's no API key configured, rank the same
+  // keyword-narrowed candidates by how many of the typed words their
+  // label actually contains, instead of a hard 503 - a genuinely useful,
+  // zero-cost result for the common case (the description already names
+  // the condition close to how the reference table spells it), just
+  // without the AI's synonym/clinical-reasoning judgment or its one-line
+  // "why" explanation.
+  if (!process.env.ANTHROPIC_API_KEY) {
+    const scored = candidates
+      .map(c => {
+        const labelLower = c.label.toLowerCase()
+        const hits = keywords.filter(k => labelLower.includes(k))
+        return { code: c.code, label: c.label, reasoning: hits.length>0 ? `Matched keyword(s): ${hits.join(', ')}` : null, score: hits.length }
+      })
+      .filter(s => s.score > 0)
+      .sort((a,b) => b.score - a.score)
+      .slice(0, 5)
+    return res.status(200).json({
+      suggestions: scored.map(({code,label,reasoning})=>({code,label,reasoning})),
+      usedAI: false,
+      note: scored.length===0 ? 'No keyword match in the reference set - search or enter a code manually.' : undefined,
+    })
   }
 
   try {
@@ -90,7 +113,7 @@ export default async function handler(req, res) {
       .filter(p => byCode.has(p.code))
       .map(p => ({ code: p.code, label: byCode.get(p.code), reasoning: p.reasoning }))
 
-    return res.status(200).json({ suggestions })
+    return res.status(200).json({ suggestions, usedAI: true })
   } catch (err) {
     return res.status(502).json({ error: 'AI coding suggestion unavailable right now - pick codes manually.', suggestions: [] })
   }

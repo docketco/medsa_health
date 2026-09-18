@@ -48,6 +48,11 @@ export default async function handler(req, res) {
     isNew = false
   } else {
     if (!fullName?.trim()) return res.status(400).json({ status: 'ERROR', message: 'fullName is required for a new agent.' })
+    // Real gap: license_number was accepted but never required, even
+    // though it's the one credential this record exists to carry -
+    // enforced here (not just a disabled button client-side) so the bulk
+    // CSV path can't slip a licenseless agent through either.
+    if (!licenseNumber?.trim()) return res.status(400).json({ status: 'ERROR', message: 'licenseNumber is required for a new agent.' })
     const { data: created, error: insErr } = await supabase.from('agents').insert({
       full_name: fullName.trim(), email: email.trim(), phone: phone?.trim() || null,
       license_number: licenseNumber?.trim() || null,
