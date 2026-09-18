@@ -311,13 +311,14 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); return }
-      const { data: allPlans } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
         const authIds = new Set((auths||[]).map(a=>a.plan_id))
-        setBasketPlans((allPlans||[]).filter(p=>authIds.has(p.id)))
+        setBasketPlans(allPlans.filter(p=>authIds.has(p.id)))
       } else {
-        setBasketPlans(allPlans||[])
+        setBasketPlans(allPlans)
       }
     }
     loadBasket()
