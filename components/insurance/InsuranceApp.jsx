@@ -183,7 +183,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
   const [customCategory,setCustomCategory]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
@@ -217,7 +217,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
   }
@@ -228,6 +228,7 @@ function PlanManager({ company }) {
       copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
       annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
       covered_categories: plan.covered_categories||[],
+      commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -250,6 +251,12 @@ function PlanManager({ company }) {
       // 10% copay / $500 deductible regardless of what was entered here.
       copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
       annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
+      // Real gap: an agent's own commission on a policy was a free-text
+      // field THEY typed, with Medsa's referral fee capped against
+      // whatever number they entered - backwards, since commission is
+      // the insurer's own rate, not something an agent gets to declare.
+      // Set once here, it now feeds every quote/policy for this plan.
+      commission_rate_pct: form.commission_rate_pct!=='' ? parseFloat(form.commission_rate_pct) : null,
     }
     let planId = editingId
     if (editingId) {
@@ -271,7 +278,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[] })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -331,6 +338,11 @@ function PlanManager({ company }) {
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
             </div>
           </div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Commission rate (%) - what you pay an agent on this plan</div>
+            <input type="number" value={form.commission_rate_pct} onChange={e=>setForm(f=>({...f,commission_rate_pct:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 20"/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Set by you, not the agent - it now computes automatically on every quote for this plan, and Medsa's referral fee is capped at 50% of it. Leave blank if not set yet; an agent quoting this plan sees "not set by insurer" until it is.</div>
+          </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
             {PLAN_MANAGER_CATEGORIES.map(cat=>(
@@ -373,7 +385,7 @@ function PlanManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'}
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
