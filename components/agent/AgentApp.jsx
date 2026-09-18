@@ -409,9 +409,17 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const referralFeeExceedsCap = commissionNum > 0 && referralFeeNum > commissionNum * 0.5
 
   async function searchPatient() {
-    if (!patientSearch.trim()) return
+    const term = patientSearch.trim()
+    if (!term) return
+    // Real bug found live-testing: a stored name with irregular spacing
+    // ("ikea  kau", two spaces) never matched a normally-typed single-
+    // space search - ILIKE needs the literal substring, and extra
+    // whitespace breaks that silently (no error, just zero results).
+    // Collapsing whitespace in the search term into a wildcard makes any
+    // amount of spacing between words match.
+    const pattern = term.replace(/\s+/g, '%')
     const { data } = await supabase.from('patients').select('id,full_name,medsa_id')
-      .or(`medsa_id.ilike.%${patientSearch}%,full_name.ilike.%${patientSearch}%`).limit(1).maybeSingle()
+      .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`).limit(1).maybeSingle()
     setFoundPatient(data||null)
   }
 

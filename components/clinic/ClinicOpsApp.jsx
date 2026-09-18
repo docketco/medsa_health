@@ -755,10 +755,11 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   async function handleSearch() {
     if (!searchTerm.trim()) return
     const term = searchTerm.trim()
+    const pattern = term.replace(/\s+/g, '%')
     const { data } = await supabase
       .from('patients')
       .select('*')
-      .or(`medsa_id.ilike.%${term}%,full_name.ilike.%${term}%`)
+      .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`)
       .limit(1)
       .maybeSingle()
     setSearchResult(data || null)
@@ -5006,9 +5007,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   }, [preselectPatient])
 
   async function handleNewApptSearch() {
-    if (!newApptSearch.trim()) return
+    const term = newApptSearch.trim()
+    if (!term) return
+    const pattern = term.replace(/\s+/g, '%')
     const { data } = await supabase.from('patients').select('*')
-      .or(`medsa_id.ilike.%${newApptSearch}%,full_name.ilike.%${newApptSearch}%`).limit(1).maybeSingle()
+      .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`).limit(1).maybeSingle()
     setNewApptPatient(data || null)
     setNewApptError(data ? null : 'No patient found matching that name or Medsa ID.')
   }

@@ -830,8 +830,12 @@ function CheckInScreen() {
   async function handleSearch() {
     if (!searchTerm.trim()) return
     const term = searchTerm.trim()
+    // Collapse whitespace into a wildcard so irregular spacing in a stored
+    // name (e.g. a double space) doesn't silently break an otherwise
+    // correct search - ILIKE needs the literal substring.
+    const pattern = term.replace(/\s+/g, '%')
     const { data } = await supabase.from('patients').select('*')
-      .or(`medsa_id.ilike.%${term}%,full_name.ilike.%${term}%`).limit(1).maybeSingle()
+      .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`).limit(1).maybeSingle()
     setFound(data || null)
     setSearched(true)
     setCheckedIn(false)
@@ -1781,9 +1785,11 @@ function NewAppointmentModal({ open, onClose, onBooked }) {
   if (!open) return null
 
   async function handleSearch() {
-    if (!searchTerm.trim()) return
+    const term = searchTerm.trim()
+    if (!term) return
+    const pattern = term.replace(/\s+/g, '%')
     const { data } = await supabase.from('patients').select('*')
-      .or(`medsa_id.ilike.%${searchTerm}%,full_name.ilike.%${searchTerm}%`).limit(1).maybeSingle()
+      .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`).limit(1).maybeSingle()
     setFoundPatient(data || null)
     if (!data) setError('No patient found matching that name or Medsa ID.')
     else setError(null)

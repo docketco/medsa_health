@@ -73,6 +73,20 @@ export default async function handler(req, res) {
     .upsert({ agent_id: agentId, institution_id: institutionId, team_id: teamId || null, status: 'active' }, { onConflict: 'agent_id,institution_id' })
   if (apptErr) return res.status(500).json({ status: 'ERROR', message: apptErr.message })
 
+  // Real bug found live-testing: agents.team_id was only ever set once,
+  // at creation - moving an existing agent to a different team here
+  // updated the appointment (the source the Team screen's own roster
+  // reads from) but left this denormalized copy stale, silently
+  // disagreeing with the appointment for as long as the agent stayed
+  // put after that first move. Anything reading agent.team_id directly
+  // (basket loading, team-gating checks, transfer-recipient pickers)
+  // kept using the old team. Kept in sync here instead of removed
+  // outright, since it's read in many places as a quick agent.team_id
+  // rather than joining the appointment every time.
+  if (existing) {
+    await supabase.from('agents').update({ team_id: teamId || null }).eq('id', agentId)
+  }
+
   let emailResult = { sent: false, reason: 'Existing agent - no new credentials to send.' }
   if (isNew) {
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
