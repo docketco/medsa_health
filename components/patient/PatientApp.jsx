@@ -2661,18 +2661,21 @@ function MyInquiriesTab({ isEn, patient={} }) {
     const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(name)')
       .eq('patient_id', patient.id).order('created_at',{ascending:false})
     setInquiries(data||[])
-    // Real gap: an agent building a policy directly (Issue Policy / Quote,
-    // not converting a plan_inquiries row) never showed up anywhere in
-    // the patient's own app - no inquiry was ever created for it, so
-    // there was nothing for this tab to find. A "quote" (not yet active)
-    // built this way now shows here too, distinct from a real inquiry.
+    // Real gap: an agent building a policy directly (Issue Policy / Quote)
+    // never showed up anywhere in the patient's own app - the plain
+    // inquiry card above (when one even exists) shows the plan/company/
+    // agent badge, never the actual quoted premium. A "quote" (not yet
+    // active) now shows here regardless of whether it's linked back to a
+    // real plan_inquiries row - excluding the linked ones was the actual
+    // bug found live-testing: those never showed their premium anywhere
+    // either, since the plain inquiry card doesn't carry it.
     // Once "talk to an agent" vs the automated path (lib/planSuitability.js)
     // gets its own upload/matching rebuild, this should be revisited -
     // an auto-issued policy is meant to land under a real "My plans" view
     // instead, not this list.
     const { data: quotes } = await supabase.from('agent_policies')
       .select('*, institutions(name), agents(full_name)')
-      .eq('patient_id', patient.id).eq('status', 'quote').is('inquiry_id', null)
+      .eq('patient_id', patient.id).eq('status', 'quote')
       .order('created_at', { ascending: false })
     setAgentQuotes(quotes || [])
     setLoading(false)
