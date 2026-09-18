@@ -1724,6 +1724,30 @@ function SponsoredListings({ company }) {
 // institution's basket - none of this existed before; every agent was
 // flatly tied to one institution with no branch layer and no per-team
 // product restriction at all.
+// Real-time check as the practice manager types an email into "Add
+// member"/"Appoint an independent agent" - before this, the only way to
+// find out whether an email matched an existing agent (appoint, no new
+// password) vs a brand new one (creates an account) was to submit and
+// read the result notice after the fact.
+function EmailLookupHint({ email }) {
+  const [match, setMatch] = useState(undefined) // undefined=no lookup yet, null=checked/no match, object=matched agent
+  useEffect(() => {
+    const e = email.trim()
+    if (!e || !e.includes('@')) { setMatch(undefined); return }
+    let cancelled = false
+    setMatch('checking')
+    const t = setTimeout(async () => {
+      const { data } = await supabase.from('agents').select('id, full_name, medsa_id').ilike('email', e).maybeSingle()
+      if (!cancelled) setMatch(data || null)
+    }, 400)
+    return () => { cancelled = true }
+  }, [email])
+  if (match === undefined) return null
+  if (match === 'checking') return <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-4px',marginBottom:'8px'}}>Checking…</div>
+  if (match === null) return <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-4px',marginBottom:'8px'}}>No existing agent with this email - a new account will be created.</div>
+  return <div style={{fontSize:'11px',color:C.green,marginTop:'-4px',marginBottom:'8px'}}>✓ Existing agent - {match.full_name} ({match.medsa_id}) will be appointed here, no new account created.</div>
+}
+
 function TeamManagementCard({ company, team, plans, onChanged }) {
   const [members,setMembers]=useState([])
   const [authorizedPlanIds,setAuthorizedPlanIds]=useState(new Set())
@@ -1823,7 +1847,10 @@ function TeamManagementCard({ company, team, plans, onChanged }) {
       {showAddMember ? (
         <div style={{marginTop:'12px',background:C.beige,borderRadius:'8px',padding:'12px'}}>
           {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
-            <input key={k} value={memberForm[k]} onChange={e=>setMemberForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box'}}/>
+            <div key={k}>
+              <input value={memberForm[k]} onChange={e=>setMemberForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px 10px',fontSize:'12px',marginBottom:'6px',boxSizing:'border-box'}}/>
+              {k==='email'&&<EmailLookupHint email={memberForm.email}/>}
+            </div>
           ))}
           <div style={{display:'flex',gap:'6px'}}>
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setShowAddMember(false)}>Cancel</Btn>
@@ -2002,7 +2029,10 @@ function TeamsAndAgents({ company }) {
       {showAddIndependent ? (
         <Card style={{padding:'16px'}}>
           {[['fullName','Full name (blank if appointing an existing agent)'],['email','Email'],['phone','Phone'],['licenseNumber','License number (required for a new agent)']].map(([k,ph])=>(
-            <input key={k} value={indyForm[k]} onChange={e=>setIndyForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div key={k}>
+              <input value={indyForm[k]} onChange={e=>setIndyForm(f=>({...f,[k]:e.target.value}))} placeholder={ph} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+              {k==='email'&&<EmailLookupHint email={indyForm.email}/>}
+            </div>
           ))}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setShowAddIndependent(false)}>Cancel</Btn>
