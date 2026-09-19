@@ -393,7 +393,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     : lineItems.reduce((s,l)=>s+(l.premium*(l.commissionRatePct||0)/100),0))
 
   useEffect(() => {
-    if (computedCommission!=null) setBrokerCommission(computedCommission.toFixed(2))
+    setBrokerCommission(computedCommission!=null ? computedCommission.toFixed(2) : '')
   }, [computedCommission])
 
   const commissionNum = parseFloat(brokerCommission) || 0
@@ -403,7 +403,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const computedReferralFee = (lineItems.length>0 && commissionNum>0 && medsaReferralFeeRatePct!=null)
     ? Math.min(commissionNum * medsaReferralFeeRatePct / 100, commissionNum * 0.5) : null
   useEffect(() => {
-    if (computedReferralFee!=null) setReferralFee(computedReferralFee.toFixed(2))
+    setReferralFee(computedReferralFee!=null ? computedReferralFee.toFixed(2) : '')
   }, [computedReferralFee])
   const referralFeeNum = parseFloat(referralFee) || 0
   const referralFeeExceedsCap = commissionNum > 0 && referralFeeNum > commissionNum * 0.5
@@ -584,15 +584,15 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       {prefillInquiry&&<>
-        <SecLabel>Referral fee owed to Medsa (optional)</SecLabel>
+        <SecLabel>Referral fee owed to Medsa</SecLabel>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
           {lineItems.length>0
             ? `Commission is the insurer's own rate for this plan, not something you enter. Medsa's fee is its own contracted rate against that commission${medsaReferralFeeRatePct!=null?` (${medsaReferralFeeRatePct}%, set by Medsa admin)`:' (not set yet by Medsa admin)'}, capped at 50% either way (the Insurance Authority's own referral-fee benchmark).`
-            : "No basket plan on this policy, so neither commission nor Medsa's rate is on file for it - enter both manually below if you're ready to. The fee is capped at 50% of commission. Leave blank to sort out later; Medsa admin can also fill this in from their side."}
+            : "Add a plan to this policy first - commission and Medsa's fee are both set by the insurer's and Medsa's own contracted rates, never typed in by an agent."}
         </div>
         <div style={{display:'flex',gap:'10px',marginBottom:'8px'}}>
-          <input value={brokerCommission} onChange={e=>setBrokerCommission(e.target.value)} disabled={lineItems.length>0} type="number" placeholder={lineItems.length>0&&anyLineItemMissingCommissionRate?'Not set by insurer yet':'Your commission (HK$)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:lineItems.length>0?C.beige:'#fff',color:lineItems.length>0?C.textSub:C.text}}/>
-          <input value={referralFee} onChange={e=>setReferralFee(e.target.value)} disabled={computedReferralFee!=null} type="number" placeholder={lineItems.length>0&&medsaReferralFeeRatePct==null?'Not set by Medsa admin yet':'Referral fee to Medsa (HK$)'} style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:computedReferralFee!=null?C.beige:'#fff',color:computedReferralFee!=null?C.textSub:C.text}}/>
+          <input value={brokerCommission} disabled type="number" placeholder={lineItems.length===0?'Add a plan first':(anyLineItemMissingCommissionRate?'Not set by insurer yet':'Your commission (HK$)')} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+          <input value={referralFee} disabled type="number" placeholder={lineItems.length===0?'Add a plan first':(medsaReferralFeeRatePct==null?'Not set by Medsa admin yet':'Referral fee to Medsa (HK$)')} style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
         </div>
         {referralFeeExceedsCap&&<div style={{fontSize:'11px',color:C.red,marginBottom:'12px'}}>That's more than 50% of the commission entered (HK${(commissionNum*0.5).toFixed(0)} max) - the IA's referral-fee benchmark.</div>}
       </>}
@@ -914,7 +914,6 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     // dead lead nobody needs to act on.
     const { data: unclaimedRows } = myCompanyNames.length===0 ? { data: [] } : await supabase.from('plan_inquiries').select('*, insurance_plans!inner(plan_name, company_name)')
       .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames).order('created_at',{ascending:false})
-    setUnclaimed(unclaimedRows||[])
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
     setMine(mineRows||[])
@@ -923,6 +922,13 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
     setConvertedInquiryIds(new Set((convertedRows||[]).map(r=>r.inquiry_id)))
 
+    // Real bug found live-testing: unclaimed used to be committed to state
+    // before this team-authorization data was ready, so a team-gated
+    // inquiry the agent isn't eligible for would render for one frame
+    // (planTeamAuth still empty, so isTeamGated read as false below) and
+    // then vanish the instant the real auth data landed - a visible
+    // flash-then-disappear on every refresh. Both are committed together
+    // now, so the list never shows something it's about to hide.
     const planIds = [...new Set((unclaimedRows||[]).map(i=>i.plan_id).filter(Boolean))]
     if (planIds.length>0) {
       const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', planIds)
@@ -932,6 +938,7 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     } else {
       setPlanTeamAuth({})
     }
+    setUnclaimed(unclaimedRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [agent.id])

@@ -8035,6 +8035,16 @@ function ClaimsScreen({ onNavPayment, institutionId }) {
 export default function ClinicOpsApp() {
   const [staffMember,setStaffMember]=useState(null)
   const [kickedOutMessage,setKickedOutMessage]=useState(null)
+  // Declared early - loadTaskBoard (below) and its effect reference
+  // institutionId in their dependency array, which runs synchronously on
+  // every render; a real bug this fixes: institutionId used to be
+  // declared further down the component, after that effect - a genuine
+  // "Cannot access before initialization" crash on every load, not just
+  // this one screen, since the dependency array is evaluated before the
+  // later const line ever runs.
+  const [institutionId,setInstitutionId]=useState(null)
+  const [institutionName,setInstitutionName]=useState('')
+  const [medicineType,setMedicineType]=useState('western')
 
   // Single device at a time per staff account - if another device signs
   // in on this same account, staff_sessions gets overwritten with its
@@ -8103,9 +8113,6 @@ export default function ClinicOpsApp() {
     return () => clearInterval(interval)
   }, [institutionId])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
-  const [institutionId,setInstitutionId]=useState(null)
-  const [institutionName,setInstitutionName]=useState('')
-  const [medicineType,setMedicineType]=useState('western')
   const [clinicQueues,setClinicQueues]=useState([])
   const [affiliatedClinics,setAffiliatedClinics]=useState([]) // other institutions this same real practitioner is also onboarded at
 
