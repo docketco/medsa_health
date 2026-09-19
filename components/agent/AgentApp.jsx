@@ -1098,6 +1098,20 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               {(i.declared_conditions||[]).length>0&&<div style={{marginTop:'2px',color:C.textMuted}}>Declared: {i.declared_conditions.join(', ')}</div>}
               {i.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{i.history_context_summary}</div>}
             </div>}
+            {/* Real gap found live-testing: the patient explicitly
+                consented to Medsa checking their visit history against
+                this plan, but the agent could only ever see a computed
+                summary sentence, never the actual entries it came from -
+                no way to review what was really on file. Expanding the
+                card now also shows the real snapshot taken at inquiry
+                time (not a live query - what the patient actually
+                consented to at that moment). */}
+            {expandedId===i.id&&(i.history_records_snapshot||[]).length>0&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>Visit history reviewed (patient consented)</div>
+              {i.history_records_snapshot.map((r,ri)=>(
+                <div key={ri} style={{fontSize:'11px',color:C.textSub,padding:'3px 0'}}>{r.date?new Date(r.date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'-'} · {r.diagnosis}</div>
+              ))}
+            </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
         ))}

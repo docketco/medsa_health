@@ -78,11 +78,21 @@ export default async function handler(req, res) {
   const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
   const { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
 
+  // Real gap found live-testing: an agent had no way to actually review a
+  // patient's consented visit history for an inquiry - only a computed
+  // summary sentence, never the real entries it came from. The patient
+  // consented specifically to this (the checkbox says exactly this: let
+  // Medsa check visit history against this plan), so the claiming agent
+  // gets the real snapshot, not just a derived note.
   let historyContextSummary = null
+  let historyRecordsSnapshot = null
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
-      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
-      .order('created_at', { ascending: false }).limit(15)
+      .select('diagnosis, date_of_record').eq('patient_id', patientId).not('diagnosis', 'is', null)
+      .order('date_of_record', { ascending: false }).limit(15)
+    if (records && records.length > 0) {
+      historyRecordsSnapshot = records.map(r => ({ diagnosis: r.diagnosis, date: r.date_of_record }))
+    }
     const historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
     if (historyConditions.length > 0) {
       const historyRead = matchPlanSuitability({ plan, patientAge: age, conditions: historyConditions })
@@ -102,7 +112,7 @@ export default async function handler(req, res) {
     declared_conditions: declaredConditions || [],
     suitability_verdict: result.verdict, suitability_summary: summary,
     quoted_premium_hkd: result.quotedPremium, used_ai: usedAI,
-    history_context_summary: historyContextSummary,
+    history_context_summary: historyContextSummary, history_records_snapshot: historyRecordsSnapshot,
   }
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
