@@ -73,7 +73,7 @@ export default async function handler(req, res) {
         const wardClass = session.metadata.ward_class || null
         const paymentFrequency = session.metadata.payment_frequency || 'monthly'
         const { data: plan } = await supabase.from('insurance_plans')
-          .select('id, plan_name, company_name, contract_template_url, insurance_plan_pricing_tiers(*)')
+          .select('id, plan_name, company_name, insurance_plan_pricing_tiers(*)')
           .eq('id', planId).maybeSingle()
         const { data: company } = await supabase.from('insurance_companies').select('institution_ref_id').eq('name', plan?.company_name).maybeSingle()
         const { data: patient } = await supabase.from('patients').select('full_name, date_of_birth').eq('id', patientId).maybeSingle()
@@ -97,9 +97,6 @@ export default async function handler(req, res) {
           start_date: now.toISOString().slice(0, 10), renewal_date: renewalDate.toISOString().slice(0, 10),
           ward_class: wardClass, payment_frequency: paymentFrequency,
           health_declaration_acknowledged_at: nowIso,
-          contract_file_path: plan?.contract_template_url || null,
-          contract_ready_at: plan?.contract_template_url ? nowIso : null,
-          patient_signed_at: plan?.contract_template_url ? nowIso : null,
           premium_paid_at: nowIso, stripe_checkout_session_id: session.id,
           amount_paid_hkd: (session.amount_total || 0) / 100,
         })

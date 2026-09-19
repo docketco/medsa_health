@@ -364,7 +364,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
-      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, contract_template_url, waiting_period_days, pre_existing_condition_policy, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, waiting_period_days, pre_existing_condition_policy, additional_terms, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
@@ -422,9 +422,9 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       deductibleId: builderDeductibleId||null, deductibleHkd: builderDeductible?.deductible_hkd??null,
       riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
       commissionRatePct: builderPlan.commission_rate_pct,
-      contractTemplateUrl: builderPlan.contract_template_url||null,
       waitingPeriodDays: builderPlan.waiting_period_days ?? null,
       preExistingConditionPolicy: builderPlan.pre_existing_condition_policy || null,
+      additionalTerms: builderPlan.additional_terms || null,
     }])
     setBuilderPlanId(''); setSearchedPlan(null); setPlanSearchTerm(''); setPlanSearchResults([])
     setHealthDeclarationAck(false) // the plan set changed - the declaration has to be reviewed again
@@ -444,7 +444,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     if (!q) { setPlanSearchResults([]); return }
     setPlanSearching(true)
     let query = supabase.from('insurance_plans')
-      .select('id, plan_name, company_name, commission_rate_pct, contract_template_url, waiting_period_days, pre_existing_condition_policy, insurance_plan_pricing_tiers(*)')
+      .select('id, plan_name, company_name, commission_rate_pct, waiting_period_days, pre_existing_condition_policy, additional_terms, insurance_plan_pricing_tiers(*)')
       .eq('status','active').eq('self_serve_only', false)
       .ilike('plan_name', `%${q}%`).limit(10)
     if (agent.agent_type==='captive' && agent.institutions?.name) query = query.eq('company_name', agent.institutions.name)
@@ -502,12 +502,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     setFoundPatient(data||null)
   }
 
-  async function handleViewLineItemContract(path) {
-    if (!path) return
-    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
-    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
-  }
-
   async function handleSave() {
     // No more freehand fallback - every policy has to trace back to at
     // least one real plan_id, added via the basket or the cross-insurer
@@ -539,13 +533,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
           ward_class: wardClass||null, payment_frequency: paymentFrequency,
           health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
-          // The insurer's own contract template is already on file for
-          // this plan - no separate "agent uploads a contract" step
-          // needed at issuance (unlike a renewal, where a genuinely new
-          // document is being prepared). Patient signs it the same way
-          // a renewal contract gets signed - see PatientApp.jsx.
-          contract_file_path: li.contractTemplateUrl||null,
-          contract_ready_at: li.contractTemplateUrl ? new Date().toISOString() : null,
         }).select().maybeSingle()
         if (pErr) throw pErr
         if (li.riderIds.length > 0) {
@@ -733,8 +720,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         declaredConditions={prefillInquiry?.declared_conditions||[]}
         waitingPeriodDays={lineItems[0]?.waitingPeriodDays}
         preExistingConditionPolicy={lineItems[0]?.preExistingConditionPolicy}
-        contractUrl={lineItems[0]?.contractTemplateUrl}
-        onViewContract={()=>handleViewLineItemContract(lineItems[0]?.contractTemplateUrl)}
+        additionalTerms={lineItems[0]?.additionalTerms}
         onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
       />}
 

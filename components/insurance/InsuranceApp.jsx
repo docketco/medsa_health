@@ -192,11 +192,9 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
-  const [uploadingContract,setUploadingContract]=useState(false)
-  const [contractUploadError,setContractUploadError]=useState(null)
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
 
@@ -240,19 +238,20 @@ function PlanManager({ company }) {
   function removeFlag(val) {
     setForm(f => ({ ...f, insurer_flags: f.insurer_flags.filter(x=>x!==val) }))
   }
-  async function handleUploadContractTemplate(file) {
-    setUploadingContract(true)
-    setContractUploadError(null)
-    const path = `plan-templates/${company.id}/${Date.now()}-${file.name}`
-    const { error } = await supabase.storage.from('policy-contracts').upload(path, file)
-    if (error) { setContractUploadError(error.message); setUploadingContract(false); return }
-    setForm(f => ({ ...f, contract_template_url: path, contract_template_name: file.name }))
-    setUploadingContract(false)
+  function buildAutoFillTerms(f) {
+    const lines = []
+    if (f.waiting_period_days) lines.push(`Most benefits can be claimed after a ${f.waiting_period_days}-day waiting period from the policy start date.`)
+    const peLabel = PRE_EXISTING_POLICIES.find(([k])=>k===f.pre_existing_condition_policy)?.[1]
+    if (peLabel) lines.push(`Pre-existing conditions: ${peLabel.toLowerCase()}.`)
+    if (f.covered_categories.length>0) lines.push(`This plan covers: ${f.covered_categories.join(', ')}.`)
+    if (f.copay_rate!=='') lines.push(`You pay a ${f.copay_rate}% copay on claims covered by this plan.`)
+    if (f.annual_deductible_hkd!=='') lines.push(`An annual deductible of HK$${f.annual_deductible_hkd} applies before this plan starts paying.`)
+    return lines.join('\n')
   }
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -267,7 +266,7 @@ function PlanManager({ company }) {
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
       requires_agent: !!plan.requires_agent,
       insurer_flags: plan.insurer_flags||[],
-      contract_template_url: plan.contract_template_url||'', contract_template_name: plan.contract_template_name||'',
+      additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -299,8 +298,9 @@ function PlanManager({ company }) {
       commission_rate_pct: form.commission_rate_pct!=='' ? parseFloat(form.commission_rate_pct) : null,
       requires_agent: form.requires_agent,
       insurer_flags: form.insurer_flags,
-      contract_template_url: form.contract_template_url || null,
-      contract_template_name: form.contract_template_name || null,
+      additional_terms: form.additional_terms || null,
+      pre_existing_condition_policy: form.pre_existing_condition_policy || null,
+      waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
     }
     let planId = editingId
     if (editingId) {
@@ -322,7 +322,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -408,15 +408,39 @@ function PlanManager({ company }) {
               <button onClick={addFlag} disabled={!customFlag.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
             </div>
           </div>
+          {/* Real gap this closes: waiting period and pre-existing-condition
+              policy were only ever settable for self-serve/TPA plans
+              (CoverageRulesManager) - a broker-sold plan created here had
+              no way to set either, so the health-declaration screen a
+              patient/agent sees before buying always showed "not set by
+              the insurer yet" for a plan that actually has real terms. */}
+          <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Waiting period (days)</div>
+              <input type="number" value={form.waiting_period_days} onChange={e=>setForm(f=>({...f,waiting_period_days:e.target.value}))} placeholder="e.g. 30" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            </div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Pre-existing conditions</div>
+              <select value={form.pre_existing_condition_policy} onChange={e=>setForm(f=>({...f,pre_existing_condition_policy:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+                <option value="">Not set</option>
+                {PRE_EXISTING_POLICIES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+              </select>
+            </div>
+          </div>
+          {/* Real gap this closes: the previous "upload a contract for
+              patients to e-sign" feature made Medsa the custodian of a
+              real legal document, which isn't a role it wants - this is
+              just the insurer's own terms in their own words, shown to a
+              patient/agent before a policy is issued, no document upload
+              or signature involved. Auto-fill drafts a starting paragraph
+              from the structured fields already on this form; the insurer
+              edits it into whatever wording they actually want to use. */}
           <div style={{marginBottom:'12px'}}>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Policy contract (for patients to sign when buying)</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Uploaded once here, not per sale - every policy issued for this plan (agent-sold or automated) points a patient back to this same document to review and sign electronically before it goes active.</div>
-            {form.contract_template_name&&<div style={{fontSize:'12px',color:C.green,marginBottom:'6px'}}>✓ {form.contract_template_name}</div>}
-            <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
-              {uploadingContract?'Uploading…':(form.contract_template_name?'Replace contract':'Upload contract (PDF or image)')}
-              <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleUploadContractTemplate(e.target.files[0])}/>
-            </label>
-            {contractUploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {contractUploadError}</div>}
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+              <div style={{fontSize:'12px',color:C.textSub}}>Terms shown to patients before they buy</div>
+              <span onClick={()=>setForm(f=>({...f,additional_terms:buildAutoFillTerms(f)}))} style={{fontSize:'11px',color:C.green,cursor:'pointer',fontWeight:600}}>Auto-fill from plan details</span>
+            </div>
+            <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={5} placeholder="e.g. exclusions, what counts as a pre-existing condition, how claims are assessed…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
@@ -461,7 +485,7 @@ function PlanManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.contract_template_name?' · Contract on file':' · No contract uploaded'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
