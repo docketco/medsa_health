@@ -574,6 +574,25 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         </div>
       </Card>}
 
+      {/* Real gap found live-testing: these dates apply to the whole
+          policy - basket-built or not - but used to live only under "Or
+          add a plan not in the basket," which reads as optional/manual-
+          only. An agent building straight from the basket had no visible
+          reason to scroll down into that section at all, so a basket-
+          built policy could go out with no start/renewal date on file.
+          Always shown now, ahead of the basket-vs-manual plan fields. */}
+      <SecLabel>Policy dates</SecLabel>
+      <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Start date</div>
+          <input value={startDate} onChange={e=>setStartDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Renewal date</div>
+          <input value={renewalDate} onChange={e=>setRenewalDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+      </div>
+
       <SecLabel>{lineItems.length>0?'Or add a plan not in the basket':'Plan details (manual, no basket plan available)'}</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'16px'}}>
         {agent.agent_type==='independent'&&lineItems.length===0&&<select value={selectedInsurer||''} onChange={e=>setSelectedInsurer(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}>
@@ -583,16 +602,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number (optional for quotes)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         {lineItems.length===0&&<input value={premium} onChange={e=>setPremium(e.target.value)} placeholder="Monthly premium (HK$)" type="number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>}
-        <div style={{display:'flex',gap:'10px'}}>
-          <div style={{flex:1}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Start date</div>
-            <input value={startDate} onChange={e=>setStartDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}/>
-          </div>
-          <div style={{flex:1}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Renewal date</div>
-            <input value={renewalDate} onChange={e=>setRenewalDate(e.target.value)} type="date" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}/>
-          </div>
-        </div>
       </div>
 
       <SecLabel>Status</SecLabel>
