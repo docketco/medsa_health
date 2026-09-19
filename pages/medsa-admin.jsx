@@ -541,6 +541,9 @@ function PartnersTab() {
   const [renewDate, setRenewDate] = useState('')
   const [approvingId, setApprovingId] = useState(null)
   const [approvedPassword, setApprovedPassword] = useState(null)
+  const [referralFeeDrafts, setReferralFeeDrafts] = useState({})
+  const [savingReferralFeeId, setSavingReferralFeeId] = useState(null)
+  const [savedReferralFeeId, setSavedReferralFeeId] = useState(null)
 
   const [uploadError, setUploadError] = useState(null)
 
@@ -619,9 +622,18 @@ function PartnersTab() {
   // An agent's real referral_fee_hkd on a given policy is computed from
   // this rate against their commission (see AgentApp.jsx), same pattern
   // as the insurer-set commission rate on a plan.
-  async function saveReferralFeeRate(company, value) {
-    const pct = value==='' ? null : parseFloat(value)
-    await supabase.from('insurance_companies').update({ referral_fee_rate_pct: pct }).eq('id', company.id)
+  async function saveReferralFeeRate(company) {
+    const raw = referralFeeDrafts[company.id]
+    const pct = raw===undefined || raw==='' ? null : parseFloat(raw)
+    setSavingReferralFeeId(company.id)
+    setSavedReferralFeeId(null)
+    const { error } = await supabase.from('insurance_companies').update({ referral_fee_rate_pct: pct }).eq('id', company.id)
+    setSavingReferralFeeId(null)
+    if (!error) {
+      setSavedReferralFeeId(company.id)
+      setReferralFeeDrafts(d => { const n = {...d}; delete n[company.id]; return n })
+      load()
+    }
   }
 
   // Self-serve partnered applications (see /insurer-signup) land as
@@ -717,9 +729,16 @@ function PartnersTab() {
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
             : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
-          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
             <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Medsa's referral fee rate (contract term):</div>
-            <input type="number" defaultValue={c.referral_fee_rate_pct??''} onBlur={e=>saveReferralFeeRate(c,e.target.value)} placeholder="%" style={{width:60,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            <input type="number" value={referralFeeDrafts[c.id] ?? (c.referral_fee_rate_pct ?? '')}
+              onChange={e=>{setReferralFeeDrafts(d=>({...d,[c.id]:e.target.value}));setSavedReferralFeeId(null)}}
+              placeholder="%" style={{width:60,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            <button onClick={()=>saveReferralFeeRate(c)} disabled={savingReferralFeeId===c.id || referralFeeDrafts[c.id]===undefined}
+              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:referralFeeDrafts[c.id]===undefined?'default':'pointer',background:referralFeeDrafts[c.id]===undefined?C.card:C.green,color:referralFeeDrafts[c.id]===undefined?C.textMuted:'#fff'}}>
+              {savingReferralFeeId===c.id?'Saving…':'Save'}
+            </button>
+            {savedReferralFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
             <div style={{fontSize:'10px',color:C.textMuted}}>of the agent's commission on this insurer's plans</div>
           </div>
           {renewingId===c.id
