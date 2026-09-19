@@ -3364,8 +3364,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [formNoneApply,setFormNoneApply]=useState(false)
   const [formOtherText,setFormOtherText]=useState('')
 
-  function openInquiryForm(i, mode) {
-    setInquiryForm({ index: i, mode })
+  function openInquiryForm(i, mode, isSwitch) {
+    setInquiryForm({ index: i, mode, isSwitch: !!isSwitch })
     setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText('')
   }
   function toggleFormCondition(c) {
@@ -3403,6 +3403,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           patientId: patient.id, planId: plan.id, mode: inquiryForm.mode,
           consentHistoryShared: formConsent,
           declaredConditions: formNoneApply ? [] : formConditions,
+          isSwitchRequest: !!inquiryForm.isSwitch,
         }),
       })
       const data = await res.json()
@@ -3534,6 +3535,49 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!activePolicy) return
     setRenewalRequested(true)
     await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', activePolicy.id)
+  }
+
+  // Cancellation is a request, not a self-service instant action - HK's
+  // Insurance Authority only guarantees a full refund within a 21-day
+  // cooling-off/free-look period from when the policy took effect; after
+  // that, cancelling requires 30 days' notice, and an agent needs to
+  // actually process it with the insurer either way. This just records
+  // the request and which window applies, for the agent to act on.
+  const [cancelTargetId,setCancelTargetId]=useState(null)
+  const [cancelling,setCancelling]=useState(false)
+  function cancellationWindow(policy) {
+    const startedAt = policy?.start_date || policy?.created_at
+    if (!startedAt) return { withinFreeLook: false, daysInto: null }
+    const daysInto = Math.floor((Date.now() - new Date(startedAt).getTime()) / (1000*60*60*24))
+    return { withinFreeLook: daysInto <= 21, daysInto }
+  }
+  async function handleRequestCancellation(policy) {
+    setCancelling(true)
+    await supabase.from('agent_policies').update({ cancellation_requested_at: new Date().toISOString() }).eq('id', policy.id)
+    setCancelling(false)
+    setCancelTargetId(null)
+    loadPolicy()
+  }
+  function renderCancelAction(policy, light) {
+    const textColor = light ? 'rgba(255,255,255,0.85)' : C.textMuted
+    if (policy.cancellation_requested_at) {
+      return <div style={{marginTop:'10px',fontSize:'11px',color:textColor}}>{isEn?'✓ Cancellation requested - your agent will confirm once processed.':'✓ 已請求取消 - 代理人處理後將確認。'}</div>
+    }
+    if (cancelTargetId !== policy.id) {
+      return <div onClick={()=>setCancelTargetId(policy.id)} style={{marginTop:'10px',fontSize:'11px',color:light?'rgba(255,255,255,0.7)':C.textMuted,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Request cancellation':'請求取消保單'}</div>
+    }
+    const { withinFreeLook, daysInto } = cancellationWindow(policy)
+    return (
+      <div style={{marginTop:'10px',background:light?'rgba(255,255,255,0.15)':C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',lineHeight:1.5,color:textColor}}>
+        {withinFreeLook
+          ? (isEn?`You're within the 21-day cooling-off period (day ${daysInto ?? 0}) - cancelling now qualifies for a full premium refund.`:`您仍在21天冷靜期內(第${daysInto ?? 0}天)- 現在取消可獲全額保費退還。`)
+          : (isEn?"You're past the 21-day cooling-off period, so cancellation needs 30 days' notice and isn't instant - your agent will confirm the effective date with the insurer.":'您已超過21天冷靜期,取消保單需提前30天通知,並非即時生效 - 代理人將與保險公司確認生效日期。')}
+        <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+          <Btn style={{flex:1,fontSize:'11px',padding:'6px 10px',...(light?{background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)'}:{})}} onClick={()=>setCancelTargetId(null)}>{isEn?'Never mind':'不用了'}</Btn>
+          <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>handleRequestCancellation(policy)}>{cancelling?(isEn?'Requesting…':'請求中…'):(isEn?'Confirm request':'確認請求')}</Btn>
+        </div>
+      </div>
+    )
   }
 
   async function handleSignContract() {
@@ -3683,6 +3727,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
           </div>
           <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
+          {renderCancelAction(activePolicy, false)}
         </div>
       )}
       {!policyLoading&&activePolicy&&activePolicy.premium!=null&&(() => {
@@ -3726,6 +3771,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
               :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
           </div>}
+          {!inProgress&&renderCancelAction(activePolicy, true)}
         </div>
         )
       })()}
@@ -3825,8 +3871,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
-            {inquired!==i&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
-            {inquired!==i&&<div style={{display:'flex',gap:'8px'}}>
+            {/* Already holding this exact plan? Block re-buying it outright
+                (that's just a stray double policy, not a real choice) and
+                route "I want something different" through an agent as a
+                real replacement, not a silent cancel+rebuy - the same
+                reasoning HK's Insurance Authority applies to policy
+                replacement (GL27): a switch can leave a patient worse off
+                in ways an agent should actually walk through. */}
+            {inquired!==i&&heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&(
+              <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
+                {isEn?'✓ You already hold this plan.':'✓ 您已持有此計劃。'}
+                <span onClick={()=>openInquiryForm(i,'agent',true)} style={{color:C.green,fontWeight:600,cursor:'pointer',marginLeft:'6px'}}>{isEn?'Compare & switch instead':'比較並更換計劃'}</span>
+              </div>
+            )}
+            {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
+            {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&<div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
               {!plan.requiresAgent&&<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>Get details automatically</Btn>}
               <Btn variant={plan.requiresAgent?'primary':undefined} style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>

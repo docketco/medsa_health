@@ -201,10 +201,24 @@ function TransferRequestModal({ policy, agent, onClose, onRequested }) {
   )
 }
 
-function PoliciesScreen({ agent, policies, onNewPolicy }) {
+function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [filter,setFilter]=useState('all')
   const [transferringPolicy,setTransferringPolicy]=useState(null)
+  const [confirmingCancelId,setConfirmingCancelId]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
+
+  // A patient's cancellation request just marks intent - the actual
+  // cancellation still has to be processed with the insurer, so this is
+  // the agent confirming that's done, not a rubber stamp on a self-
+  // service button. Sets status to 'cancelled' so it drops out of the
+  // patient's own active-plan view automatically (that view only ever
+  // reads status in ['active','renewal_in_progress']).
+  async function confirmCancellation(p) {
+    setConfirmingCancelId(p.id)
+    await supabase.from('agent_policies').update({ status: 'cancelled' }).eq('id', p.id)
+    setConfirmingCancelId(null)
+    onReload?.()
+  }
 
   return (
     <PageWrap maxWidth={720}>
@@ -235,6 +249,11 @@ function PoliciesScreen({ agent, policies, onNewPolicy }) {
                 <span>Premium: HK${p.premium}/mo</span>
                 {p.renewal_date&&<span style={{color:d!==null&&d<=30?C.amber:C.textMuted}}>Renews {new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{d!==null&&d<=30&&d>=0?` (${d}d)`:''}</span>}
               </div>
+              {p.cancellation_requested_at&&<div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px'}}>
+                <div style={{fontSize:'11px',fontWeight:600,color:C.red}}>Patient requested cancellation - {new Date(p.cancellation_requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>Process it with the insurer, then confirm here once it's actually cancelled.</div>
+                <Btn style={{fontSize:'11px',padding:'6px 10px',marginTop:'8px'}} disabled={confirmingCancelId===p.id} onClick={()=>confirmCancellation(p)}>{confirmingCancelId===p.id?'Confirming…':'Confirm cancelled'}</Btn>
+              </div>}
               {agent.team_id&&<div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to teammate</Btn></div>}
             </Card>
           )
@@ -1023,6 +1042,7 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+                {i.is_switch_request&&<div style={{marginTop:'4px'}}><Badge text="⇄ Plan switch request" type="due"/></div>}
                 {isTeamGated&&<div style={{fontSize:'11px',color:C.blue,marginTop:'2px'}}>Team-gated - claim it yourself, or confirm it for your team to distribute by its own rule</div>}
               </div>
               <div style={{display:'flex',gap:'6px'}}>
@@ -1047,6 +1067,7 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
               </div>
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px'}}>
+                {i.is_switch_request&&<Badge text="⇄ Plan switch request" type="due"/>}
                 {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
                 {convertedInquiryIds.has(i.id)
                   ? <Badge text="Converted to policy" type="ok"/>
@@ -1521,7 +1542,7 @@ export default function AgentApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
         {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries}/>}
-        {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}}/>}
+        {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
         {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent} onConvert={(inq)=>{setPrefillInquiry(inq);setScreen('newpolicy')}}/>}

@@ -42,7 +42,14 @@ async function polishSummaryWithAI(ruleSummary, verdict, planName) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { patientId, planId, declaredConditions, consentHistoryShared, mode } = req.body || {}
+  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, mode: requestedMode } = req.body || {}
+  // Replacing a plan already held is never an automated, self-service
+  // purchase - the Insurance Authority's own guideline on policy
+  // replacement (GL27) exists specifically because a switch can leave a
+  // patient worse off (lost benefits, a new waiting period) in a way an
+  // agent needs to walk through, not something a rule engine should
+  // wave through on its own.
+  const mode = isSwitchRequest ? 'agent' : requestedMode
   if (!patientId || !planId) return res.status(400).json({ status: 'ERROR', message: 'patientId and planId are required.' })
   if (!['auto', 'agent'].includes(mode)) return res.status(400).json({ status: 'ERROR', message: "mode must be 'auto' or 'agent'." })
 
@@ -90,7 +97,7 @@ export default async function handler(req, res) {
     applicant_full_name: patient.full_name || null, applicant_hkid: patient.hkid || null,
     applicant_dob: patient.date_of_birth || null, applicant_phone: patient.phone || null,
     applicant_email: patient.email || null, consent_given: true, consent_given_at: new Date().toISOString(),
-    status: 'new', mode,
+    status: 'new', mode, is_switch_request: !!isSwitchRequest,
     consent_history_shared_at: consentHistoryShared ? new Date().toISOString() : null,
     declared_conditions: declaredConditions || [],
     suitability_verdict: result.verdict, suitability_summary: summary,
