@@ -59,20 +59,31 @@ export default async function handler(req, res) {
   if (!patient) return res.status(404).json({ status: 'ERROR', message: 'Patient not found.' })
   const age = patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
 
-  // Consent-gated: only ever reads this patient's own diagnosis history when
-  // they explicitly opted in for this specific inquiry - declared conditions
-  // alone are always used regardless of consent.
-  let historyConditions = []
+  // The verdict/quote that gets shown to the patient (both modes) or
+  // acted on automatically is driven ONLY by what was actually declared -
+  // a deliberate call after live testing showed visit-history free text
+  // (real consultation notes, not a clean conditions list) flooding the
+  // automated verdict with noise no patient actually claimed. Consented
+  // visit history still gets pulled and matched, but only ever as
+  // read-only context attached for an agent to review - it can flag a
+  // "talk to an agent" inquiry for a closer look, but it never flips an
+  // automated quote on its own.
+  const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
+  const { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
+
+  let historyContextSummary = null
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
       .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
       .order('created_at', { ascending: false }).limit(15)
-    historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
+    const historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
+    if (historyConditions.length > 0) {
+      const historyRead = matchPlanSuitability({ plan, patientAge: age, conditions: historyConditions })
+      if (historyRead.excludedConditions.length > 0 || historyRead.uncoveredConditions.length > 0) {
+        historyContextSummary = `From the patient's consented visit history (not self-declared, for review only): ${historyRead.summary}`
+      }
+    }
   }
-  const allConditions = [...new Set([...(declaredConditions || []), ...historyConditions])]
-
-  const result = matchPlanSuitability({ plan, patientAge: age, conditions: allConditions })
-  const { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
 
   const inquiryPayload = {
     patient_id: patientId, plan_id: planId,
@@ -84,6 +95,7 @@ export default async function handler(req, res) {
     declared_conditions: declaredConditions || [],
     suitability_verdict: result.verdict, suitability_summary: summary,
     quoted_premium_hkd: result.quotedPremium, used_ai: usedAI,
+    history_context_summary: historyContextSummary,
   }
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
