@@ -7,6 +7,7 @@ import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
+import TermsAgreementModal from '../shared/TermsAgreementModal'
 
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
@@ -3381,8 +3382,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [purchaseHealthDeclaration,setPurchaseHealthDeclaration]=useState(false)
   const [purchaseContractViewed,setPurchaseContractViewed]=useState(false)
   const [purchasing,setPurchasing]=useState(false)
-  const [purchasedIndices,setPurchasedIndices]=useState(new Set())
   const [purchaseError,setPurchaseError]=useState(null)
+  const [termsModalOpen,setTermsModalOpen]=useState(false)
 
   function openPurchaseForm(i) {
     setPurchaseOpenIndex(i)
@@ -3399,7 +3400,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     setPurchasing(true)
     setPurchaseError(null)
     try {
-      const res = await fetch('/api/patient/complete_auto_purchase', {
+      // This no longer activates a policy directly - it only starts a real
+      // Stripe Checkout for the premium. The policy is only ever created
+      // once Stripe confirms the card was actually charged (see the
+      // webhook), so "buy" now means paying, not just ticking a box.
+      const res = await fetch('/api/patient/create_auto_purchase_checkout', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           inquiryId: result.inquiryId, patientId: patient.id, planId: plan.id,
@@ -3408,10 +3413,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         }),
       })
       const data = await res.json()
-      if (data.status !== 'OK') { setPurchaseError(data.message || 'Could not complete the purchase.'); return }
-      setPurchasedIndices(prev => new Set(prev).add(i))
-      setPurchaseOpenIndex(null)
-      loadPolicy()
+      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setPurchaseError(data.message || 'Could not start payment.')
     } finally {
       setPurchasing(false)
     }
@@ -3457,7 +3460,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, hasContractTemplate: data.hasContractTemplate } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, hasContractTemplate: data.hasContractTemplate, declaredConditions: formNoneApply ? [] : formConditions } }))
         setInquired(i)
         setInquiryForm(null)
       }
@@ -3508,6 +3511,10 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   }
   const [activePolicy,setActivePolicy]=useState(null)
   const [heldPolicies,setHeldPolicies]=useState([]) // every held policy, not just the one shown up top - a patient can hold more than one, and ClaimsTab needs all of them to let the patient pick which to bill
+  // Compact-by-default: once "Policy on file" could show several real
+  // cards (see comment below), a full card per policy made the list too
+  // long to scan. Only one expands at a time, collapsed by default.
+  const [expandedPolicyId,setExpandedPolicyId]=useState(null)
   const [policyLoading,setPolicyLoading]=useState(true)
   const [renewalRequested,setRenewalRequested]=useState(false)
 
@@ -3745,6 +3752,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           matchedConditions, isMatched: matchedConditions.length > 0,
           requiresAgent: !!p.requires_agent,
           contractTemplatePath: p.contract_template_url || null,
+          waitingPeriodDays: p.waiting_period_days ?? null,
+          preExistingConditionPolicy: p.pre_existing_condition_policy || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
@@ -3799,24 +3808,34 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           through Medsa, just recorded so claims can process. The full
           premium/renewal card below assumes a Medsa-issued policy, so a
           self-linked one gets its own simpler card instead. */}
-      {!policyLoading&&heldPolicies.filter(p=>p.premium==null).map(policy=>(
-        <div key={policy.id} style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'18px'}}>
-          <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
-          <div style={{fontSize:'16px',fontWeight:700,marginTop:'6px'}}>{policy.plan_name}</div>
-          {policy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {policy.policy_number}</div>}
-          {/* Real gap this closes: nothing on this screen ever told a
-              patient whether their own plan bills the clinic directly or
-              requires them to pay in full and claim it back - the single
-              biggest thing that changes what happens at checkout. */}
-          <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:policy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
-            {policy.insurance_plans?.billing_model==='reimbursement'
-              ? (isEn?'Reimbursement plan - you pay in full at the clinic, then claim it back':'自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
-              : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
+      {!policyLoading&&heldPolicies.filter(p=>p.premium==null).map(policy=>{
+        const expanded = expandedPolicyId===policy.id
+        return (
+        <div key={policy.id} style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',overflow:'hidden'}}>
+          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
+              <div style={{fontSize:'14px',fontWeight:700,marginTop:'2px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
+            </div>
+            <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
-          {renderCancelAction(policy, false)}
+          {expanded&&<div style={{padding:'0 18px 18px'}}>
+            {policy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {policy.policy_number}</div>}
+            {/* Real gap this closes: nothing on this screen ever told a
+                patient whether their own plan bills the clinic directly or
+                requires them to pay in full and claim it back - the single
+                biggest thing that changes what happens at checkout. */}
+            <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:policy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
+              {policy.insurance_plans?.billing_model==='reimbursement'
+                ? (isEn?'Reimbursement plan - you pay in full at the clinic, then claim it back':'自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
+                : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
+            {renderCancelAction(policy, false)}
+          </div>}
         </div>
-      ))}
+        )
+      })}
       {/* Real gap found live-testing: this used to only ever render
           activePolicy (heldPolicies[0]) - a patient holding more than one
           real Medsa-sold policy only ever saw the first. Now renders
@@ -3830,10 +3849,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         const readyToSign = !!policy.contract_ready_at && !policy.patient_signed_at
         const waitingOnAgent = inProgress && !policy.contract_ready_at
         const activePolicy = policy
+        const expanded = expandedPolicyId===policy.id
+        // A short status word for the collapsed row - so a policy that
+        // needs the patient's attention (sign, renewal in progress) is
+        // visible without expanding, but everything else stays compact.
+        const statusLabel = readyToSign ? (isEn?'Sign required':'需要簽署')
+          : waitingOnAgent ? (isEn?'Renewal in progress':'續保處理中')
+          : (isEn?'Active':'生效中')
         return (
-        <div key={policy.id} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
-          <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
-          <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
+        <div key={policy.id} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',overflow:'hidden',color:'#fff'}}>
+          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:'10px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{activePolicy.plan_name}</div>
+              <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginTop:'4px'}}>
+                <div style={{fontSize:'17px',fontWeight:700}}>HK${activePolicy.premium}/mo</div>
+                <div style={{fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'20px',background:readyToSign?'rgba(255,200,0,0.25)':'rgba(255,255,255,0.15)'}}>{statusLabel}</div>
+              </div>
+            </div>
+            <span style={{fontSize:'11px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
+          </div>
+          {expanded&&<div style={{padding:'0 20px 20px'}}>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
           <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',opacity:0.9}}>
             {activePolicy.insurance_plans?.billing_model==='reimbursement'
@@ -3867,6 +3902,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={()=>handleRequestRenewal(policy)}>{isEn?'Request renewal':'請求續保'}</Btn>)}
           </div>}
           {!inProgress&&renderCancelAction(policy, true)}
+          </div>}
         </div>
         )
       })}
@@ -3982,7 +4018,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
             {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&<div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              {!plan.requiresAgent&&<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>Get details automatically</Btn>}
+              {!plan.requiresAgent&&<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>Quote immediately</Btn>}
               <Btn variant={plan.requiresAgent?'primary':undefined} style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>
             </div>}
 
@@ -4045,13 +4081,10 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                   real held policy. A "needs review" read is exactly the
                   case this stays closed for - that's what the agent path
                   is for. */}
-              {suitabilityResults[i].verdict!=='needs_review'&&(purchasedIndices.has(i)
+              {suitabilityResults[i].verdict!=='needs_review'&&(heldPolicies.some(hp=>hp.plan_id===plan.id)
                 ? <div style={{marginTop:'10px',fontSize:'11px',color:C.green,fontWeight:600}}>✓ Purchased - see it under "Policy on file" above.</div>
                 : purchaseOpenIndex===i
                   ? <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
-                      {plan.contractTemplatePath&&<div style={{marginBottom:'10px'}}>
-                        <Btn style={{width:'100%',fontSize:'12px'}} onClick={()=>handleViewPlanContract(plan)}>{purchaseContractViewed?'✓ Contract reviewed - view again':'View the policy contract'}</Btn>
-                      </div>}
                       <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
                         <select value={purchaseWardClass} onChange={e=>setPurchaseWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
                           <option value="">Ward class (optional)</option>
@@ -4064,26 +4097,70 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                           <option value="annual">Pay annually</option>
                         </select>
                       </div>
-                      <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
-                        <input type="checkbox" checked={purchaseHealthDeclaration} onChange={e=>setPurchaseHealthDeclaration(e.target.checked)} disabled={!!plan.contractTemplatePath&&!purchaseContractViewed} style={{marginTop:'2px'}}/>
-                        I've declared all relevant medical conditions above and understand this plan's exclusions and waiting periods.
-                      </label>
+                      {/* Real gap this closes: this used to be one inline
+                          checkbox sentence next to the buy button - no real
+                          document, nothing that actually made a patient
+                          read what they were agreeing to. Now a real,
+                          scrollable declaration screen (Uber-Merchant-
+                          onboarding style) built from this plan's own
+                          on-file terms, that has to be scrolled through
+                          (and the contract viewed, if one exists) before
+                          "I agree" unlocks. */}
+                      {purchaseHealthDeclaration
+                        ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ Health declaration & terms reviewed and accepted.</div>
+                        : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
+                      {/* Real gap this closes: this used to just flip the
+                          policy active with no payment step at all. Now
+                          it's a real charge - shown up front so "buy"
+                          actually means paying, not just ticking a box. */}
+                      {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'12px',fontWeight:600,color:C.navy,marginBottom:'10px'}}>
+                        You'll be charged HK${purchasePaymentFrequency==='annual'?(suitabilityResults[i].quotedPremium*12).toFixed(0):suitabilityResults[i].quotedPremium} now ({purchasePaymentFrequency==='annual'?'1 year':'1 month'}), by card via Stripe.
+                      </div>}
                       {purchaseError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{purchaseError}</div>}
                       <div style={{display:'flex',gap:'8px'}}>
                         <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPurchaseOpenIndex(null)}>Cancel</Btn>
-                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Completing…':'Confirm & buy'}</Btn>
+                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Redirecting to payment…':'Proceed to payment'}</Btn>
                       </div>
                     </div>
                   : <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>openPurchaseForm(i)}>Buy this plan</Btn>
               )}
             </div>}
+            {/* Real gap this closes: the same suitability check that runs
+                for the automated path already ran here too (that's the
+                whole point of sharing one engine - see handleInquire's
+                comment) but the patient never saw any of it, just generic
+                forwarding boilerplate. They should see the same
+                preliminary read, just clearly marked as not final since
+                an agent (and their own consented history, if shared)
+                still confirms it. */}
             {inquired===i&&suitabilityResults[i]?.mode==='agent'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
               <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
+              {suitabilityResults[i].verdict&&<div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',marginTop:'8px',marginBottom:'8px'}}>
+                <div style={{fontSize:'11px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
+                  {suitabilityResults[i].verdict==='suitable'&&'✓ Preliminary read: suitable'}
+                  {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Preliminary read: likely suitable'}
+                  {suitabilityResults[i].verdict==='needs_review'&&'⚠ Preliminary read: worth a closer look'}
+                </div>
+                {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
+                <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
+                <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Automatic, not final - your agent reviews and confirms this before anything is bound.</div>
+              </div>}
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up already has your declared conditions checked against this plan, so you shouldn't need to repeat yourself.</div>
             </div>}
           </Card>
         ))}
+
+        {purchaseOpenIndex!=null&&visiblePlans[purchaseOpenIndex]&&<TermsAgreementModal
+          open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn}
+          planName={visiblePlans[purchaseOpenIndex].name} companyName={visiblePlans[purchaseOpenIndex].company}
+          declaredConditions={suitabilityResults[purchaseOpenIndex]?.declaredConditions||[]}
+          waitingPeriodDays={visiblePlans[purchaseOpenIndex].waitingPeriodDays}
+          preExistingConditionPolicy={visiblePlans[purchaseOpenIndex].preExistingConditionPolicy}
+          contractUrl={visiblePlans[purchaseOpenIndex].contractTemplatePath}
+          onViewContract={()=>handleViewPlanContract(visiblePlans[purchaseOpenIndex])}
+          onAccept={()=>{setPurchaseHealthDeclaration(true);setPurchaseContractViewed(true);setTermsModalOpen(false)}}
+        />}
 
         {/* Search all plans */}
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
