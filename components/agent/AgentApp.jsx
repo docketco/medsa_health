@@ -1059,6 +1059,7 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               {i.quoted_premium_hkd!=null&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
               <div style={{marginTop:'2px'}}>{i.suitability_summary}</div>
               {(i.declared_conditions||[]).length>0&&<div style={{marginTop:'2px',color:C.textMuted}}>Declared: {i.declared_conditions.join(', ')}</div>}
+              {i.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{i.history_context_summary}</div>}
             </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
