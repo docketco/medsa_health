@@ -5518,11 +5518,16 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadPendingPayments() {
     setPendingLoading(true)
+    if (!institutionId) { setPendingPayments([]); setPendingLoading(false); return }
     // Real, itemized list - claims with a real amount still owed by the
     // patient that haven't been collected yet. Replaces the single
     // hardcoded demo bill this screen used to show.
+    // Real bug found live-testing: no institution scoping at all - every
+    // clinic's outstanding copays showed up here regardless of who was
+    // logged in, same class of leak as ClaimsScreen and loadTaskBoard.
     const { data } = await supabase.from('insurance_claims')
       .select('*, patients(full_name), insurance_plans(company_name, plan_name)')
+      .eq('institution_id', institutionId)
       .in('status', ['approved','partially_approved'])
       .is('copay_payment_method', null)
       .order('submitted_at', {ascending:false})
@@ -5611,7 +5616,10 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadTreatmentPlans() {
     setPlansLoading(true)
-    const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)')
+    if (!institutionId) { setTreatmentPlans([]); setPlansLoading(false); return }
+    // Real bug found live-testing: no institution scoping at all - same
+    // cross-clinic leak class as loadPendingPayments above.
+    const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)').eq('institution_id', institutionId)
     setTreatmentPlans((data||[]).map(p => ({
       id: p.id,
       patient: p.patients?.full_name || 'Unknown',
@@ -5631,7 +5639,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     loadTreatmentPlans()
     loadLedger()
     loadPendingPayments()
-  }, [])
+  }, [institutionId])
 
   useEffect(() => {
     if (institutionId) loadUnbilledVisits()

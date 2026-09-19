@@ -3363,10 +3363,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [formConditions,setFormConditions]=useState([])
   const [formNoneApply,setFormNoneApply]=useState(false)
   const [formOtherText,setFormOtherText]=useState('')
+  const [formMessage,setFormMessage]=useState('')
 
   function openInquiryForm(i, mode, isSwitch) {
     setInquiryForm({ index: i, mode, isSwitch: !!isSwitch })
-    setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText('')
+    setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText(''); setFormMessage('')
   }
   function toggleFormCondition(c) {
     setFormNoneApply(false)
@@ -3404,6 +3405,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           consentHistoryShared: formConsent,
           declaredConditions: formNoneApply ? [] : formConditions,
           isSwitchRequest: !!inquiryForm.isSwitch,
+          message: inquiryForm.mode==='agent' ? formMessage.trim() : '',
         }),
       })
       const data = await res.json()
@@ -3531,10 +3533,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     loadPolicy()
   }
 
-  async function handleRequestRenewal() {
-    if (!activePolicy) return
+  async function handleRequestRenewal(policy) {
+    const target = policy || activePolicy
+    if (!target) return
     setRenewalRequested(true)
-    await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', activePolicy.id)
+    await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', target.id)
+    loadPolicy()
   }
 
   // Cancellation is a request, not a self-service instant action - HK's
@@ -3558,13 +3562,40 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     setCancelTargetId(null)
     loadPolicy()
   }
+  // A self-linked policy (see handleLinkPlan) was never sold through
+  // Medsa and has no agent attached - agent_id is null. Real gap found
+  // live-testing: the agent-mediated cancellation flow below silently
+  // went nowhere for one of these, since there's no agent to receive
+  // it. Medsa has no standing with that insurer for a policy it never
+  // sold, so "cancelling" it here can only ever mean removing Medsa's
+  // own record of it, not actually cancelling coverage - the patient
+  // still has to contact that insurer directly for that.
+  async function handleRemoveSelfLinkedPolicy(policy) {
+    setCancelling(true)
+    await supabase.from('agent_policies').update({ status: 'removed' }).eq('id', policy.id)
+    setCancelling(false)
+    setCancelTargetId(null)
+    loadPolicy()
+  }
   function renderCancelAction(policy, light) {
     const textColor = light ? 'rgba(255,255,255,0.85)' : C.textMuted
+    const isSelfLinked = !policy.agent_id
     if (policy.cancellation_requested_at) {
       return <div style={{marginTop:'10px',fontSize:'11px',color:textColor}}>{isEn?'✓ Cancellation requested - your agent will confirm once processed.':'✓ 已請求取消 - 代理人處理後將確認。'}</div>
     }
     if (cancelTargetId !== policy.id) {
-      return <div onClick={()=>setCancelTargetId(policy.id)} style={{marginTop:'10px',fontSize:'11px',color:light?'rgba(255,255,255,0.7)':C.textMuted,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Request cancellation':'請求取消保單'}</div>
+      return <div onClick={()=>setCancelTargetId(policy.id)} style={{marginTop:'10px',fontSize:'11px',color:light?'rgba(255,255,255,0.7)':C.textMuted,textDecoration:'underline',cursor:'pointer'}}>{isSelfLinked?(isEn?'Remove this policy from my file':'從我的檔案中移除此保單'):(isEn?'Request cancellation':'請求取消保單')}</div>
+    }
+    if (isSelfLinked) {
+      return (
+        <div style={{marginTop:'10px',background:light?'rgba(255,255,255,0.15)':C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',lineHeight:1.5,color:textColor}}>
+          {isEn?"This just removes Medsa's own record of the policy - it was never sold through Medsa, so we can't cancel your actual coverage. Contact the insurer directly for that.":'此操作僅移除Medsa存檔的保單記錄 - 此保單並非透過Medsa銷售,故我們無法取消您的實際保障,請直接聯絡保險公司處理。'}
+          <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
+            <Btn style={{flex:1,fontSize:'11px',padding:'6px 10px',...(light?{background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)'}:{})}} onClick={()=>setCancelTargetId(null)}>{isEn?'Never mind':'不用了'}</Btn>
+            <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>handleRemoveSelfLinkedPolicy(policy)}>{cancelling?(isEn?'Removing…':'移除中…'):(isEn?'Remove it':'移除')}</Btn>
+          </div>
+        </div>
+      )
     }
     const { withinFreeLook, daysInto } = cancellationWindow(policy)
     return (
@@ -3712,31 +3743,36 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           through Medsa, just recorded so claims can process. The full
           premium/renewal card below assumes a Medsa-issued policy, so a
           self-linked one gets its own simpler card instead. */}
-      {!policyLoading&&activePolicy&&activePolicy.premium==null&&(
-        <div style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'18px'}}>
+      {!policyLoading&&heldPolicies.filter(p=>p.premium==null).map(policy=>(
+        <div key={policy.id} style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',padding:'18px'}}>
           <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
-          <div style={{fontSize:'16px',fontWeight:700,marginTop:'6px'}}>{activePolicy.plan_name}</div>
-          {activePolicy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {activePolicy.policy_number}</div>}
+          <div style={{fontSize:'16px',fontWeight:700,marginTop:'6px'}}>{policy.plan_name}</div>
+          {policy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {policy.policy_number}</div>}
           {/* Real gap this closes: nothing on this screen ever told a
               patient whether their own plan bills the clinic directly or
               requires them to pay in full and claim it back - the single
               biggest thing that changes what happens at checkout. */}
-          <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:activePolicy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
-            {activePolicy.insurance_plans?.billing_model==='reimbursement'
+          <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:policy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
+            {policy.insurance_plans?.billing_model==='reimbursement'
               ? (isEn?'Reimbursement plan - you pay in full at the clinic, then claim it back':'自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
               : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
           </div>
           <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Added by you - this lets a Medsa clinic process claims against it. It\'s not a Medsa-sold plan, so there\'s no premium or renewal to track here.':'由您自行新增 - 讓Medsa診所可根據此保單處理索償。此保單並非由Medsa銷售,故此處不會顯示保費或續保資料。'}</div>
-          {renderCancelAction(activePolicy, false)}
+          {renderCancelAction(policy, false)}
         </div>
-      )}
-      {!policyLoading&&activePolicy&&activePolicy.premium!=null&&(() => {
-        const daysLeft = Math.ceil((new Date(activePolicy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
-        const inProgress = activePolicy.status==='renewal_in_progress'
-        const readyToSign = inProgress && activePolicy.contract_ready_at && !activePolicy.patient_signed_at
-        const waitingOnAgent = inProgress && !activePolicy.contract_ready_at
+      ))}
+      {/* Real gap found live-testing: this used to only ever render
+          activePolicy (heldPolicies[0]) - a patient holding more than one
+          real Medsa-sold policy only ever saw the first. Now renders
+          every held policy of this kind as its own card. */}
+      {!policyLoading&&heldPolicies.filter(p=>p.premium!=null).map(policy=>{
+        const daysLeft = Math.ceil((new Date(policy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
+        const inProgress = policy.status==='renewal_in_progress'
+        const readyToSign = inProgress && policy.contract_ready_at && !policy.patient_signed_at
+        const waitingOnAgent = inProgress && !policy.contract_ready_at
+        const activePolicy = policy
         return (
-        <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
+        <div key={policy.id} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
           <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px'}}>{activePolicy.plan_name} — {isEn?'Active plan':'現行計劃'}</div>
           <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px'}}>HK${activePolicy.premium}/mo</div>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
@@ -3767,14 +3803,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           {!inProgress&&<div style={{display:'flex',gap:'16px',marginTop:'14px',alignItems:'center'}}>
             <div><div style={{fontSize:'11px',opacity:0.7}}>{isEn?'Days left':'剩餘天數'}</div><div style={{fontSize:'16px',fontWeight:600}}>{daysLeft>=0?daysLeft:'Overdue'}</div></div>
             <div style={{flex:1}}/>
-            {daysLeft<=45&&(renewalRequested
+            {daysLeft<=45&&(policy.patient_requested_renewal_at
               ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
-              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={handleRequestRenewal}>{isEn?'Request renewal':'請求續保'}</Btn>)}
+              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={()=>handleRequestRenewal(policy)}>{isEn?'Request renewal':'請求續保'}</Btn>)}
           </div>}
-          {!inProgress&&renderCancelAction(activePolicy, true)}
+          {!inProgress&&renderCancelAction(policy, true)}
         </div>
         )
-      })()}
+      })}
 
       {/* Self-serve link to a plan already held outside Medsa's own
           marketplace - see comment on handleLinkPlan above. Always
@@ -3915,6 +3951,16 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                 <input type="text" value={formOtherText} onChange={e=>setFormOtherText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addOtherCondition()}}} placeholder="Have another condition? Type it here" style={{flex:1,fontSize:'11px',padding:'7px 10px',borderRadius:'8px',border:`0.5px solid ${C.border}`,boxSizing:'border-box'}}/>
                 <Btn style={{fontSize:'11px',padding:'7px 12px'}} onClick={addOtherCondition}>Add</Btn>
               </div>
+              {/* Real gap this closes: talking to an agent had nowhere to
+                  actually say anything - a patient with a specific
+                  question ("does this cover my existing GP?") had no way
+                  to ask it up front, only the generic consent/conditions
+                  form. Seeds the same inquiry_messages thread the agent
+                  already reads once they claim it, so it's not lost. */}
+              {inquiryForm.mode==='agent'&&<div style={{marginBottom:'10px'}}>
+                <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Anything specific to ask the agent? (optional)</div>
+                <textarea value={formMessage} onChange={e=>setFormMessage(e.target.value)} rows={2} placeholder="e.g. Does this cover my existing GP visits?" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit'}}/>
+              </div>}
               <div style={{display:'flex',gap:'8px'}}>
                 <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setInquiryForm(null)}>Cancel</Btn>
                 <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleInquire(i,plan)} disabled={inquiring===i||(!formNoneApply&&formConditions.length===0)}>{inquiring===i?'Checking…':(inquiryForm.mode==='auto'?'See my quote':'Send to an agent')}</Btn>

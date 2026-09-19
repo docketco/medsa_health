@@ -42,7 +42,7 @@ async function polishSummaryWithAI(ruleSummary, verdict, planName) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, mode: requestedMode } = req.body || {}
+  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode } = req.body || {}
   // Replacing a plan already held is never an automated, self-service
   // purchase - the Insurance Authority's own guideline on policy
   // replacement (GL27) exists specifically because a switch can leave a
@@ -106,6 +106,17 @@ export default async function handler(req, res) {
   }
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
+
+  // Seeds the same inquiry_messages thread the agent side (and the
+  // patient's own My Inquiries tab) already read/write to, so a
+  // question asked up front isn't lost waiting for someone to claim
+  // this and start the thread themselves.
+  if (message && message.trim()) {
+    await supabase.from('inquiry_messages').insert({
+      inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patient.full_name || null,
+      body: message.trim(),
+    })
+  }
 
   return res.status(200).json({
     status: 'OK', inquiryId: inquiry.id,
