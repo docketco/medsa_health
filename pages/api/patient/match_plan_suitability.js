@@ -86,7 +86,7 @@ export default async function handler(req, res) {
   if (!['auto', 'agent'].includes(mode)) return res.status(400).json({ status: 'ERROR', message: "mode must be 'auto' or 'agent'." })
 
   const { data: plan } = await supabase.from('insurance_plans')
-    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurer_flags, contract_template_url, insurance_plan_pricing_tiers(*)')
+    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurer_flags, additional_terms, insurance_plan_pricing_tiers(*)')
     .eq('id', planId).maybeSingle()
   if (!plan) return res.status(404).json({ status: 'ERROR', message: 'Plan not found.' })
   if (mode === 'auto' && plan.requires_agent) {
@@ -176,6 +176,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     status: 'OK', inquiryId: inquiry.id,
     verdict, summary, quotedPremium: result.quotedPremium, usedAI,
-    hasContractTemplate: !!plan.contract_template_url,
+    waitingPeriodDays: plan.waiting_period_days, preExistingConditionPolicy: plan.pre_existing_condition_policy,
+    additionalTerms: plan.additional_terms,
   })
 }

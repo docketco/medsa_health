@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   if (inquiry.status === 'converted') return res.status(400).json({ status: 'ERROR', message: 'This inquiry has already been turned into a policy.' })
 
   const { data: plan } = await supabase.from('insurance_plans')
-    .select('id, plan_name, company_name, requires_agent, contract_template_url, insurance_plan_pricing_tiers(*)')
+    .select('id, plan_name, company_name, requires_agent, insurance_plan_pricing_tiers(*)')
     .eq('id', planId).maybeSingle()
   if (!plan) return res.status(404).json({ status: 'ERROR', message: 'Plan not found.' })
   if (plan.requires_agent) return res.status(400).json({ status: 'ERROR', message: 'This plan requires an agent - it cannot be bought automatically.' })

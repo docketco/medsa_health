@@ -8,9 +8,12 @@
 // conditions, which plan, what happens if something's missing).
 // Modelled on the Uber Merchant onboarding pattern the user asked for: a
 // real scrollable document, built from the plan's own on-file terms
-// (waiting period, pre-existing condition policy, insurer flags) and
-// whatever was actually declared - not boilerplate - with "I agree"
-// disabled until the content has actually been scrolled through.
+// (waiting period, pre-existing condition policy, the insurer's own
+// additional terms) and whatever was actually declared - not boilerplate -
+// with "I agree" disabled until the content has actually been scrolled
+// through. Deliberately not a real contract/e-signature flow - Medsa isn't
+// the custodian of any insurer's legal document, just showing the terms
+// the insurer typed in themselves before a patient/agent commits.
 // Shared between PatientApp.jsx (automated purchase) and AgentApp.jsx
 // (agent-issued policy) so both flows go through the same real screen.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,10 +24,9 @@ import C from './colours'
 export default function TermsAgreementModal({
   open, onClose, onAccept, isEn=true,
   planName, companyName, declaredConditions=[], historyConditions=[],
-  waitingPeriodDays, preExistingConditionPolicy, contractUrl, onViewContract,
+  waitingPeriodDays, preExistingConditionPolicy, additionalTerms,
 }) {
   const [scrolledToEnd, setScrolledToEnd] = useState(false)
-  const [contractViewed, setContractViewed] = useState(false)
   const scrollRef = useRef(null)
 
   if (!open) return null
@@ -33,12 +35,9 @@ export default function TermsAgreementModal({
     const el = e.target
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 24) setScrolledToEnd(true)
   }
-  async function handleViewContract() {
-    if (onViewContract) { await onViewContract(); setContractViewed(true) }
-  }
 
   const allDeclared = [...new Set([...(declaredConditions||[]), ...(historyConditions||[])])].filter(Boolean)
-  const canAccept = scrolledToEnd && (!contractUrl || contractViewed)
+  const canAccept = scrolledToEnd
 
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}}>
@@ -71,10 +70,9 @@ export default function TermsAgreementModal({
             <div>{isEn?'Insurers rely on this declaration being complete and accurate. Leaving out a condition you knew about at the time of applying can lead to a claim being reduced, delayed, or refused, or the policy being cancelled - this is standard across health insurance in Hong Kong, not specific to Medsa or this insurer.':'保險公司依賴此聲明的完整及準確性。若在申請時未有申報已知的病況，可能導致索償被削減、延遲或拒絕，甚至保單被取消 - 這是香港健康保險業的一般做法，並非Medsa或此保險公司獨有的規定。'}</div>
           </div>
 
-          {contractUrl&&<div style={{marginBottom:'20px'}}>
-            <div style={{fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.6px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'4. Policy contract':'4. 保單合約'}</div>
-            <div style={{marginBottom:'8px'}}>{isEn?'The insurer has provided a full contract for this plan - review it before agreeing below.':'保險公司已提供此計劃的完整合約 - 請在下方同意前先行查閱。'}</div>
-            <button onClick={handleViewContract} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',fontSize:'12px',fontFamily:'inherit',background:contractViewed?C.greenXLight:'#fff',color:contractViewed?C.green:C.text,cursor:'pointer'}}>{contractViewed?(isEn?'✓ Contract reviewed - view again':'✓ 已查閱合約 - 再次查看'):(isEn?'View the full contract':'查看完整合約')}</button>
+          {additionalTerms&&<div style={{marginBottom:'20px'}}>
+            <div style={{fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.6px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'4. Terms from the insurer':'4. 保險公司條款'}</div>
+            <div style={{whiteSpace:'pre-wrap'}}>{additionalTerms}</div>
           </div>}
 
           <div style={{fontSize:'11px',color:C.textMuted,paddingTop:'8px',borderTop:`0.5px solid ${C.border}`}}>
@@ -84,7 +82,6 @@ export default function TermsAgreementModal({
 
         <div style={{padding:'16px 24px 24px',borderTop:`0.5px solid ${C.border}`}}>
           {!scrolledToEnd&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'8px'}}>{isEn?'Please read through to the end first.':'請先閱讀至結尾。'}</div>}
-          {scrolledToEnd&&contractUrl&&!contractViewed&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginBottom:'8px'}}>{isEn?'Please view the contract above first.':'請先查看上方的合約。'}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={onClose} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',fontSize:'13px',fontFamily:'inherit',background:C.card,color:C.text,cursor:'pointer'}}>{isEn?'Cancel':'取消'}</button>
             <button onClick={()=>canAccept&&onAccept()} disabled={!canAccept} style={{flex:1,border:'none',borderRadius:'10px',padding:'12px',fontSize:'13px',fontWeight:600,fontFamily:'inherit',background:canAccept?C.green:C.border,color:'#fff',cursor:canAccept?'pointer':'not-allowed'}}>{isEn?'I agree':'我同意'}</button>

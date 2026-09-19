@@ -3380,20 +3380,13 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [purchaseWardClass,setPurchaseWardClass]=useState('')
   const [purchasePaymentFrequency,setPurchasePaymentFrequency]=useState('monthly')
   const [purchaseHealthDeclaration,setPurchaseHealthDeclaration]=useState(false)
-  const [purchaseContractViewed,setPurchaseContractViewed]=useState(false)
   const [purchasing,setPurchasing]=useState(false)
   const [purchaseError,setPurchaseError]=useState(null)
   const [termsModalOpen,setTermsModalOpen]=useState(false)
 
   function openPurchaseForm(i) {
     setPurchaseOpenIndex(i)
-    setPurchaseWardClass(''); setPurchasePaymentFrequency('monthly'); setPurchaseHealthDeclaration(false); setPurchaseContractViewed(false); setPurchaseError(null)
-  }
-  async function handleViewPlanContract(plan) {
-    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(plan.contractTemplatePath, 300)
-    if (error || !data?.signedUrl) { setPurchaseError('Could not open the contract - try again shortly.'); return }
-    window.open(data.signedUrl, '_blank')
-    setPurchaseContractViewed(true)
+    setPurchaseWardClass(''); setPurchasePaymentFrequency('monthly'); setPurchaseHealthDeclaration(false); setPurchaseError(null)
   }
   async function handleCompletePurchase(i, plan, result) {
     if (!purchaseHealthDeclaration) return
@@ -3460,7 +3453,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, hasContractTemplate: data.hasContractTemplate, declaredConditions: formNoneApply ? [] : formConditions } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: formNoneApply ? [] : formConditions } }))
         setInquired(i)
         setInquiryForm(null)
       }
@@ -3751,9 +3744,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0,
           requiresAgent: !!p.requires_agent,
-          contractTemplatePath: p.contract_template_url || null,
           waitingPeriodDays: p.waiting_period_days ?? null,
           preExistingConditionPolicy: p.pre_existing_condition_policy || null,
+          additionalTerms: p.additional_terms || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
@@ -3803,6 +3796,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {/* Active plan banner - real data from agent_policies */}
       {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading your plan...':'載入您的計劃中...'}</div>}
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
+      {/* Real gap this closes: "too long" was still true after the first
+          compacting pass - each card repeated its own "Policy on file"
+          label, and 16px of top margin per card added up fast with
+          several held policies. One shared label now, tighter spacing
+          between cards, no repeated label per row. */}
+      {!policyLoading&&heldPolicies.length>0&&<SecLabel>{isEn?'Policy on file':'已存檔保單'}</SecLabel>}
       {/* A policy linked via "I already have insurance" below (self-serve,
           out-of-network) has no premium/renewal_date - it was never sold
           through Medsa, just recorded so claims can process. The full
@@ -3811,15 +3810,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {!policyLoading&&heldPolicies.filter(p=>p.premium==null).map(policy=>{
         const expanded = expandedPolicyId===policy.id
         return (
-        <div key={policy.id} style={{margin:'16px 16px 0',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'16px',overflow:'hidden'}}>
-          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+        <div key={policy.id} style={{margin:'0 16px 8px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
+          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Policy on file':'已存檔保單'}</div>
-              <div style={{fontSize:'14px',fontWeight:700,marginTop:'2px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
+              <div style={{fontSize:'13px',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
             </div>
-            <span style={{fontSize:'11px',color:C.textMuted,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
+            <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>
-          {expanded&&<div style={{padding:'0 18px 18px'}}>
+          {expanded&&<div style={{padding:'0 14px 14px'}}>
             {policy.policy_number&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{isEn?'Policy #':'保單編號'} {policy.policy_number}</div>}
             {/* Real gap this closes: nothing on this screen ever told a
                 patient whether their own plan bills the clinic directly or
@@ -3857,18 +3855,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           : waitingOnAgent ? (isEn?'Renewal in progress':'續保處理中')
           : (isEn?'Active':'生效中')
         return (
-        <div key={policy.id} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'16px',overflow:'hidden',color:'#fff'}}>
-          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'16px 20px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+        <div key={policy.id} style={{margin:'0 16px 8px',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
+          <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:'10px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{activePolicy.plan_name}</div>
-              <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginTop:'4px'}}>
-                <div style={{fontSize:'17px',fontWeight:700}}>HK${activePolicy.premium}/mo</div>
+              <div style={{fontSize:'10px',opacity:0.7,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{activePolicy.plan_name}</div>
+              <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginTop:'2px'}}>
+                <div style={{fontSize:'15px',fontWeight:700}}>HK${activePolicy.premium}/mo</div>
                 <div style={{fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'20px',background:readyToSign?'rgba(255,200,0,0.25)':'rgba(255,255,255,0.15)'}}>{statusLabel}</div>
               </div>
             </div>
-            <span style={{fontSize:'11px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
+            <span style={{fontSize:'10px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>
-          {expanded&&<div style={{padding:'0 20px 20px'}}>
+          {expanded&&<div style={{padding:'0 14px 14px'}}>
           <div style={{fontSize:'12px',opacity:0.8}}>{isEn?`Renews ${new Date(activePolicy.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`續保日期 ${new Date(activePolicy.renewal_date).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`}</div>
           <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',opacity:0.9}}>
             {activePolicy.insurance_plans?.billing_model==='reimbursement'
@@ -4016,10 +4014,17 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               </div>
             )}
             {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
+            {/* Real gap this closes: a filled green "Quote immediately"
+                sitting between two plain buttons read as a selection
+                state ("I thought I selected, turns green") rather than a
+                third, independent action. None of these three are a
+                toggle - they're separate next steps - so all three now
+                share the same plain styling, and the fast path is marked
+                with an icon instead of a color that implied "chosen." */}
             {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&<div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              {!plan.requiresAgent&&<Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>Quote immediately</Btn>}
-              <Btn variant={plan.requiresAgent?'primary':undefined} style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>
+              {!plan.requiresAgent&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>⚡ Quote immediately</Btn>}
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>
             </div>}
 
             {/* Shared consent + self-declared conditions form - same
@@ -4157,9 +4162,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           declaredConditions={suitabilityResults[purchaseOpenIndex]?.declaredConditions||[]}
           waitingPeriodDays={visiblePlans[purchaseOpenIndex].waitingPeriodDays}
           preExistingConditionPolicy={visiblePlans[purchaseOpenIndex].preExistingConditionPolicy}
-          contractUrl={visiblePlans[purchaseOpenIndex].contractTemplatePath}
-          onViewContract={()=>handleViewPlanContract(visiblePlans[purchaseOpenIndex])}
-          onAccept={()=>{setPurchaseHealthDeclaration(true);setPurchaseContractViewed(true);setTermsModalOpen(false)}}
+          additionalTerms={visiblePlans[purchaseOpenIndex].additionalTerms}
+          onAccept={()=>{setPurchaseHealthDeclaration(true);setTermsModalOpen(false)}}
         />}
 
         {/* Search all plans */}
