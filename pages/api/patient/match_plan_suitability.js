@@ -40,6 +40,38 @@ async function polishSummaryWithAI(ruleSummary, verdict, planName) {
   }
 }
 
+// Same tiered pattern as everywhere else in this app: the rule engine
+// above (keyword/list matching against covered_conditions, exclusion
+// policy, insurer_flags) is always the real check and never overridden.
+// This is a second, advisory-only pass - catches phrasing a literal
+// keyword match misses (e.g. "I take blood thinners" doesn't match any
+// configured exclusion string, but a human underwriter would still want
+// to see it). It can only ever ADD a note and softly elevate an
+// otherwise-clean "suitable" to "worth a look" - it can never downgrade,
+// invent a condition nobody declared, or move anything to needs_review
+// (that stays reserved for the deterministic matches, which are
+// auditable; this isn't).
+async function screenWithAI(declaredConditions, historyConditions, planName) {
+  const allText = [...(declaredConditions||[]), ...(historyConditions||[])].filter(Boolean)
+  if (!process.env.ANTHROPIC_API_KEY || allText.length === 0) return { concern: null }
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    const client = new Anthropic()
+    const response = await client.messages.create({
+      model: 'claude-opus-5',
+      max_tokens: 150,
+      output_config: { effort: 'low' },
+      system: 'You are an advisory screening pass for a health insurance quote, checking a list of a patient\'s declared/history conditions for anything a human underwriter would want a closer look at (e.g. a serious chronic condition, a treatment implying higher risk) that a simple keyword match might phrase differently and miss. You do NOT decide coverage or make the actual call - just flag what deserves a second look. Reply with either the single word NONE, or one short plain sentence naming the concern. Never invent a condition that is not in the list. Never mention plan coverage terms - you were not given them.',
+      messages: [{ role: 'user', content: `Plan: ${planName}\nDeclared/history items: ${allText.join(', ')}` }],
+    })
+    const text = response.content.find(b => b.type === 'text')?.text?.trim()
+    if (!text || /^none\.?$/i.test(text)) return { concern: null }
+    return { concern: text }
+  } catch (e) {
+    return { concern: null }
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode } = req.body || {}
@@ -54,7 +86,7 @@ export default async function handler(req, res) {
   if (!['auto', 'agent'].includes(mode)) return res.status(400).json({ status: 'ERROR', message: "mode must be 'auto' or 'agent'." })
 
   const { data: plan } = await supabase.from('insurance_plans')
-    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurance_plan_pricing_tiers(*)')
+    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurer_flags, contract_template_url, insurance_plan_pricing_tiers(*)')
     .eq('id', planId).maybeSingle()
   if (!plan) return res.status(404).json({ status: 'ERROR', message: 'Plan not found.' })
   if (mode === 'auto' && plan.requires_agent) {
@@ -76,7 +108,8 @@ export default async function handler(req, res) {
   // "talk to an agent" inquiry for a closer look, but it never flips an
   // automated quote on its own.
   const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
-  const { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
+  let { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
+  let verdict = result.verdict
 
   // Real gap found live-testing: an agent had no way to actually review a
   // patient's consented visit history for an inquiry - only a computed
@@ -86,6 +119,7 @@ export default async function handler(req, res) {
   // gets the real snapshot, not just a derived note.
   let historyContextSummary = null
   let historyRecordsSnapshot = null
+  let historyConditions = []
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
       .select('diagnosis, date_of_record').eq('patient_id', patientId).not('diagnosis', 'is', null)
@@ -93,13 +127,24 @@ export default async function handler(req, res) {
     if (records && records.length > 0) {
       historyRecordsSnapshot = records.map(r => ({ diagnosis: r.diagnosis, date: r.date_of_record }))
     }
-    const historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
+    historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
     if (historyConditions.length > 0) {
       const historyRead = matchPlanSuitability({ plan, patientAge: age, conditions: historyConditions })
       if (historyRead.excludedConditions.length > 0 || historyRead.uncoveredConditions.length > 0) {
         historyContextSummary = `From the patient's consented visit history (not self-declared, for review only): ${historyRead.summary}`
       }
     }
+  }
+
+  // Advisory AI screening, both modes - see screenWithAI's own comment.
+  // Runs for both talk-to-an-agent and the fully-automated path, per the
+  // product ask: the automated path has no human in the loop otherwise,
+  // so this is the one chance to catch something a literal keyword match
+  // would miss before the patient sees a clean "suitable" verdict.
+  const { concern } = await screenWithAI(declaredConditions, historyConditions, plan.plan_name)
+  if (concern) {
+    summary = `${summary} AI screening note (unverified - worth a human check): ${concern}`
+    if (verdict === 'suitable') verdict = 'suitable_with_notes'
   }
 
   const inquiryPayload = {
@@ -110,7 +155,7 @@ export default async function handler(req, res) {
     status: 'new', mode, is_switch_request: !!isSwitchRequest,
     consent_history_shared_at: consentHistoryShared ? new Date().toISOString() : null,
     declared_conditions: declaredConditions || [],
-    suitability_verdict: result.verdict, suitability_summary: summary,
+    suitability_verdict: verdict, suitability_summary: summary,
     quoted_premium_hkd: result.quotedPremium, used_ai: usedAI,
     history_context_summary: historyContextSummary, history_records_snapshot: historyRecordsSnapshot,
   }
@@ -130,6 +175,7 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     status: 'OK', inquiryId: inquiry.id,
-    verdict: result.verdict, summary, quotedPremium: result.quotedPremium, usedAI,
+    verdict, summary, quotedPremium: result.quotedPremium, usedAI,
+    hasContractTemplate: !!plan.contract_template_url,
   })
 }

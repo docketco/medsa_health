@@ -295,6 +295,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [referralFee,setReferralFee]=useState('')
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+  // Mirrors what the automated patient-side purchase now also collects
+  // (see PatientApp.jsx's purchase flow) - an agent-issued policy should
+  // carry the same details, not less, than one a patient bought without
+  // any human involved at all.
+  const [wardClass,setWardClass]=useState('')
+  const [paymentFrequency,setPaymentFrequency]=useState('monthly')
+  const [healthDeclarationAck,setHealthDeclarationAck]=useState(false)
 
   // ── Package builder (phase 6) ── real plans from this agent's own
   // basket (a team's authorized subset, or - independent/no-team - the
@@ -336,7 +343,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
-      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, contract_template_url, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
@@ -394,6 +401,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       deductibleId: builderDeductibleId||null, deductibleHkd: builderDeductible?.deductible_hkd??null,
       riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
       commissionRatePct: builderPlan.commission_rate_pct,
+      contractTemplateUrl: builderPlan.contract_template_url||null,
     }])
     setBuilderPlanId('')
   }
@@ -467,6 +475,15 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
             inquiry_id: prefillInquiry?.id || null,
             broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
             referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
+            ward_class: wardClass||null, payment_frequency: paymentFrequency,
+            health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
+            // The insurer's own contract template is already on file for
+            // this plan - no separate "agent uploads a contract" step
+            // needed at issuance (unlike a renewal, where a genuinely new
+            // document is being prepared). Patient signs it the same way
+            // a renewal contract gets signed - see PatientApp.jsx.
+            contract_file_path: li.contractTemplateUrl||null,
+            contract_ready_at: li.contractTemplateUrl ? new Date().toISOString() : null,
           }).select().maybeSingle()
           if (pErr) throw pErr
           if (li.riderIds.length > 0) {
@@ -488,6 +505,8 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           inquiry_id: prefillInquiry?.id || null,
           broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
           referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
+          ward_class: wardClass||null, payment_frequency: paymentFrequency,
+          health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
         })
         if (insErr) throw insErr
       }
@@ -593,6 +612,30 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         </div>
       </div>
 
+      <SecLabel>Coverage details</SecLabel>
+      <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Ward class</div>
+          <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}>
+            <option value="">Not set</option>
+            <option value="general">General ward</option>
+            <option value="semi_private">Semi-private</option>
+            <option value="private">Private</option>
+          </select>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Payment frequency</div>
+          <select value={paymentFrequency} onChange={e=>setPaymentFrequency(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}>
+            <option value="monthly">Monthly</option>
+            <option value="annual">Annual</option>
+          </select>
+        </div>
+      </div>
+      <label style={{display:'flex',alignItems:'flex-start',gap:'8px',marginBottom:'20px',cursor:'pointer'}}>
+        <input type="checkbox" checked={healthDeclarationAck} onChange={e=>setHealthDeclarationAck(e.target.checked)} style={{marginTop:'2px'}}/>
+        <div style={{fontSize:'12px',color:C.text,lineHeight:1.5}}>I've walked the patient through this plan's exclusions, waiting periods and pre-existing condition terms before issuing this policy.</div>
+      </label>
+
       <SecLabel>{lineItems.length>0?'Or add a plan not in the basket':'Plan details (manual, no basket plan available)'}</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'16px'}}>
         {agent.agent_type==='independent'&&lineItems.length===0&&<select value={selectedInsurer||''} onChange={e=>setSelectedInsurer(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}>
@@ -630,7 +673,8 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||(lineItems.length===0&&(!planName||(agent.agent_type==='independent'&&!selectedInsurer)))||referralFeeExceedsCap}>{saving?'Saving...':lineItems.length>0?`Save package (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Save policy'}</Btn>
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||(lineItems.length===0&&(!planName||(agent.agent_type==='independent'&&!selectedInsurer)))||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':lineItems.length>0?`Save package (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Save policy'}</Btn>
+      {status==='active'&&!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'6px'}}>Acknowledge the health declaration above to issue an active policy - a quote doesn't need it yet.</div>}
     </PageWrap>
   )
 }

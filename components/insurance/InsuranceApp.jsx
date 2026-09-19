@@ -192,8 +192,11 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
   const [customCategory,setCustomCategory]=useState('')
+  const [customFlag,setCustomFlag]=useState('')
+  const [uploadingContract,setUploadingContract]=useState(false)
+  const [contractUploadError,setContractUploadError]=useState(null)
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
 
@@ -223,10 +226,33 @@ function PlanManager({ company }) {
     setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
     setCustomCategory('')
   }
+  // The insurer's own "always flag this" list - separate from covered
+  // categories, matched against a patient's declared/history conditions
+  // by lib/planSuitability.js regardless of the plan's own coverage
+  // terms. Free-text since this is the insurer naming whatever they
+  // personally want a human to see, not a fixed list Medsa controls.
+  function addFlag() {
+    const val = customFlag.trim()
+    if (!val || form.insurer_flags.includes(val)) return
+    setForm(f => ({ ...f, insurer_flags: [...f.insurer_flags, val] }))
+    setCustomFlag('')
+  }
+  function removeFlag(val) {
+    setForm(f => ({ ...f, insurer_flags: f.insurer_flags.filter(x=>x!==val) }))
+  }
+  async function handleUploadContractTemplate(file) {
+    setUploadingContract(true)
+    setContractUploadError(null)
+    const path = `plan-templates/${company.id}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('policy-contracts').upload(path, file)
+    if (error) { setContractUploadError(error.message); setUploadingContract(false); return }
+    setForm(f => ({ ...f, contract_template_url: path, contract_template_name: file.name }))
+    setUploadingContract(false)
+  }
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -240,6 +266,8 @@ function PlanManager({ company }) {
       covered_categories: plan.covered_categories||[],
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
       requires_agent: !!plan.requires_agent,
+      insurer_flags: plan.insurer_flags||[],
+      contract_template_url: plan.contract_template_url||'', contract_template_name: plan.contract_template_name||'',
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -270,6 +298,9 @@ function PlanManager({ company }) {
       // Set once here, it now feeds every quote/policy for this plan.
       commission_rate_pct: form.commission_rate_pct!=='' ? parseFloat(form.commission_rate_pct) : null,
       requires_agent: form.requires_agent,
+      insurer_flags: form.insurer_flags,
+      contract_template_url: form.contract_template_url || null,
+      contract_template_name: form.contract_template_name || null,
     }
     let planId = editingId
     if (editingId) {
@@ -291,7 +322,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], contract_template_url:'', contract_template_name:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -364,6 +395,29 @@ function PlanManager({ company }) {
               <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
             </div>
           </label>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Always flag for review</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Anything a patient declares that matches one of these forces a "needs review" verdict on both the automated and talk-to-an-agent paths, regardless of the plan's own coverage terms above - your own call on what always needs a human, not something Medsa or an agent overrides.</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
+              {form.insurer_flags.map(flag=>(
+                <div key={flag} onClick={()=>removeFlag(flag)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.amber,color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',gap:'6px'}}>{flag}<span style={{fontWeight:700}}>×</span></div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:'6px'}}>
+              <input value={customFlag} onChange={e=>setCustomFlag(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addFlag())} placeholder="e.g. extreme sports, age over 65" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              <button onClick={addFlag} disabled={!customFlag.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+            </div>
+          </div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Policy contract (for patients to sign when buying)</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Uploaded once here, not per sale - every policy issued for this plan (agent-sold or automated) points a patient back to this same document to review and sign electronically before it goes active.</div>
+            {form.contract_template_name&&<div style={{fontSize:'12px',color:C.green,marginBottom:'6px'}}>✓ {form.contract_template_name}</div>}
+            <label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
+              {uploadingContract?'Uploading…':(form.contract_template_name?'Replace contract':'Upload contract (PDF or image)')}
+              <input type="file" accept="image/*,.pdf" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleUploadContractTemplate(e.target.files[0])}/>
+            </label>
+            {contractUploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {contractUploadError}</div>}
+          </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
             {PLAN_MANAGER_CATEGORIES.map(cat=>(
@@ -407,7 +461,7 @@ function PlanManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}
+            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.contract_template_name?' · Contract on file':' · No contract uploaded'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
