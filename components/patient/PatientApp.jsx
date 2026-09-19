@@ -3369,6 +3369,53 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     setInquiryForm({ index: i, mode, isSwitch: !!isSwitch })
     setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText(''); setFormMessage('')
   }
+  // Finishing the auto-quote into a real held policy - previously the
+  // automated path only ever produced a quote card, never an actual
+  // policy. Ward class/payment frequency/health declaration mirror what
+  // the agent side now also collects (see NewPolicyScreen), and the
+  // contract (when the insurer uploaded one for this plan) has to
+  // actually be opened before the declaration can be checked.
+  const [purchaseOpenIndex,setPurchaseOpenIndex]=useState(null)
+  const [purchaseWardClass,setPurchaseWardClass]=useState('')
+  const [purchasePaymentFrequency,setPurchasePaymentFrequency]=useState('monthly')
+  const [purchaseHealthDeclaration,setPurchaseHealthDeclaration]=useState(false)
+  const [purchaseContractViewed,setPurchaseContractViewed]=useState(false)
+  const [purchasing,setPurchasing]=useState(false)
+  const [purchasedIndices,setPurchasedIndices]=useState(new Set())
+  const [purchaseError,setPurchaseError]=useState(null)
+
+  function openPurchaseForm(i) {
+    setPurchaseOpenIndex(i)
+    setPurchaseWardClass(''); setPurchasePaymentFrequency('monthly'); setPurchaseHealthDeclaration(false); setPurchaseContractViewed(false); setPurchaseError(null)
+  }
+  async function handleViewPlanContract(plan) {
+    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(plan.contractTemplatePath, 300)
+    if (error || !data?.signedUrl) { setPurchaseError('Could not open the contract - try again shortly.'); return }
+    window.open(data.signedUrl, '_blank')
+    setPurchaseContractViewed(true)
+  }
+  async function handleCompletePurchase(i, plan, result) {
+    if (!purchaseHealthDeclaration) return
+    setPurchasing(true)
+    setPurchaseError(null)
+    try {
+      const res = await fetch('/api/patient/complete_auto_purchase', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          inquiryId: result.inquiryId, patientId: patient.id, planId: plan.id,
+          wardClass: purchaseWardClass || null, paymentFrequency: purchasePaymentFrequency,
+          healthDeclarationAcknowledged: purchaseHealthDeclaration,
+        }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setPurchaseError(data.message || 'Could not complete the purchase.'); return }
+      setPurchasedIndices(prev => new Set(prev).add(i))
+      setPurchaseOpenIndex(null)
+      loadPolicy()
+    } finally {
+      setPurchasing(false)
+    }
+  }
   function toggleFormCondition(c) {
     setFormNoneApply(false)
     setFormConditions(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
@@ -3410,7 +3457,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, hasContractTemplate: data.hasContractTemplate } }))
         setInquired(i)
         setInquiryForm(null)
       }
@@ -3611,18 +3658,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     )
   }
 
-  async function handleSignContract() {
-    if (!activePolicy) return
+  // Real gap this closes: previously only ever acted on activePolicy
+  // (heldPolicies[0]) - fine while a contract-sign step only ever
+  // happened during a renewal (rare, one policy at a time in practice),
+  // but now every newly-issued policy can carry one too, so signing the
+  // wrong held policy's contract was a real risk once more than one is
+  // ever awaiting signature at once.
+  async function handleSignContract(policy) {
+    const target = policy || activePolicy
+    if (!target) return
     const signedAt = new Date().toISOString()
-    setActivePolicy({...activePolicy, patient_signed_at: signedAt})
-    await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', activePolicy.id)
+    await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', target.id)
+    loadPolicy()
   }
 
   const [viewError,setViewError]=useState(null)
-  async function handleViewContract() {
-    if (!activePolicy?.contract_file_path) return
+  async function handleViewContract(policy) {
+    const target = policy || activePolicy
+    if (!target?.contract_file_path) return
     setViewError(null)
-    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(activePolicy.contract_file_path, 300) // link valid 5 minutes
+    const { data, error } = await supabase.storage.from('policy-contracts').createSignedUrl(target.contract_file_path, 300) // link valid 5 minutes
     if (error || !data?.signedUrl) { setViewError('Could not open the contract - ask your agent to check the upload.'); return }
     window.open(data.signedUrl, '_blank')
   }
@@ -3689,6 +3744,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0,
           requiresAgent: !!p.requires_agent,
+          contractTemplatePath: p.contract_template_url || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
@@ -3768,7 +3824,10 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       {!policyLoading&&heldPolicies.filter(p=>p.premium!=null).map(policy=>{
         const daysLeft = Math.ceil((new Date(policy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
         const inProgress = policy.status==='renewal_in_progress'
-        const readyToSign = inProgress && policy.contract_ready_at && !policy.patient_signed_at
+        // Not renewal-gated any more - a freshly-issued policy (agent-
+        // sold, contract already on file at issuance) needs the exact
+        // same sign step a renewal does, not just a renewal in progress.
+        const readyToSign = !!policy.contract_ready_at && !policy.patient_signed_at
         const waitingOnAgent = inProgress && !policy.contract_ready_at
         const activePolicy = policy
         return (
@@ -3791,8 +3850,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             <div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Review the document below, then confirm once you're ready to sign.":'請先查閱以下文件，準備好後確認簽署。'}</div>
             {viewError&&<div style={{fontSize:'11px',color:'#ffb3b3',marginBottom:'10px'}}>{viewError}</div>}
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={handleViewContract}>{isEn?'View contract':'查看合約'}</Btn>
-              <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={handleSignContract}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
+              <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={()=>handleViewContract(policy)}>{isEn?'View contract':'查看合約'}</Btn>
+              <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={()=>handleSignContract(policy)}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
             </div>
           </div>}
 
@@ -3981,6 +4040,42 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
               {suitabilityResults[i].usedAI===false&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>}
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',fontStyle:'italic'}}>This is an estimate, not a bound quote or advice. Ready to proceed, or want a second opinion? You can still reach out to a licensed agent from "My inquiries".</div>
+              {/* Real gap this closes: the automated path only ever
+                  produced a quote card before - nothing ever became a
+                  real held policy. A "needs review" read is exactly the
+                  case this stays closed for - that's what the agent path
+                  is for. */}
+              {suitabilityResults[i].verdict!=='needs_review'&&(purchasedIndices.has(i)
+                ? <div style={{marginTop:'10px',fontSize:'11px',color:C.green,fontWeight:600}}>✓ Purchased - see it under "Policy on file" above.</div>
+                : purchaseOpenIndex===i
+                  ? <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
+                      {plan.contractTemplatePath&&<div style={{marginBottom:'10px'}}>
+                        <Btn style={{width:'100%',fontSize:'12px'}} onClick={()=>handleViewPlanContract(plan)}>{purchaseContractViewed?'✓ Contract reviewed - view again':'View the policy contract'}</Btn>
+                      </div>}
+                      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+                        <select value={purchaseWardClass} onChange={e=>setPurchaseWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+                          <option value="">Ward class (optional)</option>
+                          <option value="general">General ward</option>
+                          <option value="semi_private">Semi-private</option>
+                          <option value="private">Private</option>
+                        </select>
+                        <select value={purchasePaymentFrequency} onChange={e=>setPurchasePaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+                          <option value="monthly">Pay monthly</option>
+                          <option value="annual">Pay annually</option>
+                        </select>
+                      </div>
+                      <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
+                        <input type="checkbox" checked={purchaseHealthDeclaration} onChange={e=>setPurchaseHealthDeclaration(e.target.checked)} disabled={!!plan.contractTemplatePath&&!purchaseContractViewed} style={{marginTop:'2px'}}/>
+                        I've declared all relevant medical conditions above and understand this plan's exclusions and waiting periods.
+                      </label>
+                      {purchaseError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{purchaseError}</div>}
+                      <div style={{display:'flex',gap:'8px'}}>
+                        <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPurchaseOpenIndex(null)}>Cancel</Btn>
+                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Completing…':'Confirm & buy'}</Btn>
+                      </div>
+                    </div>
+                  : <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>openPurchaseForm(i)}>Buy this plan</Btn>
+              )}
             </div>}
             {inquired===i&&suitabilityResults[i]?.mode==='agent'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
               <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
