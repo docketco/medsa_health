@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import C from '../shared/colours'
+import TermsAgreementModal from '../shared/TermsAgreementModal'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -272,11 +273,9 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [patientSearch,setPatientSearch]=useState(prefillInquiry?.applicant_full_name || '')
   const [foundPatient,setFoundPatient]=useState(prefillInquiry?.patient_id ? { id: prefillInquiry.patient_id, full_name: prefillInquiry.applicant_full_name, medsa_id: null } : null)
   const [patientAge,setPatientAge]=useState(null)
+  const [patientDetails,setPatientDetails]=useState(null) // {date_of_birth, phone, email, hkid} - what an agent actually needs to see to work the case
   const [insurers,setInsurers]=useState([])
-  const [selectedInsurer,setSelectedInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:null)
-  const [planName,setPlanName]=useState(prefillInquiry?.insurance_plans?.plan_name || '')
   const [policyNumber,setPolicyNumber]=useState('')
-  const [premium,setPremium]=useState('')
   const [startDate,setStartDate]=useState('')
   const [renewalDate,setRenewalDate]=useState('')
   const [status,setStatus]=useState('quote')
@@ -284,13 +283,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   // real inquiry (an unsolicited manually-entered policy has no referral
   // to pay a fee for). broker_commission_hkd used to be a number the
   // agent typed themselves - backwards, since commission is the
-  // insurer's own rate, not the agent's to declare. For a real basket
-  // plan it's now computed from the plan's own commission_rate_pct
-  // (below) and this field just displays it; it only stays free-text
-  // for the fully-manual "plan not in basket" path, where Medsa has no
-  // record of that plan's rate at all. referral_fee_hkd is still capped
-  // at 50% of whichever commission applies, per the Insurance
-  // Authority's published referral-fee benchmark.
+  // insurer's own rate, not the agent's to declare. It's now always
+  // computed from the plan's own commission_rate_pct (below) and this
+  // field just displays it - every line item on a policy now traces
+  // back to a real plan_id, so there's always a real rate to compute
+  // from. referral_fee_hkd is still capped at 50% of whichever
+  // commission applies, per the Insurance Authority's published
+  // referral-fee benchmark.
   const [brokerCommission,setBrokerCommission]=useState('')
   const [referralFee,setReferralFee]=useState('')
   const [saving,setSaving]=useState(false)
@@ -302,12 +301,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [wardClass,setWardClass]=useState('')
   const [paymentFrequency,setPaymentFrequency]=useState('monthly')
   const [healthDeclarationAck,setHealthDeclarationAck]=useState(false)
+  const [termsModalOpen,setTermsModalOpen]=useState(false)
 
   // ── Package builder (phase 6) ── real plans from this agent's own
   // basket (a team's authorized subset, or - independent/no-team - the
   // whole institution basket), with real riders/deductible options and
-  // multi-plan bundling. Purely additive: an agent can still ignore all
-  // of this and type a bare plan name/premium below, same as before.
+  // multi-plan bundling. A plan outside the basket is still only ever
+  // added via the real cross-insurer search below, never typed in.
   const [basketPlans,setBasketPlans]=useState([])
   const [builderInsurer,setBuilderInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:'')
   const [builderPlanId,setBuilderPlanId]=useState('')
@@ -317,6 +317,19 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [builderSelectedRiderIds,setBuilderSelectedRiderIds]=useState(new Set())
   const [lineItems,setLineItems]=useState([]) // [{planId, planName, deductibleId, deductibleHkd, riderIds:[], riderNames:[], premium}]
   const [bundleDiscount,setBundleDiscount]=useState('')
+  // Real gap found live-testing: the old "manual plan" section let an
+  // agent just type a plan name and a premium into existence, unlinked
+  // to any real plan_id - no riders, no contract, no real commission
+  // rate, and the user's own read was right: agents can only ever write
+  // a policy against a plan that actually exists. This replaces that
+  // free-text entry with a real cross-insurer search, so a plan found
+  // outside the agent's basket still has to be a genuine, active,
+  // insurer-published plan - it flows into the exact same
+  // deductible/rider/premium/commission builder below as a basket pick.
+  const [planSearchTerm,setPlanSearchTerm]=useState('')
+  const [planSearchResults,setPlanSearchResults]=useState([])
+  const [planSearching,setPlanSearching]=useState(false)
+  const [searchedPlan,setSearchedPlan]=useState(null)
 
   useEffect(() => {
     if (agent.agent_type==='independent') {
@@ -324,10 +337,18 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     }
   }, [agent.agent_type])
 
+  // Real gap found live-testing: an agent building or converting a policy
+  // had no way to actually see the patient they were writing it for - not
+  // even basic contact details, let alone the declared conditions the
+  // patient's own inquiry already collected. patientAge was already
+  // fetched (for pricing-tier matching) but never shown; this pulls the
+  // rest of what an agent needs to actually work the case.
   useEffect(() => {
-    if (!foundPatient?.id) { setPatientAge(null); return }
-    supabase.from('patients').select('date_of_birth').eq('id', foundPatient.id).maybeSingle().then(({data}) => {
-      if (!data?.date_of_birth) { setPatientAge(null); return }
+    if (!foundPatient?.id) { setPatientAge(null); setPatientDetails(null); return }
+    supabase.from('patients').select('date_of_birth, phone, email, hkid').eq('id', foundPatient.id).maybeSingle().then(({data}) => {
+      if (!data) { setPatientAge(null); setPatientDetails(null); return }
+      setPatientDetails(data)
+      if (!data.date_of_birth) { setPatientAge(null); return }
       const dob = new Date(data.date_of_birth)
       const age = Math.floor((Date.now() - dob.getTime()) / (365.25*24*3600*1000))
       setPatientAge(age)
@@ -343,7 +364,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!builderInsurer) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
-      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, contract_template_url, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+      const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, contract_template_url, waiting_period_days, pre_existing_condition_policy, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
@@ -378,7 +399,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     supabase.from('insurance_plan_deductible_options').select('*').eq('plan_id', builderPlanId).then(({data})=>setBuilderDeductibles(data||[]))
   }, [builderPlanId])
 
-  const builderPlan = basketPlans.find(p=>p.id===builderPlanId)
+  const builderPlan = basketPlans.find(p=>p.id===builderPlanId) || (searchedPlan?.id===builderPlanId ? searchedPlan : null)
   const builderBasePremium = (() => {
     if (!builderPlan) return 0
     const tiers = builderPlan.insurance_plan_pricing_tiers||[]
@@ -402,11 +423,42 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
       commissionRatePct: builderPlan.commission_rate_pct,
       contractTemplateUrl: builderPlan.contract_template_url||null,
+      waitingPeriodDays: builderPlan.waiting_period_days ?? null,
+      preExistingConditionPolicy: builderPlan.pre_existing_condition_policy || null,
     }])
-    setBuilderPlanId('')
+    setBuilderPlanId(''); setSearchedPlan(null); setPlanSearchTerm(''); setPlanSearchResults([])
+    setHealthDeclarationAck(false) // the plan set changed - the declaration has to be reviewed again
   }
   function removeLineItem(i) {
     setLineItems(prev => prev.filter((_,idx)=>idx!==i))
+    setHealthDeclarationAck(false)
+  }
+  // Searches every insurer's active, agent-sellable plans (not just this
+  // agent's own basket) by name - a captive agent still only ever sees
+  // their own institution's plans, matching how the basket picker above
+  // already restricts them.
+  async function searchAllPlans(term) {
+    setPlanSearchTerm(term)
+    setSearchedPlan(null)
+    const q = term.trim()
+    if (!q) { setPlanSearchResults([]); return }
+    setPlanSearching(true)
+    let query = supabase.from('insurance_plans')
+      .select('id, plan_name, company_name, commission_rate_pct, contract_template_url, waiting_period_days, pre_existing_condition_policy, insurance_plan_pricing_tiers(*)')
+      .eq('status','active').eq('self_serve_only', false)
+      .ilike('plan_name', `%${q}%`).limit(10)
+    if (agent.agent_type==='captive' && agent.institutions?.name) query = query.eq('company_name', agent.institutions.name)
+    const { data } = await query
+    setPlanSearching(false)
+    setPlanSearchResults(data||[])
+  }
+  async function selectSearchedPlan(plan) {
+    const { data: company } = await supabase.from('insurance_companies').select('institution_ref_id').eq('name', plan.company_name).maybeSingle()
+    if (!company?.institution_ref_id) { setError(`Could not find ${plan.company_name}'s institution record on Medsa - contact Medsa admin before selling this plan.`); return }
+    setSearchedPlan(plan)
+    setBuilderInsurer(company.institution_ref_id)
+    setBuilderPlanId(plan.id)
+    setPlanSearchTerm(''); setPlanSearchResults([])
   }
   const lineItemsTotal = lineItems.reduce((s,l)=>s+l.premium,0)
   const bundleDiscountNum = parseFloat(bundleDiscount) || 0
@@ -450,65 +502,55 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     setFoundPatient(data||null)
   }
 
+  async function handleViewLineItemContract(path) {
+    if (!path) return
+    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
   async function handleSave() {
+    // No more freehand fallback - every policy has to trace back to at
+    // least one real plan_id, added via the basket or the cross-insurer
+    // search above. If neither ever produced a line item, there is
+    // nothing real to save.
+    if (lineItems.length === 0) { setError('Add at least one real plan first - from your basket or by searching.'); return }
     setSaving(true)
     setError(null)
     try {
-      if (lineItems.length > 0) {
-        // Package path: one policy_bundles row when combining, one
-        // agent_policies row per plan, riders linked per policy.
-        let bundleId = null
-        if (lineItems.length > 1) {
-          const { data: bundle, error: bErr } = await supabase.from('policy_bundles').insert({
-            agent_id: agent.id, patient_id: foundPatient?.id||null, patient_name: foundPatient?.full_name||patientSearch,
-            discount_hkd: bundleDiscountNum, notes: null,
-          }).select().maybeSingle()
-          if (bErr) throw bErr
-          bundleId = bundle.id
-        }
-        for (const li of lineItems) {
-          const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
-            agent_id: agent.id, institution_id: li.institutionId, patient_id: foundPatient?.id||null,
-            patient_name: foundPatient?.full_name||patientSearch, plan_name: li.planName, plan_id: li.planId,
-            policy_number: policyNumber||null, status, premium: li.premium, deductible_hkd: li.deductibleHkd,
-            start_date: startDate||null, renewal_date: renewalDate||null, bundle_id: bundleId,
-            inquiry_id: prefillInquiry?.id || null,
-            broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
-            referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
-            ward_class: wardClass||null, payment_frequency: paymentFrequency,
-            health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
-            // The insurer's own contract template is already on file for
-            // this plan - no separate "agent uploads a contract" step
-            // needed at issuance (unlike a renewal, where a genuinely new
-            // document is being prepared). Patient signs it the same way
-            // a renewal contract gets signed - see PatientApp.jsx.
-            contract_file_path: li.contractTemplateUrl||null,
-            contract_ready_at: li.contractTemplateUrl ? new Date().toISOString() : null,
-          }).select().maybeSingle()
-          if (pErr) throw pErr
-          if (li.riderIds.length > 0) {
-            await supabase.from('agent_policy_riders').insert(li.riderIds.map(riderId => ({ policy_id: pol.id, rider_id: riderId })))
-          }
-        }
-      } else {
-        const { error: insErr } = await supabase.from('agent_policies').insert({
-          agent_id: agent.id,
-          institution_id: selectedInsurer,
-          patient_id: foundPatient?.id || null,
-          patient_name: foundPatient?.full_name || patientSearch,
-          plan_name: planName,
-          policy_number: policyNumber || null,
-          status,
-          premium: parseFloat(premium) || null,
-          start_date: startDate || null,
-          renewal_date: renewalDate || null,
+      // One policy_bundles row when combining multiple plans, one
+      // agent_policies row per plan, riders linked per policy.
+      let bundleId = null
+      if (lineItems.length > 1) {
+        const { data: bundle, error: bErr } = await supabase.from('policy_bundles').insert({
+          agent_id: agent.id, patient_id: foundPatient?.id||null, patient_name: foundPatient?.full_name||patientSearch,
+          discount_hkd: bundleDiscountNum, notes: null,
+        }).select().maybeSingle()
+        if (bErr) throw bErr
+        bundleId = bundle.id
+      }
+      for (const li of lineItems) {
+        const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
+          agent_id: agent.id, institution_id: li.institutionId, patient_id: foundPatient?.id||null,
+          patient_name: foundPatient?.full_name||patientSearch, plan_name: li.planName, plan_id: li.planId,
+          policy_number: policyNumber||null, status, premium: li.premium, deductible_hkd: li.deductibleHkd,
+          start_date: startDate||null, renewal_date: renewalDate||null, bundle_id: bundleId,
           inquiry_id: prefillInquiry?.id || null,
           broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
           referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
           ward_class: wardClass||null, payment_frequency: paymentFrequency,
           health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
-        })
-        if (insErr) throw insErr
+          // The insurer's own contract template is already on file for
+          // this plan - no separate "agent uploads a contract" step
+          // needed at issuance (unlike a renewal, where a genuinely new
+          // document is being prepared). Patient signs it the same way
+          // a renewal contract gets signed - see PatientApp.jsx.
+          contract_file_path: li.contractTemplateUrl||null,
+          contract_ready_at: li.contractTemplateUrl ? new Date().toISOString() : null,
+        }).select().maybeSingle()
+        if (pErr) throw pErr
+        if (li.riderIds.length > 0) {
+          await supabase.from('agent_policy_riders').insert(li.riderIds.map(riderId => ({ policy_id: pol.id, rider_id: riderId })))
+        }
       }
       onSaved()
     } catch (e) {
@@ -530,8 +572,32 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search by name or Medsa ID" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         <Btn onClick={searchPatient}>Search</Btn>
       </div>
-      {foundPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.green}}>Matched: {foundPatient.full_name} ({foundPatient.medsa_id})</div>}
+      {/* Real gap this closes: an agent building or converting a policy
+          used to see just a name and a Medsa ID - no age, no way to
+          reach the patient, and (when converting a real inquiry)
+          nothing of what the patient had already declared. Everything
+          below is real data already on file, never agent-typed. */}
+      {foundPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px',fontSize:'12px',color:C.text}}>
+        <div style={{color:C.green,fontWeight:600,marginBottom:'2px'}}>Matched: {foundPatient.full_name} {foundPatient.medsa_id?`(${foundPatient.medsa_id})`:''}</div>
+        <div style={{color:C.textSub,fontSize:'11px',lineHeight:1.6}}>
+          {patientAge!=null&&`Age ${patientAge}`}
+          {patientDetails?.phone&&` · ${patientDetails.phone}`}
+          {patientDetails?.email&&` · ${patientDetails.email}`}
+          {patientDetails?.hkid&&` · HKID ${patientDetails.hkid}`}
+        </div>
+      </div>}
       {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually below and continue without linking a Medsa profile.</div>}
+
+      {prefillInquiry&&(prefillInquiry.suitability_verdict||(prefillInquiry.declared_conditions||[]).length>0)&&<div style={{background:prefillInquiry.suitability_verdict==='needs_review'?C.amberLight:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',lineHeight:1.6}}>
+        <div style={{fontWeight:600,marginBottom:'4px',color:prefillInquiry.suitability_verdict==='needs_review'?C.amber:C.green}}>
+          {prefillInquiry.suitability_verdict==='suitable'&&'✓ Pre-checked: suitable'}
+          {prefillInquiry.suitability_verdict==='suitable_with_notes'&&'◇ Pre-checked: likely suitable'}
+          {prefillInquiry.suitability_verdict==='needs_review'&&'⚠ Pre-checked: needs a closer look'}
+        </div>
+        {prefillInquiry.suitability_summary&&<div style={{color:C.textSub}}>{prefillInquiry.suitability_summary}</div>}
+        {(prefillInquiry.declared_conditions||[]).length>0&&<div style={{marginTop:'4px',color:C.textMuted}}>Declared: {prefillInquiry.declared_conditions.join(', ')}</div>}
+        {prefillInquiry.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{prefillInquiry.history_context_summary}</div>}
+      </div>}
 
       <SecLabel>Build from basket (real plans, riders, deductibles)</SecLabel>
       <Card style={{padding:'16px',marginBottom:'8px'}}>
@@ -542,10 +608,28 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
             ? <option value={agent.institution_id}>{agent.institutions?.name||'Your insurer'}</option>
             : insurers.map(ins=><option key={ins.id} value={ins.id}>{ins.name}</option>)}
         </select>
-        <select value={builderPlanId} onChange={e=>setBuilderPlanId(e.target.value)} disabled={!builderInsurer} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}>
+        <select value={searchedPlan?'':builderPlanId} onChange={e=>{setSearchedPlan(null);setBuilderPlanId(e.target.value)}} disabled={!builderInsurer} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}>
           <option value="">{basketPlans.length===0?'No authorized plans in this basket':'Select plan'}</option>
           {basketPlans.map(p=><option key={p.id} value={p.id}>{p.plan_name}</option>)}
         </select>
+        {/* Replaces the old freehand "manual plan" entry - a plan not in
+            this agent's basket still has to be found here, as a real,
+            active, insurer-published plan_id, never typed into existence. */}
+        {!searchedPlan&&<div style={{marginBottom:'8px'}}>
+          <input value={planSearchTerm} onChange={e=>searchAllPlans(e.target.value)} placeholder="Or search any other plan by name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          {planSearching&&<div style={{fontSize:'11px',color:C.textMuted,padding:'6px 0'}}>Searching…</div>}
+          {!planSearching&&planSearchTerm.trim()&&planSearchResults.length===0&&<div style={{fontSize:'11px',color:C.textMuted,padding:'6px 0'}}>No matching active plan found.</div>}
+          {planSearchResults.map(p=>(
+            <div key={p.id} onClick={()=>selectSearchedPlan(p)} style={{padding:'8px 10px',borderRadius:'8px',cursor:'pointer',fontSize:'12px',background:C.beige,marginTop:'6px'}}>
+              <div style={{fontWeight:600}}>{p.plan_name}</div>
+              <div style={{color:C.textMuted,fontSize:'11px'}}>{p.company_name}</div>
+            </div>
+          ))}
+        </div>}
+        {searchedPlan&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'9px 12px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:'12px',fontWeight:600}}>{searchedPlan.plan_name}</div><div style={{fontSize:'11px',color:C.textMuted}}>{searchedPlan.company_name} - found by search, not in your basket</div></div>
+          <span onClick={()=>{setSearchedPlan(null);setBuilderPlanId('')}} style={{fontSize:'11px',color:C.green,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>Change</span>
+        </div>}
         {builderPlan&&<>
           {builderDeductibles.length>0&&<>
             <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Deductible</div>
@@ -631,20 +715,32 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           </select>
         </div>
       </div>
-      <label style={{display:'flex',alignItems:'flex-start',gap:'8px',marginBottom:'20px',cursor:'pointer'}}>
-        <input type="checkbox" checked={healthDeclarationAck} onChange={e=>setHealthDeclarationAck(e.target.checked)} style={{marginTop:'2px'}}/>
-        <div style={{fontSize:'12px',color:C.text,lineHeight:1.5}}>I've walked the patient through this plan's exclusions, waiting periods and pre-existing condition terms before issuing this policy.</div>
-      </label>
+      {/* Real gap this closes: this used to be one inline checkbox
+          sentence, ticked by the agent alone with no real document - not
+          something the agent could actually walk the patient through.
+          Now a real, scrollable declaration screen (Uber-Merchant-
+          onboarding style) built from the plan's own on-file terms and
+          whatever the inquiry already declared, meant to be reviewed
+          together with the patient before issuing an active policy. */}
+      <div style={{marginBottom:'20px'}}>
+        {healthDeclarationAck
+          ? <div style={{fontSize:'12px',color:C.green,fontWeight:600}}>✓ Health declaration & terms reviewed and accepted with the patient.</div>
+          : <Btn style={{width:'100%'}} disabled={lineItems.length===0} onClick={()=>setTermsModalOpen(true)}>{lineItems.length===0?'Add a plan first to review the health declaration':'Review & accept health declaration with patient'}</Btn>}
+      </div>
+      {lineItems.length>0&&<TermsAgreementModal
+        open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={true}
+        planName={lineItems.map(l=>l.planName).join(', ')}
+        declaredConditions={prefillInquiry?.declared_conditions||[]}
+        waitingPeriodDays={lineItems[0]?.waitingPeriodDays}
+        preExistingConditionPolicy={lineItems[0]?.preExistingConditionPolicy}
+        contractUrl={lineItems[0]?.contractTemplateUrl}
+        onViewContract={()=>handleViewLineItemContract(lineItems[0]?.contractTemplateUrl)}
+        onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
+      />}
 
-      <SecLabel>{lineItems.length>0?'Or add a plan not in the basket':'Plan details (manual, no basket plan available)'}</SecLabel>
-      <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'16px'}}>
-        {agent.agent_type==='independent'&&lineItems.length===0&&<select value={selectedInsurer||''} onChange={e=>setSelectedInsurer(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}>
-          <option value="">Select insurer</option>
-          {insurers.map(ins=><option key={ins.id} value={ins.id}>{ins.name}</option>)}
-        </select>}
-        <input value={planName} onChange={e=>setPlanName(e.target.value)} placeholder="Plan name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-        <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number (optional for quotes)" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-        {lineItems.length===0&&<input value={premium} onChange={e=>setPremium(e.target.value)} placeholder="Monthly premium (HK$)" type="number" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>}
+      <SecLabel>Policy number</SecLabel>
+      <div style={{marginBottom:'16px'}}>
+        <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number, once the insurer issues it (optional for quotes)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
       </div>
 
       <SecLabel>Status</SecLabel>
@@ -673,7 +769,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||(lineItems.length===0&&(!planName||(agent.agent_type==='independent'&&!selectedInsurer)))||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':lineItems.length>0?`Save package (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Save policy'}</Btn>
+      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||lineItems.length===0||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':lineItems.length>0?`Save policy (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Add a plan above to save'}</Btn>
       {status==='active'&&!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'6px'}}>Acknowledge the health declaration above to issue an active policy - a quote doesn't need it yet.</div>}
     </PageWrap>
   )
