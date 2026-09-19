@@ -4,6 +4,15 @@ import C from '../shared/colours'
 import { supabase } from '../../lib/supabase'
 import { parseCSV } from '../../lib/csvImport'
 
+// Opening an edit/create form used to leave the view exactly where it
+// was - if that form renders somewhere the user had already scrolled
+// past, nothing visibly happens and it looks like the button did
+// nothing. Called right after the state flip that reveals the form;
+// the timeout waits one tick for that form to actually be in the DOM.
+function scrollFormIntoView(id) {
+  setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+}
+
 // A crash while RENDERING (as opposed to a data-fetch error, which
 // AgentClaimView already catches itself) used to unmount the whole
 // claim-detail tree with zero visible trace - from a tester's
@@ -220,6 +229,7 @@ function PlanManager({ company }) {
     setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
+    scrollFormIntoView('plan-manager-form')
   }
   function startEdit(plan) {
     setEditingId(plan.id)
@@ -236,6 +246,7 @@ function PlanManager({ company }) {
       ? existingTiers.map(t=>({ age_min:String(t.age_min), age_max:String(t.age_max), monthly_premium:String(t.monthly_premium), annual_limit:t.annual_limit!=null?String(t.annual_limit):'' }))
       : [{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
+    scrollFormIntoView('plan-manager-form')
   }
 
   async function handleSubmit() {
@@ -300,6 +311,7 @@ function PlanManager({ company }) {
     <div style={{background:C.beige,flex:1}}>
       {!creating&&<div style={{padding:'16px 16px 0'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
       {creating&&(
+        <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
           <div style={{marginBottom:'12px'}}>
@@ -374,6 +386,7 @@ function PlanManager({ company }) {
             <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':editingId?'Save changes':'Submit plan'}</Btn>
           </div>
         </Card>
+        </div>
       )}
       <SecLabel>Your listed plans</SecLabel>
       <div style={{padding:'0 16px 10px'}}>

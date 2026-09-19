@@ -4141,9 +4141,15 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     // status='pending' only - an approved leave needs to stay visible
     // somewhere so anyone can see who's actually out, not disappear the
     // moment it's approved.
+    // Real bug found live-testing: both queries below filtered only on
+    // institution_source ('clinic_ops') - that column marks which APP
+    // wrote a row, not which CLINIC it belongs to. With only one
+    // clinic_ops clinic ever onboarded before, that accidentally worked;
+    // the moment a second one existed, every clinic saw every other
+    // clinic's staff roster and leave requests. Scoped by institutionId.
     const [{data:s},{data:l}] = await Promise.all([
-      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','clinic_ops').eq('status','active').order('full_name'),
-      supabase.from('leave_requests').select('*').eq('institution_source','clinic_ops').order('start_date'),
+      supabase.from('staff_credentials').select(STAFF_CREDENTIALS_SAFE_COLUMNS).eq('institution_source','clinic_ops').eq('institution_id', institutionId).eq('status','active').order('full_name'),
+      supabase.from('leave_requests').select('*').eq('institution_source','clinic_ops').eq('institution_id', institutionId).order('start_date'),
     ])
     setStaff(s||[])
     setLeaves(l||[])
@@ -4320,7 +4326,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     const person = staff.find(s => s.full_name === newLeaveStaffName)
     setAddingLeave(true)
     await supabase.from('leave_requests').insert({
-      institution_source: 'clinic_ops', staff_name: newLeaveStaffName, department: person?.department || 'All departments',
+      institution_source: 'clinic_ops', institution_id: institutionId, staff_name: newLeaveStaffName, department: person?.department || 'All departments',
       leave_type: newLeaveType, start_date: newLeaveStart, end_date: newLeaveEnd, reason: newLeaveReason.trim()||null,
       status: 'approved', reviewed_by: staffMember?.name, is_discretionary: true,
     })
@@ -7761,7 +7767,7 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
 // Medsa clearinghouse fee, and tracks status through the pipeline. Actual
 // transmission to an insurer is a manual/portal handoff until a real insurer
 // API or EDI contract exists - this is flagged honestly in the UI itself.
-function ClaimsScreen({ onNavPayment }) {
+function ClaimsScreen({ onNavPayment, institutionId }) {
   const [step,setStep]=useState('list')
   const [claimType,setClaimType]=useState('outpatient')
   const [selectedPatient,setSelectedPatient]=useState(null)
@@ -7813,7 +7819,13 @@ function ClaimsScreen({ onNavPayment }) {
         supabase.from('patients').select('id, full_name, medsa_id'),
         supabase.from('patient_consent').select('patient_id').eq('active', true),
         supabase.from('insurance_plans').select('*'),
-        supabase.from('insurance_claims').select('*, patients(full_name), insurance_plans(plan_name, company_name)').order('submitted_at', { ascending: false }).limit(10),
+        // Real bug found live-testing: this had no institution scoping at
+        // all - the 10 most recent claims platform-wide, from any clinic.
+        // With only one clinic_ops clinic ever onboarded before, that
+        // accidentally looked right.
+        institutionId
+          ? supabase.from('insurance_claims').select('*, patients(full_name), insurance_plans(plan_name, company_name)').eq('institution_id', institutionId).order('submitted_at', { ascending: false }).limit(10)
+          : Promise.resolve({ data: [] }),
       ])
       const consentedIds = new Set((consentRows||[]).map(c=>c.patient_id))
       setPatients((patientRows||[]).map(p => ({
@@ -7830,7 +7842,7 @@ function ClaimsScreen({ onNavPayment }) {
       setLoading(false)
     }
     load()
-  }, [reloadTrigger])
+  }, [reloadTrigger, institutionId])
 
   const statusMeta = {
     approved: {label:'Approved', type:'ok', desc:'Insurer has approved this claim in full'},
@@ -8061,9 +8073,14 @@ export default function ClinicOpsApp() {
   // logic didn't need to be rewritten. Polls rather than a single load,
   // since this needs to reach a genuinely different device in real time.
   async function loadTaskBoard() {
+    if (!institutionId) return
+    // Real bug found live-testing: source='clinic_ops' marks which APP
+    // wrote the record, not which clinic - every clinic_ops clinic's
+    // pending prescriptions showed up mixed together here until a second
+    // clinic actually existed to expose it.
     const { data: records } = await supabase.from('medical_records')
       .select('*, patients(full_name, medsa_id)')
-      .eq('record_status', 'submitted').eq('source', 'clinic_ops')
+      .eq('record_status', 'submitted').eq('source', 'clinic_ops').eq('institution_id', institutionId)
       .order('date_of_record', { ascending: false })
     if (!records) return
     const withDrugs = await Promise.all(records.map(async r => {
@@ -8084,7 +8101,7 @@ export default function ClinicOpsApp() {
     loadTaskBoard()
     const interval = setInterval(loadTaskBoard, 15000)
     return () => clearInterval(interval)
-  }, [])
+  }, [institutionId])
   const [selectedQueueEntry,setSelectedQueueEntry]=useState(null)
   const [institutionId,setInstitutionId]=useState(null)
   const [institutionName,setInstitutionName]=useState('')
@@ -8718,7 +8735,7 @@ export default function ClinicOpsApp() {
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
-        {screen==='claims'&&<ClaimsScreen onNavPayment={(claimRef)=>{setPayPreselectRecordId(null);setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
+        {screen==='claims'&&<ClaimsScreen institutionId={institutionId} onNavPayment={(claimRef)=>{setPayPreselectRecordId(null);setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='preauth'&&<PreauthRequestsScreen institutionId={institutionId} staffMember={staffMember}/>}
         {screen==='workinghours'&&<WorkingHoursScreen/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
