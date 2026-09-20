@@ -3393,11 +3393,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     setPurchasing(true)
     setPurchaseError(null)
     try {
-      // This no longer activates a policy directly - it only starts a real
-      // Stripe Checkout for the premium. The policy is only ever created
-      // once Stripe confirms the card was actually charged (see the
-      // webhook), so "buy" now means paying, not just ticking a box.
-      const res = await fetch('/api/patient/create_auto_purchase_checkout', {
+      // Doesn't route through Stripe or collect the premium - real HK
+      // insurers bill premiums directly to the patient, never through a
+      // broker, so Medsa isn't in the business of charging this card for
+      // insurance. This just creates the held policy; the patient's actual
+      // premium payment gets set up directly with the insurer afterward.
+      const res = await fetch('/api/patient/complete_auto_purchase', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           inquiryId: result.inquiryId, patientId: patient.id, planId: plan.id,
@@ -3406,8 +3407,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         }),
       })
       const data = await res.json()
-      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
-      setPurchaseError(data.message || 'Could not start payment.')
+      if (data.status !== 'OK') { setPurchaseError(data.message || 'Could not complete the purchase.'); return }
+      setPurchaseOpenIndex(null)
+      loadPolicy()
     } finally {
       setPurchasing(false)
     }
@@ -4109,22 +4111,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                           scrollable declaration screen (Uber-Merchant-
                           onboarding style) built from this plan's own
                           on-file terms, that has to be scrolled through
-                          (and the contract viewed, if one exists) before
-                          "I agree" unlocks. */}
+                          before "I agree" unlocks. */}
                       {purchaseHealthDeclaration
                         ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ Health declaration & terms reviewed and accepted.</div>
                         : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
-                      {/* Real gap this closes: this used to just flip the
-                          policy active with no payment step at all. Now
-                          it's a real charge - shown up front so "buy"
-                          actually means paying, not just ticking a box. */}
-                      {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'12px',fontWeight:600,color:C.navy,marginBottom:'10px'}}>
-                        You'll be charged HK${purchasePaymentFrequency==='annual'?(suitabilityResults[i].quotedPremium*12).toFixed(0):suitabilityResults[i].quotedPremium} now ({purchasePaymentFrequency==='annual'?'1 year':'1 month'}), by card via Stripe.
+                      {/* Real HK insurers bill premiums directly to the
+                          patient, never through a broker - so this isn't a
+                          Medsa charge, just a heads-up on what to expect
+                          next once the policy is confirmed. */}
+                      {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>
+                        Estimated HK${purchasePaymentFrequency==='annual'?(suitabilityResults[i].quotedPremium*12).toFixed(0):suitabilityResults[i].quotedPremium}/{purchasePaymentFrequency==='annual'?'yr':'mo'}. {plan.company} will contact you directly to set up premium payment - Medsa doesn't collect or hold this payment.
                       </div>}
                       {purchaseError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{purchaseError}</div>}
                       <div style={{display:'flex',gap:'8px'}}>
                         <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPurchaseOpenIndex(null)}>Cancel</Btn>
-                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Redirecting to payment…':'Proceed to payment'}</Btn>
+                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Confirming…':'Confirm & activate'}</Btn>
                       </div>
                     </div>
                   : <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>openPurchaseForm(i)}>Buy this plan</Btn>
