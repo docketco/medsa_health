@@ -544,6 +544,17 @@ function PartnersTab() {
   const [referralFeeDrafts, setReferralFeeDrafts] = useState({})
   const [savingReferralFeeId, setSavingReferralFeeId] = useState(null)
   const [savedReferralFeeId, setSavedReferralFeeId] = useState(null)
+  // Medsa's own cut on a policy nobody sold - the fully-automated purchase
+  // path (see PatientApp.jsx) has no agent, so there's no commission to
+  // take a referral cut from. Real-world insurers bill premiums directly
+  // to the patient, never through a broker, and referral fees tied to
+  // commission are exactly what the HK Insurance Authority has been
+  // cracking down on for unlicensed parties - so Medsa's revenue for an
+  // automated sale is a flat, disclosed platform fee billed to the
+  // insurer instead, tracked here and recorded per-policy for invoicing.
+  const [platformFeeDrafts, setPlatformFeeDrafts] = useState({})
+  const [savingPlatformFeeId, setSavingPlatformFeeId] = useState(null)
+  const [savedPlatformFeeId, setSavedPlatformFeeId] = useState(null)
 
   const [uploadError, setUploadError] = useState(null)
 
@@ -554,7 +565,7 @@ function PartnersTab() {
     // institutions.mims_api_key is locked down (see the migration that
     // added policy verification); naming even one ungranted column fails
     // the whole select, and '*' would ask for both.
-    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, platform_fee_hkd').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
@@ -632,6 +643,20 @@ function PartnersTab() {
     if (!error) {
       setSavedReferralFeeId(company.id)
       setReferralFeeDrafts(d => { const n = {...d}; delete n[company.id]; return n })
+      load()
+    }
+  }
+
+  async function savePlatformFee(company) {
+    const raw = platformFeeDrafts[company.id]
+    const amt = raw===undefined || raw==='' ? null : parseFloat(raw)
+    setSavingPlatformFeeId(company.id)
+    setSavedPlatformFeeId(null)
+    const { error } = await supabase.from('insurance_companies').update({ platform_fee_hkd: amt }).eq('id', company.id)
+    setSavingPlatformFeeId(null)
+    if (!error) {
+      setSavedPlatformFeeId(company.id)
+      setPlatformFeeDrafts(d => { const n = {...d}; delete n[company.id]; return n })
       load()
     }
   }
@@ -740,6 +765,26 @@ function PartnersTab() {
             </button>
             {savedReferralFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
             <div style={{fontSize:'10px',color:C.textMuted}}>of the agent's commission on this insurer's plans</div>
+          </div>
+          {/* Real gap this closes: the fully-automated purchase path has
+              no agent, so there's no commission to take a referral cut
+              from - and per real-world practice (premiums are billed
+              directly by the insurer, never through a broker) Medsa
+              doesn't collect the premium either. This is Medsa's actual
+              revenue on an automated sale: a flat fee billed to the
+              insurer, recorded on the policy for invoicing. */}
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Platform fee per automated policy:</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>HK$</div>
+            <input type="number" value={platformFeeDrafts[c.id] ?? (c.platform_fee_hkd ?? '')}
+              onChange={e=>{setPlatformFeeDrafts(d=>({...d,[c.id]:e.target.value}));setSavedPlatformFeeId(null)}}
+              placeholder="0" style={{width:60,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            <button onClick={()=>savePlatformFee(c)} disabled={savingPlatformFeeId===c.id || platformFeeDrafts[c.id]===undefined}
+              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:platformFeeDrafts[c.id]===undefined?'default':'pointer',background:platformFeeDrafts[c.id]===undefined?C.card:C.green,color:platformFeeDrafts[c.id]===undefined?C.textMuted:'#fff'}}>
+              {savingPlatformFeeId===c.id?'Saving…':'Save'}
+            </button>
+            {savedPlatformFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
+            <div style={{fontSize:'10px',color:C.textMuted}}>invoiced to this insurer, not collected from the patient</div>
           </div>
           {renewingId===c.id
             ? <div style={{marginBottom:'8px'}}>
