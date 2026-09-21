@@ -7597,6 +7597,17 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
   const [notes,setNotes]=useState('')
   const [submitting,setSubmitting]=useState(false)
   const [submitError,setSubmitError]=useState(null)
+  // Real gap this closes: "estimated cost" used to be a raw number the
+  // clinic typed in, with nothing telling anyone what the PATIENT would
+  // actually owe after deductible/copay/category caps - the exact "clear
+  // view of the budget required" a real pre-authorization is supposed to
+  // give (see AIA's own description of the flow). Runs the same real
+  // adjudication math a claim would (adapter.adjudicateClaim with
+  // dryRun:true - nothing is written), against the estimated cost as a
+  // single line item in the chosen category, the moment enough is filled
+  // in to compute it.
+  const [estimate,setEstimate] = useState(null)
+  const [estimating,setEstimating] = useState(false)
 
   async function loadRequests() {
     setLoading(true)
@@ -7636,9 +7647,34 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
 
   const filteredPatients = patientSearch.trim() ? patients.filter(p => p.full_name?.toLowerCase().includes(patientSearch.trim().toLowerCase())) : []
 
+  // Recomputes the second a category or estimated amount changes, so the
+  // number on screen never goes stale relative to what's about to be
+  // submitted. A debounce isn't needed - dryRun does real reads (deductible
+  // used-this-year, category caps) but never writes, so re-running it on
+  // every keystroke is cheap and safe to repeat.
+  useEffect(() => {
+    setEstimate(null)
+    const amt = parseFloat(estimatedAmount)
+    if (!selectedPatient || !selectedPolicy || !category || !amt || amt <= 0) return
+    let cancelled = false
+    async function runEstimate() {
+      setEstimating(true)
+      const adapter = getInsuranceAdapter(selectedPolicy.insurance_plans.company_name)
+      const result = await adapter.adjudicateClaim({
+        patientId: selectedPatient.id, policyNumber: selectedPolicy.insurance_plans.id,
+        clinicId: institutionId, totalGrossAmount: amt,
+        items: [{ code: category, description: description || category, amount: amt }],
+        dryRun: true,
+      })
+      if (!cancelled) { setEstimate(result); setEstimating(false) }
+    }
+    runEstimate()
+    return () => { cancelled = true }
+  }, [selectedPatient?.id, selectedPolicy?.id, category, estimatedAmount])
+
   function resetForm() {
     setSelectedPatient(null); setSelectedPolicy(null); setCategory(''); setDescription('')
-    setEstimatedAmount(''); setNotes(''); setPatientSearch(''); setSubmitError(null)
+    setEstimatedAmount(''); setNotes(''); setPatientSearch(''); setSubmitError(null); setEstimate(null)
   }
 
   async function handleSubmit() {
@@ -7651,6 +7687,11 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
       description: description || null,
       estimated_amount_hkd: estimatedAmount!=='' ? parseFloat(estimatedAmount) : null,
       notes: notes || null,
+      // Real computed split (deductible/copay/category-cap math already
+      // run above for the on-screen preview), not just the raw cost
+      // guess - this is what makes it an actual budget, not a number.
+      estimated_patient_payable_hkd: estimate?.fees?.patientPayableTotal ?? null,
+      estimated_insurer_payable_hkd: estimate?.fees?.insurerCoveredAmount ?? null,
     })
     setSubmitting(false)
     if (error) { setSubmitError(error.message); return }
@@ -7723,7 +7764,19 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
       <textarea value={description} onChange={e=>setDescription(e.target.value)} placeholder="e.g. MRI of the left knee, suspected ACL tear" rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'13px',boxSizing:'border-box',marginBottom:'16px',fontFamily:'inherit',resize:'none'}}/>
 
       <SecLabel>Estimated cost (HK$)</SecLabel>
-      <input value={estimatedAmount} onChange={e=>setEstimatedAmount(e.target.value)} type="number" placeholder="HK$" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px'}}/>
+      <input value={estimatedAmount} onChange={e=>setEstimatedAmount(e.target.value)} type="number" placeholder="HK$" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:estimating||estimate?'8px':'16px'}}/>
+      {estimating&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Calculating budget…</div>}
+      {/* Real gap this closes: "estimated cost" used to just be the raw
+          number typed above, with no view of what the patient would
+          actually owe once deductible/copay/category caps apply - the
+          "clear view of the budget" a real pre-authorization is supposed
+          to give. This is the same adjudication math a real claim would
+          run, just against the estimate instead of a billed visit. */}
+      {!estimating&&estimate&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'12px',fontWeight:600,color:C.green,marginBottom:'2px'}}>Estimated budget for this visit</div>
+        <div style={{fontSize:'12px',color:C.text}}>Patient pays ~HK${estimate.fees.patientPayableTotal.toFixed(0)} · Insurer covers ~HK${estimate.fees.insurerCoveredAmount.toFixed(0)}</div>
+        {estimate.usingDefaultDeductible&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{estimate.usingDefaultDeductible}</div>}
+      </div>}
 
       <SecLabel>Notes for the insurer (optional)</SecLabel>
       <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'13px',boxSizing:'border-box',marginBottom:'20px',fontFamily:'inherit',resize:'none'}}/>
@@ -7756,6 +7809,7 @@ function PreauthRequestsScreen({ institutionId, staffMember }) {
                 <Badge text={meta.label} type={meta.type}/>
               </div>
               <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>{r.category?`${r.category} - `:''}{r.description||'No description given.'}</div>
+              {r.estimated_patient_payable_hkd!=null&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Budget estimate: patient ~HK${r.estimated_patient_payable_hkd.toFixed(0)} · insurer ~HK${r.estimated_insurer_payable_hkd.toFixed(0)}</div>}
               <div style={{fontSize:'11px',color:C.textMuted}}>Requested {r.requested_at?new Date(r.requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}</div>
               {r.status==='approved'&&<div style={{marginTop:'8px',background:C.greenLight,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.green}}>
                 GOP code: <strong>{r.gop_code}</strong>{r.used_at?' · already used':` · valid until ${new Date(r.expires_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`}

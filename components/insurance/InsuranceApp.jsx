@@ -1393,6 +1393,7 @@ function PreauthRequestsManager({ company }) {
               </div>
             </div>
             <div style={{fontSize:'12px',color:C.text,marginBottom:'4px'}}>{r.category?`${r.category} - `:''}{r.description||'No description given.'}</div>
+            {r.estimated_patient_payable_hkd!=null&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Computed against this plan's terms: patient ~HK${r.estimated_patient_payable_hkd.toFixed(0)} · you cover ~HK${r.estimated_insurer_payable_hkd.toFixed(0)}</div>}
             {r.notes&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>{r.notes}</div>}
             <div style={{fontSize:'11px',color:C.textMuted}}>Requested {r.requested_at?new Date(r.requested_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'}):'-'}{r.requested_by?` by ${r.requested_by}`:''}</div>
             {r.status==='approved'&&<div style={{marginTop:'8px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.green}}>
