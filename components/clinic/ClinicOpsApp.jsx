@@ -4248,14 +4248,20 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   }
 
   async function handleOnboard() {
-    if (!newFirstName || !newDept || !newPin) return
+    // Real bug found live-testing: these three checks used to fail
+    // completely silently - no error message, the form just sat there
+    // looking like the button had done nothing, with no way to tell
+    // which field was the problem.
+    if (!newFirstName) { setOnboardError('First name is required.'); return }
+    if (!newDept) { setOnboardError('Department is required.'); return }
+    if (!newPin) { setOnboardError('A password is required.'); return }
     if (!newEmail?.trim()) { setOnboardError('Email is required - it\'s how this person resets their own password later.'); return }
     if (newPin.length < 8) { setOnboardError('Password must be at least 8 characters.'); return }
     if (!/[0-9]/.test(newPin)) { setOnboardError('Password must contain at least one number.'); return }
     if (!/[A-Z]/.test(newPin)) { setOnboardError('Password must contain at least one capital letter.'); return }
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newPin !== newPinConfirm) { setOnboardError('Password and confirmation don\'t match.'); return }
-    if (newRole==='doctor' && !newDob) return
+    if (newRole==='doctor' && !newDob) { setOnboardError('Date of birth is required for a doctor account.'); return }
     const needsEpc = EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse)
     if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
     if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
