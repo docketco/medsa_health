@@ -4726,7 +4726,16 @@ function WorkingHoursScreen({ institutionId }) {
   const [slotDuration,setSlotDuration]=useState(30)
 
   useEffect(() => {
-    loadClinicDoctors(institutionId).then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
+    // Real bug found live-testing: a clinic with no doctor accounts yet
+    // (e.g. a freshly onboarded second clinic) never had anything to
+    // auto-select, so loadHours - the only place that ever turns loading
+    // off - was never called, and this screen showed "Loading..."
+    // forever with no way out.
+    loadClinicDoctors(institutionId).then(docs => {
+      setClinicDoctors(docs)
+      if (docs[0]) setSelectedDoctor(docs[0].name)
+      else { setSelectedDoctor(''); setLoading(false) }
+    })
   }, [institutionId])
 
   async function loadHours(doctorName) {
@@ -4776,7 +4785,9 @@ function WorkingHoursScreen({ institutionId }) {
 
       {loading&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
 
-      {!loading&&<>
+      {!loading&&clinicDoctors.length===0&&<div style={{textAlign:'center',padding:'30px',color:C.textMuted,fontSize:'13px'}}>No doctor accounts yet for this clinic - add one under Staff first.</div>}
+
+      {!loading&&clinicDoctors.length>0&&<>
         <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Appointment slot length</div>
           <div style={{display:'flex',gap:'8px'}}>
@@ -8138,6 +8149,16 @@ export default function ClinicOpsApp() {
   // two separate regulatory systems in Hong Kong, so a clinic's drug
   // reference pool never mixes between them.
  useEffect(() => {
+  // Real bug found live-testing on a second clinic account: logging out
+  // and into a different clinic in the same tab doesn't remount this
+  // component, so institutionId and everything loaded from it (Printed
+  // Today, the checked-in queue, clinic queues) stayed at the PREVIOUS
+  // clinic's values until this async lookup resolved - a real flash of
+  // the old clinic's data for a second or two before it got overwritten.
+  // Clearing them synchronously, before the lookup even starts, means
+  // there's nothing stale to flash - screens just show their own loading
+  // state until the new institution resolves.
+  setInstitutionId(null); setPendingPrescriptions([]); setCheckedInQueue([]); setClinicQueues([])
   async function loadInstitution() {
     // Real fix - resolves from whichever institution the logged-in staff
     // member actually belongs to, not a hardcoded clinic name. This was
