@@ -3407,6 +3407,13 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         }),
       })
       const data = await res.json()
+      // An insurer that has connected their own Stripe account for
+      // self-serve checkout (see the insurer portal's Payments tab) gets
+      // a real Checkout redirect here instead - the policy itself isn't
+      // created until Stripe confirms the payment landed in THEIR
+      // account, via the webhook. Everyone else keeps the direct,
+      // no-Stripe path (status 'OK', policy held immediately).
+      if (data.status === 'REDIRECT' && data.checkoutUrl) { window.location.href = data.checkoutUrl; return }
       if (data.status !== 'OK') { setPurchaseError(data.message || 'Could not complete the purchase.'); return }
       setPurchaseOpenIndex(null)
       loadPolicy()
