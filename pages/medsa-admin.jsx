@@ -14,6 +14,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
 import Icon from '../components/shared/Icon'
+import { SecLabel } from '../components/shared/UI'
 
 export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
@@ -28,7 +29,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -42,6 +43,7 @@ export default function MedsaAdminPage() {
       {tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
+      {tab==='roster' && <InsurerTestRosterScreen/>}
       {tab==='qa' && <QaToolsTab/>}
     </div>
   )
@@ -1636,6 +1638,122 @@ function ForumModerationTab() {
         Imported {bulkProductResult.imported} of {bulkProductResult.total} rows.
         {bulkProductResult.skipped.length>0&&<div style={{marginTop:'4px'}}>Skipped: {bulkProductResult.skipped.join(', ')}</div>}
       </div>}
+    </div>
+  )
+}
+
+// ── POLICY ROSTER ────────────────────────────────────────────────────────────
+// Read-only view of insurer_policy_roster - the raw table a real insurer
+// uploads (or Medsa's own test fixtures fill in) to say "this policy
+// number/HKID is active, and here are this specific policyholder's own
+// negotiated terms, if any." Real gap this closes by living here rather
+// than in ClinicOpsApp.jsx (where it started, under a single clinic's
+// admin menu): insurer_policy_roster is insurer-owned reference data, not
+// scoped to any one clinic - it never had a leak (this query was always
+// deliberately global), but showing cross-institution data on a screen
+// gated by "this clinic's admin" role was its own kind of confusing, and
+// the wrong home for it either way. This is purely a lookup table to
+// answer "why did this claim use that number" without asking someone to
+// go query the database directly - no editing happens here.
+function InsurerTestRosterScreen() {
+  const [loading,setLoading]=useState(true)
+  const [rows,setRows]=useState([])
+  const [companyFilter,setCompanyFilter]=useState('')
+  const [search,setSearch]=useState('')
+
+  useEffect(() => { loadRows() }, [])
+
+  async function loadRows() {
+    setLoading(true)
+    const { data: companies } = await supabase.from('insurance_companies').select('id, name, verification_mode')
+    const companyById = new Map((companies||[]).map(c=>[c.id, c]))
+    const { data: roster } = await supabase.from('insurer_policy_roster').select('*').order('uploaded_at',{ascending:false}).limit(500)
+    // Real gap this closes: this screen used to show each policy's
+    // configured deductible/limit but never what's actually been used
+    // against them - a practice manager testing "did this year's claims
+    // eat into the cap correctly" had to go verify that by asking me to
+    // query the database directly, defeating the whole point of this
+    // being a self-serve lookup. Same year-to-date sum checkEligibility
+    // itself uses (insurance_claims.policy_number, this calendar year),
+    // read straight off the real claims history so it can never drift
+    // from what adjudication actually saw.
+    const policyNumbers = [...new Set((roster||[]).map(r=>r.policy_number).filter(Boolean))]
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString()
+    const { data: claims } = policyNumbers.length
+      ? await supabase.from('insurance_claims').select('policy_number, amount').in('policy_number', policyNumbers).gte('submitted_at', yearStart)
+      : { data: [] }
+    const claimedByPolicy = {}
+    for (const c of (claims||[])) claimedByPolicy[c.policy_number] = (claimedByPolicy[c.policy_number]||0) + (c.amount||0)
+    const merged = (roster||[]).map(r => {
+      const claimedYtd = claimedByPolicy[r.policy_number] || 0
+      const remaining = r.overall_annual_limit_hkd != null ? Math.max(0, r.overall_annual_limit_hkd - claimedYtd) : null
+      return { ...r, companyName: companyById.get(r.insurance_company_id)?.name || 'Unknown insurer', claimedYtd, remaining }
+    })
+    setRows(merged)
+    setLoading(false)
+  }
+
+  const companyOptions = [...new Set(rows.map(r=>r.companyName))].sort()
+  const filtered = rows
+    .filter(r => !companyFilter || r.companyName===companyFilter)
+    .filter(r => {
+      if (!search.trim()) return true
+      const q = search.trim().toLowerCase()
+      const haystack = [r.policy_number, r.companyName, r.hkid, r.patient_name, r.plan_name, r.status].filter(Boolean).join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+
+  const th = {textAlign:'left',padding:'8px 10px',fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',borderBottom:`1px solid ${C.border}`,whiteSpace:'nowrap'}
+  const td = {padding:'8px 10px',fontSize:'12px',borderBottom:`0.5px solid ${C.border}`,whiteSpace:'nowrap'}
+  const statusPill = (status) => {
+    const active = status==='active'
+    return <span style={{fontSize:'11px',background:active?C.greenLight:C.card,color:active?C.green:C.textSub,padding:'4px 10px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{status}</span>
+  }
+
+  return (
+    <div>
+      <SecLabel>Insurer test roster (read-only)</SecLabel>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>
+        {'◇'} This is the raw list every real policy-number check runs against - what a real insurer's own system would say if we called them. Only insurers with verification turned on (see the mode next to each company below) actually use this; everyone else's plans use their own configured numbers directly, always. "Claimed YTD" and "Remaining" are computed live from this year's real claims against each policy number - nothing here can be edited from this screen.
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
+        <input type="text" placeholder="Search policy no, HKID, patient, plan, status…" value={search} onChange={e=>setSearch(e.target.value)} style={{flex:1,minWidth:'220px',padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+        <select value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
+          <option value="">All insurers</option>
+          {companyOptions.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No roster entries match.</div>}
+      {!loading&&filtered.length>0&&
+        <div style={{overflowX:'auto',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+          <table style={{borderCollapse:'collapse',width:'100%'}}>
+            <thead><tr>
+              {['Policy number','Insurer','Status','HKID','Patient','Plan','Copay','Annual deductible','Annual limit','Claimed YTD','Remaining','Category overrides'].map(h=>
+                <th key={h} style={th}>{h}</th>
+              )}
+            </tr></thead>
+            <tbody>
+              {filtered.map(r=>(
+                <tr key={r.id}>
+                  <td style={{...td,fontWeight:600}}>{r.policy_number||'(none)'}</td>
+                  <td style={td}>{r.companyName}</td>
+                  <td style={td}>{statusPill(r.status)}</td>
+                  <td style={td}>{r.hkid||'-'}</td>
+                  <td style={td}>{r.patient_name||'-'}</td>
+                  <td style={td}>{r.plan_name||'-'}</td>
+                  <td style={td}>{r.copay_rate!=null?`${Math.round(r.copay_rate*100)}%`:'plan default'}</td>
+                  <td style={td}>{r.annual_deductible_hkd!=null?`HK$${r.annual_deductible_hkd}`:'plan default'}</td>
+                  <td style={td}>{r.overall_annual_limit_hkd!=null?`HK$${r.overall_annual_limit_hkd}`:'plan default'}</td>
+                  <td style={td}>HK${r.claimedYtd.toFixed(2)}</td>
+                  <td style={{...td,color:r.remaining===0?C.red:C.text}}>{r.remaining!=null?`HK$${r.remaining.toFixed(2)}`:'uncapped'}</td>
+                  <td style={{...td,whiteSpace:'normal',fontFamily:'monospace',fontSize:'10px'}}>{r.category_limits&&Object.keys(r.category_limits).length>0?JSON.stringify(r.category_limits):'-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      }
     </div>
   )
 }

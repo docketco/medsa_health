@@ -92,9 +92,18 @@ function InfoRow({ label, value, last }) {
 // Real doctors, queried fresh wherever needed - replaces the old hardcoded
 // DOCTOR_DIRECTORY array, which never reflected who was actually onboarded
 // and kept showing two stale demo names indefinitely.
-async function loadClinicDoctors() {
+// Real gap this closes: institution_source only ever marked which APP
+// wrote a staff row ('clinic_ops'), not which CLINIC - every clinic_ops
+// clinic's doctors showed up here at once. This is the shared helper five
+// different screens call (check-in, Working Hours, reschedule slots, new-
+// appointment picker, department-queue creation), so an un-scoped call
+// leaked into all five. institutionId is now required, not optional -
+// callers that don't have it yet should wait rather than show every
+// clinic's doctors in the meantime.
+async function loadClinicDoctors(institutionId) {
+  if (!institutionId) return []
   const { data } = await supabase.from('staff_credentials').select('full_name,department')
-    .eq('institution_source','clinic_ops').eq('role','doctor').eq('status','active').order('full_name')
+    .eq('institution_source','clinic_ops').eq('institution_id', institutionId).eq('role','doctor').eq('status','active').order('full_name')
   return (data||[]).map(d => ({ name: d.full_name, department: d.department }))
 }
 
@@ -106,7 +115,7 @@ async function loadClinicDoctors() {
 // still coexist for front desk to pick from.
 async function ensureDepartmentQueues(institutionId) {
   if (!institutionId) return
-  const doctors = await loadClinicDoctors()
+  const doctors = await loadClinicDoctors(institutionId)
   const departments = [...new Set(doctors.map(d=>d.department).filter(Boolean))]
   if (departments.length === 0) return
   const { data: existing } = await supabase.from('clinic_queues').select('department,ticket_prefix').eq('institution_id', institutionId)
@@ -579,7 +588,7 @@ function Sidebar({ screen, setScreen, staffMember, onLogout, navItems }) {
   )
 }
 
-function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError, onDoneCheckIn, staffMember }) {
+function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkInError, onDoneCheckIn, staffMember, institutionId }) {
   const [mode,setMode]=useState('scan')
   const [stage,setStage]=useState('idle')
   const [patient,setPatient]=useState(null)
@@ -652,7 +661,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   // attached at all and never showed up under anyone's My Patients.
   const [checkInDoctors,setCheckInDoctors]=useState([])
   const [selectedCheckInDoctor,setSelectedCheckInDoctor]=useState('')
-  useEffect(() => { loadClinicDoctors().then(setCheckInDoctors) }, [])
+  useEffect(() => { loadClinicDoctors(institutionId).then(setCheckInDoctors) }, [institutionId])
   const checkInDoctorsBySpeciality = checkInDoctors.reduce((acc,d)=>{
     const key = d.department || 'General'
     ;(acc[key] = acc[key]||[]).push(d)
@@ -3025,7 +3034,7 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // ── CLINIC SCHEDULE ACTIONS — reschedule, switch doctor, cancel, follow-up ──
 // Available to both doctors and front desk/admin - anyone with schedule
 // access should be able to make these changes, not just reception staff.
-function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError, clinicQueues=[] }) {
+function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError, clinicQueues=[], institutionId }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'notes'
   const [checkingIn,setCheckingIn]=useState(false)
   const [saveError,setSaveError]=useState(null)
@@ -3119,8 +3128,8 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
   const [slotsLoading,setSlotsLoading]=useState(true)
 
   useEffect(() => {
-    loadClinicDoctors().then(setClinicDoctors)
-  }, [])
+    loadClinicDoctors(institutionId).then(setClinicDoctors)
+  }, [institutionId])
 
   useEffect(() => {
     async function loadSlots() {
@@ -3133,7 +3142,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
       // weekday regardless of the staff device's own timezone.
       const dayOfWeek = hkParts(appt.scheduledAt || new Date()).dayOfWeek
       const { data } = await supabase.from('doctor_availability').select('*')
-        .eq('doctor_name', appt.doctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+        .eq('doctor_name', appt.doctor).eq('institution_source', 'clinic_ops').eq('institution_id', institutionId).eq('day_of_week', dayOfWeek).maybeSingle()
       if (!data || data.is_off) { setAvailableSlots([]); setSlotsLoading(false); return }
       const slots = []
       const [startH, startM] = (data.start_time||'09:00').split(':').map(Number)
@@ -3148,7 +3157,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
       setSlotsLoading(false)
     }
     loadSlots()
-  }, [appt?.doctor])
+  }, [appt?.doctor, institutionId])
 
   // Show real patient info here - the same view as when their Medsa ID is
   // scanned at check-in - not just a bare scheduling row. Full medical
@@ -3209,7 +3218,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
       if (names.length===0) { setSwitchAvail({}); setSwitchAvailLoaded(true); return }
       const hk = hkParts(appt.scheduledAt || new Date())
       const { data } = await supabase.from('doctor_availability').select('doctor_name,is_off,start_time,end_time')
-        .in('doctor_name', names).eq('institution_source','clinic_ops').eq('day_of_week', hk.dayOfWeek)
+        .in('doctor_name', names).eq('institution_source','clinic_ops').eq('institution_id', institutionId).eq('day_of_week', hk.dayOfWeek)
       const map = {}
       ;(data||[]).forEach(row => { map[row.doctor_name] = row })
       setSwitchAvail(map)
@@ -4706,120 +4715,8 @@ function PaymentLogScreen({ institutionId }) {
   )
 }
 
-// Read-only view of insurer_policy_roster - the raw table a real insurer
-// uploads (or Medsa's own test fixtures fill in) to say "this policy
-// number/HKID is active, and here are this specific policyholder's own
-// negotiated terms, if any." A practice manager testing coverage math has
-// no other way to see this - the insurer-side upload screen
-// (InsuranceApp.jsx) only shows a row COUNT, and requires a login this
-// role doesn't have anyway. This is purely a lookup table to answer "why
-// did this claim use that number" without asking someone to go query the
-// database directly - no editing happens here.
-function InsurerTestRosterScreen() {
-  const [loading,setLoading]=useState(true)
-  const [rows,setRows]=useState([])
-  const [companyFilter,setCompanyFilter]=useState('')
-  const [search,setSearch]=useState('')
 
-  useEffect(() => { loadRows() }, [])
-
-  async function loadRows() {
-    setLoading(true)
-    const { data: companies } = await supabase.from('insurance_companies').select('id, name, verification_mode')
-    const companyById = new Map((companies||[]).map(c=>[c.id, c]))
-    const { data: roster } = await supabase.from('insurer_policy_roster').select('*').order('uploaded_at',{ascending:false}).limit(500)
-    // Real gap this closes: this screen used to show each policy's
-    // configured deductible/limit but never what's actually been used
-    // against them - a practice manager testing "did this year's claims
-    // eat into the cap correctly" had to go verify that by asking me to
-    // query the database directly, defeating the whole point of this
-    // being a self-serve lookup. Same year-to-date sum checkEligibility
-    // itself uses (insurance_claims.policy_number, this calendar year),
-    // read straight off the real claims history so it can never drift
-    // from what adjudication actually saw.
-    const policyNumbers = [...new Set((roster||[]).map(r=>r.policy_number).filter(Boolean))]
-    const yearStart = new Date(new Date().getFullYear(), 0, 1).toISOString()
-    const { data: claims } = policyNumbers.length
-      ? await supabase.from('insurance_claims').select('policy_number, amount').in('policy_number', policyNumbers).gte('submitted_at', yearStart)
-      : { data: [] }
-    const claimedByPolicy = {}
-    for (const c of (claims||[])) claimedByPolicy[c.policy_number] = (claimedByPolicy[c.policy_number]||0) + (c.amount||0)
-    const merged = (roster||[]).map(r => {
-      const claimedYtd = claimedByPolicy[r.policy_number] || 0
-      const remaining = r.overall_annual_limit_hkd != null ? Math.max(0, r.overall_annual_limit_hkd - claimedYtd) : null
-      return { ...r, companyName: companyById.get(r.insurance_company_id)?.name || 'Unknown insurer', claimedYtd, remaining }
-    })
-    setRows(merged)
-    setLoading(false)
-  }
-
-  const companyOptions = [...new Set(rows.map(r=>r.companyName))].sort()
-  const filtered = rows
-    .filter(r => !companyFilter || r.companyName===companyFilter)
-    // Real gap this closes: the only way to narrow this list used to be
-    // the insurer dropdown - finding one specific policy number, HKID,
-    // patient, or plan meant scrolling and reading every row by eye.
-    // Matches across every field a practice manager would actually
-    // search by.
-    .filter(r => {
-      if (!search.trim()) return true
-      const q = search.trim().toLowerCase()
-      const haystack = [r.policy_number, r.companyName, r.hkid, r.patient_name, r.plan_name, r.status].filter(Boolean).join(' ').toLowerCase()
-      return haystack.includes(q)
-    })
-
-  const th = {textAlign:'left',padding:'8px 10px',fontSize:'10px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',borderBottom:`1px solid ${C.border}`,whiteSpace:'nowrap'}
-  const td = {padding:'8px 10px',fontSize:'12px',borderBottom:`0.5px solid ${C.border}`,whiteSpace:'nowrap'}
-
-  return (
-    <PageWrap maxWidth={1100}>
-      <SecLabel>Insurer test roster (read-only)</SecLabel>
-      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>
-        {'◇'} This is the raw list every real policy-number check runs against - what a real insurer's own system would say if we called them. Only insurers with verification turned on (see the mode next to each company below) actually use this; everyone else's plans use their own configured numbers directly, always. "Claimed YTD" and "Remaining" are computed live from this year's real claims against each policy number - nothing here can be edited from this screen.
-      </div>
-      <div style={{display:'flex',gap:'8px',marginBottom:'16px',flexWrap:'wrap'}}>
-        <input type="text" placeholder="Search policy no, HKID, patient, plan, status…" value={search} onChange={e=>setSearch(e.target.value)} style={{flex:1,minWidth:'220px',padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
-        <select value={companyFilter} onChange={e=>setCompanyFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
-          <option value="">All insurers</option>
-          {companyOptions.map(c=><option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
-      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-      {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No roster entries match.</div>}
-      {!loading&&filtered.length>0&&
-        <div style={{overflowX:'auto',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
-          <table style={{borderCollapse:'collapse',width:'100%'}}>
-            <thead><tr>
-              {['Policy number','Insurer','Status','HKID','Patient','Plan','Copay','Annual deductible','Annual limit','Claimed YTD','Remaining','Category overrides'].map(h=>
-                <th key={h} style={th}>{h}</th>
-              )}
-            </tr></thead>
-            <tbody>
-              {filtered.map(r=>(
-                <tr key={r.id}>
-                  <td style={{...td,fontWeight:600}}>{r.policy_number||'(none)'}</td>
-                  <td style={td}>{r.companyName}</td>
-                  <td style={td}><Badge text={r.status} type={r.status==='active'?'ok':'muted'}/></td>
-                  <td style={td}>{r.hkid||'-'}</td>
-                  <td style={td}>{r.patient_name||'-'}</td>
-                  <td style={td}>{r.plan_name||'-'}</td>
-                  <td style={td}>{r.copay_rate!=null?`${Math.round(r.copay_rate*100)}%`:'plan default'}</td>
-                  <td style={td}>{r.annual_deductible_hkd!=null?`HK$${r.annual_deductible_hkd}`:'plan default'}</td>
-                  <td style={td}>{r.overall_annual_limit_hkd!=null?`HK$${r.overall_annual_limit_hkd}`:'plan default'}</td>
-                  <td style={td}>HK${r.claimedYtd.toFixed(2)}</td>
-                  <td style={{...td,color:r.remaining===0?C.red:C.text}}>{r.remaining!=null?`HK$${r.remaining.toFixed(2)}`:'uncapped'}</td>
-                  <td style={{...td,whiteSpace:'normal',fontFamily:'monospace',fontSize:'10px'}}>{r.category_limits&&Object.keys(r.category_limits).length>0?JSON.stringify(r.category_limits):'-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      }
-    </PageWrap>
-  )
-}
-
-function WorkingHoursScreen() {
+function WorkingHoursScreen({ institutionId }) {
   const [clinicDoctors,setClinicDoctors]=useState([])
   const [selectedDoctor,setSelectedDoctor]=useState('')
   const [hours,setHours]=useState({}) // day_of_week -> {start,end,is_off}
@@ -4829,13 +4726,13 @@ function WorkingHoursScreen() {
   const [slotDuration,setSlotDuration]=useState(30)
 
   useEffect(() => {
-    loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
-  }, [])
+    loadClinicDoctors(institutionId).then(docs => { setClinicDoctors(docs); if (docs[0]) setSelectedDoctor(docs[0].name) })
+  }, [institutionId])
 
   async function loadHours(doctorName) {
     setLoading(true)
     const { data } = await supabase.from('doctor_availability').select('*')
-      .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops')
+      .eq('doctor_name', doctorName).eq('institution_source', 'clinic_ops').eq('institution_id', institutionId)
     const byDay = {}
     for (let d=0; d<7; d++) byDay[d] = { start:'09:00', end:'17:00', is_off: d===0 } // default: closed Sundays
     ;(data||[]).forEach(row => {
@@ -4846,7 +4743,7 @@ function WorkingHoursScreen() {
     setLoading(false)
   }
 
-  useEffect(() => { loadHours(selectedDoctor) }, [selectedDoctor])
+  useEffect(() => { if (selectedDoctor) loadHours(selectedDoctor) }, [selectedDoctor, institutionId])
 
   function updateDay(day, field, value) {
     setHours(prev => ({ ...prev, [day]: { ...prev[day], [field]: value } }))
@@ -4856,11 +4753,11 @@ function WorkingHoursScreen() {
   async function handleSave() {
     setSaving(true)
     const rows = Object.entries(hours).map(([day, h]) => ({
-      doctor_name: selectedDoctor, institution_source: 'clinic_ops', day_of_week: parseInt(day),
+      doctor_name: selectedDoctor, institution_source: 'clinic_ops', institution_id: institutionId, day_of_week: parseInt(day),
       start_time: h.start, end_time: h.end, is_off: h.is_off, slot_duration_minutes: slotDuration,
       updated_at: new Date().toISOString(),
     }))
-    await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_source,day_of_week' })
+    await supabase.from('doctor_availability').upsert(rows, { onConflict: 'doctor_name,institution_id,day_of_week' })
     setSaving(false)
     setSaved(true)
     setTimeout(()=>setSaved(false), 2500)
@@ -4915,7 +4812,7 @@ function WorkingHoursScreen() {
   )
 }
 
-function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError, clinicQueues=[] }) {
+function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, preselectPatient, onConsumedPreselect, onNavNewPatient, onCheckedIn, onPreselectPatientForFollowup, checkInError, clinicQueues=[], institutionId }) {
   // "Today" here has to be Hong Kong's today, not the staff device's own -
   // same root cause and same fix as the patient app's booking day-picker
   // and Calendar (see PatientApp.jsx's DAYS/CalendarScreen). Staff running
@@ -4959,8 +4856,8 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   const [newApptSlotsLoading,setNewApptSlotsLoading]=useState(false)
 
   useEffect(() => {
-    loadClinicDoctors().then(docs => { setClinicDoctors(docs); if (docs[0]) setNewApptDoctor(docs[0].name) })
-  }, [])
+    loadClinicDoctors(institutionId).then(docs => { setClinicDoctors(docs); if (docs[0]) setNewApptDoctor(docs[0].name) })
+  }, [institutionId])
 
   useEffect(() => {
     async function loadSlots() {
@@ -4969,7 +4866,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       setNewApptTime('')
       const dayOfWeek = hkParts(selectedDay).dayOfWeek
       const { data } = await supabase.from('doctor_availability').select('*')
-        .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+        .eq('doctor_name', newApptDoctor).eq('institution_source', 'clinic_ops').eq('institution_id', institutionId).eq('day_of_week', dayOfWeek).maybeSingle()
       if (!data || data.is_off) { setNewApptSlots([]); setNewApptSlotsLoading(false); return }
       const slots = []
       const [startH, startM] = (data.start_time||'09:00').split(':').map(Number)
@@ -4998,7 +4895,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       setNewApptSlotsLoading(false)
     }
     if (showNewApptForm) loadSlots()
-  }, [newApptDoctor, selectedDay, showNewApptForm])
+  }, [newApptDoctor, selectedDay, showNewApptForm, institutionId])
 
   // Arrived here after registering a new walk-in patient - open the form
   // with them already selected instead of making reception search again.
@@ -5247,7 +5144,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       const dayOfWeek = hkAppt.dayOfWeek
       const dayLabel = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek]
       const { data: avail } = await supabase.from('doctor_availability').select('*')
-        .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops').eq('day_of_week', dayOfWeek).maybeSingle()
+        .eq('doctor_name', updated.doctor).eq('institution_source','clinic_ops').eq('institution_id', institutionId).eq('day_of_week', dayOfWeek).maybeSingle()
       if (!avail || avail.is_off) return { ok:false, error:`${updated.doctor} doesn't work on ${dayLabel}s. Pick a different doctor or time.` }
       const apptMinutes = hkAppt.hour*60 + hkAppt.minute
       const [startH,startM] = (avail.start_time||'09:00').split(':').map(Number)
@@ -5326,6 +5223,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         onGoToConsultation={onGoToConsultation}
         role={staffMember?.role}
         staffMember={staffMember}
+        institutionId={institutionId}
         onCheckedIn={onCheckedIn}
         checkInError={checkInError}
         clinicQueues={clinicQueues}
@@ -8705,7 +8603,6 @@ export default function ClinicOpsApp() {
     {key:'queues', icon:'queue', label:'Queues', roles:['admin']},
     {key:'staff', icon:'family', label:'Staff', roles:['admin']},
     {key:'paymentlog', icon:'slides', label:'Payment Log', roles:['admin']},
-    {key:'insurertestroster', icon:'insurance', label:'Insurer Test Roster', roles:['admin']},
     {key:'pricelist', icon:'tag', label:'Price List', roles:['admin']},
     {key:'diagnosiscodes', icon:'records', label:'Diagnosis Codes', roles:['admin']},
     {key:'anomalyflags', icon:'alert', label:'Anomaly Review', roles:['admin']},
@@ -8734,7 +8631,7 @@ export default function ClinicOpsApp() {
         {screen==='overview'&&<OverviewScreen queue={scopedQueue} pendingCount={pendingCount} onRemoveFromQueue={handleRemoveFromQueue} onCancelAppointment={handleCancelAppointment} onUpdateStatus={updateQueueStatus} queues={clinicQueues} checkInError={checkInError} staffMember={staffMember} institutionId={institutionId} onNavCredentials={()=>setScreen('mycredentials')} onNavStaff={()=>setScreen('staff')}/>}
         {screen==='mypatients'&&<MyPatientsScreen queue={myDoctorQueue} onSelectPatient={(q)=>{if(q.status==='waiting')updateQueueStatus(q,'serving');setSelectedQueueEntry(q);setScreen('consultation')}} staffMember={staffMember} onRefresh={loadQueueAndPrescriptions} onMarkServing={(q)=>{if(q?.status==='waiting')updateQueueStatus(q,'serving')}}/>}
         {screen==='consultation'&&selectedQueueEntry&&<ConsultationScreen key={`${selectedQueueEntry.patientMedsaId||''}-${selectedQueueEntry.ticket||''}`} queueEntry={selectedQueueEntry} staffMember={staffMember} onPrescribed={handlePrescribed} institutionId={institutionId} medicineType={medicineType}/>}
-        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('checkin');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember}/>}
+        {screen==='checkin'&&<CheckInSearchScreen onCheckedIn={handleCheckedIn} onNewPatient={()=>{setNewPatientOrigin('checkin');setScreen('newpatient')}} onNavSchedule={()=>setScreen('schedule')} checkInError={checkInError} onDoneCheckIn={()=>staffMember?.role==='admin'&&setScreen('overview')} staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='newpatient'&&<NewPatientScreen
           onBack={()=>setScreen(newPatientOrigin==='schedule'?'schedule':'checkin')}
           prefillName={newPatientPrefillName}
@@ -8750,6 +8647,7 @@ export default function ClinicOpsApp() {
         />}
         {screen==='schedule'&&<ScheduleScreen
           staffMember={staffMember}
+          institutionId={institutionId}
           onCheckedIn={handleCheckedIn}
           checkInError={checkInError}
           clinicQueues={clinicQueues}
@@ -8806,11 +8704,10 @@ export default function ClinicOpsApp() {
         {screen==='payment'&&<PaymentScreen staffMember={staffMember} institutionId={institutionId} preselectClaimRef={payPreselectClaimRef} onConsumedPreselect={()=>setPayPreselectClaimRef(null)} preselectRecordId={payPreselectRecordId} onConsumedRecordPreselect={()=>setPayPreselectRecordId(null)}/>}
         {screen==='claims'&&<ClaimsScreen institutionId={institutionId} onNavPayment={(claimRef)=>{setPayPreselectRecordId(null);setPayPreselectClaimRef(claimRef);setScreen('payment')}}/>}
         {screen==='preauth'&&<PreauthRequestsScreen institutionId={institutionId} staffMember={staffMember}/>}
-        {screen==='workinghours'&&<WorkingHoursScreen/>}
+        {screen==='workinghours'&&<WorkingHoursScreen institutionId={institutionId}/>}
         {screen==='queues'&&staffMember?.role==='admin'&&<QueueSettingsScreen institutionId={institutionId} queues={clinicQueues} onRefresh={loadClinicQueues}/>}
         {screen==='staff'&&staffMember?.role==='admin'&&<PracticeManagerStaffScreen staffMember={staffMember} institutionId={institutionId}/>}
         {screen==='paymentlog'&&staffMember?.role==='admin'&&<PaymentLogScreen institutionId={institutionId}/>}
-        {screen==='insurertestroster'&&staffMember?.role==='admin'&&<InsurerTestRosterScreen/>}
         {screen==='pricelist'&&staffMember?.role==='admin'&&<PriceListScreen medicineType={medicineType}/>}
         {screen==='diagnosiscodes'&&staffMember?.role==='admin'&&<DiagnosisCodesScreen/>}
         {screen==='anomalyflags'&&staffMember?.role==='admin'&&<AnomalyFlagsScreen staffMember={staffMember}/>}
