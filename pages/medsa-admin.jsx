@@ -569,7 +569,7 @@ function PartnersTab() {
     // institutions.mims_api_key is locked down (see the migration that
     // added policy verification); naming even one ungranted column fails
     // the whole select, and '*' would ask for both.
-    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, subscription_fee_hkd_monthly, subscription_status, stripe_connect_status, self_serve_checkout_enabled').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, subscription_fee_hkd_monthly, subscription_status, stripe_connect_status').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
@@ -819,11 +819,11 @@ function PartnersTab() {
               <div style={{marginTop:'6px',fontSize:'11px',color:C.red}}>{subscriptionCheckoutUrl.error}</div>}
           </div>}
           <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}}>
-            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Self-serve checkout (Stripe Connect):</div>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Stripe Connect account:</div>
             <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:600,background:c.stripe_connect_status==='active'?C.greenLight:C.card,color:c.stripe_connect_status==='active'?C.green:C.textMuted}}>
-              {c.stripe_connect_status==='active'?(c.self_serve_checkout_enabled?'Connected & enabled':'Connected, not enabled'):c.stripe_connect_status==='onboarding'?'Onboarding started':'Not connected'}
+              {c.stripe_connect_status==='active'?'Connected':c.stripe_connect_status==='onboarding'?'Onboarding started':'Not connected'}
             </span>
-            <div style={{fontSize:'10px',color:C.textMuted}}>insurer connects their own Stripe account from their own portal (Payments tab)</div>
+            <div style={{fontSize:'10px',color:C.textMuted}}>insurer connects it themselves (Payments tab); self-serve checkout is then a per-plan toggle in their Plan Manager</div>
           </div>
           {renewingId===c.id
             ? <div style={{marginBottom:'8px'}}>

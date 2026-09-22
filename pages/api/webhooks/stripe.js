@@ -65,12 +65,15 @@ export default async function handler(req, res) {
     const companyId = account.metadata?.company_id
     if (companyId) {
       const connectStatus = account.charges_enabled ? 'active' : 'onboarding'
-      const patch = { stripe_connect_status: connectStatus }
-      if (connectStatus !== 'active') {
-        const { data: company } = await supabase.from('insurance_companies').select('self_serve_checkout_enabled').eq('id', companyId).maybeSingle()
-        if (company?.self_serve_checkout_enabled) patch.self_serve_checkout_enabled = false
+      const { data: company } = await supabase.from('insurance_companies').select('name').eq('id', companyId).maybeSingle()
+      await supabase.from('insurance_companies').update({ stripe_connect_status: connectStatus }).eq('id', companyId)
+      // Self-serve checkout is a per-plan choice - if the account can no
+      // longer take charges, every one of this insurer's plans that had
+      // it on gets turned back off rather than left pointing at a
+      // restricted account.
+      if (connectStatus !== 'active' && company?.name) {
+        await supabase.from('insurance_plans').update({ self_serve_checkout_enabled: false }).eq('company_name', company.name).eq('self_serve_checkout_enabled', true)
       }
-      await supabase.from('insurance_companies').update(patch).eq('id', companyId)
     }
   }
 

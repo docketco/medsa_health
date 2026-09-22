@@ -36,12 +36,16 @@ export default async function handler(req, res) {
 
   const { data: inquiry } = await supabase.from('plan_inquiries').select('id, plan_id').eq('id', inquiryId).eq('patient_id', patientId).eq('plan_id', planId).maybeSingle()
   if (!inquiry) return res.status(404).json({ status: 'ERROR', message: 'Inquiry not found.' })
-  const { data: plan } = await supabase.from('insurance_plans').select('company_name, plan_name').eq('id', planId).maybeSingle()
+  // Self-serve checkout is a per-PLAN choice (an insurer might want it
+  // for some plans and not others) that can only ever actually run while
+  // the company's own Connect account can take a charge - both have to
+  // be true.
+  const { data: plan } = await supabase.from('insurance_plans').select('company_name, plan_name, self_serve_checkout_enabled').eq('id', planId).maybeSingle()
   const { data: company } = plan
-    ? await supabase.from('insurance_companies').select('id, name, self_serve_checkout_enabled, stripe_connect_status, stripe_connect_account_id').eq('name', plan.company_name).maybeSingle()
+    ? await supabase.from('insurance_companies').select('id, name, stripe_connect_status, stripe_connect_account_id').eq('name', plan.company_name).maybeSingle()
     : { data: null }
 
-  const selfServeReady = company?.self_serve_checkout_enabled && company.stripe_connect_status === 'active' && company.stripe_connect_account_id && process.env.STRIPE_SECRET_KEY
+  const selfServeReady = plan?.self_serve_checkout_enabled && company?.stripe_connect_status === 'active' && company.stripe_connect_account_id && process.env.STRIPE_SECRET_KEY
 
   if (selfServeReady) {
     // Recompute the same way the direct path would, purely to quote the

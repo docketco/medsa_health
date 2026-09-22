@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   if (!companyId) return res.status(400).json({ status: 'ERROR', message: 'companyId is required.' })
 
   const { data: company } = await supabase.from('insurance_companies')
-    .select('id, stripe_connect_account_id, stripe_connect_status, self_serve_checkout_enabled').eq('id', companyId).maybeSingle()
+    .select('id, name, stripe_connect_account_id, stripe_connect_status').eq('id', companyId).maybeSingle()
   if (!company) return res.status(404).json({ status: 'ERROR', message: 'Company not found.' })
   if (!company.stripe_connect_account_id) return res.status(200).json({ status: 'OK', connectStatus: 'not_connected' })
   if (!process.env.STRIPE_SECRET_KEY) return res.status(200).json({ status: 'OK', connectStatus: company.stripe_connect_status })
@@ -27,13 +27,13 @@ export default async function handler(req, res) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const account = await stripe.accounts.retrieve(company.stripe_connect_account_id)
   const connectStatus = account.charges_enabled ? 'active' : 'onboarding'
-  const patch = { stripe_connect_status: connectStatus }
-  // Self-serve checkout can only ever be on while the account can actually
-  // take charges - if Stripe later restricts the account, this turns the
-  // patient-facing toggle back off automatically rather than leaving a
-  // "self-serve enabled" flag pointing at an account that can't be paid.
-  if (connectStatus !== 'active' && company.self_serve_checkout_enabled) patch.self_serve_checkout_enabled = false
-  await supabase.from('insurance_companies').update(patch).eq('id', companyId)
+  await supabase.from('insurance_companies').update({ stripe_connect_status: connectStatus }).eq('id', companyId)
+  // Self-serve checkout is a per-plan choice, but it can only ever
+  // actually run while the account can take a charge - if Stripe later
+  // restricts the account, this turns every one of this insurer's plans'
+  // toggles back off rather than leaving them pointing at an account
+  // that can't be paid.
+  if (connectStatus !== 'active') await supabase.from('insurance_plans').update({ self_serve_checkout_enabled: false }).eq('company_name', company.name).eq('self_serve_checkout_enabled', true)
 
   return res.status(200).json({ status: 'OK', connectStatus, chargesEnabled: account.charges_enabled, detailsSubmitted: account.details_submitted })
 }

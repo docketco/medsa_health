@@ -84,7 +84,6 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
-          {key:'analytics',icon:'◈',label:'Analytics',sub:'Views, referrals, conversion'},
         ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
@@ -192,11 +191,21 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
+  // Whether this insurer's own Stripe account is actually ready to take a
+  // charge - the self-serve toggle below is per-PLAN (an insurer might
+  // want it for some plans and not others), but it can only ever be
+  // turned on once the COMPANY-level Connect account (Payments tab) is
+  // connected, since that's what the checkout money actually routes to.
+  const [connectActive,setConnectActive]=useState(false)
+  useEffect(() => {
+    supabase.from('insurance_companies').select('stripe_connect_status').eq('id', company.id).maybeSingle()
+      .then(({data}) => setConnectActive(data?.stripe_connect_status === 'active'))
+  }, [company.id])
 
   async function load() {
     setLoading(true)
@@ -251,7 +260,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -267,6 +276,7 @@ function PlanManager({ company }) {
       requires_agent: !!plan.requires_agent,
       insurer_flags: plan.insurer_flags||[],
       additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
+      self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -301,6 +311,12 @@ function PlanManager({ company }) {
       additional_terms: form.additional_terms || null,
       pre_existing_condition_policy: form.pre_existing_condition_policy || null,
       waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
+      // Only ever actually takes effect while the company's own Connect
+      // account is active (see complete_auto_purchase.js) - saved as
+      // whatever the checkbox says regardless, so it's remembered for
+      // when the account does connect, but never lets a not-ready
+      // account be silently selected as a checkout destination.
+      self_serve_checkout_enabled: connectActive ? form.self_serve_checkout_enabled : false,
     }
     let planId = editingId
     if (editingId) {
@@ -322,7 +338,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'' })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -393,6 +409,15 @@ function PlanManager({ company }) {
             <div>
               <div style={{fontSize:'12px',color:C.text}}>Requires talking to an agent</div>
               <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
+            </div>
+          </label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:connectActive?'pointer':'not-allowed',opacity:connectActive?1:0.5}}>
+            <input type="checkbox" checked={form.self_serve_checkout_enabled} disabled={!connectActive} onChange={e=>setForm(f=>({...f,self_serve_checkout_enabled:e.target.checked}))}/>
+            <div>
+              <div style={{fontSize:'12px',color:C.text}}>Self-serve checkout for this plan</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{connectActive
+                ? 'When on, "Buy now" charges the patient\'s first premium straight to your connected Stripe account - Medsa never touches it.'
+                : 'Connect your Stripe account first (Payments tab) - this stays off until then.'}</div>
             </div>
           </label>
           <div style={{marginBottom:'12px'}}>
@@ -1286,13 +1311,12 @@ function PaymentsManager({ company }) {
   const [loading,setLoading]=useState(true)
   const [connecting,setConnecting]=useState(false)
   const [refreshing,setRefreshing]=useState(false)
-  const [togglingServe,setTogglingServe]=useState(false)
   const [notice,setNotice]=useState(null)
 
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('insurance_companies')
-      .select('subscription_fee_hkd_monthly, subscription_status, stripe_connect_status, self_serve_checkout_enabled')
+      .select('subscription_fee_hkd_monthly, subscription_status, stripe_connect_status')
       .eq('id', company.id).maybeSingle()
     setStatus(data)
     setLoading(false)
@@ -1334,19 +1358,6 @@ function PaymentsManager({ company }) {
     } finally { setRefreshing(false) }
   }
 
-  async function toggleSelfServe(enabled) {
-    setTogglingServe(true); setNotice(null)
-    try {
-      const res = await fetch('/api/insurer/set_self_serve_checkout', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ companyId: company.id, enabled }),
-      })
-      const data = await res.json()
-      if (data.status !== 'OK') { setNotice(data.message); return }
-      await load()
-    } finally { setTogglingServe(false) }
-  }
-
   if (loading || !status) return <div style={{padding:'40px 24px',textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
 
   const connectActive = status.stripe_connect_status === 'active'
@@ -1374,15 +1385,7 @@ function PaymentsManager({ company }) {
           <span onClick={refreshStatus} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{refreshing?'Refreshing…':'↻ Refresh status'}</span>
         </div>
         {!connectActive&&<button onClick={connectStripe} disabled={connecting} style={{width:'100%',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'8px'}}>{connecting?'Opening Stripe…':status.stripe_connect_status==='onboarding'?'Finish onboarding on Stripe':'Connect Stripe account'}</button>}
-        {connectActive&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.cream,borderRadius:'8px'}}>
-          <div>
-            <div style={{fontSize:'12px',fontWeight:600}}>Self-serve checkout for patients</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>{status.self_serve_checkout_enabled?'On - "Buy now" charges your Stripe account directly':'Off - the automated path holds the policy, you bill the patient yourselves'}</div>
-          </div>
-          <div onClick={()=>!togglingServe&&toggleSelfServe(!status.self_serve_checkout_enabled)} style={{width:40,height:22,borderRadius:20,background:status.self_serve_checkout_enabled?C.green:C.border,position:'relative',cursor:togglingServe?'default':'pointer',flexShrink:0}}>
-            <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:status.self_serve_checkout_enabled?20:2,transition:'left .15s'}}/>
-          </div>
-        </div>}
+        {connectActive&&<div style={{padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Connected. Turn self-serve checkout on per plan from Plans → edit a plan → "Self-serve checkout for this plan" - some of your plans can use it while others stay bill-the-patient-yourselves.</div>}
         {notice&&<div style={{marginTop:'10px',fontSize:'11px',color:notice==='Refreshed.'?C.green:C.red}}>{notice}</div>}
       </Card>
     </div>
@@ -2306,7 +2309,7 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
@@ -2314,7 +2317,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // (a house for Overview, a document for Plans/Coverage, people for
   // Teams, a shield for Verify, a stamp for Preauth, a clipboard for
   // Claims, a star for Sponsored/Promote, a bar chart for Analytics).
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Sponsored'},{key:'analytics',icon:'▲',label:'Analytics'}]
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Sponsored'}]
     : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
@@ -2348,7 +2351,6 @@ export default function InsuranceApp({ company, onLogout }) {
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
         {screen==='ads'&&<SponsoredListings company={company}/>}
-        {screen==='analytics'&&isPartnered&&<div style={{padding:'40px 24px',textAlign:'center',color:C.textSub}}><div style={{fontSize:'32px',marginBottom:'12px'}}>◈</div><div style={{fontSize:'16px',fontWeight:600,marginBottom:'6px',color:C.text}}>Analytics</div><div style={{fontSize:'13px'}}>Views, referrals, and conversion data — coming in the next build.</div></div>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{
