@@ -546,17 +546,19 @@ function PartnersTab() {
   const [referralFeeDrafts, setReferralFeeDrafts] = useState({})
   const [savingReferralFeeId, setSavingReferralFeeId] = useState(null)
   const [savedReferralFeeId, setSavedReferralFeeId] = useState(null)
-  // Medsa's own cut on a policy nobody sold - the fully-automated purchase
-  // path (see PatientApp.jsx) has no agent, so there's no commission to
-  // take a referral cut from. Real-world insurers bill premiums directly
-  // to the patient, never through a broker, and referral fees tied to
-  // commission are exactly what the HK Insurance Authority has been
-  // cracking down on for unlicensed parties - so Medsa's revenue for an
-  // automated sale is a flat, disclosed platform fee billed to the
-  // insurer instead, tracked here and recorded per-policy for invoicing.
-  const [platformFeeDrafts, setPlatformFeeDrafts] = useState({})
-  const [savingPlatformFeeId, setSavingPlatformFeeId] = useState(null)
-  const [savedPlatformFeeId, setSavedPlatformFeeId] = useState(null)
+  // Medsa's actual revenue model: a flat monthly platform subscription fee
+  // per insurer, not a per-policy/commission-shaped charge. A fee tied to
+  // each policy sold reads, to a regulator, like a referral fee - exactly
+  // what the HK Insurance Authority has been cracking down on for
+  // unlicensed parties. A subscription for platform access (quoting
+  // engine, claims processing, patient-app listing) reads as paying for
+  // software, the same way an EMR or TPA vendor charges, and isn't tied to
+  // any specific policy sale.
+  const [subscriptionFeeDrafts, setSubscriptionFeeDrafts] = useState({})
+  const [savingSubscriptionFeeId, setSavingSubscriptionFeeId] = useState(null)
+  const [savedSubscriptionFeeId, setSavedSubscriptionFeeId] = useState(null)
+  const [startingSubscriptionId, setStartingSubscriptionId] = useState(null)
+  const [subscriptionCheckoutUrl, setSubscriptionCheckoutUrl] = useState(null)
 
   const [uploadError, setUploadError] = useState(null)
 
@@ -567,7 +569,7 @@ function PartnersTab() {
     // institutions.mims_api_key is locked down (see the migration that
     // added policy verification); naming even one ungranted column fails
     // the whole select, and '*' would ask for both.
-    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, platform_fee_hkd').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, subscription_fee_hkd_monthly, subscription_status, stripe_connect_status, self_serve_checkout_enabled').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
@@ -649,17 +651,36 @@ function PartnersTab() {
     }
   }
 
-  async function savePlatformFee(company) {
-    const raw = platformFeeDrafts[company.id]
+  async function saveSubscriptionFee(company) {
+    const raw = subscriptionFeeDrafts[company.id]
     const amt = raw===undefined || raw==='' ? null : parseFloat(raw)
-    setSavingPlatformFeeId(company.id)
-    setSavedPlatformFeeId(null)
-    const { error } = await supabase.from('insurance_companies').update({ platform_fee_hkd: amt }).eq('id', company.id)
-    setSavingPlatformFeeId(null)
+    setSavingSubscriptionFeeId(company.id)
+    setSavedSubscriptionFeeId(null)
+    const { error } = await supabase.from('insurance_companies').update({ subscription_fee_hkd_monthly: amt }).eq('id', company.id)
+    setSavingSubscriptionFeeId(null)
     if (!error) {
-      setSavedPlatformFeeId(company.id)
-      setPlatformFeeDrafts(d => { const n = {...d}; delete n[company.id]; return n })
+      setSavedSubscriptionFeeId(company.id)
+      setSubscriptionFeeDrafts(d => { const n = {...d}; delete n[company.id]; return n })
       load()
+    }
+  }
+
+  // Creates the Stripe Checkout link for this insurer's monthly platform
+  // subscription - shown here to send to their billing contact, since
+  // it's their card that pays it, not Medsa's.
+  async function startSubscription(company) {
+    setStartingSubscriptionId(company.id)
+    setSubscriptionCheckoutUrl(null)
+    try {
+      const res = await fetch('/api/admin/start_insurer_subscription', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED') setSubscriptionCheckoutUrl({ id: company.id, url: data.checkoutUrl })
+      else if (data.message) setSubscriptionCheckoutUrl({ id: company.id, error: data.message })
+    } finally {
+      setStartingSubscriptionId(null)
     }
   }
 
@@ -768,25 +789,41 @@ function PartnersTab() {
             {savedReferralFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
             <div style={{fontSize:'10px',color:C.textMuted}}>of the agent's commission on this insurer's plans</div>
           </div>
-          {/* Real gap this closes: the fully-automated purchase path has
-              no agent, so there's no commission to take a referral cut
-              from - and per real-world practice (premiums are billed
-              directly by the insurer, never through a broker) Medsa
-              doesn't collect the premium either. This is Medsa's actual
-              revenue on an automated sale: a flat fee billed to the
-              insurer, recorded on the policy for invoicing. */}
-          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
-            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Platform fee per automated policy:</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>HK$</div>
-            <input type="number" value={platformFeeDrafts[c.id] ?? (c.platform_fee_hkd ?? '')}
-              onChange={e=>{setPlatformFeeDrafts(d=>({...d,[c.id]:e.target.value}));setSavedPlatformFeeId(null)}}
-              placeholder="0" style={{width:60,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
-            <button onClick={()=>savePlatformFee(c)} disabled={savingPlatformFeeId===c.id || platformFeeDrafts[c.id]===undefined}
-              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:platformFeeDrafts[c.id]===undefined?'default':'pointer',background:platformFeeDrafts[c.id]===undefined?C.card:C.green,color:platformFeeDrafts[c.id]===undefined?C.textMuted:'#fff'}}>
-              {savingPlatformFeeId===c.id?'Saving…':'Save'}
+          {/* Medsa's actual revenue model: a flat monthly platform
+              subscription, not a per-policy/commission-shaped fee - see
+              the state comment above for why that matters regulatorily.
+              Applies uniformly whether a policy was sold by an agent or
+              through the automated path. */}
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px',flexWrap:'wrap'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Platform subscription (HK$/month):</div>
+            <input type="number" value={subscriptionFeeDrafts[c.id] ?? (c.subscription_fee_hkd_monthly ?? '')}
+              onChange={e=>{setSubscriptionFeeDrafts(d=>({...d,[c.id]:e.target.value}));setSavedSubscriptionFeeId(null)}}
+              placeholder="0" style={{width:70,padding:'4px 6px',fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+            <button onClick={()=>saveSubscriptionFee(c)} disabled={savingSubscriptionFeeId===c.id || subscriptionFeeDrafts[c.id]===undefined}
+              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:subscriptionFeeDrafts[c.id]===undefined?'default':'pointer',background:subscriptionFeeDrafts[c.id]===undefined?C.card:C.green,color:subscriptionFeeDrafts[c.id]===undefined?C.textMuted:'#fff'}}>
+              {savingSubscriptionFeeId===c.id?'Saving…':'Save'}
             </button>
-            {savedPlatformFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
-            <div style={{fontSize:'10px',color:C.textMuted}}>invoiced to this insurer, not collected from the patient</div>
+            {savedSubscriptionFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
+            <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:600,background:c.subscription_status==='active'?C.greenLight:c.subscription_status==='past_due'?C.amberLight:C.card,color:c.subscription_status==='active'?C.green:c.subscription_status==='past_due'?C.amber:C.textMuted}}>
+              {c.subscription_status==='active'?'Subscription active':c.subscription_status==='past_due'?'Payment past due':c.subscription_status==='canceled'?'Cancelled':'No subscription yet'}
+            </span>
+          </div>
+          {c.subscription_status!=='active'&&<div style={{marginBottom:'8px'}}>
+            <button onClick={()=>startSubscription(c)} disabled={startingSubscriptionId===c.id || !c.subscription_fee_hkd_monthly}
+              style={{padding:'6px 12px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:c.subscription_fee_hkd_monthly?'pointer':'not-allowed',background:c.subscription_fee_hkd_monthly?C.navy:C.card,color:c.subscription_fee_hkd_monthly?'#fff':C.textMuted}}>
+              {startingSubscriptionId===c.id?'Creating link…':'Create subscription checkout link'}
+            </button>
+            {subscriptionCheckoutUrl?.id===c.id&&subscriptionCheckoutUrl.url&&
+              <div style={{marginTop:'6px',fontSize:'11px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'8px 10px',wordBreak:'break-all'}}>Send this to {c.contact_email||'their billing contact'} to complete: <a href={subscriptionCheckoutUrl.url} target="_blank" rel="noreferrer">{subscriptionCheckoutUrl.url}</a></div>}
+            {subscriptionCheckoutUrl?.id===c.id&&subscriptionCheckoutUrl.error&&
+              <div style={{marginTop:'6px',fontSize:'11px',color:C.red}}>{subscriptionCheckoutUrl.error}</div>}
+          </div>}
+          <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Self-serve checkout (Stripe Connect):</div>
+            <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:600,background:c.stripe_connect_status==='active'?C.greenLight:C.card,color:c.stripe_connect_status==='active'?C.green:C.textMuted}}>
+              {c.stripe_connect_status==='active'?(c.self_serve_checkout_enabled?'Connected & enabled':'Connected, not enabled'):c.stripe_connect_status==='onboarding'?'Onboarding started':'Not connected'}
+            </span>
+            <div style={{fontSize:'10px',color:C.textMuted}}>insurer connects their own Stripe account from their own portal (Payments tab)</div>
           </div>
           {renewingId===c.id
             ? <div style={{marginBottom:'8px'}}>

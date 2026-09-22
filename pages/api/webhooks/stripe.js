@@ -7,6 +7,7 @@
 // set STRIPE_WEBHOOK_SECRET in Vercel to the signing secret it gives you.
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
+import { createAutoPurchasePolicy } from '../../../lib/completeAutoPurchase'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -37,11 +38,63 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Webhook signature verification failed: ${err.message}` })
   }
 
+  // Keeps insurance_companies.subscription_status in sync with the real
+  // Stripe subscription - this is Medsa's actual revenue now (a flat
+  // monthly platform fee), so a lapsed/cancelled card needs to show up
+  // here, not just silently stop billing.
+  if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
+    const sub = event.data.object
+    const companyId = sub.metadata?.company_id
+    if (companyId) {
+      const status = sub.status === 'active' || sub.status === 'trialing' ? 'active'
+        : sub.status === 'past_due' || sub.status === 'unpaid' ? 'past_due' : 'canceled'
+      await supabase.from('insurance_companies').update({ subscription_status: status, stripe_subscription_id: sub.id }).eq('id', companyId)
+    }
+  }
+  if (event.type === 'customer.subscription.deleted') {
+    const sub = event.data.object
+    const companyId = sub.metadata?.company_id
+    if (companyId) await supabase.from('insurance_companies').update({ subscription_status: 'canceled' }).eq('id', companyId)
+  }
+
+  // Keeps stripe_connect_status in sync as an insurer completes (or later
+  // loses) the ability to actually take charges on their connected
+  // account - this is what gates the self-serve-checkout toggle.
+  if (event.type === 'account.updated') {
+    const account = event.data.object
+    const companyId = account.metadata?.company_id
+    if (companyId) {
+      const connectStatus = account.charges_enabled ? 'active' : 'onboarding'
+      const patch = { stripe_connect_status: connectStatus }
+      if (connectStatus !== 'active') {
+        const { data: company } = await supabase.from('insurance_companies').select('self_serve_checkout_enabled').eq('id', companyId).maybeSingle()
+        if (company?.self_serve_checkout_enabled) patch.self_serve_checkout_enabled = false
+      }
+      await supabase.from('insurance_companies').update(patch).eq('id', companyId)
+    }
+  }
+
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object
     const submissionId = session.metadata?.submission_id
     const sponsorPlanId = session.metadata?.plan_id
     const videoConsultInstitutionId = session.metadata?.video_consult_institution_id
+    const autoPurchaseInquiryId = session.metadata?.auto_purchase_inquiry_id
+    // Self-serve automated-purchase path: the patient just paid the
+    // insurer's own connected Stripe account directly (Connect transfer,
+    // zero application fee - Medsa never touches this money). The policy
+    // is only ever created here, after Stripe confirms the charge
+    // actually went through, using the same logic the no-Stripe direct
+    // path uses.
+    if (autoPurchaseInquiryId) {
+      await createAutoPurchasePolicy(supabase, {
+        inquiryId: autoPurchaseInquiryId,
+        patientId: session.metadata?.auto_purchase_patient_id,
+        planId: session.metadata?.auto_purchase_plan_id,
+        wardClass: session.metadata?.auto_purchase_ward_class || null,
+        paymentFrequency: session.metadata?.auto_purchase_payment_frequency || null,
+      })
+    }
     if (videoConsultInstitutionId) {
       const until = new Date()
       until.setFullYear(until.getFullYear() + 1)

@@ -1272,6 +1272,123 @@ function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
 
 // ── PRE-AUTHORIZATION REQUESTS (real GOP flow) ─────────────────────────────
 // Real gap this closes: "pre-authorization" used to just mean an amber
+// Two separate money things an insurer manages here, neither of which is
+// Medsa collecting a patient's premium: (1) Medsa's own platform
+// subscription, a flat monthly fee medsa-admin sets and the insurer pays
+// via the Checkout link admin sends them - shown here read-only so the
+// insurer can see their own status; and (2) their own Stripe Connect
+// account, which THIS insurer controls end to end, for Bowtie-style
+// self-serve checkout on their automated-purchase plans (the patient pays
+// the insurer's connected account directly - Medsa's Stripe integration
+// only ever facilitates the checkout page).
+function PaymentsManager({ company }) {
+  const [status,setStatus]=useState(null)
+  const [loading,setLoading]=useState(true)
+  const [connecting,setConnecting]=useState(false)
+  const [refreshing,setRefreshing]=useState(false)
+  const [togglingServe,setTogglingServe]=useState(false)
+  const [notice,setNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_companies')
+      .select('subscription_fee_hkd_monthly, subscription_status, stripe_connect_status, self_serve_checkout_enabled')
+      .eq('id', company.id).maybeSingle()
+    setStatus(data)
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id])
+
+  // Re-checks the real Stripe account status on load (not just whatever
+  // this app's own database last had) - catches an onboarding that
+  // finished in another tab, or a webhook that hasn't arrived yet.
+  useEffect(() => {
+    fetch('/api/insurer/refresh_connect_status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId: company.id }),
+    }).then(()=>load()).catch(()=>{})
+  }, [company.id])
+
+  async function connectStripe() {
+    setConnecting(true); setNotice(null)
+    try {
+      const res = await fetch('/api/insurer/create_connect_account_link', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED') window.location.href = data.onboardingUrl
+      else setNotice(data.message || 'Could not start Stripe onboarding.')
+    } finally { setConnecting(false) }
+  }
+
+  async function refreshStatus() {
+    setRefreshing(true); setNotice(null)
+    try {
+      await fetch('/api/insurer/refresh_connect_status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      await load()
+      setNotice('Refreshed.')
+    } finally { setRefreshing(false) }
+  }
+
+  async function toggleSelfServe(enabled) {
+    setTogglingServe(true); setNotice(null)
+    try {
+      const res = await fetch('/api/insurer/set_self_serve_checkout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: company.id, enabled }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message); return }
+      await load()
+    } finally { setTogglingServe(false) }
+  }
+
+  if (loading || !status) return <div style={{padding:'40px 24px',textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
+
+  const connectActive = status.stripe_connect_status === 'active'
+
+  return (
+    <div style={{padding:'16px 20px'}}>
+      <Card style={{padding:'16px 18px',marginBottom:'16px'}}>
+        <div style={{fontSize:'14px',fontWeight:700,marginBottom:'4px'}}>Medsa platform subscription</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Medsa's own revenue is a flat monthly fee for platform access - not a per-case or commission-shaped charge. Set and invoiced by Medsa; shown here for your reference.</div>
+        <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+          <div style={{fontSize:'16px',fontWeight:700}}>{status.subscription_fee_hkd_monthly ? `HK$${status.subscription_fee_hkd_monthly}/mo` : 'Not set yet'}</div>
+          <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:600,background:status.subscription_status==='active'?C.greenLight:status.subscription_status==='past_due'?C.amberLight:C.card,color:status.subscription_status==='active'?C.green:status.subscription_status==='past_due'?C.amber:C.textMuted}}>
+            {status.subscription_status==='active'?'Active':status.subscription_status==='past_due'?'Payment past due':status.subscription_status==='canceled'?'Cancelled':'Not started'}
+          </span>
+        </div>
+      </Card>
+
+      <Card style={{padding:'16px 18px',marginBottom:'16px'}}>
+        <div style={{fontSize:'14px',fontWeight:700,marginBottom:'4px'}}>Your Stripe account (self-serve checkout)</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>Connect your own Stripe account to let patients pay their first premium directly to you at checkout, Bowtie-style - the money goes straight to your account, Medsa never touches it or takes a cut. Without this, the automated path just holds the policy and you bill the patient yourselves, same as today.</div>
+        <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px'}}>
+          <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:600,background:connectActive?C.greenLight:status.stripe_connect_status==='onboarding'?C.amberLight:C.card,color:connectActive?C.green:status.stripe_connect_status==='onboarding'?C.amber:C.textMuted}}>
+            {connectActive?'Connected':status.stripe_connect_status==='onboarding'?'Onboarding started - not finished yet':'Not connected'}
+          </span>
+          <span onClick={refreshStatus} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{refreshing?'Refreshing…':'↻ Refresh status'}</span>
+        </div>
+        {!connectActive&&<button onClick={connectStripe} disabled={connecting} style={{width:'100%',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'8px'}}>{connecting?'Opening Stripe…':status.stripe_connect_status==='onboarding'?'Finish onboarding on Stripe':'Connect Stripe account'}</button>}
+        {connectActive&&<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 12px',background:C.cream,borderRadius:'8px'}}>
+          <div>
+            <div style={{fontSize:'12px',fontWeight:600}}>Self-serve checkout for patients</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>{status.self_serve_checkout_enabled?'On - "Buy now" charges your Stripe account directly':'Off - the automated path holds the policy, you bill the patient yourselves'}</div>
+          </div>
+          <div onClick={()=>!togglingServe&&toggleSelfServe(!status.self_serve_checkout_enabled)} style={{width:40,height:22,borderRadius:20,background:status.self_serve_checkout_enabled?C.green:C.border,position:'relative',cursor:togglingServe?'default':'pointer',flexShrink:0}}>
+            <div style={{width:18,height:18,borderRadius:'50%',background:'#fff',position:'absolute',top:2,left:status.self_serve_checkout_enabled?20:2,transition:'left .15s'}}/>
+          </div>
+        </div>}
+        {notice&&<div style={{marginTop:'10px',fontSize:'11px',color:notice==='Refreshed.'?C.green:C.red}}>{notice}</div>}
+      </Card>
+    </div>
+  )
+}
+
 // warning on an already-submitted claim, decided with the exact same
 // Approve/Reject a reviewer uses on anything else - not a real GOP
 // (Guarantee of Payment) obtained BEFORE the visit happens, which is what
@@ -2189,7 +2306,7 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',analytics:'Analytics',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
@@ -2197,8 +2314,8 @@ export default function InsuranceApp({ company, onLogout }) {
   // (a house for Overview, a document for Plans/Coverage, people for
   // Teams, a shield for Verify, a stamp for Preauth, a clipboard for
   // Claims, a star for Sponsored/Promote, a bar chart for Analytics).
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'},{key:'analytics',icon:'▲',label:'Analytics'}]
-    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Sponsored'},{key:'analytics',icon:'▲',label:'Analytics'}]
+    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2225,6 +2342,7 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
         {screen==='preauth'&&<PreauthRequestsManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
+        {screen==='payments'&&<PaymentsManager company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
