@@ -2648,11 +2648,11 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
           "start billing this visit" buttons existed for the same
           visit, in two unrelated screens, and made this list read as
           an unpaid-payment queue rather than what it actually is: a
-          history of which labels have been printed. Every entry here
-          genuinely IS still unbilled (this whole screen only ever
-          loads record_status='submitted' visits - see loadTaskBoard -
-          so a billed visit never appears here at all), but billing now
-          starts from Payment - this is read-only history. */}
+          history of which labels have been printed. Billing now starts
+          from Payment - this is read-only history; loadTaskBoard keeps
+          an entry here for the rest of the Hong Kong day even after
+          it's billed (see p.billed above), so this reads as "printed
+          today" for the whole day, not "still unbilled right now". */}
       {done.length>0&&<>
         <SecLabel>Printed today</SecLabel>
         <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -2669,7 +2669,7 @@ function PrescriptionsQueueScreen({ pending, onConfirm, medicineType, onReload, 
               {p.drugs?.length>0&&<div style={{fontSize:'11px',color:C.text,marginTop:'6px'}}>
                 {p.drugs.map((d,i)=><div key={i}>{d.drug}{d.dosage?` - ${d.dosage}`:''}{d.frequency?` - ${d.frequency}`:''}</div>)}
               </div>}
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>Still unbilled - HK${(p.totalFee||0).toFixed(2)}. Bill it from Payment {'→'} Unbilled visits.</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{p.billed ? `Billed - HK$${(p.totalFee||0).toFixed(2)}` : <>Still unbilled - HK${(p.totalFee||0).toFixed(2)}. Bill it from Payment {'→'} Unbilled visits.</>}</div>
             </Card>
           ))}
         </div>
@@ -8048,9 +8048,19 @@ export default function ClinicOpsApp() {
     // wrote the record, not which clinic - every clinic_ops clinic's
     // pending prescriptions showed up mixed together here until a second
     // clinic actually existed to expose it.
+    // Real bug this fixes: "Printed today" only ever queried
+    // record_status='submitted', so the moment front desk billed a
+    // printed visit (which the auto-handoff below nudges them to do
+    // right away), it vanished from a section literally labeled
+    // "today" - looking like it had disappeared within a minute or
+    // two, when in fact the visit was just billed. It now also pulls
+    // in anything dispensed today regardless of billing status, so a
+    // printed label stays visible as same-day reference all day.
+    const { start: todayStart } = hkDayBounds(new Date())
     const { data: records } = await supabase.from('medical_records')
       .select('*, patients(full_name, medsa_id)')
-      .eq('record_status', 'submitted').eq('source', 'clinic_ops').eq('institution_id', institutionId)
+      .eq('source', 'clinic_ops').eq('institution_id', institutionId)
+      .or(`record_status.eq.submitted,meds_dispensed_at.gte.${todayStart.toISOString()}`)
       .order('date_of_record', { ascending: false })
     if (!records) return
     const withDrugs = await Promise.all(records.map(async r => {
@@ -8062,6 +8072,7 @@ export default function ClinicOpsApp() {
         lineItems: r.line_items || [], totalFee: r.total_fee,
         drugs: (meds||[]).map(m => ({ drug: m.medication_name, dosage: m.dosage, frequency: m.frequency, quantity: m.quantity, durationDays: m.duration_days })),
         timestamp: new Date(r.date_of_record).getTime(), status: r.meds_dispensed_at ? 'printed' : 'pending',
+        billed: r.record_status !== 'submitted',
       }
     }))
     setPendingPrescriptions(withDrugs)
