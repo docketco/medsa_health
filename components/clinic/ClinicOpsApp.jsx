@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
@@ -4262,6 +4262,18 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     if (!/[^A-Za-z0-9]/.test(newPin)) { setOnboardError('Password must contain at least one special character.'); return }
     if (newPin !== newPinConfirm) { setOnboardError('Password and confirmation don\'t match.'); return }
     if (newRole==='doctor' && !newDob) { setOnboardError('Date of birth is required for a doctor account.'); return }
+    // Real bug this fixes: the Onboard button was silently DISABLED
+    // (not clickable at all, no message) whenever this checkbox wasn't
+    // ticked - "everything filled in" could still leave the button
+    // unresponsive with zero indication why, since this one condition
+    // was only ever checked in the button's disabled= expression, never
+    // inside this function where the other checks give a real message.
+    if (newRole==='doctor' && !newMchkDeclared) { setOnboardError('You must confirm the MCHK Code of Professional Conduct declaration below before this doctor can be onboarded.'); return }
+    if (newRole==='doctor' && newDob) {
+      const age = Math.floor((Date.now() - new Date(newDob).getTime()) / (365.25*24*3600*1000))
+      if (age < 18) { setOnboardError('A doctor account needs a date of birth that makes them at least 18 years old.'); return }
+      if (age > 100) { setOnboardError('That date of birth doesn\'t look right - please double check it.'); return }
+    }
     const needsEpc = EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse)
     if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
     if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
@@ -4462,7 +4474,13 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           {onboardError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px',padding:'8px 10px',background:C.redLight,borderRadius:'8px'}}>{onboardError}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>setShowOnboard(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={handleOnboard} disabled={saving||!newFirstName||!newEmail?.trim()||!newDept||!newPin||newPin!==newPinConfirm||(newRole==='doctor'&&(!newDob||!newMchkDeclared))||((EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&(!newEpcLink?.trim()||!newHkid?.trim()))||(ACCREDITED_REGISTER_ROLES.includes(newRole)&&!newRegisteringBody?.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
+            {/* Real bug this fixes: this button used to be disabled outright
+                whenever any of these conditions held, with no message at
+                all - a form that looked fully filled in could still just
+                sit there unresponsive. It's only ever disabled by "saving"
+                now; every other condition is checked inside handleOnboard
+                itself, which sets a real, specific onboardError instead. */}
+            <button onClick={handleOnboard} disabled={saving} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Onboard'}</button>
           </div>
         </div>}
         {staff.map(s=>(
@@ -4591,17 +4609,25 @@ function PaymentLogScreen({ institutionId }) {
   const [fromDate,setFromDate]=useState('')
   const [toDate,setToDate]=useState('')
   const [searchQuery,setSearchQuery]=useState('')
+  // Guards against a slow in-flight request for a PREVIOUS institutionId
+  // (a clinic switch mid-fetch) landing late and overwriting already-
+  // correct state with stale data - see ClinicOpsApp's own
+  // institutionIdRef for the full reasoning.
+  const institutionIdRef = useRef(institutionId)
+  useEffect(() => { institutionIdRef.current = institutionId }, [institutionId])
 
   useEffect(() => { loadRows() }, [institutionId])
 
   async function loadRows() {
     setLoading(true)
+    const requestedInstitutionId = institutionId
     const { data: txns } = await supabase.from('transactions').select('*')
-      .eq('institution_id', institutionId).order('created_at',{ascending:false}).limit(1000)
+      .eq('institution_id', requestedInstitutionId).order('created_at',{ascending:false}).limit(1000)
     const recordIds = [...new Set((txns||[]).map(t=>t.medical_record_id).filter(Boolean))]
     const { data: records } = recordIds.length
       ? await supabase.from('medical_records').select('id, doctor_name, line_items, title').in('id', recordIds)
       : { data: [] }
+    if (institutionIdRef.current !== requestedInstitutionId) return
     const recordById = new Map((records||[]).map(r=>[r.id, r]))
     const merged = (txns||[]).map(t => {
       const rec = t.medical_record_id ? recordById.get(t.medical_record_id) : null
@@ -5292,6 +5318,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
 }
 
 function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect, preselectRecordId, onConsumedRecordPreselect }) {
+  // Guards the loaders below against a slow in-flight request from a
+  // PREVIOUS institutionId (e.g. this staff member switched clinics
+  // mid-fetch) landing late and overwriting already-correct state with
+  // stale data - see the matching comment on ClinicOpsApp's own
+  // institutionIdRef for the full reasoning.
+  const institutionIdRef = useRef(institutionId)
+  useEffect(() => { institutionIdRef.current = institutionId }, [institutionId])
   const [tab,setTab]=useState('collect')
   const [method,setMethod]=useState('card')
   // No card/Octopus terminal is actually integrated yet (calculatePaymentProcessingFee
@@ -5433,7 +5466,8 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadPendingPayments() {
     setPendingLoading(true)
-    if (!institutionId) { setPendingPayments([]); setPendingLoading(false); return }
+    const requestedInstitutionId = institutionId
+    if (!requestedInstitutionId) { setPendingPayments([]); setPendingLoading(false); return }
     // Real, itemized list - claims with a real amount still owed by the
     // patient that haven't been collected yet. Replaces the single
     // hardcoded demo bill this screen used to show.
@@ -5442,10 +5476,11 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // logged in, same class of leak as ClaimsScreen and loadTaskBoard.
     const { data } = await supabase.from('insurance_claims')
       .select('*, patients(full_name), insurance_plans(company_name, plan_name)')
-      .eq('institution_id', institutionId)
+      .eq('institution_id', requestedInstitutionId)
       .in('status', ['approved','partially_approved'])
       .is('copay_payment_method', null)
       .order('submitted_at', {ascending:false})
+    if (institutionIdRef.current !== requestedInstitutionId) return // stale - a clinic switch happened mid-flight
     const withAmountOwed = (data||[]).filter(c => ((c.deductible_applied||0) + (c.patient_copay_amount||0)) > 0)
     setPendingPayments(withAmountOwed)
     setPendingLoading(false)
@@ -5453,12 +5488,14 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadLedger() {
     setLedgerLoading(true)
+    const requestedInstitutionId = institutionId
     // Real bug: this never filtered by institution_id, so a multi-clinic
     // Medsa deployment's "Financial records" tab showed every OTHER
     // clinic's transactions mixed into this one's - the practice manager
     // review below (PaymentLogScreen) needs its own institution scoping
     // too, but this cashier-facing tab had never had it at all.
-    const { data } = await supabase.from('transactions').select('*').eq('institution_id', institutionId).order('created_at',{ascending:false}).limit(100)
+    const { data } = await supabase.from('transactions').select('*').eq('institution_id', requestedInstitutionId).order('created_at',{ascending:false}).limit(100)
+    if (institutionIdRef.current !== requestedInstitutionId) return
     setLedger(data||[])
     setLedgerLoading(false)
   }
@@ -5531,10 +5568,12 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
 
   async function loadTreatmentPlans() {
     setPlansLoading(true)
-    if (!institutionId) { setTreatmentPlans([]); setPlansLoading(false); return }
+    const requestedInstitutionId = institutionId
+    if (!requestedInstitutionId) { setTreatmentPlans([]); setPlansLoading(false); return }
     // Real bug found live-testing: no institution scoping at all - same
     // cross-clinic leak class as loadPendingPayments above.
-    const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)').eq('institution_id', institutionId)
+    const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)').eq('institution_id', requestedInstitutionId)
+    if (institutionIdRef.current !== requestedInstitutionId) return
     setTreatmentPlans((data||[]).map(p => ({
       id: p.id,
       patient: p.patients?.full_name || 'Unknown',
@@ -8022,6 +8061,20 @@ export default function ClinicOpsApp() {
   const [institutionId,setInstitutionId]=useState(null)
   const [institutionName,setInstitutionName]=useState('')
   const [medicineType,setMedicineType]=useState('western')
+  // Real bug found live-testing on a second clinic: institutionId being
+  // cleared/reset on relogin (see loadInstitution below) stops NEW
+  // fetches from using the wrong clinic, but does nothing about a
+  // fetch that was ALREADY in flight for the PREVIOUS clinic when the
+  // switch happened - that request still resolves later and, without a
+  // check, still overwrites state with the old clinic's data for a
+  // moment before the next correctly-scoped poll corrects it again.
+  // That's the exact "flashes then disappears" pattern reported. A ref
+  // (not state - refs are readable synchronously inside an
+  // already-in-flight async function without retriggering anything)
+  // lets a resolving fetch check whether it's still relevant before
+  // committing its result.
+  const institutionIdRef = useRef(null)
+  useEffect(() => { institutionIdRef.current = institutionId }, [institutionId])
 
   // Single device at a time per staff account - if another device signs
   // in on this same account, staff_sessions gets overwritten with its
@@ -8060,7 +8113,8 @@ export default function ClinicOpsApp() {
   // logic didn't need to be rewritten. Polls rather than a single load,
   // since this needs to reach a genuinely different device in real time.
   async function loadTaskBoard() {
-    if (!institutionId) return
+    const requestedInstitutionId = institutionId
+    if (!requestedInstitutionId) return
     // Real bug found live-testing: source='clinic_ops' marks which APP
     // wrote the record, not which clinic - every clinic_ops clinic's
     // pending prescriptions showed up mixed together here until a second
@@ -8092,6 +8146,11 @@ export default function ClinicOpsApp() {
         billed: r.record_status !== 'submitted',
       }
     }))
+    // If institutionId has moved on since this request started (a clinic
+    // switch mid-flight), this response is stale - drop it instead of
+    // briefly showing the wrong clinic's data before the next poll
+    // (already scoped to the new clinic) corrects it.
+    if (institutionIdRef.current !== requestedInstitutionId) return
     setPendingPrescriptions(withDrugs)
   }
 
