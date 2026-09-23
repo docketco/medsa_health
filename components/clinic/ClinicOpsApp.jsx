@@ -4653,15 +4653,18 @@ function PaymentLogScreen({ institutionId }) {
   async function loadRows() {
     setLoading(true)
     const requestedInstitutionId = institutionId
-    const { data: txns } = await supabase.from('transactions').select('*')
+    const { data: rawTxns } = await supabase.from('transactions').select('*')
       .eq('institution_id', requestedInstitutionId).order('created_at',{ascending:false}).limit(1000)
-    const recordIds = [...new Set((txns||[]).map(t=>t.medical_record_id).filter(Boolean))]
+    // Hard client-side re-check, independent of the query filter above -
+    // see the matching comment on loadTaskBoard for why this exists.
+    const txns = (rawTxns||[]).filter(t => t.institution_id === requestedInstitutionId)
+    const recordIds = [...new Set(txns.map(t=>t.medical_record_id).filter(Boolean))]
     const { data: records } = recordIds.length
       ? await supabase.from('medical_records').select('id, doctor_name, line_items, title').in('id', recordIds)
       : { data: [] }
     if (institutionIdRef.current !== requestedInstitutionId) return
     const recordById = new Map((records||[]).map(r=>[r.id, r]))
-    const merged = (txns||[]).map(t => {
+    const merged = txns.map(t => {
       const rec = t.medical_record_id ? recordById.get(t.medical_record_id) : null
       const categories = rec?.line_items?.length
         ? [...new Set(rec.line_items.map(i=>i.category).filter(Boolean))]
@@ -5528,7 +5531,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // too, but this cashier-facing tab had never had it at all.
     const { data } = await supabase.from('transactions').select('*').eq('institution_id', requestedInstitutionId).order('created_at',{ascending:false}).limit(100)
     if (institutionIdRef.current !== requestedInstitutionId) return
-    setLedger(data||[])
+    // Hard client-side re-check, independent of the query filter above -
+    // see the matching comment on loadTaskBoard for why this exists.
+    setLedger((data||[]).filter(t => t.institution_id === requestedInstitutionId))
     setLedgerLoading(false)
   }
 
@@ -5606,7 +5611,9 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
     // cross-clinic leak class as loadPendingPayments above.
     const { data } = await supabase.from('treatment_plans').select('*, patients(full_name)').eq('institution_id', requestedInstitutionId)
     if (institutionIdRef.current !== requestedInstitutionId) return
-    setTreatmentPlans((data||[]).map(p => ({
+    // Hard client-side re-check, independent of the query filter above -
+    // see the matching comment on loadTaskBoard for why this exists.
+    setTreatmentPlans((data||[]).filter(p => p.institution_id === requestedInstitutionId).map(p => ({
       id: p.id,
       patient: p.patients?.full_name || 'Unknown',
       plan: p.plan_name,
@@ -8160,12 +8167,20 @@ export default function ClinicOpsApp() {
     // in anything dispensed today regardless of billing status, so a
     // printed label stays visible as same-day reference all day.
     const { start: todayStart } = hkDayBounds(new Date())
-    const { data: records } = await supabase.from('medical_records')
+    const { data: rawRecords } = await supabase.from('medical_records')
       .select('*, patients(full_name, medsa_id)')
-      .eq('source', 'clinic_ops').eq('institution_id', institutionId)
+      .eq('source', 'clinic_ops').eq('institution_id', requestedInstitutionId)
       .or(`record_status.eq.submitted,meds_dispensed_at.gte.${todayStart.toISOString()}`)
       .order('date_of_record', { ascending: false })
-    if (!records) return
+    if (!rawRecords) return
+    // Hard client-side re-check, independent of the query filter above -
+    // a real cross-clinic leak was reported here that server-side
+    // scoping alone didn't explain, and some legacy medical_records rows
+    // are missing institution_id entirely (NULL) from before that column
+    // existed. Whatever the exact mechanism, no row reaches the screen
+    // unless its own institution_id is an exact match - this is the
+    // final gate, not just a query hint.
+    const records = rawRecords.filter(r => r.institution_id === requestedInstitutionId)
     const withDrugs = await Promise.all(records.map(async r => {
       const { data: meds } = await supabase.from('medications').select('*').eq('medical_record_id', r.id)
       return {
