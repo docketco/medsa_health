@@ -19,6 +19,30 @@ import Icon from '../shared/Icon'
 const EPC_TRACK_ROLES = ['doctor', 'physiotherapist', 'occupational_therapist', 'optometrist', 'radiographer', 'medical_lab_technologist']
 const ACCREDITED_REGISTER_ROLES = ['speech_therapist', 'dietitian', 'clinical_psychologist']
 
+// Light e-PC verification - there's no public MCHK API to confirm a
+// license is genuine or still active (see the field's own note), so this
+// can never be real verification. What it CAN catch: someone pasting a
+// license/registration number, a random string, or an unrelated link
+// into a field meant to hold the government's own verification page -
+// which is the actual, common way this field goes wrong. `valid: false`
+// hard-blocks (not even a URL); a hostname mismatch for a role whose
+// real domain is known is a soft `warning`, never a block, since a
+// government site can legitimately live on more than one domain and
+// this app has no authoritative list of all of them.
+const EPC_EXPECTED_HOSTS = { doctor: 'mchk.org.hk', clinic_assistant: 'nchk.org.hk' }
+function checkEpcLinkFormat(link, role) {
+  const trimmed = (link || '').trim()
+  if (!trimmed) return { valid: false, warning: null }
+  let url
+  try { url = new URL(trimmed) } catch { return { valid: false, warning: null } }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return { valid: false, warning: null }
+  const expectedHost = EPC_EXPECTED_HOSTS[role]
+  if (expectedHost && !url.hostname.toLowerCase().endsWith(expectedHost)) {
+    return { valid: true, warning: `This doesn't look like a ${expectedHost} link - double-check it's the real MCHK verification page, not a different site.` }
+  }
+  return { valid: true, warning: null }
+}
+
 const ROLE_LABELS = {
   doctor: 'Doctor', clinic_assistant: 'Clinic Assistant', admin: 'Practice Manager',
   physiotherapist: 'Physiotherapist', occupational_therapist: 'Occupational Therapist',
@@ -4050,6 +4074,7 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
   const [newSex,setNewSex]=useState('')
   const [newDob,setNewDob]=useState('')
   const [newEpcLink,setNewEpcLink]=useState('')
+  const epcLinkWarning = checkEpcLinkFormat(newEpcLink, newRole).warning
   const [newHkid,setNewHkid]=useState('')
   const [newEmail,setNewEmail]=useState('')
   const [editingEmailId,setEditingEmailId]=useState(null)
@@ -4276,6 +4301,11 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
     }
     const needsEpc = EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse)
     if (needsEpc && !newEpcLink?.trim()) { setOnboardError('A real e-PC (electronic Practising Certificate) link is required.'); return }
+    // Light verification, not real verification - there's no public MCHK
+    // API to confirm a license is genuine, but this catches the common
+    // real mistake of pasting a license number or an unrelated link into
+    // a field meant to hold the government's own verification page.
+    if (needsEpc && !checkEpcLinkFormat(newEpcLink, newRole).valid) { setOnboardError('The e-PC field needs a real link (starting with https://) to the government verification page, not a license number or other text.'); return }
     if (needsEpc && !newHkid?.trim()) { setOnboardError('HKID is required - together with e-PC, it’s how Medsa recognises this is the same real person if they also work at another clinic.'); return }
     if (ACCREDITED_REGISTER_ROLES.includes(newRole) && !newRegisteringBody?.trim()) { setOnboardError('Registering body is required for this profession.'); return }
     setSaving(true)
@@ -4437,7 +4467,9 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
           </>}
           {(EPC_TRACK_ROLES.includes(newRole)||(newRole==='clinic_assistant'&&newIsNurse))&&<>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>e-PC (electronic Practising Certificate) - required. This is the real government-issued identifier and the actual scan target itself (MCHK for doctors, the Allied Health Practitioners Council for the 5 statutory-board allied health professions) - not a separate Medsa-generated code.</div>
-            <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px',marginTop:'-2px'}}>This is recorded as declared, not verified - Medsa checks it's a real-looking link (and, for a doctor, that it points at MCHK's own site), but there's no public MCHK API to confirm the license itself is genuine or still active. Same limitation as the license-expiry field below.</div>
+            <input value={newEpcLink} onChange={e=>setNewEpcLink(e.target.value)} placeholder="e-PC government verification link (e.g. https://www.mchk.org.hk/...)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+            {epcLinkWarning&&<div style={{fontSize:'11px',color:C.amber,marginTop:'-6px',marginBottom:'10px'}}>{'⚠'} {epcLinkWarning}</div>}
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>HKID - required. Together with e-PC, this is how Medsa recognises the same real person if they also work at another clinic, so they log in once and switch clinics instead of getting a second, disconnected account.</div>
             <input value={newHkid} onChange={e=>setNewHkid(e.target.value)} placeholder="HKID" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
           </>}
