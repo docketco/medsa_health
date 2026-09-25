@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
@@ -686,11 +686,6 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   const [checkInDoctors,setCheckInDoctors]=useState([])
   const [selectedCheckInDoctor,setSelectedCheckInDoctor]=useState('')
   useEffect(() => { loadClinicDoctors(institutionId).then(setCheckInDoctors) }, [institutionId])
-  const checkInDoctorsBySpeciality = checkInDoctors.reduce((acc,d)=>{
-    const key = d.department || 'General'
-    ;(acc[key] = acc[key]||[]).push(d)
-    return acc
-  }, {})
 
   // Which queue this clinic runs, if more than one - lets front desk
   // route a check-in to the right line (e.g. General vs Chinese
@@ -909,18 +904,22 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               </div>
               {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
             </div>
-            {Object.keys(checkInDoctorsBySpeciality).length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
+            {checkInDoctors.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
-              {Object.entries(checkInDoctorsBySpeciality).map(([speciality,docs])=>(
-                <div key={speciality} style={{marginBottom:'6px'}}>
-                  <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>{speciality}</div>
-                  <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                    {docs.map(d=>(
-                      <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}</div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+              {/* Real fix: this used to group doctors under a department
+                  header first (e.g. "GENERAL MEDICINE" / "CHINESE
+                  MEDICINE"), with the doctor's own name as a small chip
+                  underneath - front desk was effectively picking a
+                  department, not a doctor, especially with only one
+                  doctor per department. Flattened to one row of doctor
+                  chips, each showing its own department as a small
+                  inline label, so picking a specific doctor is the one
+                  and only action here. */}
+              <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+                {checkInDoctors.map(d=>(
+                  <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}{d.department&&<span style={{opacity:0.65,marginLeft:'5px'}}>· {d.department}</span>}</div>
+                ))}
+              </div>
             </div>}
             <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
               <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
@@ -978,18 +977,13 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             </div>
             {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
           </div>
-          {Object.keys(checkInDoctorsBySpeciality).length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
+          {checkInDoctors.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
-            {Object.entries(checkInDoctorsBySpeciality).map(([speciality,docs])=>(
-              <div key={speciality} style={{marginBottom:'6px'}}>
-                <div style={{fontSize:'10px',color:C.textMuted,textTransform:'uppercase',marginBottom:'4px'}}>{speciality}</div>
-                <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-                  {docs.map(d=>(
-                    <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}</div>
-                  ))}
-                </div>
-              </div>
-            ))}
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+              {checkInDoctors.map(d=>(
+                <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}{d.department&&<span style={{opacity:0.65,marginLeft:'5px'}}>· {d.department}</span>}</div>
+              ))}
+            </div>
           </div>}
           <div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
@@ -8260,7 +8254,7 @@ export default function ClinicOpsApp() {
   // Poisons Ordinance, or Chinese - Chinese Medicine Ordinance). These are
   // two separate regulatory systems in Hong Kong, so a clinic's drug
   // reference pool never mixes between them.
- useEffect(() => {
+ useLayoutEffect(() => {
   // Real bug found live-testing on a second clinic account: logging out
   // and into a different clinic in the same tab doesn't remount this
   // component, so institutionId and everything loaded from it (Printed
@@ -8270,6 +8264,16 @@ export default function ClinicOpsApp() {
   // Clearing them synchronously, before the lookup even starts, means
   // there's nothing stale to flash - screens just show their own loading
   // state until the new institution resolves.
+  //
+  // Still not enough on its own, though: a plain useEffect runs AFTER
+  // the browser has already painted the frame where staffMember changed
+  // but this state hadn't been cleared yet - so the old clinic's data
+  // (consultation history, labels queued to print, everything sourced
+  // from pendingPrescriptions/checkedInQueue) painted for exactly one
+  // stale frame before this callback ran and cleared it. useLayoutEffect
+  // runs synchronously after the DOM update but before the browser
+  // paints, so the clear lands in the SAME frame as the staffMember
+  // change - there's no stale frame left to flash at all.
   setInstitutionId(null); setPendingPrescriptions([]); setCheckedInQueue([]); setClinicQueues([])
   async function loadInstitution() {
     // Real fix - resolves from whichever institution the logged-in staff

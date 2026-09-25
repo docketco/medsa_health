@@ -13,6 +13,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
+import { REFERRAL_FEE_ENABLED } from '../lib/featureFlags'
 import Icon from '../components/shared/Icon'
 import { SecLabel } from '../components/shared/UI'
 
@@ -777,7 +778,7 @@ function PartnersTab() {
           {c.contract_expiry_date
             ? <div style={{fontSize:'11px',marginBottom:'8px',color:expiringSoon?C.amber:C.textMuted,fontWeight:expiringSoon?600:400}}>{expiringSoon?`⚠ Contract expires in ${daysLeft} day${daysLeft===1?'':'s'} - send a new one`:`Contract until ${c.contract_expiry_date}`}{c.contract_doc_url?' · signed copy on file':''}</div>
             : <div style={{fontSize:'11px',marginBottom:'8px',color:C.amber}}>⚠ No contract expiry on file</div>}
-          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
+          {REFERRAL_FEE_ENABLED && <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
             <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Medsa's referral fee rate (contract term):</div>
             <input type="number" value={referralFeeDrafts[c.id] ?? (c.referral_fee_rate_pct ?? '')}
               onChange={e=>{setReferralFeeDrafts(d=>({...d,[c.id]:e.target.value}));setSavedReferralFeeId(null)}}
@@ -788,7 +789,7 @@ function PartnersTab() {
             </button>
             {savedReferralFeeId===c.id&&<span style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ Saved</span>}
             <div style={{fontSize:'10px',color:C.textMuted}}>of the agent's commission on this insurer's plans</div>
-          </div>
+          </div>}
           {/* Medsa's actual revenue model: a flat monthly platform
               subscription, not a per-policy/commission-shaped fee - see
               the state comment above for why that matters regulatorily.
@@ -987,7 +988,7 @@ function CompanyPlansManager({ company, onBack }) {
             {inq.status==='new'
               ? <button onClick={()=>markContacted(inq)} style={{marginTop:'8px',padding:'6px 12px',background:C.card,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>Mark as contacted</button>
               : <div style={{marginTop:'6px',fontSize:'11px',color:C.green}}>✓ Contacted</div>}
-            {inq.policy&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+            {REFERRAL_FEE_ENABLED && inq.policy&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`,display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
               <span style={{fontSize:'11px',color:C.textMuted}}>Converted to policy - referral fee:</span>
               <input type="number" defaultValue={inq.policy.referral_fee_hkd||''} onBlur={e=>saveReferralFee(inq.policy.id, e.target.value)} placeholder="HK$" style={{width:80,padding:'5px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
               {inq.policy.broker_commission_hkd&&<span style={{fontSize:'11px',color:C.textMuted}}>(commission HK${inq.policy.broker_commission_hkd}, cap HK${(inq.policy.broker_commission_hkd*0.5).toFixed(0)})</span>}
