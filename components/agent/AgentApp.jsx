@@ -299,8 +299,14 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   // (see PatientApp.jsx's purchase flow) - an agent-issued policy should
   // carry the same details, not less, than one a patient bought without
   // any human involved at all.
-  const [wardClass,setWardClass]=useState('')
-  const [paymentFrequency,setPaymentFrequency]=useState('monthly')
+  // Pre-filled from the patient's own answers on the inquiry (see
+  // formWardClass/formPaymentFrequency in PatientApp.jsx's "talk to an
+  // agent" form) when this policy is being built from one - they already
+  // answered this while asking about this specific product, and re-asking
+  // meant an agent either had to track the answer down separately or just
+  // guessed. Still a normal editable field - an agent can change it.
+  const [wardClass,setWardClass]=useState(prefillInquiry?.ward_class || '')
+  const [paymentFrequency,setPaymentFrequency]=useState(prefillInquiry?.payment_frequency || 'monthly')
   const [healthDeclarationAck,setHealthDeclarationAck]=useState(false)
   const [termsModalOpen,setTermsModalOpen]=useState(false)
 
@@ -582,8 +588,19 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           {prefillInquiry.suitability_verdict==='suitable_with_notes'&&'◇ Pre-checked: likely suitable'}
           {prefillInquiry.suitability_verdict==='needs_review'&&'⚠ Pre-checked: needs a closer look'}
         </div>
+        {/* Real privacy gap found live-testing: this used to also dump the
+            patient's full declared_conditions list verbatim (everything
+            they checked or that turned up in their consented visit
+            history, whether or not it was relevant to this plan) - an
+            agent got the patient's whole self-declared/history-derived
+            condition list just from a pre-check they never had to open.
+            suitability_summary already says, in plain language, exactly
+            which conditions are excluded/uncovered/insurer-flagged for
+            THIS plan (see lib/planSuitability.js) - that's the real
+            signal an agent needs. Nothing beyond that renders here now;
+            history_context_summary (only ever set when something in the
+            consented history was actually flagged) still shows below. */}
         {prefillInquiry.suitability_summary&&<div style={{color:C.textSub}}>{prefillInquiry.suitability_summary}</div>}
-        {(prefillInquiry.declared_conditions||[]).length>0&&<div style={{marginTop:'4px',color:C.textMuted}}>Declared: {prefillInquiry.declared_conditions.join(', ')}</div>}
         {prefillInquiry.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{prefillInquiry.history_context_summary}</div>}
       </div>}
 
@@ -685,6 +702,9 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       <SecLabel>Coverage details</SecLabel>
+      {prefillInquiry?.ward_class || prefillInquiry?.payment_frequency
+        ? <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Pre-filled from the patient's own answer when they reached out - change either if it's no longer right.</div>
+        : null}
       <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
         <div style={{flex:1}}>
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Ward class</div>
@@ -737,15 +757,38 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         ))}
       </div>
 
+      {/* Real fix: this used to only show the computed HK$ commission
+          figure, unlabelled beyond a placeholder, buried inside a block
+          titled "Referral fee owed to Medsa" (Medsa's own cut, now off -
+          see REFERRAL_FEE_ENABLED) - an agent's own commission is a
+          separate thing they should always be able to see regardless of
+          that toggle, and the rate itself (what "convoluted" was really
+          about) never showed at all, only the dollar amount it produced.
+          Now: a real "Your commission" label, the insurer's % rate shown
+          first, then the HK$ figure it computes to. */}
+      {lineItems.length>0&&<>
+        <SecLabel>Your commission</SecLabel>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>
+          {anyLineItemMissingCommissionRate ? "The insurer hasn't set a commission rate for this plan yet - not something you enter." : "Set by the insurer's own published rate for this plan, not something you enter."}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
+          <div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>
+            {anyLineItemMissingCommissionRate ? 'Rate not set' : `${lineItems.map(l=>l.commissionRatePct).filter((v,idx,arr)=>arr.indexOf(v)===idx).join(', ')}%`}
+          </div>
+          <div style={{color:C.textMuted,fontSize:'13px'}}>→</div>
+          <input value={brokerCommission} disabled type="number" placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+        </div>
+      </>}
       {REFERRAL_FEE_ENABLED && prefillInquiry&&<>
         <SecLabel>Referral fee owed to Medsa</SecLabel>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
           {lineItems.length>0
-            ? `Commission is the insurer's own rate for this plan, not something you enter. Medsa's fee is its own contracted rate against that commission${medsaReferralFeeRatePct!=null?` (${medsaReferralFeeRatePct}%, set by Medsa admin)`:' (not set yet by Medsa admin)'}, capped at 50% either way (the Insurance Authority's own referral-fee benchmark).`
-            : "Add a plan to this policy first - commission and Medsa's fee are both set by the insurer's and Medsa's own contracted rates, never typed in by an agent."}
+            ? `Medsa's fee is its own contracted rate against that commission${medsaReferralFeeRatePct!=null?` (${medsaReferralFeeRatePct}%, set by Medsa admin)`:' (not set yet by Medsa admin)'}, capped at 50% either way (the Insurance Authority's own referral-fee benchmark).`
+            : "Add a plan to this policy first - Medsa's fee is set by Medsa's own contracted rate, never typed in by an agent."}
         </div>
-        <div style={{display:'flex',gap:'10px',marginBottom:'8px'}}>
-          <input value={brokerCommission} disabled type="number" placeholder={lineItems.length===0?'Add a plan first':(anyLineItemMissingCommissionRate?'Not set by insurer yet':'Your commission (HK$)')} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+        <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'8px'}}>
+          {medsaReferralFeeRatePct!=null&&<div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>{medsaReferralFeeRatePct}%</div>}
+          {medsaReferralFeeRatePct!=null&&<div style={{color:C.textMuted,fontSize:'13px'}}>→</div>}
           <input value={referralFee} disabled type="number" placeholder={lineItems.length===0?'Add a plan first':(medsaReferralFeeRatePct==null?'Not set by Medsa admin yet':'Referral fee to Medsa (HK$)')} style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
         </div>
         {referralFeeExceedsCap&&<div style={{fontSize:'11px',color:C.red,marginBottom:'12px'}}>That's more than 50% of the commission entered (HK${(commissionNum*0.5).toFixed(0)} max) - the IA's referral-fee benchmark.</div>}
@@ -1222,19 +1265,22 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               </span>
               {i.quoted_premium_hkd!=null&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
               <div style={{marginTop:'2px'}}>{i.suitability_summary}</div>
-              {(i.declared_conditions||[]).length>0&&<div style={{marginTop:'2px',color:C.textMuted}}>Declared: {i.declared_conditions.join(', ')}</div>}
               {i.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{i.history_context_summary}</div>}
             </div>}
-            {/* Real gap found live-testing: the patient explicitly
-                consented to Medsa checking their visit history against
-                this plan, but the agent could only ever see a computed
-                summary sentence, never the actual entries it came from -
-                no way to review what was really on file. Expanding the
-                card now also shows the real snapshot taken at inquiry
-                time (not a live query - what the patient actually
-                consented to at that moment). */}
-            {expandedId===i.id&&(i.history_records_snapshot||[]).length>0&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px'}}>
-              <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>Visit history reviewed (patient consented)</div>
+            {/* Real privacy fix: this used to show the patient's full
+                consented visit-history snapshot (up to 15 real diagnosis
+                entries) the moment an agent expanded ANY inquiry card,
+                whether or not anything in that history was actually
+                relevant to the plan being quoted - a "declared 3
+                unrelated conditions from 2 years ago" leak dressed up as
+                a feature. history_context_summary (above) is only ever
+                set when the history-derived check actually found an
+                excluded or uncovered condition for THIS plan - so the
+                raw entries now only render when there's something real
+                to review, gated behind the same expand action an agent
+                already uses to open a card (their "request" to see it). */}
+            {expandedId===i.id&&i.history_context_summary&&(i.history_records_snapshot||[]).length>0&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px'}}>
+              <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>Visit history reviewed (patient consented) - shown because something above was flagged</div>
               {i.history_records_snapshot.map((r,ri)=>(
                 <div key={ri} style={{fontSize:'11px',color:C.textSub,padding:'3px 0'}}>{r.date?new Date(r.date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'-'} · {r.diagnosis}</div>
               ))}
