@@ -1316,12 +1316,24 @@ function PaymentsManager({ company }) {
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('insurance_companies')
-      .select('subscription_fee_hkd_monthly, subscription_status, stripe_connect_status')
+      .select('subscription_fee_hkd_monthly, subscription_status, subscription_current_period_end, stripe_connect_status, stripe_subscription_id')
       .eq('id', company.id).maybeSingle()
     setStatus(data)
     setLoading(false)
   }
   useEffect(() => { load() }, [company.id])
+
+  // Same real-time sync as the Connect status check below - the
+  // customer.subscription.updated webhook can lag or (as found live-
+  // testing) be pointed at a stale signing secret with no on-screen way to
+  // tell, so this re-checks Stripe directly on load too.
+  useEffect(() => {
+    if (!status?.stripe_subscription_id) return
+    fetch('/api/admin/refresh_subscription_status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companyId: company.id }),
+    }).then(()=>load()).catch(()=>{})
+  }, [status?.stripe_subscription_id])
 
   // Re-checks the real Stripe account status on load (not just whatever
   // this app's own database last had) - catches an onboarding that
@@ -1373,6 +1385,8 @@ function PaymentsManager({ company }) {
             {status.subscription_status==='active'?'Active':status.subscription_status==='past_due'?'Payment past due':status.subscription_status==='canceled'?'Cancelled':'Not started'}
           </span>
         </div>
+        {status.subscription_status==='active'&&status.subscription_current_period_end&&
+          <div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Renews {new Date(status.subscription_current_period_end).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - billed automatically, no action needed.</div>}
       </Card>
 
       <Card style={{padding:'16px 18px',marginBottom:'16px'}}>

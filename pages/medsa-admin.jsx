@@ -560,6 +560,7 @@ function PartnersTab() {
   const [savedSubscriptionFeeId, setSavedSubscriptionFeeId] = useState(null)
   const [startingSubscriptionId, setStartingSubscriptionId] = useState(null)
   const [subscriptionCheckoutUrl, setSubscriptionCheckoutUrl] = useState(null)
+  const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState(null)
 
   const [uploadError, setUploadError] = useState(null)
 
@@ -682,6 +683,23 @@ function PartnersTab() {
       else if (data.message) setSubscriptionCheckoutUrl({ id: company.id, error: data.message })
     } finally {
       setStartingSubscriptionId(null)
+    }
+  }
+
+  // Pulls the real status/renewal date straight from Stripe - doesn't rely
+  // on the webhook alone, since there's no on-screen way to tell whether it
+  // actually fired (and the webhook signing secret has genuinely been wrong
+  // before, silently).
+  async function refreshSubscriptionStatus(company) {
+    setRefreshingSubscriptionId(company.id)
+    try {
+      await fetch('/api/admin/refresh_subscription_status', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      load()
+    } finally {
+      setRefreshingSubscriptionId(null)
     }
   }
 
@@ -808,7 +826,14 @@ function PartnersTab() {
             <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:600,background:c.subscription_status==='active'?C.greenLight:c.subscription_status==='past_due'?C.amberLight:C.card,color:c.subscription_status==='active'?C.green:c.subscription_status==='past_due'?C.amber:C.textMuted}}>
               {c.subscription_status==='active'?'Subscription active':c.subscription_status==='past_due'?'Payment past due':c.subscription_status==='canceled'?'Cancelled':'No subscription yet'}
             </span>
+            {c.stripe_subscription_id&&<span onClick={()=>refreshSubscriptionStatus(c)} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{refreshingSubscriptionId===c.id?'Refreshing…':'↻ Refresh status'}</span>}
           </div>
+          {/* A monthly subscription auto-renews rather than having a fixed
+              term the insurer picked a length for - this is really "next
+              renewal date," shown that way rather than as a chosen expiry,
+              since Stripe (not us) advances it every successful charge. */}
+          {c.subscription_status==='active'&&c.subscription_current_period_end&&
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Active until {new Date(c.subscription_current_period_end).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - renews automatically unless cancelled.</div>}
           {c.subscription_status!=='active'&&<div style={{marginBottom:'8px'}}>
             <button onClick={()=>startSubscription(c)} disabled={startingSubscriptionId===c.id || !c.subscription_fee_hkd_monthly}
               style={{padding:'6px 12px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:c.subscription_fee_hkd_monthly?'pointer':'not-allowed',background:c.subscription_fee_hkd_monthly?C.navy:C.card,color:c.subscription_fee_hkd_monthly?'#fff':C.textMuted}}>
