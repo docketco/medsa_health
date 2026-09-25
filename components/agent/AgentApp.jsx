@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import C from '../shared/colours'
 import TermsAgreementModal from '../shared/TermsAgreementModal'
+import { REFERRAL_FEE_ENABLED } from '../../lib/featureFlags'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -736,7 +737,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         ))}
       </div>
 
-      {prefillInquiry&&<>
+      {REFERRAL_FEE_ENABLED && prefillInquiry&&<>
         <SecLabel>Referral fee owed to Medsa</SecLabel>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
           {lineItems.length>0
