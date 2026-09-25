@@ -6514,6 +6514,13 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {claimAdjudication.usingDefaultDeductible&&<div style={{fontSize:'11px',color:C.amber,marginTop:'2px'}}>{'⚠'} {claimAdjudication.usingDefaultDeductible}</div>}
               {claimAdjudication.preauthCleared&&<div style={{fontSize:'11px',color:C.green,marginTop:'2px'}}>{'✓'} Pre-authorized via GOP code - settled without a review hold.</div>}
               {claimAdjudication.icd10Codes?.length>0&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>ICD-10: {claimAdjudication.icd10Codes.join(', ')}</div>}
+              {/* Real gap this closes: this screen is the one clinic staff
+                  actually bill through day to day - the platform/
+                  processing fee note (an estimate, insurer-billed, never
+                  deducted from the patient or the clinic) only ever
+                  existed on the separate standalone claims-testing
+                  screen, never here. */}
+              {claimAdjudication.fees?.platformClaimFee!=null&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Medsa clearinghouse fee for this claim: HK${claimAdjudication.fees.platformClaimFee.toFixed(2)} (estimate, paid by {selectedEligiblePlan.plan.company_name} - never deducted from this visit's total)</div>}
             </div>
             {/* Preview stops here - confirming is what actually creates
                 the claim (see handleConfirmClaimSubmit). Only a REAL

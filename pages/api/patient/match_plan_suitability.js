@@ -74,7 +74,7 @@ async function screenWithAI(declaredConditions, historyConditions, planName) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode } = req.body || {}
+  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode, wardClass, paymentFrequency } = req.body || {}
   // Replacing a plan already held is never an automated, self-service
   // purchase - the Insurance Authority's own guideline on policy
   // replacement (GL27) exists specifically because a switch can leave a
@@ -158,6 +158,11 @@ export default async function handler(req, res) {
     suitability_verdict: verdict, suitability_summary: summary,
     quoted_premium_hkd: result.quotedPremium, used_ai: usedAI,
     history_context_summary: historyContextSummary, history_records_snapshot: historyRecordsSnapshot,
+    // Same ward class / payment frequency the automated-purchase path
+    // already collects - carried through here too (agent mode only, see
+    // the patient-side form) so NewPolicyScreen can pre-fill them instead
+    // of asking the patient again for something they already answered.
+    ward_class: wardClass || null, payment_frequency: paymentFrequency || null,
   }
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })

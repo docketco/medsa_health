@@ -3365,10 +3365,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [formNoneApply,setFormNoneApply]=useState(false)
   const [formOtherText,setFormOtherText]=useState('')
   const [formMessage,setFormMessage]=useState('')
+  // Same ward class / payment frequency questions the automated-purchase
+  // confirmation screen already asks - collected here too, for the "talk
+  // to an agent" path, so the agent doesn't have to ask the patient again
+  // for something they already answered when they first asked about this
+  // specific plan.
+  const [formWardClass,setFormWardClass]=useState('')
+  const [formPaymentFrequency,setFormPaymentFrequency]=useState('monthly')
 
   function openInquiryForm(i, mode, isSwitch) {
     setInquiryForm({ index: i, mode, isSwitch: !!isSwitch })
     setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText(''); setFormMessage('')
+    setFormWardClass(''); setFormPaymentFrequency('monthly')
   }
   // Finishing the auto-quote into a real held policy - previously the
   // automated path only ever produced a quote card, never an actual
@@ -3458,6 +3466,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           declaredConditions: formNoneApply ? [] : formConditions,
           isSwitchRequest: !!inquiryForm.isSwitch,
           message: inquiryForm.mode==='agent' ? formMessage.trim() : '',
+          wardClass: inquiryForm.mode==='agent' ? (formWardClass||null) : null,
+          paymentFrequency: inquiryForm.mode==='agent' ? formPaymentFrequency : null,
         }),
       })
       const data = await res.json()
@@ -4066,6 +4076,23 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                   to ask it up front, only the generic consent/conditions
                   form. Seeds the same inquiry_messages thread the agent
                   already reads once they claim it, so it's not lost. */}
+              {/* Same ward class / payment frequency choice the automated
+                  purchase flow asks at checkout - asking here too means
+                  the agent picking this up already has the patient's real
+                  answer instead of a blank field to re-ask for on a
+                  specific product the patient is already asking about. */}
+              {inquiryForm.mode==='agent'&&<div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+                <select value={formWardClass} onChange={e=>setFormWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+                  <option value="">Ward class (optional)</option>
+                  <option value="general">General ward</option>
+                  <option value="semi_private">Semi-private</option>
+                  <option value="private">Private</option>
+                </select>
+                <select value={formPaymentFrequency} onChange={e=>setFormPaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+                  <option value="monthly">Pay monthly</option>
+                  <option value="annual">Pay annually</option>
+                </select>
+              </div>}
               {inquiryForm.mode==='agent'&&<div style={{marginBottom:'10px'}}>
                 <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Anything specific to ask the agent? (optional)</div>
                 <textarea value={formMessage} onChange={e=>setFormMessage(e.target.value)} rows={2} placeholder="e.g. Does this cover my existing GP visits?" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit'}}/>

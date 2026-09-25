@@ -172,6 +172,47 @@ function SubmitClaimScreen({ clinic }) {
   // (AgentClaimView), since a clinic deciding its own claim would be a
   // real conflict of interest, not a UI shortcut worth taking.
   const [expandedClaimRef,setExpandedClaimRef]=useState(null)
+  // Real gap this closes: a TPA clinic never gets its own ClinicOps
+  // receipts (they're not a ClinicOps clinic at all - see this file's
+  // top comment), so this claim history is the only record they have of
+  // what Medsa billed on their behalf. No way existed to pick a set of
+  // claims and get something to keep or hand to their own accounting.
+  const [selectedClaimRefs,setSelectedClaimRefs]=useState(new Set())
+  function toggleClaimSelected(ref) {
+    setSelectedClaimRefs(prev => { const n = new Set(prev); n.has(ref) ? n.delete(ref) : n.add(ref); return n })
+  }
+  function exportSelectedClaimsCsv() {
+    const rows = recentClaims.filter(c=>selectedClaimRefs.has(c.claim_ref))
+    const header = ['Claim ref','Patient','Submitted','Status','Amount','Insurer covers','Patient pays','Medsa fee (estimate)','ICD-10']
+    const csv = [header, ...rows.map(c => [
+      c.claim_ref, c.patients?.full_name||'Unknown', new Date(c.submitted_at).toLocaleString('en-HK'),
+      c.status, c.amount, c.insurer_covered_amount??'', c.patient_copay_amount??'', c.platform_claim_fee||0, c.icd10_codes||'',
+    ])].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `${clinic.name}-claims-${new Date().toISOString().slice(0,10)}.csv`
+    a.click(); URL.revokeObjectURL(url)
+  }
+  function printSelectedClaims() {
+    const rows = recentClaims.filter(c=>selectedClaimRefs.has(c.claim_ref))
+    const win = window.open('', '_blank')
+    win.document.write(`<html><head><title>${clinic.name} - claim history</title><style>
+      body{font-family:-apple-system,sans-serif;padding:24px;color:#141413}
+      h1{font-size:16px;margin-bottom:4px}
+      table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}
+      th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #ddd}
+      th{color:#666;font-weight:600}
+    </style></head><body>
+      <h1>${clinic.name} - claim history</h1>
+      <div style="font-size:12px;color:#666">${rows.length} claim(s) - printed ${new Date().toLocaleString('en-HK')}</div>
+      <table><thead><tr><th>Claim ref</th><th>Patient</th><th>Submitted</th><th>Status</th><th>Amount</th><th>Insurer covers</th><th>Patient pays</th><th>Medsa fee (est.)</th></tr></thead><tbody>
+      ${rows.map(c=>`<tr><td>${c.claim_ref}</td><td>${c.patients?.full_name||'Unknown'}</td><td>${new Date(c.submitted_at).toLocaleString('en-HK')}</td><td>${c.status}</td><td>HK$${c.amount}</td><td>HK$${c.insurer_covered_amount??'—'}</td><td>HK$${c.patient_copay_amount??'—'}</td><td>HK$${c.platform_claim_fee||0}</td></tr>`).join('')}
+      </tbody></table>
+    </body></html>`)
+    win.document.close()
+    win.print()
+  }
 
   async function loadRecentClaims() {
     setLoadingClaims(true)
@@ -334,7 +375,14 @@ function SubmitClaimScreen({ clinic }) {
         </div>}
       </Card>
 
-      <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,marginBottom:'10px'}}>Recent claims from {clinic.name}</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'}}>
+        <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted}}>Recent claims from {clinic.name}</div>
+        {recentClaims.length>0&&<span onClick={()=>setSelectedClaimRefs(selectedClaimRefs.size===recentClaims.length ? new Set() : new Set(recentClaims.map(c=>c.claim_ref)))} style={{fontSize:'11px',color:C.textSub,cursor:'pointer'}}>{selectedClaimRefs.size===recentClaims.length?'Deselect all':'Select all'}</span>}
+      </div>
+      {selectedClaimRefs.size>0&&<div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <button onClick={exportSelectedClaimsCsv} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',cursor:'pointer'}}>Export {selectedClaimRefs.size} selected (CSV)</button>
+        <button onClick={printSelectedClaims} style={{flex:1,padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',cursor:'pointer'}}>Print {selectedClaimRefs.size} selected</button>
+      </div>}
       {loadingClaims&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>Loading…</div>}
       {!loadingClaims&&recentClaims.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'16px'}}>No claims submitted yet.</div>}
       {recentClaims.map(c=>{
@@ -342,9 +390,12 @@ function SubmitClaimScreen({ clinic }) {
         return (
           <Card key={c.claim_ref} style={{padding:'12px 16px',marginBottom:'8px',cursor:'pointer'}} onClick={()=>setExpandedClaimRef(expanded?null:c.claim_ref)}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
-                <div style={{fontSize:'13px',fontWeight:500}}>{c.patients?.full_name||'Unknown patient'}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{c.claim_ref} · HK${c.amount} · fee HK${c.platform_claim_fee||0}</div>
+              <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                <input type="checkbox" checked={selectedClaimRefs.has(c.claim_ref)} onClick={e=>e.stopPropagation()} onChange={()=>toggleClaimSelected(c.claim_ref)} style={{marginTop:'1px'}}/>
+                <div>
+                  <div style={{fontSize:'13px',fontWeight:500}}>{c.patients?.full_name||'Unknown patient'}</div>
+                  <div style={{fontSize:'11px',color:C.textMuted}}>{c.claim_ref} · HK${c.amount} · fee HK${c.platform_claim_fee||0}</div>
+                </div>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                 <StatusBadge status={(c.status||'').toUpperCase()}/>
@@ -356,6 +407,14 @@ function SubmitClaimScreen({ clinic }) {
               <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Patient pays</span><strong>HK${c.patient_copay_amount??'—'}</strong></div>
               <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Submitted</span><strong>{new Date(c.submitted_at).toLocaleString('en-HK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</strong></div>
               {c.icd10_codes&&<div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>ICD-10</span><strong>{c.icd10_codes}</strong></div>}
+              {/* The collapsed row above already shows the raw fee number
+                  - this repeats it here with the same "estimate, insurer-
+                  billed" framing the submit screen uses, since reviewing
+                  a specific claim later is exactly when a TPA clinic
+                  needs the reminder that this was never deducted from
+                  them or the patient. */}
+              <div style={{display:'flex',justifyContent:'space-between',padding:'3px 0'}}><span>Medsa's fee (estimate)</span><strong>HK${c.platform_claim_fee||0}</strong></div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Charged to the insurer, never deducted from this clinic or the patient.</div>
             </div>}
           </Card>
         )
