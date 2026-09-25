@@ -48,7 +48,12 @@ export default async function handler(req, res) {
     if (companyId) {
       const status = sub.status === 'active' || sub.status === 'trialing' ? 'active'
         : sub.status === 'past_due' || sub.status === 'unpaid' ? 'past_due' : 'canceled'
-      await supabase.from('insurance_companies').update({ subscription_status: status, stripe_subscription_id: sub.id }).eq('id', companyId)
+      // current_period_end is what actually answers "active until when" -
+      // a monthly subscription auto-renews rather than having a fixed
+      // term, so this is really "next renewal date," not an expiry the
+      // insurer chose a length for - shown that way in the UI.
+      const periodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null
+      await supabase.from('insurance_companies').update({ subscription_status: status, stripe_subscription_id: sub.id, subscription_current_period_end: periodEnd }).eq('id', companyId)
     }
   }
   if (event.type === 'customer.subscription.deleted') {
