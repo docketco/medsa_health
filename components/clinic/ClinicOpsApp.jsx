@@ -8290,6 +8290,7 @@ export default function ClinicOpsApp() {
   // never see it without manually logging out and back in.
   async function loadQueueAndPrescriptions() {
       if (!institutionId) return
+      const requestedInstitutionId = institutionId
       setQueueLoading(true)
       // Scoped to this clinic - this had no institution filter at all
       // before, so every clinic on the platform was seeing every other
@@ -8321,7 +8322,9 @@ export default function ClinicOpsApp() {
         .gte('checked_in_at', queueDayStart.toISOString())
         .lte('checked_in_at', queueDayEnd.toISOString())
         .order('checked_in_at', { ascending: true })
-      setCheckedInQueue((queueRows||[]).map(r => ({
+      if (institutionIdRef.current !== requestedInstitutionId) return
+      const checkedInRows = (queueRows||[]).filter(r => r.institution_id === requestedInstitutionId)
+      setCheckedInQueue(checkedInRows.map(r => ({
         id: r.id,
         ticket: r.ticket,
         queueId: r.queue_id,
@@ -8350,20 +8353,18 @@ export default function ClinicOpsApp() {
         checkinNote: r.checkin_note || null,
       })))
 
-      const { data: rxRows } = await supabase
-        .from('medications')
-        .select('*, patients(full_name)')
-        .not('prescribed_by_staff', 'is', null)
-        .order('start_date', { ascending: false })
-        .limit(20)
-      setPendingPrescriptions((rxRows||[]).map(r => ({
-        id: r.id,
-        patientName: r.patients?.full_name || 'Unknown patient',
-        doctorName: r.prescribed_by_staff,
-        drugs: [{ drug: r.medication_name, dosage: r.dosage, frequency: r.frequency, quantity: r.quantity, durationDays: r.duration_days, timesPerDay: r.times_per_day, dosingMode: r.dosing_mode, intervalHours: r.interval_hours }],
-        timestamp: new Date(r.start_date).getTime(),
-        status: r.dispense_status || 'pending',
-      })))
+      // Real root cause of the persistent cross-clinic "Printed Today"
+      // leak: this used to also fetch medications directly (with NO
+      // institution_id filter at all - every clinic's prescriptions) and
+      // call setPendingPrescriptions with a second, differently-shaped
+      // result, clobbering whatever loadTaskBoard (the correct, fully
+      // scoped source - see its own institutionIdRef guard) had just set.
+      // This function runs on every Overview/My Patients visit, which is
+      // why the leak reappeared right after login every time instead of
+      // looking like a one-off race. loadTaskBoard is the single source
+      // of truth for pendingPrescriptions now - this function only owns
+      // the checked-in queue.
+      if (institutionIdRef.current !== requestedInstitutionId) return
       setQueueLoading(false)
   }
 
