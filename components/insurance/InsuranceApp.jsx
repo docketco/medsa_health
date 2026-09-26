@@ -1311,17 +1311,45 @@ function PaymentsManager({ company }) {
   const [loading,setLoading]=useState(true)
   const [connecting,setConnecting]=useState(false)
   const [refreshing,setRefreshing]=useState(false)
-  const [notice,setNotice]=useState(null)
+  const [connectNotice,setConnectNotice]=useState(null)
+  const [subscriptionNotice,setSubscriptionNotice]=useState(null)
+  const [startingCard,setStartingCard]=useState(false)
+  const [choosingBank,setChoosingBank]=useState(false)
 
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('insurance_companies')
-      .select('subscription_fee_hkd_monthly, subscription_status, subscription_current_period_end, stripe_connect_status, stripe_subscription_id')
+      .select('subscription_fee_hkd_monthly, subscription_status, subscription_current_period_end, subscription_payment_method, stripe_payments_enabled, stripe_connect_status, stripe_subscription_id')
       .eq('id', company.id).maybeSingle()
     setStatus(data)
     setLoading(false)
   }
   useEffect(() => { load() }, [company.id])
+
+  // Choosing bank transfer doesn't touch Stripe at all - Medsa arranges the
+  // wire directly and confirms receipt on their side (see medsa-admin's
+  // "Mark bank transfer received"). Recording the choice here just tells
+  // Medsa which conversation to have, and stops this screen re-asking.
+  async function chooseBankTransfer() {
+    setChoosingBank(true)
+    try {
+      await supabase.from('insurance_companies').update({ subscription_payment_method: 'bank' }).eq('id', company.id)
+      await load()
+    } finally { setChoosingBank(false) }
+  }
+
+  async function chooseCard() {
+    setStartingCard(true); setSubscriptionNotice(null)
+    try {
+      const res = await fetch('/api/insurer/start_subscription', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: company.id }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED') window.location.href = data.checkoutUrl
+      else setSubscriptionNotice(data.message || 'Could not start checkout.')
+    } finally { setStartingCard(false) }
+  }
 
   // Same real-time sync as the Connect status check below - the
   // customer.subscription.updated webhook can lag or (as found live-
@@ -1346,7 +1374,7 @@ function PaymentsManager({ company }) {
   }, [company.id])
 
   async function connectStripe() {
-    setConnecting(true); setNotice(null)
+    setConnecting(true); setConnectNotice(null)
     try {
       const res = await fetch('/api/insurer/create_connect_account_link', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1354,39 +1382,71 @@ function PaymentsManager({ company }) {
       })
       const data = await res.json()
       if (data.status === 'CREATED') window.location.href = data.onboardingUrl
-      else setNotice(data.message || 'Could not start Stripe onboarding.')
+      else setConnectNotice(data.message || 'Could not start Stripe onboarding.')
     } finally { setConnecting(false) }
   }
 
   async function refreshStatus() {
-    setRefreshing(true); setNotice(null)
+    setRefreshing(true); setConnectNotice(null)
     try {
       await fetch('/api/insurer/refresh_connect_status', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ companyId: company.id }),
       })
       await load()
-      setNotice('Refreshed.')
+      setConnectNotice('Refreshed.')
     } finally { setRefreshing(false) }
   }
 
   if (loading || !status) return <div style={{padding:'40px 24px',textAlign:'center',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
 
+  // Deliberate gate, separate from having a login at all - Medsa turns this
+  // on once the contract is signed and they're ready for this account to
+  // touch real money. Nothing below is reachable until then.
+  if (!status.stripe_payments_enabled) {
+    return (
+      <div style={{padding:'40px 24px',textAlign:'center'}}>
+        <div style={{fontSize:'13px',color:C.textSub,maxWidth:360,margin:'0 auto',lineHeight:1.6}}>Payments aren't enabled for your account yet - Medsa turns this on once your contract is signed. Contact your Medsa representative if you're expecting this to be active.</div>
+      </div>
+    )
+  }
+
   const connectActive = status.stripe_connect_status === 'active'
+  const subscriptionSettled = status.subscription_status === 'active'
 
   return (
     <div style={{padding:'16px 20px'}}>
       <Card style={{padding:'16px 18px',marginBottom:'16px'}}>
         <div style={{fontSize:'14px',fontWeight:700,marginBottom:'4px'}}>Medsa platform subscription</div>
-        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Medsa's own revenue is a flat monthly fee for platform access - not a per-case or commission-shaped charge. Set and invoiced by Medsa; shown here for your reference.</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Medsa's own revenue is a flat monthly fee for platform access - not a per-case or commission-shaped charge.</div>
         <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
           <div style={{fontSize:'16px',fontWeight:700}}>{status.subscription_fee_hkd_monthly ? `HK$${status.subscription_fee_hkd_monthly}/mo` : 'Not set yet'}</div>
-          <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:600,background:status.subscription_status==='active'?C.greenLight:status.subscription_status==='past_due'?C.amberLight:C.card,color:status.subscription_status==='active'?C.green:status.subscription_status==='past_due'?C.amber:C.textMuted}}>
-            {status.subscription_status==='active'?'Active':status.subscription_status==='past_due'?'Payment past due':status.subscription_status==='canceled'?'Cancelled':'Not started'}
+          <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:600,background:subscriptionSettled?C.greenLight:status.subscription_status==='past_due'?C.amberLight:C.card,color:subscriptionSettled?C.green:status.subscription_status==='past_due'?C.amber:C.textMuted}}>
+            {subscriptionSettled?'Active':status.subscription_status==='past_due'?'Payment past due':status.subscription_status==='canceled'?'Cancelled':'Not started'}
           </span>
         </div>
-        {status.subscription_status==='active'&&status.subscription_current_period_end&&
-          <div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>Renews {new Date(status.subscription_current_period_end).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - billed automatically, no action needed.</div>}
+        {subscriptionSettled&&status.subscription_current_period_end&&
+          <div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>{status.subscription_payment_method==='bank'?'Paid by bank transfer - r':'R'}enews {new Date(status.subscription_current_period_end).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{status.subscription_payment_method==='bank'?', once Medsa confirms next month\'s transfer.':' - billed automatically, no action needed.'}</div>}
+
+        {/* Real gap this closes: this used to only ever show medsa-admin's
+            own "create a link and send it to them" flow - the insurer had
+            no way to start paying themselves. Choosing bank transfer here
+            doesn't touch Stripe at all (Medsa arranges the wire directly);
+            choosing card goes straight to a real Checkout session, with a
+            flat 3.5% surcharge covering Stripe's own processing cost -
+            bank transfer carries none. */}
+        {!subscriptionSettled&&!status.subscription_payment_method&&status.subscription_fee_hkd_monthly&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.border}`}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>How would you like to pay?</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={chooseBankTransfer} disabled={choosingBank} style={{flex:1,padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{choosingBank?'…':'Bank transfer'}</button>
+            <button onClick={chooseCard} disabled={startingCard} style={{flex:1,padding:'10px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':'Card (+3.5%)'}</button>
+          </div>
+        </div>}
+        {!subscriptionSettled&&status.subscription_payment_method==='bank'&&
+          <div style={{marginTop:'12px',padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Bank transfer selected - Medsa will contact your billing contact directly with transfer details. This screen updates once Medsa confirms it's received.</div>}
+        {!subscriptionSettled&&status.subscription_payment_method==='card'&&
+          <button onClick={chooseCard} disabled={startingCard} style={{width:'100%',marginTop:'12px',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':'Pay by card'}</button>}
+        {subscriptionNotice&&<div style={{marginTop:'10px',fontSize:'11px',color:C.red}}>{subscriptionNotice}</div>}
       </Card>
 
       <Card style={{padding:'16px 18px',marginBottom:'16px'}}>
@@ -1400,7 +1460,7 @@ function PaymentsManager({ company }) {
         </div>
         {!connectActive&&<button onClick={connectStripe} disabled={connecting} style={{width:'100%',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'8px'}}>{connecting?'Opening Stripe…':status.stripe_connect_status==='onboarding'?'Finish onboarding on Stripe':'Connect Stripe account'}</button>}
         {connectActive&&<div style={{padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Connected. Turn self-serve checkout on per plan from Plans → edit a plan → "Self-serve checkout for this plan" - some of your plans can use it while others stay bill-the-patient-yourselves.</div>}
-        {notice&&<div style={{marginTop:'10px',fontSize:'11px',color:notice==='Refreshed.'?C.green:C.red}}>{notice}</div>}
+        {connectNotice&&<div style={{marginTop:'10px',fontSize:'11px',color:connectNotice==='Refreshed.'?C.green:C.red}}>{connectNotice}</div>}
       </Card>
     </div>
   )

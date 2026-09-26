@@ -571,7 +571,7 @@ function PartnersTab() {
     // institutions.mims_api_key is locked down (see the migration that
     // added policy verification); naming even one ungranted column fails
     // the whole select, and '*' would ask for both.
-    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, subscription_fee_hkd_monthly, subscription_status, stripe_connect_status').order('created_at',{ascending:false})
+    const { data } = await supabase.from('insurance_companies').select('id, name, contact_name, contact_email, contact_phone, status, onboarded_by, created_at, contract_start_date, contract_expiry_date, contract_doc_url, relationship_type, self_serve, medsa_id, institution_ref_id, contract_signed_at, contract_signed_by, integration_configured_at, api_client_id, payment_confirmed_at, payment_note, verification_mode, verification_api_url, roster_updated_at, referral_fee_rate_pct, subscription_fee_hkd_monthly, subscription_status, subscription_current_period_end, stripe_connect_status, stripe_payments_enabled, subscription_payment_method, stripe_subscription_id').order('created_at',{ascending:false})
     // New-inquiry counts per company, surfaced right here rather than
     // only visible after drilling into "Manage plans" - that's where
     // "Inquire about plan" on the patient side actually lands, and it
@@ -684,6 +684,28 @@ function PartnersTab() {
     } finally {
       setStartingSubscriptionId(null)
     }
+  }
+
+  // Deliberate, separate gate from the Partner Onboarding checkpoints -
+  // getting a login (contract/integration/payment checkpoints) doesn't
+  // automatically mean Medsa wants this insurer touching real money yet.
+  // Only flippable once the contract is actually signed.
+  async function toggleStripePayments(company) {
+    await supabase.from('insurance_companies').update({ stripe_payments_enabled: !company.stripe_payments_enabled }).eq('id', company.id)
+    load()
+  }
+
+  // Bank transfer is deliberately not integrated with anything - Medsa
+  // arranges the wire directly with the insurer's billing contact outside
+  // this app, then confirms receipt here. Advances a month at a time,
+  // same cadence a card subscription renews at, so the "Active until"
+  // display means the same thing regardless of how they pay.
+  async function markBankTransferReceived(company) {
+    const until = new Date(); until.setMonth(until.getMonth() + 1)
+    await supabase.from('insurance_companies').update({
+      subscription_status: 'active', subscription_payment_method: 'bank', subscription_current_period_end: until.toISOString(),
+    }).eq('id', company.id)
+    load()
   }
 
   // Pulls the real status/renewal date straight from Stripe - doesn't rely
@@ -834,10 +856,28 @@ function PartnersTab() {
               since Stripe (not us) advances it every successful charge. */}
           {c.subscription_status==='active'&&c.subscription_current_period_end&&
             <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Active until {new Date(c.subscription_current_period_end).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - renews automatically unless cancelled.</div>}
+          {/* Deliberately separate from the checkpoints above - a signed
+              contract doesn't by itself mean the insurer should see any
+              payment UI. Medsa flips this on once ready, and only then does
+              the insurer's own Payments tab unlock (subscription + Connect,
+              choosing bank transfer or card themselves). */}
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px',flexWrap:'wrap'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Allow Stripe payments (unlocks their Payments tab):</div>
+            <button onClick={()=>toggleStripePayments(c)} disabled={!c.contract_signed_at}
+              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:c.contract_signed_at?'pointer':'not-allowed',background:c.stripe_payments_enabled?C.green:C.card,color:c.stripe_payments_enabled?'#fff':C.textMuted}}>
+              {c.stripe_payments_enabled?'✓ Enabled':'Off'}
+            </button>
+            {!c.contract_signed_at&&<span style={{fontSize:'10px',color:C.textMuted}}>Needs a signed contract first</span>}
+          </div>
+          {c.subscription_payment_method&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Insurer chose: {c.subscription_payment_method==='bank'?'bank transfer':'card (3.5% surcharge applied)'}</div>}
+          {c.subscription_status!=='active'&&c.subscription_payment_method==='bank'&&
+            <button onClick={()=>markBankTransferReceived(c)} style={{width:'100%',marginBottom:'8px',padding:'8px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>Mark this month's bank transfer received</button>}
+          {c.subscription_status==='active'&&c.subscription_payment_method==='bank'&&
+            <button onClick={()=>markBankTransferReceived(c)} style={{width:'100%',marginBottom:'8px',padding:'6px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Advance another month (next transfer received)</button>}
           {c.subscription_status!=='active'&&<div style={{marginBottom:'8px'}}>
             <button onClick={()=>startSubscription(c)} disabled={startingSubscriptionId===c.id || !c.subscription_fee_hkd_monthly}
               style={{padding:'6px 12px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:c.subscription_fee_hkd_monthly?'pointer':'not-allowed',background:c.subscription_fee_hkd_monthly?C.navy:C.card,color:c.subscription_fee_hkd_monthly?'#fff':C.textMuted}}>
-              {startingSubscriptionId===c.id?'Creating link…':'Create subscription checkout link'}
+              {startingSubscriptionId===c.id?'Creating link…':'Or create a card checkout link yourself (e.g. to walk them through it live)'}
             </button>
             {subscriptionCheckoutUrl?.id===c.id&&subscriptionCheckoutUrl.url&&
               <div style={{marginTop:'6px',fontSize:'11px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'8px 10px',wordBreak:'break-all'}}>Send this to {c.contact_email||'their billing contact'} to complete: <a href={subscriptionCheckoutUrl.url} target="_blank" rel="noreferrer">{subscriptionCheckoutUrl.url}</a></div>}
