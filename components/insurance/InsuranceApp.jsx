@@ -1315,6 +1315,33 @@ function PaymentsManager({ company }) {
   const [subscriptionNotice,setSubscriptionNotice]=useState(null)
   const [startingCard,setStartingCard]=useState(false)
   const [choosingBank,setChoosingBank]=useState(false)
+  const [returnNotice,setReturnNotice]=useState(null)
+
+  // Real bug found live-testing (same root cause as SponsoredListings'
+  // own verify-on-return effect above): stripe_subscription_id was only
+  // ever set by the checkout.session.completed webhook, which is
+  // confirmed not firing - so a real, successful card payment redirected
+  // back here to an account still reading "Not started," which then let
+  // the insurer try to pay again. Verifies the real Stripe session
+  // directly instead, same pattern as sponsorship.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('subscription') === '1' && sessionId) {
+      fetch('/api/insurer/verify_subscription_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK') { setReturnNotice({ ok: true, text: 'Payment confirmed - your subscription is active.' }); load() }
+        else if (data.status === 'NOT_PAID') setReturnNotice({ ok: false, text: `Payment didn't complete (status: ${data.paymentStatus}) - nothing was charged.` })
+        else setReturnNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setReturnNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('subscription_cancelled') === '1') {
+      setReturnNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   async function load() {
     setLoading(true)
@@ -1416,6 +1443,7 @@ function PaymentsManager({ company }) {
 
   return (
     <div style={{padding:'16px 20px'}}>
+      {returnNotice&&<div style={{marginBottom:'16px',padding:'12px 14px',borderRadius:'10px',fontSize:'12px',lineHeight:1.5,background:returnNotice.ok?C.greenXLight:C.redLight,border:`0.5px solid ${returnNotice.ok?C.green:C.red}`,color:returnNotice.ok?C.green:C.red}}>{returnNotice.text}</div>}
       <Card style={{padding:'16px 18px',marginBottom:'16px'}}>
         <div style={{fontSize:'14px',fontWeight:700,marginBottom:'4px'}}>Medsa platform subscription</div>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Medsa's own revenue is a flat monthly fee for platform access - not a per-case or commission-shaped charge.</div>

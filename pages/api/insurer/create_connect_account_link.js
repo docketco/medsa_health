@@ -33,24 +33,45 @@ export default async function handler(req, res) {
 
   let accountId = company.stripe_connect_account_id
   if (!accountId) {
-    const account = await stripe.accounts.create({
-      type: 'express',
-      country: 'HK',
-      email: company.contact_email || undefined,
-      business_type: 'company',
-      capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
-      metadata: { company_id: company.id },
-    })
+    // Real bug found live-testing: stripe.accounts.create is the legacy
+    // "Accounts v1" API, which Stripe now rejects outright for any Connect
+    // platform that hasn't explicitly kept v1 support on - it throws a 500
+    // here with no JSON body, which the frontend's res.json() call then
+    // also throws on, so the insurer just saw the button silently reset
+    // with no error shown at all ("jumps back to Connect Stripe"). Catching
+    // it here at least surfaces the real reason instead of a silent
+    // failure - the actual fix is enabling Accounts v1 support for this
+    // Stripe account (Settings -> Developers -> API policies), or migrating
+    // this call to the v2 Accounts API, which is a larger, untested-from-
+    // here change.
+    let account
+    try {
+      account = await stripe.accounts.create({
+        type: 'express',
+        country: 'HK',
+        email: company.contact_email || undefined,
+        business_type: 'company',
+        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+        metadata: { company_id: company.id },
+      })
+    } catch (err) {
+      return res.status(200).json({ status: 'ERROR', message: `Stripe rejected creating the connected account: ${err.message || 'unknown error'}` })
+    }
     accountId = account.id
     await supabase.from('insurance_companies').update({ stripe_connect_account_id: accountId, stripe_connect_status: 'onboarding' }).eq('id', company.id)
   }
 
-  const accountLink = await stripe.accountLinks.create({
-    account: accountId,
-    refresh_url: `${siteUrl}/insurer-portal?connect_refresh=1`,
-    return_url: `${siteUrl}/insurer-portal?connect_return=1`,
-    type: 'account_onboarding',
-  })
+  let accountLink
+  try {
+    accountLink = await stripe.accountLinks.create({
+      account: accountId,
+      refresh_url: `${siteUrl}/insurer-portal?connect_refresh=1`,
+      return_url: `${siteUrl}/insurer-portal?connect_return=1`,
+      type: 'account_onboarding',
+    })
+  } catch (err) {
+    return res.status(200).json({ status: 'ERROR', message: `Stripe rejected the onboarding link: ${err.message || 'unknown error'}` })
+  }
 
   return res.status(200).json({ status: 'CREATED', onboardingUrl: accountLink.url })
 }
