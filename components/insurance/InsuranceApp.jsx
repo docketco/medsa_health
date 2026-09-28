@@ -1907,7 +1907,33 @@ function SponsoredListings({ company }) {
   const [termsAccepted,setTermsAccepted]=useState(false)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
+  const [returnNotice,setReturnNotice]=useState(null)
   const RATE = 3000
+
+  // Real bug found live-testing: this used to trust the webhook alone to
+  // activate a sponsorship, with zero confirmation or error shown on
+  // return regardless of whether it actually worked - "paid, but nothing
+  // happened, no message either way." Verifies the real Stripe session
+  // directly now (works even if the webhook never fires) and shows what
+  // actually happened.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('sponsored') === '1' && sessionId) {
+      fetch('/api/insurer/verify_sponsor_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK') { setReturnNotice({ ok: true, text: 'Payment confirmed - this plan is now sponsored.' }); load() }
+        else if (data.status === 'NOT_PAID') setReturnNotice({ ok: false, text: `Payment didn't complete (status: ${data.paymentStatus}) - nothing was charged or sponsored.` })
+        else setReturnNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setReturnNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('sponsor_cancelled') === '1') {
+      setReturnNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   async function load() {
     setLoading(true)
@@ -1970,6 +1996,7 @@ function SponsoredListings({ company }) {
         <div style={{fontSize:'14px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>⬡ Sponsored placements</div>
         <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Sponsored plans get priority placement in patient searches and AI recommendations for the period you pay for. HK${RATE.toLocaleString()}/month, charged upfront for the duration you pick - no approval needed, it goes live as soon as payment clears.</div>
       </div>
+      {returnNotice&&<div style={{margin:'12px 16px 0',padding:'12px 14px',borderRadius:'10px',fontSize:'12px',lineHeight:1.5,background:returnNotice.ok?C.greenXLight:C.redLight,border:`0.5px solid ${returnNotice.ok?C.green:C.red}`,color:returnNotice.ok?C.green:C.red}}>{returnNotice.text}</div>}
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       <SecLabel>Active sponsorships</SecLabel>
       {!loading&&active.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None right now.</div>}
