@@ -130,7 +130,15 @@ export default async function handler(req, res) {
     historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
     if (historyConditions.length > 0) {
       const historyRead = matchPlanSuitability({ plan, patientAge: age, conditions: historyConditions })
-      if (historyRead.excludedConditions.length > 0 || historyRead.uncoveredConditions.length > 0) {
+      // Only excludedConditions is a meaningful signal here - it requires the
+      // plan to explicitly exclude pre-existing conditions AND the condition
+      // to genuinely not be covered. uncoveredConditions fires for nearly any
+      // raw clinical diagnosis text (it almost never literally matches a
+      // plan's curated covered_conditions list), unlike self-declared
+      // conditions which are drawn from the plan's own vocabulary - so
+      // including it here opened the history reveal gate for nearly every
+      // patient with any diagnosis on file, defeating the point of gating it.
+      if (historyRead.excludedConditions.length > 0) {
         historyContextSummary = `From the patient's consented visit history (not self-declared, for review only): ${historyRead.summary}`
       }
     }

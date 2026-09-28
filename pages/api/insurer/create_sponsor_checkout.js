@@ -51,7 +51,13 @@ export default async function handler(req, res) {
       quantity: 1,
     }],
     customer_email: company.contact_email || undefined,
-    success_url: `${siteUrl}/insurer-portal?sponsored=1`,
+    // {CHECKOUT_SESSION_ID} is a real Stripe template token, substituted
+    // with the actual session id on redirect - needed so the return trip
+    // can verify this exact payment directly (see
+    // verify_sponsor_checkout.js) rather than depending entirely on the
+    // webhook, which this flow used to (silently - there was no
+    // confirmation UI on return regardless of whether the webhook fired).
+    success_url: `${siteUrl}/insurer-portal?sponsored=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${siteUrl}/insurer-portal?sponsor_cancelled=1`,
     metadata: { plan_id: planId, months: String(months) },
   })
