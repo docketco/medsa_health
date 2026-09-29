@@ -35,19 +35,21 @@ export default async function handler(req, res) {
   if (!accountId) {
     // Real bug found live-testing, root-caused via server logs: the old
     // stripe.accounts.create call used the legacy "Accounts v1" API, which
-    // Stripe rejects outright for this platform (not just a warning - a
-    // hard error), even after enabling "Accounts v1 support" in the
-    // Dashboard. Migrated to the v2 Accounts API (POST /v2/core/accounts),
-    // matching the fee/loss responsibility split Stripe's own v2 docs use
-    // to replicate a v1 Express account: Stripe collects fees the
-    // "Express" way and bears the loss risk, same as v1 Express did.
-    // fees_collector/losses_collector enum values and the merchant/
-    // recipient capability shape are taken directly from this project's
-    // installed stripe-node SDK's own generated type definitions
-    // (node_modules/stripe/.../V2/Core/Accounts.d.ts) - not verified
-    // against a live Stripe API call, since this sandbox can't reach
-    // Stripe's API or docs. First real attempt may still need one more
-    // round of live debugging.
+    // Stripe rejects outright for this platform, even after enabling
+    // "Accounts v1 support" in the Dashboard. Migrated to the v2 Accounts
+    // API (POST /v2/core/accounts). First migration attempt requested
+    // both merchant + recipient configurations and got "This account
+    // configuration is not supported" - the actual charge pattern this
+    // app uses (see complete_auto_purchase.js: a Checkout Session created
+    // on MEDSA's own account, with transfer_data.destination routing the
+    // money to this connected account, no on_behalf_of) is a Destination
+    // Charge without on_behalf_of. Per Stripe's own Connect integration
+    // design guidance, that pattern only needs the connected account to
+    // hold a Recipient configuration - the account never creates its own
+    // charge, so Merchant (which requests card_payments capability for
+    // charges made ON that account) doesn't apply and was the invalid
+    // combination. Recipient-only lets the account receive the transfer
+    // into its Stripe balance and pay itself out to a linked bank account.
     let account
     try {
       account = await stripe.v2.core.accounts.create({
@@ -56,12 +58,11 @@ export default async function handler(req, res) {
         dashboard: 'express',
         identity: { country: 'HK', entity_type: 'company' },
         configuration: {
-          merchant: { capabilities: { card_payments: { requested: true } } },
           recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } },
         },
         defaults: {
           currency: 'hkd',
-          responsibilities: { fees_collector: 'application_express', losses_collector: 'stripe' },
+          responsibilities: { fees_collector: 'stripe', losses_collector: 'stripe' },
         },
         metadata: { company_id: company.id },
       })
@@ -82,7 +83,7 @@ export default async function handler(req, res) {
       use_case: {
         type: 'account_onboarding',
         account_onboarding: {
-          configurations: ['merchant', 'recipient'],
+          configurations: ['recipient'],
           refresh_url: `${siteUrl}/insurer-portal?connect_refresh=1`,
           return_url: `${siteUrl}/insurer-portal?connect_return=1`,
         },
