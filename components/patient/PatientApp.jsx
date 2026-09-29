@@ -3834,6 +3834,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [plansLoading,setPlansLoading]=useState(true)
   const [planSearch,setPlanSearch]=useState('')
   const [patientConditions,setPatientConditions]=useState([])
+  // "Find me a plan" (aq2-09) - the guided entry point, matching your
+  // original design intent: one declaration up front, matched
+  // recommendations back, instead of browsing every plan blind.
+  const [findPlanOpen,setFindPlanOpen]=useState(false)
+  const [findPlanConditions,setFindPlanConditions]=useState([])
+  const [findPlanConsent,setFindPlanConsent]=useState(false)
+  const [findPlanLoading,setFindPlanLoading]=useState(false)
+  const [findPlanResults,setFindPlanResults]=useState(null)
 
   useEffect(() => {
     async function loadPlansAndMatch() {
@@ -4110,6 +4118,66 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn’t rank plans or tell you which is "best" — that’s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
+        </div>
+
+        {/* "Find me a plan" (aq2-09) - guided entry matching the original
+            design intent: declare once, consent to screening, get matched
+            recommendations up front instead of browsing every plan blind.
+            Patients are still welcome to browse the full list below either
+            way - this is an addition, not a gate. */}
+        <div style={{margin:'10px 16px 0'}}>
+          {!findPlanOpen
+            ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>setFindPlanOpen(true)}>✨ {isEn?'Find me a plan':'為我配對方案'}</Btn>
+            : <Card style={{padding:'16px'}}>
+                <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>{isEn?'Find me a plan':'為我配對方案'}</div>
+                {!findPlanResults ? <>
+                  <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
+                    <input type="checkbox" checked={findPlanConsent} onChange={e=>setFindPlanConsent(e.target.checked)} style={{marginTop:'2px'}}/>
+                    {isEn?"Let Medsa check my own visit history on this platform against every plan's coverage (optional)":'讓Medsa將我在平台上的就診記錄與各方案的保障範圍核對(可選)'}
+                  </label>
+                  <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Do any of these apply to you?':'以下是否適用於您?'}</div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+                    {[...new Set(plans.flatMap(p=>p.criteria||[]))].slice(0,20).concat(['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition']).map(c=>(
+                      <span key={c} onClick={()=>setFindPlanConditions(prev=>prev.includes(c)?prev.filter(x=>x!==c):[...prev,c])} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:findPlanConditions.includes(c)?C.green:C.card,color:findPlanConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${findPlanConditions.includes(c)?C.green:C.border}`}}>{c}</span>
+                    ))}
+                  </div>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([]);setFindPlanConsent(false)}}>{isEn?'Cancel':'取消'}</Btn>
+                    <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={findPlanLoading} onClick={async()=>{
+                      setFindPlanLoading(true)
+                      const res = await fetch('/api/patient/find_me_a_plan', {
+                        method:'POST', headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: findPlanConsent }),
+                      })
+                      const data = await res.json()
+                      setFindPlanResults(data.matches||[])
+                      setFindPlanLoading(false)
+                    }}>{findPlanLoading?(isEn?'Matching…':'配對中…'):(isEn?'Show my matches':'顯示配對結果')}</Btn>
+                  </div>
+                </> : <>
+                  {findPlanResults.length===0
+                    ? <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{isEn?'No automated match right now - browse the full list below, or talk to an agent from any plan.':'暫時未有自動配對結果 - 可瀏覽下方完整列表,或聯絡任何方案的代理。'}</div>
+                    : <div style={{marginBottom:'12px'}}>
+                        {findPlanResults.map(m=>{
+                          const idx = plans.findIndex(p=>p.id===m.planId)
+                          return (
+                            <div key={m.planId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:C.beige,borderRadius:'8px',marginBottom:'6px'}}>
+                              <div>
+                                <div style={{fontSize:'12px',fontWeight:600}}>{m.planName}</div>
+                                <div style={{fontSize:'11px',color:C.textMuted}}>{m.companyName}{m.quotedPremium!=null?` · HK$${m.quotedPremium}/mo`:''}</div>
+                              </div>
+                              {idx>=0&&<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>{
+                                setFormConditions(findPlanConditions); setFormConsent(findPlanConsent); setFormNoneApply(findPlanConditions.length===0)
+                                openInquiryForm(idx, m.requiresAgent?'agent':'auto')
+                                setFindPlanOpen(false); setFindPlanResults(null)
+                              }}>{isEn?'View':'查看'}</Btn>}
+                            </div>
+                          )
+                        })}
+                      </div>}
+                  <Btn style={{width:'100%',fontSize:'12px'}} onClick={()=>{setFindPlanResults(null)}}>{isEn?'Start over':'重新開始'}</Btn>
+                </>}
+              </Card>}
         </div>
 
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
