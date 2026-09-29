@@ -1468,13 +1468,13 @@ function PaymentsManager({ company }) {
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>How would you like to pay?</div>
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={chooseBankTransfer} disabled={choosingBank} style={{flex:1,padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{choosingBank?'…':'Bank transfer'}</button>
-            <button onClick={chooseCard} disabled={startingCard} style={{flex:1,padding:'10px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':'Card (+3.5%)'}</button>
+            <button onClick={chooseCard} disabled={startingCard} style={{flex:1,padding:'10px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':`Card - HK$${(status.subscription_fee_hkd_monthly*1.035).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (+3.5%)`}</button>
           </div>
         </div>}
         {!subscriptionSettled&&status.subscription_payment_method==='bank'&&
           <div style={{marginTop:'12px',padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Bank transfer selected - Medsa will contact your billing contact directly with transfer details. This screen updates once Medsa confirms it's received.</div>}
         {!subscriptionSettled&&status.subscription_payment_method==='card'&&
-          <button onClick={chooseCard} disabled={startingCard} style={{width:'100%',marginTop:'12px',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':'Pay by card'}</button>}
+          <button onClick={chooseCard} disabled={startingCard} style={{width:'100%',marginTop:'12px',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{startingCard?'Opening Stripe…':`Pay HK$${(status.subscription_fee_hkd_monthly*1.035).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} by card`}</button>}
         {subscriptionNotice&&<div style={{marginTop:'10px',fontSize:'11px',color:C.red}}>{subscriptionNotice}</div>}
       </Card>
 
