@@ -55,6 +55,7 @@ export default async function handler(req, res) {
         metadata: { company_id: company.id },
       })
     } catch (err) {
+      console.error('create_connect_account_link: stripe.accounts.create failed', err.message)
       return res.status(200).json({ status: 'ERROR', message: `Stripe rejected creating the connected account: ${err.message || 'unknown error'}` })
     }
     accountId = account.id
@@ -70,6 +71,7 @@ export default async function handler(req, res) {
       type: 'account_onboarding',
     })
   } catch (err) {
+    console.error('create_connect_account_link: stripe.accountLinks.create failed', err.message)
     return res.status(200).json({ status: 'ERROR', message: `Stripe rejected the onboarding link: ${err.message || 'unknown error'}` })
   }
 
