@@ -2650,6 +2650,75 @@ function PatientInquiryThread({ inquiry, patientName }) {
   )
 }
 
+// The one place a patient can come back to an 'auto' inquiry days later -
+// suitabilityResults in the Compare Plans tab is session-only state, so
+// without this, a case that gets approved by an underwriter after the
+// patient has closed the app had nowhere to ever be bought (aq2-14: the
+// patient can proceed straight to billing from a pending-approval item
+// here, not just in the same session they declared).
+function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
+  const [open,setOpen]=useState(false)
+  const [wardClass,setWardClass]=useState('')
+  const [paymentFrequency,setPaymentFrequency]=useState('monthly')
+  const [declarationAck,setDeclarationAck]=useState(false)
+  const [termsModalOpen,setTermsModalOpen]=useState(false)
+  const [purchasing,setPurchasing]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handlePurchase() {
+    if (!declarationAck) return
+    setPurchasing(true); setError(null)
+    try {
+      const res = await fetch('/api/patient/complete_auto_purchase', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          inquiryId: inquiry.id, patientId: patient.id, planId: inquiry.plan_id,
+          wardClass: wardClass || null, paymentFrequency, healthDeclarationAcknowledged: declarationAck,
+        }),
+      })
+      const data = await res.json()
+      if (data.status === 'REDIRECT' && data.checkoutUrl) { window.location.href = data.checkoutUrl; return }
+      if (data.status !== 'OK') { setError(data.message || 'Could not complete the purchase.'); return }
+      onPurchased()
+    } finally {
+      setPurchasing(false)
+    }
+  }
+
+  if (!open) return <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>setOpen(true)}>{isEn?'Proceed to buy':'繼續購買'}</Btn>
+
+  return (
+    <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+          <option value="">{isEn?'Ward class (optional)':'病房等級(可選)'}</option>
+          <option value="general">{isEn?'General ward':'普通病房'}</option>
+          <option value="semi_private">{isEn?'Semi-private':'半私家'}</option>
+          <option value="private">{isEn?'Private':'私家'}</option>
+        </select>
+        <select value={paymentFrequency} onChange={e=>setPaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+          <option value="monthly">{isEn?'Pay monthly':'每月繳付'}</option>
+          <option value="annual">{isEn?'Pay annually':'每年繳付'}</option>
+        </select>
+      </div>
+      {declarationAck
+        ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ {isEn?'Health declaration & terms reviewed and accepted.':'已審閱並接受健康聲明及條款。'}</div>
+        : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>{isEn?'Review & accept health declaration':'審閱並接受健康聲明'}</Btn>}
+      <TermsAgreementModal open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn}
+        planName={inquiry.insurance_plans?.plan_name} companyName={inquiry.insurance_plans?.company_name}
+        declaredConditions={inquiry.declared_conditions||[]}
+        waitingPeriodDays={inquiry.insurance_plans?.waiting_period_days} preExistingConditionPolicy={inquiry.insurance_plans?.pre_existing_condition_policy}
+        additionalTerms={inquiry.insurance_plans?.additional_terms}
+        onAccept={()=>{setDeclarationAck(true);setTermsModalOpen(false)}}/>
+      {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!declarationAck} onClick={handlePurchase}>{purchasing?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm & activate':'確認並啟用')}</Btn>
+      </div>
+    </div>
+  )
+}
+
 function MyInquiriesTab({ isEn, patient={} }) {
   const [inquiries,setInquiries]=useState([])
   const [agentQuotes,setAgentQuotes]=useState([])
@@ -2659,7 +2728,8 @@ function MyInquiriesTab({ isEn, patient={} }) {
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
-    const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(full_name)')
+    const { data } = await supabase.from('plan_inquiries')
+      .select('*, insurance_plans(plan_name, company_name, waiting_period_days, pre_existing_condition_policy, additional_terms), agents:claimed_by_agent_id(full_name)')
       .eq('patient_id', patient.id).order('created_at',{ascending:false})
     setInquiries(data||[])
     // Real gap: an agent building a policy directly (Issue Policy / Quote)
@@ -2713,7 +2783,17 @@ function MyInquiriesTab({ isEn, patient={} }) {
         ))}
       </div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {inquiries.map(i=>(
+        {inquiries.map(i=>{
+          // A patient's real return path to a flagged/pending 'auto'
+          // inquiry (aq2-14) - suitabilityResults in Compare Plans is
+          // session-only, so this is the only place a case that got
+          // decided after the patient closed the app can be found again.
+          const isAuto = i.mode === 'auto'
+          const isPurchased = i.status === 'converted'
+          const isDeclined = i.suitability_verdict === 'declined'
+          const isPending = i.underwriter_status === 'pending'
+          const isApprovedToBuy = !isDeclined && !isPending
+          return (
           <Card key={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
             <div style={{padding:'14px 16px'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
@@ -2721,21 +2801,32 @@ function MyInquiriesTab({ isEn, patient={} }) {
                   <div style={{fontSize:'14px',fontWeight:500}}>{i.insurance_plans?.plan_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
                 </div>
-                {i.agents?.full_name
-                  ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
-                  : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>}
+                {isAuto
+                  ? <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?C.greenLight:isDeclined?C.redLight:isPending?C.amberLight:C.greenLight,color:isPurchased?C.green:isDeclined?C.red:isPending?C.amber:C.green}}>
+                      {isPurchased?(isEn?'✓ Purchased':'✓ 已購買'):isDeclined?(isEn?'✕ Declined':'✕ 已拒絕'):isPending?(isEn?'⚠ Pending approval':'⚠ 待批核'):(isEn?'✓ Approved':'✓ 已批核')}
+                    </span>
+                  : (i.agents?.full_name
+                    ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
+                    : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>)}
               </div>
               {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}>
-                {i.agents?.full_name
+                {isAuto ? (
+                  <>
+                    <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginTop:'10px'}}>{i.suitability_summary}</div>
+                    {isPending&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{isEn?'An underwriter usually decides within 2-3 business days - check back here any time.':'核保員一般於2-3個工作天內作出決定 - 可隨時回來查看。'}</div>}
+                    {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
+                    {isApprovedToBuy&&!isPurchased&&<AutoInquiryPurchasePanel isEn={isEn} inquiry={i} patient={patient} onPurchased={load}/>}
+                  </>
+                ) : (i.agents?.full_name
                   ? <>
                     <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
-                  : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>}
+                  : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
               </div>}
             </div>
           </Card>
-        ))}
+        )})}
       </div>
     </div>
   )

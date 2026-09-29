@@ -192,7 +192,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
@@ -261,7 +261,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -278,6 +278,7 @@ function PlanManager({ company }) {
       insurer_flags: plan.insurer_flags||[],
       additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
       self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
+      auto_buy_on_clean: !!plan.auto_buy_on_clean,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -312,6 +313,7 @@ function PlanManager({ company }) {
       additional_terms: form.additional_terms || null,
       pre_existing_condition_policy: form.pre_existing_condition_policy || null,
       waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
+      auto_buy_on_clean: form.auto_buy_on_clean,
       // Only ever actually takes effect while the company's own Connect
       // account is active (see complete_auto_purchase.js) - saved as
       // whatever the checkbox says regardless, so it's remembered for
@@ -339,7 +341,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -410,6 +412,13 @@ function PlanManager({ company }) {
             <div>
               <div style={{fontSize:'12px',color:C.text}}>Requires talking to an agent</div>
               <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
+            </div>
+          </label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <input type="checkbox" checked={form.auto_buy_on_clean} onChange={e=>setForm(f=>({...f,auto_buy_on_clean:e.target.checked}))}/>
+            <div>
+              <div style={{fontSize:'12px',color:C.text}}>Buy immediately on a clean verdict</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Off by default: even a clean (approved by matching alone) application still waits for a quick sign-off in your Underwriter Portal before it can be purchased. On: a clean application goes straight to purchase, no human touch.</div>
             </div>
           </label>
           <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:connectActive?'pointer':'not-allowed',opacity:connectActive?1:0.5}}>
