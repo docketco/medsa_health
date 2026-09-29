@@ -558,6 +558,12 @@ function PartnersTab() {
   const [subscriptionFeeDrafts, setSubscriptionFeeDrafts] = useState({})
   const [savingSubscriptionFeeId, setSavingSubscriptionFeeId] = useState(null)
   const [savedSubscriptionFeeId, setSavedSubscriptionFeeId] = useState(null)
+  // aq2-16 gap fix: the audit log was being written (every matching-engine
+  // flag, every underwriter decision) but nothing ever read it back - this
+  // is that read-side, one insurer's own cases, loaded on demand.
+  const [auditLogOpenId, setAuditLogOpenId] = useState(null)
+  const [auditLogEntries, setAuditLogEntries] = useState({})
+  const [auditLogLoading, setAuditLogLoading] = useState(null)
   const [startingSubscriptionId, setStartingSubscriptionId] = useState(null)
   const [subscriptionCheckoutUrl, setSubscriptionCheckoutUrl] = useState(null)
   const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState(null)
@@ -698,6 +704,20 @@ function PartnersTab() {
   async function toggleUnderwritingDelegation(company) {
     await supabase.from('insurance_companies').update({ underwriting_delegated_to_medsa: !company.underwriting_delegated_to_medsa }).eq('id', company.id)
     load()
+  }
+
+  async function toggleAuditLog(company) {
+    if (auditLogOpenId === company.id) { setAuditLogOpenId(null); return }
+    setAuditLogOpenId(company.id)
+    if (!auditLogEntries[company.id]) {
+      setAuditLogLoading(company.id)
+      const res = await fetch('/api/admin/list_underwriting_audit_log', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ companyName: company.name }),
+      })
+      const data = await res.json()
+      setAuditLogEntries(prev => ({ ...prev, [company.id]: data.entries || [] }))
+      setAuditLogLoading(null)
+    }
   }
 
   async function toggleStripePayments(company) {
@@ -889,6 +909,22 @@ function PartnersTab() {
               style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:'pointer',background:c.underwriting_delegated_to_medsa?C.green:C.card,color:c.underwriting_delegated_to_medsa?'#fff':C.textMuted}}>
               {c.underwriting_delegated_to_medsa?'✓ Delegated':'Off - insurer\'s own underwriter'}
             </button>
+          </div>
+          <div style={{marginBottom:'6px'}}>
+            <button onClick={()=>toggleAuditLog(c)} style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:`0.5px solid ${C.border}`,borderRadius:'6px',cursor:'pointer',background:C.card,color:C.textSub}}>
+              {auditLogOpenId===c.id?'▾':'▸'} Underwriting audit log
+            </button>
+            {auditLogOpenId===c.id&&<div style={{marginTop:'6px',background:C.beige,borderRadius:'8px',padding:'10px 12px',maxHeight:'220px',overflowY:'auto'}}>
+              {auditLogLoading===c.id&&<div style={{fontSize:'11px',color:C.textMuted}}>Loading…</div>}
+              {auditLogLoading!==c.id&&(auditLogEntries[c.id]||[]).length===0&&<div style={{fontSize:'11px',color:C.textMuted}}>No underwriting activity yet for this insurer.</div>}
+              {(auditLogEntries[c.id]||[]).map(e=>(
+                <div key={e.id} style={{fontSize:'11px',color:C.textSub,padding:'6px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                  <span style={{fontWeight:600}}>{e.action}</span> — {e.planName||'Unknown plan'} ({e.applicantName||'Unnamed applicant'}) by {e.actor_type==='medsa_staff'?'Medsa staff':e.actor_type==='underwriter'?(e.actor_name||'underwriter'):'the system'}
+                  {e.detail&&<div style={{color:C.textMuted,marginTop:'2px'}}>{e.detail}</div>}
+                  <div style={{color:C.textMuted,fontSize:'10px',marginTop:'2px'}}>{new Date(e.created_at).toLocaleString('en-HK')}</div>
+                </div>
+              ))}
+            </div>}
           </div>
           {c.subscription_payment_method&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Insurer chose: {c.subscription_payment_method==='bank'?'bank transfer':'card (3.5% surcharge applied)'}</div>}
           {c.subscription_status!=='active'&&c.subscription_payment_method==='bank'&&
