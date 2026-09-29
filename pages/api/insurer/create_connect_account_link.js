@@ -33,29 +33,40 @@ export default async function handler(req, res) {
 
   let accountId = company.stripe_connect_account_id
   if (!accountId) {
-    // Real bug found live-testing: stripe.accounts.create is the legacy
-    // "Accounts v1" API, which Stripe now rejects outright for any Connect
-    // platform that hasn't explicitly kept v1 support on - it throws a 500
-    // here with no JSON body, which the frontend's res.json() call then
-    // also throws on, so the insurer just saw the button silently reset
-    // with no error shown at all ("jumps back to Connect Stripe"). Catching
-    // it here at least surfaces the real reason instead of a silent
-    // failure - the actual fix is enabling Accounts v1 support for this
-    // Stripe account (Settings -> Developers -> API policies), or migrating
-    // this call to the v2 Accounts API, which is a larger, untested-from-
-    // here change.
+    // Real bug found live-testing, root-caused via server logs: the old
+    // stripe.accounts.create call used the legacy "Accounts v1" API, which
+    // Stripe rejects outright for this platform (not just a warning - a
+    // hard error), even after enabling "Accounts v1 support" in the
+    // Dashboard. Migrated to the v2 Accounts API (POST /v2/core/accounts),
+    // matching the fee/loss responsibility split Stripe's own v2 docs use
+    // to replicate a v1 Express account: Stripe collects fees the
+    // "Express" way and bears the loss risk, same as v1 Express did.
+    // fees_collector/losses_collector enum values and the merchant/
+    // recipient capability shape are taken directly from this project's
+    // installed stripe-node SDK's own generated type definitions
+    // (node_modules/stripe/.../V2/Core/Accounts.d.ts) - not verified
+    // against a live Stripe API call, since this sandbox can't reach
+    // Stripe's API or docs. First real attempt may still need one more
+    // round of live debugging.
     let account
     try {
-      account = await stripe.accounts.create({
-        type: 'express',
-        country: 'HK',
-        email: company.contact_email || undefined,
-        business_type: 'company',
-        capabilities: { card_payments: { requested: true }, transfers: { requested: true } },
+      account = await stripe.v2.core.accounts.create({
+        contact_email: company.contact_email || undefined,
+        display_name: company.name,
+        dashboard: 'express',
+        identity: { country: 'HK', entity_type: 'company' },
+        configuration: {
+          merchant: { capabilities: { card_payments: { requested: true } } },
+          recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } },
+        },
+        defaults: {
+          currency: 'hkd',
+          responsibilities: { fees_collector: 'application_express', losses_collector: 'stripe' },
+        },
         metadata: { company_id: company.id },
       })
     } catch (err) {
-      console.error('create_connect_account_link: stripe.accounts.create failed', err.message)
+      console.error('create_connect_account_link: stripe.v2.core.accounts.create failed', err.message)
       return res.status(200).json({ status: 'ERROR', message: `Stripe rejected creating the connected account: ${err.message || 'unknown error'}` })
     }
     accountId = account.id
@@ -64,14 +75,21 @@ export default async function handler(req, res) {
 
   let accountLink
   try {
-    accountLink = await stripe.accountLinks.create({
+    // v2 Account Links is a separate endpoint from v1's - same reasoning
+    // as the account creation migration above.
+    accountLink = await stripe.v2.core.accountLinks.create({
       account: accountId,
-      refresh_url: `${siteUrl}/insurer-portal?connect_refresh=1`,
-      return_url: `${siteUrl}/insurer-portal?connect_return=1`,
-      type: 'account_onboarding',
+      use_case: {
+        type: 'account_onboarding',
+        account_onboarding: {
+          configurations: ['merchant', 'recipient'],
+          refresh_url: `${siteUrl}/insurer-portal?connect_refresh=1`,
+          return_url: `${siteUrl}/insurer-portal?connect_return=1`,
+        },
+      },
     })
   } catch (err) {
-    console.error('create_connect_account_link: stripe.accountLinks.create failed', err.message)
+    console.error('create_connect_account_link: stripe.v2.core.accountLinks.create failed', err.message)
     return res.status(200).json({ status: 'ERROR', message: `Stripe rejected the onboarding link: ${err.message || 'unknown error'}` })
   }
 

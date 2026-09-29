@@ -25,8 +25,15 @@ export default async function handler(req, res) {
   if (!process.env.STRIPE_SECRET_KEY) return res.status(200).json({ status: 'OK', connectStatus: company.stripe_connect_status })
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
-  const account = await stripe.accounts.retrieve(company.stripe_connect_account_id)
-  const connectStatus = account.charges_enabled ? 'active' : 'onboarding'
+  // Migrated to v2 alongside create_connect_account_link.js - a v2-created
+  // account isn't guaranteed readable via the v1 accounts.retrieve call.
+  // v2 has no charges_enabled boolean; the equivalent is the merchant
+  // configuration's card_payments capability status ('active' once
+  // onboarding clears requirements Stripe is waiting on).
+  const account = await stripe.v2.core.accounts.retrieve(company.stripe_connect_account_id, { include: ['configuration.merchant'] })
+  const cardPaymentsStatus = account.configuration?.merchant?.capabilities?.card_payments?.status
+  const chargesEnabled = cardPaymentsStatus === 'active'
+  const connectStatus = chargesEnabled ? 'active' : 'onboarding'
   await supabase.from('insurance_companies').update({ stripe_connect_status: connectStatus }).eq('id', companyId)
   // Self-serve checkout is a per-plan choice, but it can only ever
   // actually run while the account can take a charge - if Stripe later
@@ -35,5 +42,5 @@ export default async function handler(req, res) {
   // that can't be paid.
   if (connectStatus !== 'active') await supabase.from('insurance_plans').update({ self_serve_checkout_enabled: false }).eq('company_name', company.name).eq('self_serve_checkout_enabled', true)
 
-  return res.status(200).json({ status: 'OK', connectStatus, chargesEnabled: account.charges_enabled, detailsSubmitted: account.details_submitted })
+  return res.status(200).json({ status: 'OK', connectStatus, chargesEnabled })
 }
