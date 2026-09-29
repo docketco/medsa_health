@@ -4185,6 +4185,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                 <input type="checkbox" checked={formConsent} onChange={e=>setFormConsent(e.target.checked)} style={{marginTop:'2px'}}/>
                 Let Medsa check my own visit history on this platform against this plan's coverage (optional - you can still declare conditions below either way)
               </label>
+              {/* aq2-01/aq2-02: lifestyle + family history, kept lean - no
+                  DOB/gender/height/weight (Medsa already has those on
+                  file). Each toggle just adds a normalized string onto the
+                  same declaredConditions list the condition chips below
+                  use, so it runs through the exact same matching engine -
+                  no separate backend path needed. */}
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Lifestyle & family history:</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+                {['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition'].map(c=>(
+                  <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formConditions.includes(c)?C.green:C.card,color:formConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${formConditions.includes(c)?C.green:C.border}`}}>{c}</span>
+                ))}
+              </div>
               <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Do any of these apply to you? (used only to check this plan's coverage, never shared beyond this inquiry)</div>
               <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
                 {plan.criteria.map(c=>(
