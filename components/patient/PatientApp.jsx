@@ -2656,6 +2656,43 @@ function PatientInquiryThread({ inquiry, patientName }) {
 // patient has closed the app had nowhere to ever be bought (aq2-14: the
 // patient can proceed straight to billing from a pending-approval item
 // here, not just in the same session they declared).
+// aq2-08/aq2-13 - a decline is never a dead end. System-matched
+// alternatives (never an agent's judgment - see find_alternative_plans.js),
+// labeled same-insurer vs. cross-insurer, plus the fallback to a real agent.
+function AlternativePlansPanel({ isEn, inquiryId }) {
+  const [loaded,setLoaded]=useState(false)
+  const [alternatives,setAlternatives]=useState([])
+  const [loading,setLoading]=useState(false)
+
+  async function load() {
+    setLoading(true)
+    const res = await fetch('/api/patient/find_alternative_plans', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ inquiryId }),
+    })
+    const data = await res.json()
+    setAlternatives(data.alternatives||[])
+    setLoading(false)
+    setLoaded(true)
+  }
+
+  if (!loaded) return <Btn style={{width:'100%',marginTop:'10px',fontSize:'12px'}} disabled={loading} onClick={load}>{loading?(isEn?'Looking…':'搜尋中…'):(isEn?'See other plans that might work':'查看其他合適計劃')}</Btn>
+
+  return (
+    <div style={{marginTop:'10px'}}>
+      {alternatives.length===0
+        ? <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No matching alternative found automatically - talking to an agent is your best next step.':'未能自動找到合適的替代計劃 - 建議聯絡代理跟進。'}</div>
+        : alternatives.map(a=>(
+          <div key={a.planId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:'#fff',borderRadius:'8px',marginBottom:'6px'}}>
+            <div>
+              <div style={{fontSize:'12px',fontWeight:600}}>{a.planName}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?(isEn?' · same insurer':' · 同一保險公司'):(isEn?' · different insurer':' · 不同保險公司')}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
+            </div>
+          </div>
+        ))}
+    </div>
+  )
+}
+
 function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
   const [open,setOpen]=useState(false)
   const [wardClass,setWardClass]=useState('')
@@ -2815,6 +2852,7 @@ function MyInquiriesTab({ isEn, patient={} }) {
                     <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginTop:'10px'}}>{i.suitability_summary}</div>
                     {isPending&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{isEn?'An underwriter usually decides within 2-3 business days - check back here any time.':'核保員一般於2-3個工作天內作出決定 - 可隨時回來查看。'}</div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
+                    {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id}/>}
                     {isApprovedToBuy&&!isPurchased&&<AutoInquiryPurchasePanel isEn={isEn} inquiry={i} patient={patient} onPurchased={load}/>}
                   </>
                 ) : (i.agents?.full_name
@@ -4209,6 +4247,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
               {suitabilityResults[i].verdict==='flagged'&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>An underwriter usually decides within 2-3 business days. We'll notify you, and you can also check back under "My inquiries" any time.</div>}
               <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',fontStyle:'italic'}}>This is an estimate, not a bound quote or advice. Ready to proceed, or want a second opinion? You can still reach out to a licensed agent from "My inquiries".</div>
+              {suitabilityResults[i].verdict==='declined'&&<AlternativePlansPanel isEn={true} inquiryId={suitabilityResults[i].inquiryId}/>}
               {/* Purchase stays closed until the case is actually clear to
                   buy - either a clean verdict this plan lets buy straight
                   through, or an underwriter (or the quick clean-case
@@ -4277,6 +4316,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                 <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
                 {suitabilityResults[i].verdict==='flagged'&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>An underwriter usually decides within 2-3 business days - your agent will let you know once it's back.</div>}
                 <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Automatic, not final - your agent helps you through next steps, but never decides this themselves.</div>
+                {suitabilityResults[i].verdict==='declined'&&<AlternativePlansPanel isEn={true} inquiryId={suitabilityResults[i].inquiryId}/>}
               </div>}
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up sees this same read above - not your raw declared answers or visit history, just the outcome - so you shouldn't need to repeat yourself.</div>
