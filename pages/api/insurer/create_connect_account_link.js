@@ -62,7 +62,15 @@ export default async function handler(req, res) {
         },
         defaults: {
           currency: 'hkd',
-          responsibilities: { fees_collector: 'stripe', losses_collector: 'stripe' },
+          // Real error from Stripe on the first attempt: for a recipient-
+          // only account, both fields can only be 'application' - makes
+          // sense given the money is actually processed on MEDSA's own
+          // account (a Destination Charge, see the comment above) and
+          // only transferred to this account afterward, so Medsa (the
+          // platform/"application") is the one Stripe holds responsible
+          // for this account's fees and any negative-balance risk, not
+          // Stripe itself.
+          responsibilities: { fees_collector: 'application', losses_collector: 'application' },
         },
         metadata: { company_id: company.id },
       })
