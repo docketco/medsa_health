@@ -736,7 +736,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       {lineItems.length>0&&<TermsAgreementModal
         open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={true}
         planName={lineItems.map(l=>l.planName).join(', ')}
-        declaredConditions={prefillInquiry?.declared_conditions||[]}
+        hideDeclaredDetail={true}
         waitingPeriodDays={lineItems[0]?.waitingPeriodDays}
         preExistingConditionPolicy={lineItems[0]?.preExistingConditionPolicy}
         additionalTerms={lineItems[0]?.additionalTerms}
