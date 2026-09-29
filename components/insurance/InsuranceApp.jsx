@@ -507,6 +507,7 @@ function PlanManager({ company }) {
             </div>
             <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
               {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+              {p.self_serve_checkout_enabled&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Self-serve</span>}
               <span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>
             </div>
           </div>
