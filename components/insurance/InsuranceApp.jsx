@@ -3,6 +3,7 @@ import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import { supabase } from '../../lib/supabase'
 import { parseCSV } from '../../lib/csvImport'
+import { grossUpForStripeFee } from '../../lib/paymentFees'
 
 // Opening an edit/create form used to leave the view exactly where it
 // was - if that form renders somewhere the user had already scrolled
@@ -2061,11 +2062,19 @@ function SponsoredListings({ company }) {
           <input value={thumbnailUrl} onChange={e=>setThumbnailUrl(e.target.value)} placeholder="https://…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
           {thumbnailUrl.trim()&&<img src={thumbnailUrl} alt="" style={{width:'100%',height:120,objectFit:'cover',borderRadius:'8px',marginBottom:'12px'}} onError={e=>{e.target.style.display='none'}}/>}
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Duration</div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+          <div style={{display:'flex',gap:'8px',marginBottom:'6px'}}>
             {[1,3,6].map(m=>(
               <div key={m} onClick={()=>setMonths(m)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:months===m?C.navy:C.beige,color:months===m?'#fff':C.text,border:`0.5px solid ${months===m?C.navy:C.border}`}}>{m} mo · HK${(RATE*m).toLocaleString()}</div>
             ))}
           </div>
+          {/* Real gap found live-testing: the amount actually charged on
+              Stripe (base price grossed up to cover its card fee, same
+              math as create_sponsor_checkout.js) only ever showed up once
+              you'd already reached Stripe's own checkout page - nothing
+              on our side disclosed it beforehand. Same math, shown here
+              too, so nothing changes between what's promised and what's
+              actually charged. */}
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>Actual card charge: HK${grossUpForStripeFee(RATE*months).grossAmountHKD.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (includes Stripe's card processing fee)</div>
           <div onClick={()=>setTermsAccepted(!termsAccepted)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:termsAccepted?C.greenXLight:C.card,border:`0.5px solid ${termsAccepted?C.green:C.border}`,borderRadius:'10px',cursor:'pointer',marginBottom:'14px'}}>
             <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${termsAccepted?C.green:C.border}`,background:termsAccepted?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{termsAccepted?'✓':''}</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>I agree this listing must accurately describe the plan's real terms, that Medsa may remove it if it's misleading, and that the sponsorship fee is non-refundable once the placement goes live.</div>
@@ -2073,7 +2082,7 @@ function SponsoredListings({ company }) {
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setPromotingId(null)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}} onClick={handleLaunch} disabled={!termsAccepted||starting}>{starting?'Starting checkout…':`Pay HK$${(RATE*months).toLocaleString()} & launch`}</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleLaunch} disabled={!termsAccepted||starting}>{starting?'Starting checkout…':`Pay HK$${grossUpForStripeFee(RATE*months).grossAmountHKD.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} & launch`}</Btn>
           </div>
         </Card>
       )}
