@@ -1,76 +1,27 @@
 // pages/api/patient/match_plan_suitability.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Runs the same suitability/quote analysis for BOTH inquiry modes:
-//   - mode:'auto'  - the patient's own "get details automatically" path,
-//     no agent involved at all. The verdict/quote/summary this returns is
-//     shown to the patient directly.
+//   - mode:'auto'  - the patient's own "quote immediately" path.
 //   - mode:'agent' - the patient chose "talk to an agent" instead, but this
-//     still runs so the agent who eventually claims the inquiry sees a
-//     ready-made read instead of a blank lead (real workload reduction,
-//     not just a label).
-// The verdict and quote are always the deterministic rule engine in
-// lib/planSuitability.js - AI (when ANTHROPIC_API_KEY is configured) only
-// rewrites the summary into friendlier prose, exactly the same tiered
-// pattern as suggest_icd10.js: real analysis first and always, AI as an
-// optional polish layer that can never change the underlying answer.
+//     still runs FIRST, before the agent ever sees the inquiry - the agent
+//     works from the same verdict the automated path would produce, never
+//     collects raw history directly.
+// The verdict is always the deterministic 3-way matching engine in
+// lib/planSuitabilityMatch.js (approved / declined / flagged) - no AI
+// anywhere in this flow, on either path, regardless of whether an AI key
+// is configured. Only the FLAGGED bucket ever needs a human, and that
+// human is the insurer's own underwriter, not the agent (see
+// pages/api/underwriter/*.js) - an agent only ever sees the verdict and,
+// if flagged, a generic category label, never the raw declared answers or
+// the consented visit history behind them.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
-import { matchPlanSuitability } from '../../../lib/planSuitability'
+import { matchPlanSuitability } from '../../../lib/planSuitabilityMatch'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
-async function polishSummaryWithAI(ruleSummary, verdict, planName) {
-  if (!process.env.ANTHROPIC_API_KEY) return { summary: ruleSummary, usedAI: false }
-  try {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default
-    const client = new Anthropic()
-    const response = await client.messages.create({
-      model: 'claude-opus-5',
-      max_tokens: 300,
-      output_config: { effort: 'low' },
-      system: 'Rewrite this insurance-plan suitability note for a patient in 2-3 short, warm, plain-language sentences. Do not change any fact, number, or the verdict - only make the wording clearer and friendlier. Do not add any information that is not already present.',
-      messages: [{ role: 'user', content: `Verdict: ${verdict}\nPlan: ${planName}\nNote to rewrite:\n"""${ruleSummary}"""` }],
-    })
-    const text = response.content.find(b => b.type === 'text')?.text?.trim()
-    if (!text) return { summary: ruleSummary, usedAI: false }
-    return { summary: text, usedAI: true }
-  } catch (e) {
-    return { summary: ruleSummary, usedAI: false }
-  }
-}
-
-// Same tiered pattern as everywhere else in this app: the rule engine
-// above (keyword/list matching against covered_conditions, exclusion
-// policy, insurer_flags) is always the real check and never overridden.
-// This is a second, advisory-only pass - catches phrasing a literal
-// keyword match misses (e.g. "I take blood thinners" doesn't match any
-// configured exclusion string, but a human underwriter would still want
-// to see it). It can only ever ADD a note and softly elevate an
-// otherwise-clean "suitable" to "worth a look" - it can never downgrade,
-// invent a condition nobody declared, or move anything to needs_review
-// (that stays reserved for the deterministic matches, which are
-// auditable; this isn't).
-async function screenWithAI(declaredConditions, historyConditions, planName) {
-  const allText = [...(declaredConditions||[]), ...(historyConditions||[])].filter(Boolean)
-  if (!process.env.ANTHROPIC_API_KEY || allText.length === 0) return { concern: null }
-  try {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default
-    const client = new Anthropic()
-    const response = await client.messages.create({
-      model: 'claude-opus-5',
-      max_tokens: 150,
-      output_config: { effort: 'low' },
-      system: 'You are an advisory screening pass for a health insurance quote, checking a list of a patient\'s declared/history conditions for anything a human underwriter would want a closer look at (e.g. a serious chronic condition, a treatment implying higher risk) that a simple keyword match might phrase differently and miss. You do NOT decide coverage or make the actual call - just flag what deserves a second look. Reply with either the single word NONE, or one short plain sentence naming the concern. Never invent a condition that is not in the list. Never mention plan coverage terms - you were not given them.',
-      messages: [{ role: 'user', content: `Plan: ${planName}\nDeclared/history items: ${allText.join(', ')}` }],
-    })
-    const text = response.content.find(b => b.type === 'text')?.text?.trim()
-    if (!text || /^none\.?$/i.test(text)) return { concern: null }
-    return { concern: text }
-  } catch (e) {
-    return { concern: null }
-  }
-}
+const DECLARATION_VALIDITY_DAYS = 30
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -86,7 +37,7 @@ export default async function handler(req, res) {
   if (!['auto', 'agent'].includes(mode)) return res.status(400).json({ status: 'ERROR', message: "mode must be 'auto' or 'agent'." })
 
   const { data: plan } = await supabase.from('insurance_plans')
-    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurer_flags, additional_terms, insurance_plan_pricing_tiers(*)')
+    .select('id, plan_name, company_name, covered_conditions, covered_categories, pre_existing_condition_policy, waiting_period_days, requires_agent, insurer_flags, additional_terms, auto_buy_on_clean, insurance_plan_pricing_tiers(*)')
     .eq('id', planId).maybeSingle()
   if (!plan) return res.status(404).json({ status: 'ERROR', message: 'Plan not found.' })
   if (mode === 'auto' && plan.requires_agent) {
@@ -98,62 +49,31 @@ export default async function handler(req, res) {
   if (!patient) return res.status(404).json({ status: 'ERROR', message: 'Patient not found.' })
   const age = patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
 
-  // The verdict/quote that gets shown to the patient (both modes) or
-  // acted on automatically is driven ONLY by what was actually declared -
-  // a deliberate call after live testing showed visit-history free text
-  // (real consultation notes, not a clean conditions list) flooding the
-  // automated verdict with noise no patient actually claimed. Consented
-  // visit history still gets pulled and matched, but only ever as
-  // read-only context attached for an agent to review - it can flag a
-  // "talk to an agent" inquiry for a closer look, but it never flips an
-  // automated quote on its own.
-  const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
-  let { summary, usedAI } = await polishSummaryWithAI(result.summary, result.verdict, plan.plan_name)
-  let verdict = result.verdict
-
-  // Real gap found live-testing: an agent had no way to actually review a
-  // patient's consented visit history for an inquiry - only a computed
-  // summary sentence, never the real entries it came from. The patient
-  // consented specifically to this (the checkbox says exactly this: let
-  // Medsa check visit history against this plan), so the claiming agent
-  // gets the real snapshot, not just a derived note.
-  let historyContextSummary = null
-  let historyRecordsSnapshot = null
+  // Declared answers are the primary signal. Consented visit history (if
+  // shared) is folded into the SAME deterministic screen, not shown as a
+  // separate text blob anywhere - a condition that turns up in real
+  // consultation history is checked against the plan exactly the same way
+  // a self-declared one is, and can only ever make the verdict more
+  // cautious (approved -> flagged/declined), never less.
   let historyConditions = []
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
-      .select('diagnosis, date_of_record').eq('patient_id', patientId).not('diagnosis', 'is', null)
+      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
       .order('date_of_record', { ascending: false }).limit(15)
-    if (records && records.length > 0) {
-      historyRecordsSnapshot = records.map(r => ({ diagnosis: r.diagnosis, date: r.date_of_record }))
-    }
     historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
-    if (historyConditions.length > 0) {
-      const historyRead = matchPlanSuitability({ plan, patientAge: age, conditions: historyConditions })
-      // Only excludedConditions is a meaningful signal here - it requires the
-      // plan to explicitly exclude pre-existing conditions AND the condition
-      // to genuinely not be covered. uncoveredConditions fires for nearly any
-      // raw clinical diagnosis text (it almost never literally matches a
-      // plan's curated covered_conditions list), unlike self-declared
-      // conditions which are drawn from the plan's own vocabulary - so
-      // including it here opened the history reveal gate for nearly every
-      // patient with any diagnosis on file, defeating the point of gating it.
-      if (historyRead.excludedConditions.length > 0) {
-        historyContextSummary = `From the patient's consented visit history (not self-declared, for review only): ${historyRead.summary}`
-      }
-    }
   }
 
-  // Advisory AI screening, both modes - see screenWithAI's own comment.
-  // Runs for both talk-to-an-agent and the fully-automated path, per the
-  // product ask: the automated path has no human in the loop otherwise,
-  // so this is the one chance to catch something a literal keyword match
-  // would miss before the patient sees a clean "suitable" verdict.
-  const { concern } = await screenWithAI(declaredConditions, historyConditions, plan.plan_name)
-  if (concern) {
-    summary = `${summary} AI screening note (unverified - worth a human check): ${concern}`
-    if (verdict === 'suitable') verdict = 'suitable_with_notes'
-  }
+  const declaredResult = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
+  const combinedResult = historyConditions.length > 0
+    ? matchPlanSuitability({ plan, patientAge: age, conditions: [...(declaredConditions || []), ...historyConditions] })
+    : declaredResult
+  // The verdict shown to the patient/stored is the more cautious of the
+  // two - never let a clean declared-only read hide something the
+  // patient's own consented history would have flagged.
+  const rank = { approved: 0, flagged: 1, declined: 2 }
+  const result = rank[combinedResult.verdict] >= rank[declaredResult.verdict] ? combinedResult : declaredResult
+
+  const expiresAt = new Date(Date.now() + DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000).toISOString()
 
   const inquiryPayload = {
     patient_id: patientId, plan_id: planId,
@@ -163,9 +83,16 @@ export default async function handler(req, res) {
     status: 'new', mode, is_switch_request: !!isSwitchRequest,
     consent_history_shared_at: consentHistoryShared ? new Date().toISOString() : null,
     declared_conditions: declaredConditions || [],
-    suitability_verdict: verdict, suitability_summary: summary,
-    quoted_premium_hkd: result.quotedPremium, used_ai: usedAI,
-    history_context_summary: historyContextSummary, history_records_snapshot: historyRecordsSnapshot,
+    suitability_verdict: result.verdict, suitability_summary: result.summary,
+    flag_category: result.flagCategory,
+    quoted_premium_hkd: result.quotedPremium, used_ai: false,
+    declaration_expires_at: expiresAt,
+    // A clean verdict still waits for a quick human sign-off before buying
+    // when the insurer hasn't opted into auto-buy (aq2-19) - reuses the
+    // same underwriter_status field/queue as a real flagged case, just
+    // distinguished by suitability_verdict so the reviewing screen can
+    // show "clean, just needs sign-off" separately from a real review.
+    underwriter_status: result.verdict === 'flagged' || (result.verdict === 'approved' && !plan.auto_buy_on_clean) ? 'pending' : null,
     // Same ward class / payment frequency the automated-purchase path
     // already collects - carried through here too (agent mode only, see
     // the patient-side form) so NewPolicyScreen can pre-fill them instead
@@ -174,6 +101,13 @@ export default async function handler(req, res) {
   }
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
+
+  if (result.verdict === 'flagged') {
+    await supabase.from('underwriting_audit_log').insert({
+      inquiry_id: inquiry.id, actor_type: 'system', actor_name: 'Matching engine',
+      action: 'flagged', detail: result.flagCategory,
+    })
+  }
 
   // Seeds the same inquiry_messages thread the agent side (and the
   // patient's own My Inquiries tab) already read/write to, so a
@@ -188,8 +122,10 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     status: 'OK', inquiryId: inquiry.id,
-    verdict, summary, quotedPremium: result.quotedPremium, usedAI,
+    verdict: result.verdict, flagCategory: result.flagCategory, summary: result.summary,
+    quotedPremium: result.quotedPremium, autoBuyOnClean: !!plan.auto_buy_on_clean,
+    underwriterPending: inquiryPayload.underwriter_status === 'pending',
     waitingPeriodDays: plan.waiting_period_days, preExistingConditionPolicy: plan.pre_existing_condition_policy,
-    additionalTerms: plan.additional_terms,
+    additionalTerms: plan.additional_terms, declarationExpiresAt: expiresAt,
   })
 }

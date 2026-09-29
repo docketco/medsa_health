@@ -3472,7 +3472,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: formNoneApply ? [] : formConditions } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, underwriterPending: data.underwriterPending, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: formNoneApply ? [] : formConditions } }))
         setInquired(i)
         setInquiryForm(null)
       }
@@ -4107,22 +4107,23 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                 shows the real verdict/quote right here, agent mode shows
                 the forwarding confirmation as before (plus a note that
                 the same read now travels with it). */}
-            {inquired===i&&suitabilityResults[i]?.mode==='auto'&&<div style={{marginTop:'10px',background:suitabilityResults[i].verdict==='needs_review'?C.amberLight:C.greenXLight,border:`0.5px solid ${suitabilityResults[i].verdict==='needs_review'?C.amber:C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
-              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
-                {suitabilityResults[i].verdict==='suitable'&&'✓ Looks suitable for you'}
-                {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Likely suitable - a couple of things to confirm'}
-                {suitabilityResults[i].verdict==='needs_review'&&'⚠ Worth a closer look before relying on this'}
+            {inquired===i&&suitabilityResults[i]?.mode==='auto'&&<div style={{marginTop:'10px',background:suitabilityResults[i].verdict==='declined'?C.redLight:suitabilityResults[i].verdict==='flagged'?C.amberLight:C.greenXLight,border:`0.5px solid ${suitabilityResults[i].verdict==='declined'?C.red:suitabilityResults[i].verdict==='flagged'?C.amber:C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
+              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='declined'?C.red:suitabilityResults[i].verdict==='flagged'?C.amber:C.green}}>
+                {suitabilityResults[i].verdict==='approved'&&'✓ Looks suitable for you'}
+                {suitabilityResults[i].verdict==='flagged'&&'⚠ Sent for a quick underwriter review'}
+                {suitabilityResults[i].verdict==='declined'&&'✕ Not suitable under this plan\'s terms'}
               </div>
-              {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'14px',fontWeight:700,color:C.navy,marginBottom:'6px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
+              {suitabilityResults[i].quotedPremium!=null&&suitabilityResults[i].verdict!=='declined'&&<div style={{fontSize:'14px',fontWeight:700,color:C.navy,marginBottom:'6px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
-              {suitabilityResults[i].usedAI===false&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>}
+              {suitabilityResults[i].verdict==='flagged'&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>An underwriter usually decides within 2-3 business days. We'll notify you, and you can also check back under "My inquiries" any time.</div>}
+              <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',fontStyle:'italic'}}>This is an estimate, not a bound quote or advice. Ready to proceed, or want a second opinion? You can still reach out to a licensed agent from "My inquiries".</div>
-              {/* Real gap this closes: the automated path only ever
-                  produced a quote card before - nothing ever became a
-                  real held policy. A "needs review" read is exactly the
-                  case this stays closed for - that's what the agent path
-                  is for. */}
-              {suitabilityResults[i].verdict!=='needs_review'&&(heldPolicies.some(hp=>hp.plan_id===plan.id)
+              {/* Purchase stays closed until the case is actually clear to
+                  buy - either a clean verdict this plan lets buy straight
+                  through, or an underwriter (or the quick clean-case
+                  sign-off) has explicitly approved it. A flagged/pending
+                  case routes to the underwriter queue, never the agent. */}
+              {suitabilityResults[i].verdict!=='declined'&&!suitabilityResults[i].underwriterPending&&(heldPolicies.some(hp=>hp.plan_id===plan.id)
                 ? <div style={{marginTop:'10px',fontSize:'11px',color:C.green,fontWeight:600}}>✓ Purchased - see it under "Policy on file" above.</div>
                 : purchaseOpenIndex===i
                   ? <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
@@ -4176,17 +4177,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {inquired===i&&suitabilityResults[i]?.mode==='agent'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
               <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
               {suitabilityResults[i].verdict&&<div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',marginTop:'8px',marginBottom:'8px'}}>
-                <div style={{fontSize:'11px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
-                  {suitabilityResults[i].verdict==='suitable'&&'✓ Preliminary read: suitable'}
-                  {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Preliminary read: likely suitable'}
-                  {suitabilityResults[i].verdict==='needs_review'&&'⚠ Preliminary read: worth a closer look'}
+                <div style={{fontSize:'11px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='declined'?C.red:suitabilityResults[i].verdict==='flagged'?C.amber:C.green}}>
+                  {suitabilityResults[i].verdict==='approved'&&'✓ Preliminary read: suitable'}
+                  {suitabilityResults[i].verdict==='flagged'&&'⚠ Sent for a quick underwriter review'}
+                  {suitabilityResults[i].verdict==='declined'&&'✕ Not suitable under this plan\'s terms'}
                 </div>
-                {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
+                {suitabilityResults[i].quotedPremium!=null&&suitabilityResults[i].verdict!=='declined'&&<div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
                 <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
-                <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Automatic, not final - your agent reviews and confirms this before anything is bound.</div>
+                {suitabilityResults[i].verdict==='flagged'&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'6px'}}>An underwriter usually decides within 2-3 business days - your agent will let you know once it's back.</div>}
+                <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Automatic, not final - your agent helps you through next steps, but never decides this themselves.</div>
               </div>}
               <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up already has your declared conditions checked against this plan, so you shouldn't need to repeat yourself.</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up sees this same read above - not your raw declared answers or visit history, just the outcome - so you shouldn't need to repeat yourself.</div>
             </div>}
           </Card>
         ))}

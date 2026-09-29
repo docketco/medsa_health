@@ -582,26 +582,24 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>}
       {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually below and continue without linking a Medsa profile.</div>}
 
-      {prefillInquiry&&(prefillInquiry.suitability_verdict||(prefillInquiry.declared_conditions||[]).length>0)&&<div style={{background:prefillInquiry.suitability_verdict==='needs_review'?C.amberLight:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',lineHeight:1.6}}>
-        <div style={{fontWeight:600,marginBottom:'4px',color:prefillInquiry.suitability_verdict==='needs_review'?C.amber:C.green}}>
-          {prefillInquiry.suitability_verdict==='suitable'&&'✓ Pre-checked: suitable'}
-          {prefillInquiry.suitability_verdict==='suitable_with_notes'&&'◇ Pre-checked: likely suitable'}
-          {prefillInquiry.suitability_verdict==='needs_review'&&'⚠ Pre-checked: needs a closer look'}
+      {prefillInquiry&&prefillInquiry.suitability_verdict&&<div style={{background:prefillInquiry.suitability_verdict==='flagged'?C.amberLight:prefillInquiry.suitability_verdict==='declined'?C.redLight:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',lineHeight:1.6}}>
+        <div style={{fontWeight:600,marginBottom:'4px',color:prefillInquiry.suitability_verdict==='flagged'?C.amber:prefillInquiry.suitability_verdict==='declined'?C.red:C.green}}>
+          {prefillInquiry.suitability_verdict==='approved'&&'✓ Pre-checked: suitable'}
+          {prefillInquiry.suitability_verdict==='flagged'&&'⚠ With the underwriter for review'}
+          {prefillInquiry.suitability_verdict==='declined'&&'✕ Declined under this plan\'s terms'}
         </div>
-        {/* Real privacy gap found live-testing: this used to also dump the
-            patient's full declared_conditions list verbatim (everything
-            they checked or that turned up in their consented visit
-            history, whether or not it was relevant to this plan) - an
-            agent got the patient's whole self-declared/history-derived
-            condition list just from a pre-check they never had to open.
-            suitability_summary already says, in plain language, exactly
-            which conditions are excluded/uncovered/insurer-flagged for
-            THIS plan (see lib/planSuitability.js) - that's the real
-            signal an agent needs. Nothing beyond that renders here now;
-            history_context_summary (only ever set when something in the
-            consented history was actually flagged) still shows below. */}
-        {prefillInquiry.suitability_summary&&<div style={{color:C.textSub}}>{prefillInquiry.suitability_summary}</div>}
-        {prefillInquiry.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{prefillInquiry.history_context_summary}</div>}
+        {/* Redaction is deliberate, not an oversight (this is the actual
+            fix for the raw-history exposure this session kept re-finding -
+            see the rebuild's aq2-04/aq2-11 design decisions): an agent
+            never sees the patient's declared conditions, visit history, or
+            even the plan-specific reasoning sentence - only the verdict
+            above and, if flagged, a generic category below. Raw detail is
+            underwriter-only (see /underwriter-portal), matching how real
+            agents work - told the outcome so they can explain it to the
+            client, never handed the medical file behind it. */}
+        {prefillInquiry.suitability_verdict==='flagged'&&prefillInquiry.flag_category&&<div style={{color:C.textSub}}>Reason category: {prefillInquiry.flag_category}. An underwriter is reviewing - you'll see the outcome here once it's back.</div>}
+        {prefillInquiry.suitability_verdict==='declined'&&<div style={{color:C.textSub}}>This plan doesn't work for what the patient declared. Consider recommending a different plan from your basket.</div>}
+        {prefillInquiry.suitability_verdict==='approved'&&<div style={{color:C.textSub}}>Nothing declared conflicts with this plan's coverage - clear to proceed.</div>}
       </div>}
 
       <SecLabel>Build from basket (real plans, riders, deductibles)</SecLabel>
@@ -1253,37 +1251,24 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                   : <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>}
               </div>
             </div>
-            {/* Pre-computed suitability read (lib/planSuitability.js), run
-                the moment the patient submitted this inquiry - lower
+            {/* Pre-computed suitability read (lib/planSuitabilityMatch.js),
+                run the moment the patient submitted this inquiry - lower
                 agent workload was the whole point: this isn't a blank
-                lead, it's already checked against the plan's own terms. */}
-            {i.suitability_verdict&&<div style={{marginTop:'8px',padding:'8px 10px',borderRadius:'8px',fontSize:'11px',lineHeight:1.5,background:i.suitability_verdict==='needs_review'?C.amberLight:C.greenXLight,color:C.textSub}}>
-              <span style={{fontWeight:600,color:i.suitability_verdict==='needs_review'?C.amber:C.green}}>
-                {i.suitability_verdict==='suitable'&&'✓ Pre-checked: suitable'}
-                {i.suitability_verdict==='suitable_with_notes'&&'◇ Pre-checked: likely suitable'}
-                {i.suitability_verdict==='needs_review'&&'⚠ Pre-checked: needs a closer look'}
+                lead, it's already checked against the plan's own terms.
+                Redacted by design (aq2-04/aq2-11): verdict + a generic
+                flag_category only, on every screen an agent can reach -
+                raw declared_conditions and any visit-history detail never
+                render here, no matter how the card is expanded. Full
+                detail is underwriter-only, see /underwriter-portal. */}
+            {i.suitability_verdict&&<div style={{marginTop:'8px',padding:'8px 10px',borderRadius:'8px',fontSize:'11px',lineHeight:1.5,background:i.suitability_verdict==='flagged'?C.amberLight:i.suitability_verdict==='declined'?C.redLight:C.greenXLight,color:C.textSub}}>
+              <span style={{fontWeight:600,color:i.suitability_verdict==='flagged'?C.amber:i.suitability_verdict==='declined'?C.red:C.green}}>
+                {i.suitability_verdict==='approved'&&'✓ Pre-checked: suitable'}
+                {i.suitability_verdict==='flagged'&&'⚠ With the underwriter'}
+                {i.suitability_verdict==='declined'&&'✕ Declined'}
               </span>
-              {i.quoted_premium_hkd!=null&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
-              <div style={{marginTop:'2px'}}>{i.suitability_summary}</div>
-              {i.history_context_summary&&<div style={{marginTop:'6px',paddingTop:'6px',borderTop:`0.5px solid ${C.border}`,color:C.textMuted,fontStyle:'italic'}}>{i.history_context_summary}</div>}
-            </div>}
-            {/* Real privacy fix: this used to show the patient's full
-                consented visit-history snapshot (up to 15 real diagnosis
-                entries) the moment an agent expanded ANY inquiry card,
-                whether or not anything in that history was actually
-                relevant to the plan being quoted - a "declared 3
-                unrelated conditions from 2 years ago" leak dressed up as
-                a feature. history_context_summary (above) is only ever
-                set when the history-derived check actually found an
-                excluded or uncovered condition for THIS plan - so the
-                raw entries now only render when there's something real
-                to review, gated behind the same expand action an agent
-                already uses to open a card (their "request" to see it). */}
-            {expandedId===i.id&&i.history_context_summary&&(i.history_records_snapshot||[]).length>0&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px'}}>
-              <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>Visit history reviewed (patient consented) - shown because something above was flagged</div>
-              {i.history_records_snapshot.map((r,ri)=>(
-                <div key={ri} style={{fontSize:'11px',color:C.textSub,padding:'3px 0'}}>{r.date?new Date(r.date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):'-'} · {r.diagnosis}</div>
-              ))}
+              {i.quoted_premium_hkd!=null&&i.suitability_verdict!=='declined'&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
+              {i.suitability_verdict==='flagged'&&i.flag_category&&<div style={{marginTop:'2px'}}>Reason category: {i.flag_category}</div>}
+              {i.suitability_verdict==='declined'&&<div style={{marginTop:'2px'}}>Doesn't work for this patient - consider another plan from your basket.</div>}
             </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>

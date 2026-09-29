@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     // Recompute the same way the direct path would, purely to quote the
     // patient the real premium on the Checkout page - the policy itself
     // isn't created until the webhook confirms payment.
-    const { matchPlanSuitability } = await import('../../../lib/planSuitability')
+    const { matchPlanSuitability } = await import('../../../lib/planSuitabilityMatch')
     const { data: fullPlan } = await supabase.from('insurance_plans').select('id, plan_name, company_name, insurance_plan_pricing_tiers(*)').eq('id', planId).maybeSingle()
     const { data: fullInquiry } = await supabase.from('plan_inquiries').select('declared_conditions').eq('id', inquiryId).maybeSingle()
     const { data: patient } = await supabase.from('patients').select('date_of_birth').eq('id', patientId).maybeSingle()
