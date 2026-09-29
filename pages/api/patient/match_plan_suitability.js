@@ -18,6 +18,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { matchPlanSuitability } from '../../../lib/planSuitabilityMatch'
+import { resolveManyIcd10, codeMapToObject } from '../../../lib/icd10Match'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -56,16 +57,32 @@ export default async function handler(req, res) {
   // a self-declared one is, and can only ever make the verdict more
   // cautious (approved -> flagged/declined), never less.
   let historyConditions = []
+  let directCodes = {}
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
-      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
+      .select('diagnosis, icd10_code').eq('patient_id', patientId).not('diagnosis', 'is', null)
       .order('date_of_record', { ascending: false }).limit(15)
     historyConditions = [...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
+    // A real consultation's own assigned code (when a doctor added one) is
+    // more trustworthy than a keyword guess - takes priority below.
+    for (const r of records || []) {
+      if (r.diagnosis && r.icd10_code) directCodes[r.diagnosis.trim().toLowerCase()] = r.icd10_code
+    }
   }
 
-  const declaredResult = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [] })
+  // Dual mechanism (aq2-03): resolve every term that could plausibly need
+  // an ICD-10 comparison - declared conditions, history, and the plan's
+  // own covered_conditions/insurer_flags - in one batch, real assigned
+  // codes from medical_records taking priority over a keyword guess. Not
+  // every term will resolve (a plan's free-text list often won't) - that's
+  // expected, matchPlanSuitability falls back to text matching per term.
+  const allTerms = [...(declaredConditions || []), ...historyConditions, ...(plan.covered_conditions || []), ...(plan.insurer_flags || [])]
+  const resolved = codeMapToObject(await resolveManyIcd10(supabase, allTerms))
+  const codes = { ...resolved, ...directCodes }
+
+  const declaredResult = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [], declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
   const combinedResult = historyConditions.length > 0
-    ? matchPlanSuitability({ plan, patientAge: age, conditions: [...(declaredConditions || []), ...historyConditions] })
+    ? matchPlanSuitability({ plan, patientAge: age, conditions: [...(declaredConditions || []), ...historyConditions], declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
     : declaredResult
   // The verdict shown to the patient/stored is the more cautious of the
   // two - never let a clean declared-only read hide something the

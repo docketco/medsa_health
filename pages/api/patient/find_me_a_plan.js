@@ -12,6 +12,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { matchPlanSuitability } from '../../../lib/planSuitabilityMatch'
+import { resolveManyIcd10, codeMapToObject } from '../../../lib/icd10Match'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -25,11 +26,15 @@ export default async function handler(req, res) {
   const age = patient.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
 
   let conditions = [...(declaredConditions || [])]
+  let directCodes = {}
   if (consentHistoryShared) {
     const { data: records } = await supabase.from('medical_records')
-      .select('diagnosis').eq('patient_id', patientId).not('diagnosis', 'is', null)
+      .select('diagnosis, icd10_code').eq('patient_id', patientId).not('diagnosis', 'is', null)
       .order('date_of_record', { ascending: false }).limit(15)
     conditions = [...conditions, ...new Set((records || []).map(r => r.diagnosis).filter(Boolean))]
+    for (const r of records || []) {
+      if (r.diagnosis && r.icd10_code) directCodes[r.diagnosis.trim().toLowerCase()] = r.icd10_code
+    }
   }
 
   const todayStr = new Date().toISOString().slice(0, 10)
@@ -39,8 +44,14 @@ export default async function handler(req, res) {
 
   const eligiblePlans = (plans || []).filter(p => !p.self_serve_only || (p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr))
 
+  // Dual mechanism (aq2-03) - resolved once across every candidate plan's
+  // own coverage list, real assigned consultation codes taking priority
+  // over a keyword guess.
+  const allTerms = [...conditions, ...eligiblePlans.flatMap(p => [...(p.covered_conditions || []), ...(p.insurer_flags || [])])]
+  const codes = { ...codeMapToObject(await resolveManyIcd10(supabase, allTerms)), ...directCodes }
+
   const matches = eligiblePlans
-    .map(p => ({ plan: p, result: matchPlanSuitability({ plan: p, patientAge: age, conditions }) }))
+    .map(p => ({ plan: p, result: matchPlanSuitability({ plan: p, patientAge: age, conditions, declaredCodes: codes, coveredCodes: codes, flagCodes: codes }) }))
     .filter(({ result }) => result.verdict === 'approved')
     .map(({ plan, result }) => ({
       planId: plan.id, planName: plan.plan_name, companyName: plan.company_name,
