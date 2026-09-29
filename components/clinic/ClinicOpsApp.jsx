@@ -7346,6 +7346,7 @@ function VideoConsultSettingsScreen({ institutionId, institutionName }) {
   const [priceHkd,setPriceHkd]=useState(null)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
+  const [returnNotice,setReturnNotice]=useState(null)
 
   async function load() {
     if (!institutionId) return
@@ -7360,6 +7361,31 @@ function VideoConsultSettingsScreen({ institutionId, institutionName }) {
     setLoading(false)
   }
   useEffect(() => { load() }, [institutionId])
+
+  // Real bug found live-testing: this used to trust the webhook alone to
+  // enable video consultations - a clinic paid, confirmed on Stripe's side,
+  // and it never actually enabled here, with no error shown either. Same
+  // root cause as sponsorship/subscription: the webhook destination is
+  // confirmed not firing. Verifies the real Stripe session directly on
+  // return instead.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('video_consult_enabled') === '1' && sessionId) {
+      fetch('/api/clinic/verify_video_consult_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK') { setReturnNotice({ ok: true, text: 'Payment confirmed - video consultations are enabled.' }); load() }
+        else if (data.status === 'NOT_PAID') setReturnNotice({ ok: false, text: `Payment didn't complete (status: ${data.paymentStatus}) - nothing was charged.` })
+        else setReturnNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setReturnNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('video_consult_cancelled') === '1') {
+      setReturnNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   async function handleEnable() {
     setStarting(true); setError(null)
@@ -7382,6 +7408,7 @@ function VideoConsultSettingsScreen({ institutionId, institutionName }) {
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Video Consultations</h2>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center',lineHeight:1.5}}>A paid, clinic-wide feature - once enabled, every doctor at {institutionName||'this clinic'} can be booked for a video consultation from Find Care, alongside in-person. A doctor logs and completes a video visit exactly the same way as an in-person one (diagnosis, prescription, everything) - nothing about the consultation flow itself changes.</div>
 
+      {returnNotice&&<div style={{marginBottom:'16px',padding:'12px 14px',borderRadius:'10px',fontSize:'12px',lineHeight:1.5,background:returnNotice.ok?C.greenXLight:C.redLight,border:`0.5px solid ${returnNotice.ok?C.green:C.red}`,color:returnNotice.ok?C.green:C.red}}>{returnNotice.text}</div>}
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Loading...</div>}
 
       {!loading&&enabled&&<Card style={{padding:'16px'}}>

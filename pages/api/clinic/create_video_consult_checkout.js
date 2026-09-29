@@ -41,7 +41,7 @@ export default async function handler(req, res) {
       },
       quantity: 1,
     }],
-    success_url: `${siteUrl}/clinic-ops?video_consult_enabled=1`,
+    success_url: `${siteUrl}/clinic-ops?video_consult_enabled=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${siteUrl}/clinic-ops?video_consult_cancelled=1`,
     metadata: { video_consult_institution_id: institutionId },
   })
