@@ -690,6 +690,16 @@ function PartnersTab() {
   // getting a login (contract/integration/payment checkpoints) doesn't
   // automatically mean Medsa wants this insurer touching real money yet.
   // Only flippable once the contract is actually signed.
+  // Per-insurer delegation (aq2-10/aq2-06): off by default, same posture
+  // as Stripe payments above - Medsa staff only ever act in an insurer's
+  // underwriting queue once that insurer has explicitly said so. No
+  // contract-signed gate here (unlike Stripe payments) since this doesn't
+  // touch money - just who reviews a flagged case.
+  async function toggleUnderwritingDelegation(company) {
+    await supabase.from('insurance_companies').update({ underwriting_delegated_to_medsa: !company.underwriting_delegated_to_medsa }).eq('id', company.id)
+    load()
+  }
+
   async function toggleStripePayments(company) {
     await supabase.from('insurance_companies').update({ stripe_payments_enabled: !company.stripe_payments_enabled }).eq('id', company.id)
     load()
@@ -868,6 +878,17 @@ function PartnersTab() {
               {c.stripe_payments_enabled?'✓ Enabled':'Off'}
             </button>
             {!c.contract_signed_at&&<span style={{fontSize:'10px',color:C.textMuted}}>Needs a signed contract first</span>}
+          </div>
+          {/* aq2-10/aq2-06: off by default - Medsa staff only ever act in
+              this insurer's underwriting queue once they've explicitly
+              said so. Their own underwriter staff (added below) handles
+              flagged cases otherwise. */}
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px',flexWrap:'wrap'}}>
+            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Delegate underwriting review to Medsa staff:</div>
+            <button onClick={()=>toggleUnderwritingDelegation(c)}
+              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:'pointer',background:c.underwriting_delegated_to_medsa?C.green:C.card,color:c.underwriting_delegated_to_medsa?'#fff':C.textMuted}}>
+              {c.underwriting_delegated_to_medsa?'✓ Delegated':'Off - insurer\'s own underwriter'}
+            </button>
           </div>
           {c.subscription_payment_method&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Insurer chose: {c.subscription_payment_method==='bank'?'bank transfer':'card (3.5% surcharge applied)'}</div>}
           {c.subscription_status!=='active'&&c.subscription_payment_method==='bank'&&

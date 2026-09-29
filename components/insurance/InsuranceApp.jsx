@@ -2265,6 +2265,15 @@ function TeamsAndAgents({ company }) {
   const [bulkRows,setBulkRows]=useState([])
   const [bulkRunning,setBulkRunning]=useState(false)
   const [bulkResults,setBulkResults]=useState([])
+  // Underwriters (aq2-06/aq2-10) - a real role distinct from a sales
+  // agent, its own identity system (insurance_underwriters), scoped to
+  // this insurer's flagged/clean-signoff queue in the Underwriter Portal.
+  const [underwriters,setUnderwriters]=useState([])
+  const [showAddUnderwriter,setShowAddUnderwriter]=useState(false)
+  const [underwriterForm,setUnderwriterForm]=useState({ fullName:'', email:'' })
+  const [savingUnderwriter,setSavingUnderwriter]=useState(false)
+  const [underwriterNotice,setUnderwriterNotice]=useState(null)
+  const [underwriterCredentialNotice,setUnderwriterCredentialNotice]=useState(null)
 
   function handleBulkFile(file) {
     const reader = new FileReader()
@@ -2324,6 +2333,9 @@ function TeamsAndAgents({ company }) {
     const { data: apptRows } = await supabase.from('agent_institution_appointments')
       .select('agent_id, agents(id, full_name, email, medsa_id, agent_type)').eq('institution_id', company.institutionRefId).is('team_id', null).eq('status','active')
     setIndependents((apptRows||[]).map(a=>a.agents).filter(Boolean))
+    const { data: underwriterRows } = await supabase.from('insurance_underwriters')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setUnderwriters(underwriterRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [company.id, company.name])
@@ -2356,6 +2368,25 @@ function TeamsAndAgents({ company }) {
       load()
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleAddUnderwriter() {
+    if (!underwriterForm.fullName.trim()||!underwriterForm.email.trim()) return
+    setSavingUnderwriter(true); setUnderwriterNotice(null); setUnderwriterCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_underwriter', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...underwriterForm, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setUnderwriterNotice(data.message||'Could not add underwriter.'); setSavingUnderwriter(false); return }
+      setUnderwriterCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setUnderwriterForm({ fullName:'', email:'' })
+      setShowAddUnderwriter(false)
+      load()
+    } finally {
+      setSavingUnderwriter(false)
     }
   }
 
@@ -2431,6 +2462,38 @@ function TeamsAndAgents({ company }) {
         </Card>
       ) : (
         <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setShowAddIndependent(true)}>+ Appoint an independent agent</Btn></div>
+      )}
+
+      {/* Underwriters (aq2-06): a real role distinct from a sales agent -
+          reviews the flagged/clean-signoff queue in the Underwriter
+          Portal (/underwriter-portal), never the agent-facing screens. */}
+      <SecLabel>Underwriters - review flagged plan applications</SecLabel>
+      {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None yet - flagged applications wait here until someone can review them.</div>}
+      {underwriters.map(u=>(
+        <Card key={u.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between'}}>
+          <span style={{fontSize:'13px'}}>{u.full_name}</span>
+          <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+        </Card>
+      ))}
+      {underwriterNotice&&<div style={{fontSize:'11px',color:C.textSub,padding:'0 16px'}}>{underwriterNotice}</div>}
+      {underwriterCredentialNotice&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',margin:'0 16px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+        {underwriterCredentialNotice.emailSent
+          ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+          : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{underwriterCredentialNotice.password}</strong></div>}
+        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+      </div>}
+      {showAddUnderwriter ? (
+        <Card style={{padding:'16px'}}>
+          <input value={underwriterForm.fullName} onChange={e=>setUnderwriterForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+          <input value={underwriterForm.email} onChange={e=>setUnderwriterForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setShowAddUnderwriter(false)}>Cancel</Btn>
+            <Btn variant="navy" style={{flex:1}} onClick={handleAddUnderwriter} disabled={savingUnderwriter||!underwriterForm.fullName.trim()||!underwriterForm.email.trim()}>{savingUnderwriter?'Saving…':'Add underwriter'}</Btn>
+          </div>
+        </Card>
+      ) : (
+        <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setShowAddUnderwriter(true)}>+ Add an underwriter</Btn></div>
       )}
     </div>
   )
