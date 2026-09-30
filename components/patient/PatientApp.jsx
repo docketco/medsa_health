@@ -3587,12 +3587,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!patient?.id || !plan.id || !inquiryForm) return
     setInquiring(i)
     try {
+      // Real bug found live-testing: typing a condition into the free-text
+      // "other" box and hitting Submit without first pressing Add/Enter
+      // silently dropped it - formOtherText never made it into
+      // formConditions, so the declaration went through empty ("nothing
+      // declared") with no indication anything was lost. Flushed here as a
+      // safety net so a typed-but-not-explicitly-added condition still
+      // counts.
+      const pendingOther = formOtherText.trim()
+      const effectiveConditions = formNoneApply ? [] : (pendingOther && !formConditions.includes(pendingOther) ? [...formConditions, pendingOther] : formConditions)
       const res = await fetch('/api/patient/match_plan_suitability', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           patientId: patient.id, planId: plan.id, mode: inquiryForm.mode,
           consentHistoryShared: formConsent,
-          declaredConditions: formNoneApply ? [] : formConditions,
+          declaredConditions: effectiveConditions,
           isSwitchRequest: !!inquiryForm.isSwitch,
           message: inquiryForm.mode==='agent' ? formMessage.trim() : '',
           wardClass: inquiryForm.mode==='agent' ? (formWardClass||null) : null,
@@ -3601,7 +3610,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, underwriterPending: data.underwriterPending, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: formNoneApply ? [] : formConditions } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, underwriterPending: data.underwriterPending, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: effectiveConditions } }))
         setInquired(i)
         setInquiryForm(null)
       }
