@@ -2405,6 +2405,45 @@ function TeamsAndAgents({ company }) {
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Teams are branches under {company.name} - each has its own roster, its own subset of your plan basket it's authorized to sell, and its own rule for how a won inquiry gets down to one member. Independent agents appointed to you directly (not under any team) get your whole basket.</div>
       </div>
 
+      {/* Moved to the very top of this tab, in its own highlighted card -
+          previously buried at the bottom of a long page (Teams, CSV
+          import, independent agents, THEN this), which was genuinely hard
+          to find. Underwriters (aq2-06) are a real role distinct from a
+          sales agent - reviews the flagged/clean-signoff queue in the
+          Underwriter Portal (/underwriter-portal), never the agent-facing
+          screens. */}
+      <div style={{margin:'12px 16px 0',background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.green,marginBottom:'4px'}}>Underwriters - review flagged plan applications</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>A different role from a sales agent - reviews cases in the Underwriter Portal, never sees them here.</div>
+        {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - flagged applications wait here until someone can review them.</div>}
+        {underwriters.map(u=>(
+          <div key={u.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{u.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+          </div>
+        ))}
+        {underwriterNotice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{underwriterNotice}</div>}
+        {underwriterCredentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+          {underwriterCredentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{underwriterCredentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+        </div>}
+        {showAddUnderwriter ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={underwriterForm.fullName} onChange={e=>setUnderwriterForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={underwriterForm.email} onChange={e=>setUnderwriterForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAddUnderwriter(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAddUnderwriter} disabled={savingUnderwriter||!underwriterForm.fullName.trim()||!underwriterForm.email.trim()}>{savingUnderwriter?'Saving…':'Add underwriter'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddUnderwriter(true)}>+ Add an underwriter</Btn>
+        )}
+      </div>
+
       <SecLabel>Bulk onboard agents (CSV)</SecLabel>
       <Card style={{padding:'16px'}}>
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>Columns: fullName, email, phone, licenseNumber. An email that already has an agent account is appointed (not re-created); a new one gets a temp password emailed to them.</div>
@@ -2471,38 +2510,6 @@ function TeamsAndAgents({ company }) {
         </Card>
       ) : (
         <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setShowAddIndependent(true)}>+ Appoint an independent agent</Btn></div>
-      )}
-
-      {/* Underwriters (aq2-06): a real role distinct from a sales agent -
-          reviews the flagged/clean-signoff queue in the Underwriter
-          Portal (/underwriter-portal), never the agent-facing screens. */}
-      <SecLabel>Underwriters - review flagged plan applications</SecLabel>
-      {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,padding:'0 16px 10px'}}>None yet - flagged applications wait here until someone can review them.</div>}
-      {underwriters.map(u=>(
-        <Card key={u.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between'}}>
-          <span style={{fontSize:'13px'}}>{u.full_name}</span>
-          <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
-        </Card>
-      ))}
-      {underwriterNotice&&<div style={{fontSize:'11px',color:C.textSub,padding:'0 16px'}}>{underwriterNotice}</div>}
-      {underwriterCredentialNotice&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',margin:'0 16px 16px'}}>
-        <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
-        {underwriterCredentialNotice.emailSent
-          ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
-          : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{underwriterCredentialNotice.password}</strong></div>}
-        <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
-      </div>}
-      {showAddUnderwriter ? (
-        <Card style={{padding:'16px'}}>
-          <input value={underwriterForm.fullName} onChange={e=>setUnderwriterForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
-          <input value={underwriterForm.email} onChange={e=>setUnderwriterForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setShowAddUnderwriter(false)}>Cancel</Btn>
-            <Btn variant="navy" style={{flex:1}} onClick={handleAddUnderwriter} disabled={savingUnderwriter||!underwriterForm.fullName.trim()||!underwriterForm.email.trim()}>{savingUnderwriter?'Saving…':'Add underwriter'}</Btn>
-          </div>
-        </Card>
-      ) : (
-        <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setShowAddUnderwriter(true)}>+ Add an underwriter</Btn></div>
       )}
     </div>
   )
