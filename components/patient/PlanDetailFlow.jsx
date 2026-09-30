@@ -119,6 +119,9 @@ function deriveConditions(a) {
 function storageKey(patientId) { return `medsa_declaration_${patientId}` }
 const DECLARATION_VALIDITY_DAYS = 30
 
+export function clearSavedDeclaration(patientId) {
+  try { sessionStorage.removeItem(storageKey(patientId)) } catch (e) { /* ignore */ }
+}
 export function loadSavedDeclaration(patientId) {
   try {
     const raw = sessionStorage.getItem(storageKey(patientId))
@@ -273,9 +276,9 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
     }
   }
 
-  function startFlow(chosenMode) {
+  function startFlow(chosenMode, forceNew=false) {
     setMode(chosenMode)
-    const saved = loadSavedDeclaration(patient.id)
+    const saved = !forceNew && loadSavedDeclaration(patient.id)
     if (saved) { runMatch(saved.conditions, saved.consentHistoryShared, chosenMode); return }
     setPhase('wizard')
   }
@@ -324,6 +327,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             : <>
               <Btn variant="primary" style={{width:'100%',marginBottom:'10px'}} disabled={plan.requiresAgent} onClick={()=>startFlow('auto')}>{plan.requiresAgent?'Automated quote not offered for this plan':'Quote immediately'}</Btn>
               <Btn style={{width:'100%'}} onClick={()=>startFlow('agent')}>Talk to an agent</Btn>
+              {loadSavedDeclaration(patient.id)&&<div style={{textAlign:'center',marginTop:'12px'}}><span onClick={()=>{clearSavedDeclaration(patient.id);setPhase('wizard')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',textDecoration:'underline'}}>Update your health declaration</span></div>}
             </>}
         </div>
       )}
