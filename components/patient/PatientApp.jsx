@@ -8,6 +8,7 @@ import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
 import TermsAgreementModal from '../shared/TermsAgreementModal'
+import PlanDetailPage from './PlanDetailFlow'
 
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
@@ -2650,6 +2651,112 @@ function PatientInquiryThread({ inquiry, patientName }) {
   )
 }
 
+// The one place a patient can come back to an 'auto' inquiry days later -
+// suitabilityResults in the Compare Plans tab is session-only state, so
+// without this, a case that gets approved by an underwriter after the
+// patient has closed the app had nowhere to ever be bought (aq2-14: the
+// patient can proceed straight to billing from a pending-approval item
+// here, not just in the same session they declared).
+// aq2-08/aq2-13 - a decline is never a dead end. System-matched
+// alternatives (never an agent's judgment - see find_alternative_plans.js),
+// labeled same-insurer vs. cross-insurer, plus the fallback to a real agent.
+function AlternativePlansPanel({ isEn, inquiryId }) {
+  const [loaded,setLoaded]=useState(false)
+  const [alternatives,setAlternatives]=useState([])
+  const [loading,setLoading]=useState(false)
+
+  async function load() {
+    setLoading(true)
+    const res = await fetch('/api/patient/find_alternative_plans', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ inquiryId }),
+    })
+    const data = await res.json()
+    setAlternatives(data.alternatives||[])
+    setLoading(false)
+    setLoaded(true)
+  }
+
+  if (!loaded) return <Btn style={{width:'100%',marginTop:'10px',fontSize:'12px'}} disabled={loading} onClick={load}>{loading?(isEn?'Looking…':'搜尋中…'):(isEn?'See other plans that might work':'查看其他合適計劃')}</Btn>
+
+  return (
+    <div style={{marginTop:'10px'}}>
+      {alternatives.length===0
+        ? <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No matching alternative found automatically - talking to an agent is your best next step.':'未能自動找到合適的替代計劃 - 建議聯絡代理跟進。'}</div>
+        : alternatives.map(a=>(
+          <div key={a.planId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:'#fff',borderRadius:'8px',marginBottom:'6px'}}>
+            <div>
+              <div style={{fontSize:'12px',fontWeight:600}}>{a.planName}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?(isEn?' · same insurer':' · 同一保險公司'):(isEn?' · different insurer':' · 不同保險公司')}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
+            </div>
+          </div>
+        ))}
+    </div>
+  )
+}
+
+function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
+  const [open,setOpen]=useState(false)
+  const [wardClass,setWardClass]=useState('')
+  const [paymentFrequency,setPaymentFrequency]=useState('monthly')
+  const [declarationAck,setDeclarationAck]=useState(false)
+  const [termsModalOpen,setTermsModalOpen]=useState(false)
+  const [purchasing,setPurchasing]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handlePurchase() {
+    if (!declarationAck) return
+    setPurchasing(true); setError(null)
+    try {
+      const res = await fetch('/api/patient/complete_auto_purchase', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          inquiryId: inquiry.id, patientId: patient.id, planId: inquiry.plan_id,
+          wardClass: wardClass || null, paymentFrequency, healthDeclarationAcknowledged: declarationAck,
+        }),
+      })
+      const data = await res.json()
+      if (data.status === 'REDIRECT' && data.checkoutUrl) { window.location.href = data.checkoutUrl; return }
+      if (data.status !== 'OK') { setError(data.message || 'Could not complete the purchase.'); return }
+      onPurchased()
+    } finally {
+      setPurchasing(false)
+    }
+  }
+
+  if (!open) return <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>setOpen(true)}>{isEn?'Proceed to buy':'繼續購買'}</Btn>
+
+  return (
+    <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+          <option value="">{isEn?'Ward class (optional)':'病房等級(可選)'}</option>
+          <option value="general">{isEn?'General ward':'普通病房'}</option>
+          <option value="semi_private">{isEn?'Semi-private':'半私家'}</option>
+          <option value="private">{isEn?'Private':'私家'}</option>
+        </select>
+        <select value={paymentFrequency} onChange={e=>setPaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
+          <option value="monthly">{isEn?'Pay monthly':'每月繳付'}</option>
+          <option value="annual">{isEn?'Pay annually':'每年繳付'}</option>
+        </select>
+      </div>
+      {declarationAck
+        ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ {isEn?'Health declaration & terms reviewed and accepted.':'已審閱並接受健康聲明及條款。'}</div>
+        : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>{isEn?'Review & accept health declaration':'審閱並接受健康聲明'}</Btn>}
+      <TermsAgreementModal open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn}
+        planName={inquiry.insurance_plans?.plan_name} companyName={inquiry.insurance_plans?.company_name}
+        declaredConditions={inquiry.declared_conditions||[]}
+        waitingPeriodDays={inquiry.insurance_plans?.waiting_period_days} preExistingConditionPolicy={inquiry.insurance_plans?.pre_existing_condition_policy}
+        additionalTerms={inquiry.insurance_plans?.additional_terms}
+        onAccept={()=>{setDeclarationAck(true);setTermsModalOpen(false)}}/>
+      {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!declarationAck} onClick={handlePurchase}>{purchasing?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm & activate':'確認並啟用')}</Btn>
+      </div>
+    </div>
+  )
+}
+
 function MyInquiriesTab({ isEn, patient={} }) {
   const [inquiries,setInquiries]=useState([])
   const [agentQuotes,setAgentQuotes]=useState([])
@@ -2659,7 +2766,8 @@ function MyInquiriesTab({ isEn, patient={} }) {
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
-    const { data } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name), agents:claimed_by_agent_id(full_name)')
+    const { data } = await supabase.from('plan_inquiries')
+      .select('*, insurance_plans(plan_name, company_name, waiting_period_days, pre_existing_condition_policy, additional_terms), agents:claimed_by_agent_id(full_name)')
       .eq('patient_id', patient.id).order('created_at',{ascending:false})
     setInquiries(data||[])
     // Real gap: an agent building a policy directly (Issue Policy / Quote)
@@ -2713,7 +2821,17 @@ function MyInquiriesTab({ isEn, patient={} }) {
         ))}
       </div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {inquiries.map(i=>(
+        {inquiries.map(i=>{
+          // A patient's real return path to a flagged/pending 'auto'
+          // inquiry (aq2-14) - suitabilityResults in Compare Plans is
+          // session-only, so this is the only place a case that got
+          // decided after the patient closed the app can be found again.
+          const isAuto = i.mode === 'auto'
+          const isPurchased = i.status === 'converted'
+          const isDeclined = i.suitability_verdict === 'declined'
+          const isPending = i.underwriter_status === 'pending'
+          const isApprovedToBuy = !isDeclined && !isPending
+          return (
           <Card key={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
             <div style={{padding:'14px 16px'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
@@ -2721,21 +2839,33 @@ function MyInquiriesTab({ isEn, patient={} }) {
                   <div style={{fontSize:'14px',fontWeight:500}}>{i.insurance_plans?.plan_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
                 </div>
-                {i.agents?.full_name
-                  ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
-                  : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>}
+                {isAuto
+                  ? <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?C.greenLight:isDeclined?C.redLight:isPending?C.amberLight:C.greenLight,color:isPurchased?C.green:isDeclined?C.red:isPending?C.amber:C.green}}>
+                      {isPurchased?(isEn?'✓ Purchased':'✓ 已購買'):isDeclined?(isEn?'✕ Declined':'✕ 已拒絕'):isPending?(isEn?'⚠ Pending approval':'⚠ 待批核'):(isEn?'✓ Approved':'✓ 已批核')}
+                    </span>
+                  : (i.agents?.full_name
+                    ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
+                    : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>)}
               </div>
               {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}>
-                {i.agents?.full_name
+                {isAuto ? (
+                  <>
+                    <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginTop:'10px'}}>{i.suitability_summary}</div>
+                    {isPending&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{isEn?'An underwriter usually decides within 2-3 business days - check back here any time.':'核保員一般於2-3個工作天內作出決定 - 可隨時回來查看。'}</div>}
+                    {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
+                    {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id}/>}
+                    {isApprovedToBuy&&!isPurchased&&<AutoInquiryPurchasePanel isEn={isEn} inquiry={i} patient={patient} onPurchased={load}/>}
+                  </>
+                ) : (i.agents?.full_name
                   ? <>
                     <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
-                  : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>}
+                  : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
               </div>}
             </div>
           </Card>
-        ))}
+        )})}
       </div>
     </div>
   )
@@ -3347,6 +3477,7 @@ function ForumScreen({ isEn, patient={} }) {
 function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
+  const [viewingPlanIndex,setViewingPlanIndex]=useState(null)
   const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
@@ -3458,12 +3589,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!patient?.id || !plan.id || !inquiryForm) return
     setInquiring(i)
     try {
+      // Real bug found live-testing: typing a condition into the free-text
+      // "other" box and hitting Submit without first pressing Add/Enter
+      // silently dropped it - formOtherText never made it into
+      // formConditions, so the declaration went through empty ("nothing
+      // declared") with no indication anything was lost. Flushed here as a
+      // safety net so a typed-but-not-explicitly-added condition still
+      // counts.
+      const pendingOther = formOtherText.trim()
+      const effectiveConditions = formNoneApply ? [] : (pendingOther && !formConditions.includes(pendingOther) ? [...formConditions, pendingOther] : formConditions)
       const res = await fetch('/api/patient/match_plan_suitability', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           patientId: patient.id, planId: plan.id, mode: inquiryForm.mode,
           consentHistoryShared: formConsent,
-          declaredConditions: formNoneApply ? [] : formConditions,
+          declaredConditions: effectiveConditions,
           isSwitchRequest: !!inquiryForm.isSwitch,
           message: inquiryForm.mode==='agent' ? formMessage.trim() : '',
           wardClass: inquiryForm.mode==='agent' ? (formWardClass||null) : null,
@@ -3472,7 +3612,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       })
       const data = await res.json()
       if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, usedAI: data.usedAI, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: formNoneApply ? [] : formConditions } }))
+        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, underwriterPending: data.underwriterPending, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: effectiveConditions } }))
         setInquired(i)
         setInquiryForm(null)
       }
@@ -3705,6 +3845,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [plansLoading,setPlansLoading]=useState(true)
   const [planSearch,setPlanSearch]=useState('')
   const [patientConditions,setPatientConditions]=useState([])
+  // "Find me a plan" (aq2-09) - the guided entry point, matching your
+  // original design intent: one declaration up front, matched
+  // recommendations back, instead of browsing every plan blind.
+  const [findPlanOpen,setFindPlanOpen]=useState(false)
+  const [findPlanConditions,setFindPlanConditions]=useState([])
+  const [findPlanConsent,setFindPlanConsent]=useState(false)
+  const [findPlanLoading,setFindPlanLoading]=useState(false)
+  const [findPlanResults,setFindPlanResults]=useState(null)
 
   useEffect(() => {
     async function loadPlansAndMatch() {
@@ -3809,6 +3957,16 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const visiblePlans = planSearchLower
     ? plans.filter(p => [p.name, p.company, p.type, ...(p.covers||[]), ...(p.criteria||[])].some(s => (s||'').toLowerCase().includes(planSearchLower)))
     : plans
+
+  // Real rebuild: tapping a plan now opens its OWN full page
+  // (PlanDetailFlow.jsx) - a real multi-step health declaration
+  // (consent + a structured questionnaire modeled on a real insurer's
+  // actual application, not a chip-picker) instead of expanding a small
+  // form inline on the list card. This short-circuits the whole tab
+  // view, same as navigating to a different page would.
+  if (viewingPlanIndex != null && visiblePlans[viewingPlanIndex]) {
+    return <PlanDetailPage plan={visiblePlans[viewingPlanIndex]} patient={patient} isEn={isEn} heldPolicies={heldPolicies} onBack={()=>{setViewingPlanIndex(null);loadPolicy()}}/>
+  }
 
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -3983,6 +4141,66 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn’t rank plans or tell you which is "best" — that’s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
         </div>
 
+        {/* "Find me a plan" (aq2-09) - guided entry matching the original
+            design intent: declare once, consent to screening, get matched
+            recommendations up front instead of browsing every plan blind.
+            Patients are still welcome to browse the full list below either
+            way - this is an addition, not a gate. */}
+        <div style={{margin:'10px 16px 0'}}>
+          {!findPlanOpen
+            ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>setFindPlanOpen(true)}>✨ {isEn?'Find me a plan':'為我配對方案'}</Btn>
+            : <Card style={{padding:'16px'}}>
+                <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>{isEn?'Find me a plan':'為我配對方案'}</div>
+                {!findPlanResults ? <>
+                  <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
+                    <input type="checkbox" checked={findPlanConsent} onChange={e=>setFindPlanConsent(e.target.checked)} style={{marginTop:'2px'}}/>
+                    {isEn?"Let Medsa check my own visit history on this platform against every plan's coverage (optional)":'讓Medsa將我在平台上的就診記錄與各方案的保障範圍核對(可選)'}
+                  </label>
+                  <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Do any of these apply to you?':'以下是否適用於您?'}</div>
+                  <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+                    {[...new Set(plans.flatMap(p=>p.criteria||[]))].slice(0,20).concat(['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition']).map(c=>(
+                      <span key={c} onClick={()=>setFindPlanConditions(prev=>prev.includes(c)?prev.filter(x=>x!==c):[...prev,c])} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:findPlanConditions.includes(c)?C.green:C.card,color:findPlanConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${findPlanConditions.includes(c)?C.green:C.border}`}}>{c}</span>
+                    ))}
+                  </div>
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([]);setFindPlanConsent(false)}}>{isEn?'Cancel':'取消'}</Btn>
+                    <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={findPlanLoading} onClick={async()=>{
+                      setFindPlanLoading(true)
+                      const res = await fetch('/api/patient/find_me_a_plan', {
+                        method:'POST', headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: findPlanConsent }),
+                      })
+                      const data = await res.json()
+                      setFindPlanResults(data.matches||[])
+                      setFindPlanLoading(false)
+                    }}>{findPlanLoading?(isEn?'Matching…':'配對中…'):(isEn?'Show my matches':'顯示配對結果')}</Btn>
+                  </div>
+                </> : <>
+                  {findPlanResults.length===0
+                    ? <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{isEn?'No automated match right now - browse the full list below, or talk to an agent from any plan.':'暫時未有自動配對結果 - 可瀏覽下方完整列表,或聯絡任何方案的代理。'}</div>
+                    : <div style={{marginBottom:'12px'}}>
+                        {findPlanResults.map(m=>{
+                          const idx = plans.findIndex(p=>p.id===m.planId)
+                          return (
+                            <div key={m.planId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 12px',background:C.beige,borderRadius:'8px',marginBottom:'6px'}}>
+                              <div>
+                                <div style={{fontSize:'12px',fontWeight:600}}>{m.planName}</div>
+                                <div style={{fontSize:'11px',color:C.textMuted}}>{m.companyName}{m.quotedPremium!=null?` · HK$${m.quotedPremium}/mo`:''}</div>
+                              </div>
+                              {idx>=0&&<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>{
+                                setFormConditions(findPlanConditions); setFormConsent(findPlanConsent); setFormNoneApply(findPlanConditions.length===0)
+                                openInquiryForm(idx, m.requiresAgent?'agent':'auto')
+                                setFindPlanOpen(false); setFindPlanResults(null)
+                              }}>{isEn?'View':'查看'}</Btn>}
+                            </div>
+                          )
+                        })}
+                      </div>}
+                  <Btn style={{width:'100%',fontSize:'12px'}} onClick={()=>{setFindPlanResults(null)}}>{isEn?'Start over':'重新開始'}</Btn>
+                </>}
+              </Card>}
+        </div>
+
         <SecLabel>{isEn?'Plans matching your profile':'符合您狀況的計劃'}</SecLabel>
         {plansLoading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'Loading plans…':'載入計劃中…'}</div>}
         {!plansLoading&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No plans available yet.':'暫無可用計劃。'}</div>}
@@ -4019,175 +4237,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>}
-            {/* Already holding this exact plan? Block re-buying it outright
-                (that's just a stray double policy, not a real choice) and
-                route "I want something different" through an agent as a
-                real replacement, not a silent cancel+rebuy - the same
-                reasoning HK's Insurance Authority applies to policy
-                replacement (GL27): a switch can leave a patient worse off
-                in ways an agent should actually walk through. */}
-            {inquired!==i&&heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&(
-              <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.textSub,lineHeight:1.5}}>
-                {isEn?'✓ You already hold this plan.':'✓ 您已持有此計劃。'}
-                <span onClick={()=>openInquiryForm(i,'agent',true)} style={{color:C.green,fontWeight:600,cursor:'pointer',marginLeft:'6px'}}>{isEn?'Compare & switch instead':'比較並更換計劃'}</span>
-              </div>
-            )}
-            {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&inquiryForm?.index!==i&&<div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent - `:''}Inquiring shares your name, HKID, date of birth, and contact details with {plan.company} so their team (or your assigned agent) can respond without asking you to re-enter everything.</div>}
-            {/* Real gap this closes: a filled green "Quote immediately"
-                sitting between two plain buttons read as a selection
-                state ("I thought I selected, turns green") rather than a
-                third, independent action. None of these three are a
-                toggle - they're separate next steps - so all three now
-                share the same plain styling, and the fast path is marked
-                with an icon instead of a color that implied "chosen." */}
-            {inquired!==i&&!heldPolicies.some(hp=>hp.plan_id===plan.id)&&<div style={{display:'flex',gap:'8px'}}>
+            {/* Real rebuild: this card is now just for browsing/comparing -
+                declaring and quoting happens on the plan's own dedicated
+                page (PlanDetailFlow.jsx), opened by "View plan" below.
+                Everything that used to live inline here (the consent+
+                condition-chip form, the result card, the inline buy
+                panel) moved there as a real multi-step flow. Held-plan
+                and requires-agent messaging still shown here since
+                they're about browsing, not declaring. */}
+            {heldPolicies.some(hp=>hp.plan_id===plan.id)
+              ? <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>{isEn?'✓ You already hold this plan.':'✓ 您已持有此計劃。'}</div>
+              : <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent.`:''}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              {!plan.requiresAgent&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'auto')} disabled={inquiring===i}>⚡ Quote immediately</Btn>}
-              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>openInquiryForm(i,'agent')} disabled={inquiring===i}>Talk to an agent</Btn>
-            </div>}
-
-            {/* Shared consent + self-declared conditions form - same
-                mechanism for both paths, so an agent-routed inquiry gets
-                the same suitability pre-analysis a patient sees instantly
-                on the automated path, instead of starting cold. */}
-            {inquiryForm?.index===i&&<div style={{marginTop:'10px',background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px'}}>
-              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'8px'}}>{inquiryForm.mode==='auto'?'Quick check before your automated quote':'Quick check before this reaches an agent'}</div>
-              <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
-                <input type="checkbox" checked={formConsent} onChange={e=>setFormConsent(e.target.checked)} style={{marginTop:'2px'}}/>
-                Let Medsa check my own visit history on this platform against this plan's coverage (optional - you can still declare conditions below either way)
-              </label>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Do any of these apply to you? (used only to check this plan's coverage, never shared beyond this inquiry)</div>
-              <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-                {plan.criteria.map(c=>(
-                  <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formConditions.includes(c)?C.green:C.card,color:formConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${formConditions.includes(c)?C.green:C.border}`}}>{c}</span>
-                ))}
-                {formConditions.filter(c=>!plan.criteria.includes(c)).map(c=>(
-                  <span key={c} onClick={()=>toggleFormCondition(c)} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:C.green,color:'#fff',border:`0.5px solid ${C.green}`}}>{c} ✕</span>
-                ))}
-                <span onClick={()=>{setFormNoneApply(true);setFormConditions([]);setFormOtherText('')}} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:formNoneApply?C.green:C.card,color:formNoneApply?'#fff':C.textSub,border:`0.5px solid ${formNoneApply?C.green:C.border}`}}>None of these apply</span>
-              </div>
-              <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
-                <input type="text" value={formOtherText} onChange={e=>setFormOtherText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addOtherCondition()}}} placeholder="Have another condition? Type it here" style={{flex:1,fontSize:'11px',padding:'7px 10px',borderRadius:'8px',border:`0.5px solid ${C.border}`,boxSizing:'border-box'}}/>
-                <Btn style={{fontSize:'11px',padding:'7px 12px'}} onClick={addOtherCondition}>Add</Btn>
-              </div>
-              {/* Real gap this closes: talking to an agent had nowhere to
-                  actually say anything - a patient with a specific
-                  question ("does this cover my existing GP?") had no way
-                  to ask it up front, only the generic consent/conditions
-                  form. Seeds the same inquiry_messages thread the agent
-                  already reads once they claim it, so it's not lost. */}
-              {/* Same ward class / payment frequency choice the automated
-                  purchase flow asks at checkout - asking here too means
-                  the agent picking this up already has the patient's real
-                  answer instead of a blank field to re-ask for on a
-                  specific product the patient is already asking about. */}
-              {inquiryForm.mode==='agent'&&<div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-                <select value={formWardClass} onChange={e=>setFormWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
-                  <option value="">Ward class (optional)</option>
-                  <option value="general">General ward</option>
-                  <option value="semi_private">Semi-private</option>
-                  <option value="private">Private</option>
-                </select>
-                <select value={formPaymentFrequency} onChange={e=>setFormPaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
-                  <option value="monthly">Pay monthly</option>
-                  <option value="annual">Pay annually</option>
-                </select>
-              </div>}
-              {inquiryForm.mode==='agent'&&<div style={{marginBottom:'10px'}}>
-                <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Anything specific to ask the agent? (optional)</div>
-                <textarea value={formMessage} onChange={e=>setFormMessage(e.target.value)} rows={2} placeholder="e.g. Does this cover my existing GP visits?" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit'}}/>
-              </div>}
-              <div style={{display:'flex',gap:'8px'}}>
-                <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setInquiryForm(null)}>Cancel</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleInquire(i,plan)} disabled={inquiring===i||(!formNoneApply&&formConditions.length===0)}>{inquiring===i?'Checking…':(inquiryForm.mode==='auto'?'See my quote':'Send to an agent')}</Btn>
-              </div>
-            </div>}
-
-            {/* Post-inquiry confirmation - shape differs by mode: auto
-                shows the real verdict/quote right here, agent mode shows
-                the forwarding confirmation as before (plus a note that
-                the same read now travels with it). */}
-            {inquired===i&&suitabilityResults[i]?.mode==='auto'&&<div style={{marginTop:'10px',background:suitabilityResults[i].verdict==='needs_review'?C.amberLight:C.greenXLight,border:`0.5px solid ${suitabilityResults[i].verdict==='needs_review'?C.amber:C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
-              <div style={{fontSize:'12px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
-                {suitabilityResults[i].verdict==='suitable'&&'✓ Looks suitable for you'}
-                {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Likely suitable - a couple of things to confirm'}
-                {suitabilityResults[i].verdict==='needs_review'&&'⚠ Worth a closer look before relying on this'}
-              </div>
-              {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'14px',fontWeight:700,color:C.navy,marginBottom:'6px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
-              <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
-              {suitabilityResults[i].usedAI===false&&<div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>}
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px',fontStyle:'italic'}}>This is an estimate, not a bound quote or advice. Ready to proceed, or want a second opinion? You can still reach out to a licensed agent from "My inquiries".</div>
-              {/* Real gap this closes: the automated path only ever
-                  produced a quote card before - nothing ever became a
-                  real held policy. A "needs review" read is exactly the
-                  case this stays closed for - that's what the agent path
-                  is for. */}
-              {suitabilityResults[i].verdict!=='needs_review'&&(heldPolicies.some(hp=>hp.plan_id===plan.id)
-                ? <div style={{marginTop:'10px',fontSize:'11px',color:C.green,fontWeight:600}}>✓ Purchased - see it under "Policy on file" above.</div>
-                : purchaseOpenIndex===i
-                  ? <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
-                      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-                        <select value={purchaseWardClass} onChange={e=>setPurchaseWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
-                          <option value="">Ward class (optional)</option>
-                          <option value="general">General ward</option>
-                          <option value="semi_private">Semi-private</option>
-                          <option value="private">Private</option>
-                        </select>
-                        <select value={purchasePaymentFrequency} onChange={e=>setPurchasePaymentFrequency(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
-                          <option value="monthly">Pay monthly</option>
-                          <option value="annual">Pay annually</option>
-                        </select>
-                      </div>
-                      {/* Real gap this closes: this used to be one inline
-                          checkbox sentence next to the buy button - no real
-                          document, nothing that actually made a patient
-                          read what they were agreeing to. Now a real,
-                          scrollable declaration screen (Uber-Merchant-
-                          onboarding style) built from this plan's own
-                          on-file terms, that has to be scrolled through
-                          before "I agree" unlocks. */}
-                      {purchaseHealthDeclaration
-                        ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ Health declaration & terms reviewed and accepted.</div>
-                        : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
-                      {/* Real HK insurers bill premiums directly to the
-                          patient, never through a broker - so this isn't a
-                          Medsa charge, just a heads-up on what to expect
-                          next once the policy is confirmed. */}
-                      {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>
-                        Estimated HK${purchasePaymentFrequency==='annual'?(suitabilityResults[i].quotedPremium*12).toFixed(0):suitabilityResults[i].quotedPremium}/{purchasePaymentFrequency==='annual'?'yr':'mo'}. {plan.company} will contact you directly to set up premium payment - Medsa doesn't collect or hold this payment.
-                      </div>}
-                      {purchaseError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{purchaseError}</div>}
-                      <div style={{display:'flex',gap:'8px'}}>
-                        <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPurchaseOpenIndex(null)}>Cancel</Btn>
-                        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!purchaseHealthDeclaration} onClick={()=>handleCompletePurchase(i,plan,suitabilityResults[i])}>{purchasing?'Confirming…':'Confirm & activate'}</Btn>
-                      </div>
-                    </div>
-                  : <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>openPurchaseForm(i)}>Buy this plan</Btn>
-              )}
-            </div>}
-            {/* Real gap this closes: the same suitability check that runs
-                for the automated path already ran here too (that's the
-                whole point of sharing one engine - see handleInquire's
-                comment) but the patient never saw any of it, just generic
-                forwarding boilerplate. They should see the same
-                preliminary read, just clearly marked as not final since
-                an agent (and their own consented history, if shared)
-                still confirms it. */}
-            {inquired===i&&suitabilityResults[i]?.mode==='agent'&&<div style={{marginTop:'10px',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'10px',padding:'12px 14px'}}>
-              <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'4px'}}>Your enquiry has been forwarded to {plan.company}</div>
-              {suitabilityResults[i].verdict&&<div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',marginTop:'8px',marginBottom:'8px'}}>
-                <div style={{fontSize:'11px',fontWeight:600,marginBottom:'4px',color:suitabilityResults[i].verdict==='needs_review'?C.amber:C.green}}>
-                  {suitabilityResults[i].verdict==='suitable'&&'✓ Preliminary read: suitable'}
-                  {suitabilityResults[i].verdict==='suitable_with_notes'&&'◇ Preliminary read: likely suitable'}
-                  {suitabilityResults[i].verdict==='needs_review'&&'⚠ Preliminary read: worth a closer look'}
-                </div>
-                {suitabilityResults[i].quotedPremium!=null&&<div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Estimated HK${suitabilityResults[i].quotedPremium}/mo</div>}
-                <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>{suitabilityResults[i].summary}</div>
-                <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',fontStyle:'italic'}}>Automatic, not final - your agent reviews and confirms this before anything is bound.</div>
-              </div>}
-              <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.6}}>Their team will be in touch according to their standard response policy. Medsa connects you with insurers and their agents — plan outcomes, agent performance, and claims decisions are the responsibility of {plan.company}.</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>The agent picking this up already has your declared conditions checked against this plan, so you shouldn't need to repeat yourself.</div>
-            </div>}
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
+            </div>
           </Card>
         ))}
 

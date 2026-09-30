@@ -192,7 +192,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
@@ -261,7 +261,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -278,6 +278,7 @@ function PlanManager({ company }) {
       insurer_flags: plan.insurer_flags||[],
       additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
       self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
+      auto_buy_on_clean: !!plan.auto_buy_on_clean,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -312,6 +313,7 @@ function PlanManager({ company }) {
       additional_terms: form.additional_terms || null,
       pre_existing_condition_policy: form.pre_existing_condition_policy || null,
       waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
+      auto_buy_on_clean: form.auto_buy_on_clean,
       // Only ever actually takes effect while the company's own Connect
       // account is active (see complete_auto_purchase.js) - saved as
       // whatever the checkbox says regardless, so it's remembered for
@@ -339,7 +341,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -410,6 +412,13 @@ function PlanManager({ company }) {
             <div>
               <div style={{fontSize:'12px',color:C.text}}>Requires talking to an agent</div>
               <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
+            </div>
+          </label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <input type="checkbox" checked={form.auto_buy_on_clean} onChange={e=>setForm(f=>({...f,auto_buy_on_clean:e.target.checked}))}/>
+            <div>
+              <div style={{fontSize:'12px',color:C.text}}>Buy immediately on a clean verdict</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Off by default: even a clean (approved by matching alone) application still waits for a quick sign-off in your Underwriter Portal before it can be purchased. On: a clean application goes straight to purchase, no human touch.</div>
             </div>
           </label>
           <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:connectActive?'pointer':'not-allowed',opacity:connectActive?1:0.5}}>
@@ -2265,6 +2274,15 @@ function TeamsAndAgents({ company }) {
   const [bulkRows,setBulkRows]=useState([])
   const [bulkRunning,setBulkRunning]=useState(false)
   const [bulkResults,setBulkResults]=useState([])
+  // Underwriters (aq2-06/aq2-10) - a real role distinct from a sales
+  // agent, its own identity system (insurance_underwriters), scoped to
+  // this insurer's flagged/clean-signoff queue in the Underwriter Portal.
+  const [underwriters,setUnderwriters]=useState([])
+  const [showAddUnderwriter,setShowAddUnderwriter]=useState(false)
+  const [underwriterForm,setUnderwriterForm]=useState({ fullName:'', email:'' })
+  const [savingUnderwriter,setSavingUnderwriter]=useState(false)
+  const [underwriterNotice,setUnderwriterNotice]=useState(null)
+  const [underwriterCredentialNotice,setUnderwriterCredentialNotice]=useState(null)
 
   function handleBulkFile(file) {
     const reader = new FileReader()
@@ -2324,6 +2342,9 @@ function TeamsAndAgents({ company }) {
     const { data: apptRows } = await supabase.from('agent_institution_appointments')
       .select('agent_id, agents(id, full_name, email, medsa_id, agent_type)').eq('institution_id', company.institutionRefId).is('team_id', null).eq('status','active')
     setIndependents((apptRows||[]).map(a=>a.agents).filter(Boolean))
+    const { data: underwriterRows } = await supabase.from('insurance_underwriters')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setUnderwriters(underwriterRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [company.id, company.name])
@@ -2359,10 +2380,68 @@ function TeamsAndAgents({ company }) {
     }
   }
 
+  async function handleAddUnderwriter() {
+    if (!underwriterForm.fullName.trim()||!underwriterForm.email.trim()) return
+    setSavingUnderwriter(true); setUnderwriterNotice(null); setUnderwriterCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_underwriter', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...underwriterForm, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setUnderwriterNotice(data.message||'Could not add underwriter.'); setSavingUnderwriter(false); return }
+      setUnderwriterCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setUnderwriterForm({ fullName:'', email:'' })
+      setShowAddUnderwriter(false)
+      load()
+    } finally {
+      setSavingUnderwriter(false)
+    }
+  }
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Teams are branches under {company.name} - each has its own roster, its own subset of your plan basket it's authorized to sell, and its own rule for how a won inquiry gets down to one member. Independent agents appointed to you directly (not under any team) get your whole basket.</div>
+      </div>
+
+      {/* Moved to the very top of this tab, in its own highlighted card -
+          previously buried at the bottom of a long page (Teams, CSV
+          import, independent agents, THEN this), which was genuinely hard
+          to find. Underwriters (aq2-06) are a real role distinct from a
+          sales agent - reviews the flagged/clean-signoff queue in the
+          Underwriter Portal (/underwriter-portal), never the agent-facing
+          screens. */}
+      <div style={{margin:'12px 16px 0',background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.green,marginBottom:'4px'}}>Underwriters - review flagged plan applications</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>A different role from a sales agent - reviews cases in the Underwriter Portal, never sees them here.</div>
+        {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - flagged applications wait here until someone can review them.</div>}
+        {underwriters.map(u=>(
+          <div key={u.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{u.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+          </div>
+        ))}
+        {underwriterNotice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{underwriterNotice}</div>}
+        {underwriterCredentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+          {underwriterCredentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{underwriterCredentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+        </div>}
+        {showAddUnderwriter ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={underwriterForm.fullName} onChange={e=>setUnderwriterForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={underwriterForm.email} onChange={e=>setUnderwriterForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAddUnderwriter(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAddUnderwriter} disabled={savingUnderwriter||!underwriterForm.fullName.trim()||!underwriterForm.email.trim()}>{savingUnderwriter?'Saving…':'Add underwriter'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddUnderwriter(true)}>+ Add an underwriter</Btn>
+        )}
       </div>
 
       <SecLabel>Bulk onboard agents (CSV)</SecLabel>

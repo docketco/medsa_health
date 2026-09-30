@@ -23,7 +23,7 @@ import C from './colours'
 
 export default function TermsAgreementModal({
   open, onClose, onAccept, isEn=true,
-  planName, companyName, declaredConditions=[], historyConditions=[],
+  planName, companyName, declaredConditions=[], historyConditions=[], hideDeclaredDetail=false,
   waitingPeriodDays, preExistingConditionPolicy, additionalTerms,
 }) {
   const [scrolledToEnd, setScrolledToEnd] = useState(false)
@@ -50,12 +50,18 @@ export default function TermsAgreementModal({
         <div ref={scrollRef} onScroll={handleScroll} style={{overflowY:'auto',padding:'20px 24px',fontSize:'13px',lineHeight:1.7,color:C.text,flex:1}}>
           <div style={{marginBottom:'20px'}}>
             <div style={{fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.6px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'1. What you are declaring':'1. 您所聲明的事項'}</div>
-            {allDeclared.length>0
-              ? <>
-                  <div style={{marginBottom:'6px'}}>{isEn?'You are declaring the following, for this application:':'您正就此申請聲明以下事項：'}</div>
-                  <ul style={{margin:'0 0 6px',paddingLeft:'20px'}}>{allDeclared.map((c,i)=><li key={i}>{c}</li>)}</ul>
-                </>
-              : <div>{isEn?'You have declared no medical conditions for this application.':'您並未就此申請聲明任何醫療狀況。'}</div>}
+            {hideDeclaredDetail
+              // Agent-issued path (AgentApp.jsx): never show the patient's
+              // declared conditions here either - same no-raw-history rule
+              // as the inquiry cards (aq2-04/aq2-11), applied consistently
+              // rather than treating "patient is present" as an exception.
+              ? <div>{isEn?'The patient\'s declared conditions for this application have already been checked against this plan\'s coverage - see the pre-checked read on the previous screen.':'此申請的病況聲明已與此計劃的保障範圍核對 - 詳見上一畫面的結果。'}</div>
+              : (allDeclared.length>0
+                ? <>
+                    <div style={{marginBottom:'6px'}}>{isEn?'You are declaring the following, for this application:':'您正就此申請聲明以下事項：'}</div>
+                    <ul style={{margin:'0 0 6px',paddingLeft:'20px'}}>{allDeclared.map((c,i)=><li key={i}>{c}</li>)}</ul>
+                  </>
+                : <div>{isEn?'You have declared no medical conditions for this application.':'您並未就此申請聲明任何醫療狀況。'}</div>)}
             <div style={{color:C.textMuted,fontSize:'12px'}}>{isEn?'This has already been checked against this plan\'s coverage - see the read on the previous screen.':'此聲明已與此計劃的保障範圍核對 - 詳見上一畫面的結果。'}</div>
           </div>
 
