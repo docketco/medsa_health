@@ -183,6 +183,122 @@ function PlanExtrasManager({ plan, onChanged }) {
   )
 }
 
+// ── CUSTOM DECLARATION QUESTIONS ────────────────────────────────────────────
+// Lets an insurer add their own items to the four fixed list-questions on
+// the patient's health questionnaire (PlanDetailFlow.jsx), on top of
+// Medsa's own reference list - either for just this plan or every plan
+// this company sells. A selected custom item flows into the matching
+// engine exactly like a built-in one (it's just another declared string).
+const CUSTOM_QUESTION_CATEGORIES = [
+  ['diagnosed', 'Have you ever been diagnosed with any of these?'],
+  ['current', 'Do you currently have any of these?'],
+  ['other_symptoms', 'Apart from anything above, do you have any of these?'],
+  ['family_history', 'Family history: parents or siblings diagnosed at or before age 60'],
+]
+function CustomQuestionsManager({ company, planId }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [category, setCategory] = useState('diagnosed')
+  const [label, setLabel] = useState('')
+  const [scope, setScope] = useState(planId ? 'plan' : 'all')
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plan_custom_questions')
+      .select('*').eq('company_id', company.id).order('created_at')
+    setItems(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id])
+
+  async function addItem() {
+    const val = label.trim()
+    if (!val) return
+    await supabase.from('insurance_plan_custom_questions').insert({
+      company_id: company.id, plan_id: scope === 'plan' ? planId : null, category, label: val,
+    })
+    setLabel('')
+    load()
+  }
+  async function removeItem(id) {
+    await supabase.from('insurance_plan_custom_questions').delete().eq('id', id)
+    load()
+  }
+
+  // Only items relevant here: this exact plan's own additions, or ones
+  // this company applied to every plan - not another plan's own-only list.
+  const relevant = items.filter(q => q.plan_id === planId || q.plan_id === null)
+
+  return (
+    <div style={{marginBottom:'14px',background:C.beige,borderRadius:'10px',padding:'12px 14px'}}>
+      <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'2px'}}>Custom declaration questions</div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>Add your own items to the questionnaire's condition lists, on top of Medsa's reference list - scoped to just this plan or every plan you sell.</div>
+      {loading
+        ? <div style={{fontSize:'11px',color:C.textMuted}}>Loading…</div>
+        : CUSTOM_QUESTION_CATEGORIES.map(([key, title]) => {
+            const forCat = relevant.filter(q => q.category === key)
+            if (forCat.length === 0) return null
+            return (
+              <div key={key} style={{marginBottom:'8px'}}>
+                <div style={{fontSize:'10.5px',fontWeight:600,color:C.textSub,marginBottom:'4px'}}>{title}</div>
+                <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+                  {forCat.map(q => (
+                    <div key={q.id} onClick={()=>removeItem(q.id)} style={{padding:'4px 9px',borderRadius:'14px',fontSize:'10.5px',background:q.plan_id?C.green:C.navy,color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',gap:'5px'}}>
+                      {q.label}{q.plan_id?'':' (all plans)'}<span style={{fontWeight:700}}>×</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+      <div style={{display:'flex',gap:'6px',marginTop:'6px',flexWrap:'wrap'}}>
+        <select value={category} onChange={e=>setCategory(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'11.5px',background:'#fff',fontFamily:'inherit'}}>
+          {CUSTOM_QUESTION_CATEGORIES.map(([key,title])=><option key={key} value={key}>{title}</option>)}
+        </select>
+        <input value={label} onChange={e=>setLabel(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addItem())} placeholder="e.g. Sleep apnoea" style={{flex:1,minWidth:'140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        <select value={scope} onChange={e=>setScope(e.target.value)} disabled={!planId} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'11.5px',background:'#fff',fontFamily:'inherit'}}>
+          {planId && <option value="plan">This plan only</option>}
+          <option value="all">All my plans</option>
+        </select>
+        <button onClick={addItem} disabled={!label.trim()} style={{padding:'0 14px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+      </div>
+    </div>
+  )
+}
+
+// Shows this insurer's own logo to patients - on the horizontally
+// scrollable "Policy on file" cards in the patient app. Reuses the same
+// Storage bucket + upload pattern as clinic receipt branding.
+function CompanyLogoUploader({ company }) {
+  const [logoUrl, setLogoUrl] = useState(company.logo_url || null)
+  const [uploading, setUploading] = useState(false)
+
+  async function handleFile(file) {
+    setUploading(true)
+    const path = `insurers/${company.id}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('clinic-branding').upload(path, file)
+    if (!error) {
+      const { data } = supabase.storage.from('clinic-branding').getPublicUrl(path)
+      await supabase.from('insurance_companies').update({ logo_url: data.publicUrl }).eq('id', company.id)
+      setLogoUrl(data.publicUrl)
+    }
+    setUploading(false)
+  }
+
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'14px 16px 0'}}>
+      {logoUrl
+        ? <img src={logoUrl} alt={`${company.name} logo`} style={{width:'44px',height:'44px',objectFit:'contain',borderRadius:'8px',border:`0.5px solid ${C.border}`,background:'#fff'}}/>
+        : <div style={{width:'44px',height:'44px',borderRadius:'8px',border:`1px dashed ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',color:C.textMuted,textAlign:'center'}}>No logo</div>}
+      <div style={{flex:1}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Shown to patients on their held-policy cards</div>
+        <input type="file" accept="image/*" id="insurer-logo-upload" style={{display:'none'}} onChange={e=>{const f=e.target.files[0]; if(f) handleFile(f)}}/>
+        <Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>document.getElementById('insurer-logo-upload').click()} disabled={uploading}>{uploading?'Uploading…':logoUrl?'Replace logo':'Upload logo'}</Btn>
+      </div>
+    </div>
+  )
+}
+
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
 const PLAN_MANAGER_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
 function PlanManager({ company }) {
@@ -359,6 +475,7 @@ function PlanManager({ company }) {
 
   return (
     <div style={{background:C.beige,flex:1}}>
+      <CompanyLogoUploader company={company}/>
       {!creating&&<div style={{padding:'16px 16px 0'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
       {creating&&(
         <div id="plan-manager-form">
@@ -477,6 +594,7 @@ function PlanManager({ company }) {
             </div>
             <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={5} placeholder="e.g. exclusions, what counts as a pre-existing condition, how claims are assessed…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
           </div>
+          <CustomQuestionsManager company={company} planId={editingId}/>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
           <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
             {PLAN_MANAGER_CATEGORIES.map(cat=>(

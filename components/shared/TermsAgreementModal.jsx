@@ -47,7 +47,7 @@ export default function TermsAgreementModal({
           <div style={{fontSize:'12px',color:C.textMuted,marginTop:'2px'}}>{planName}{companyName?` — ${companyName}`:''}</div>
         </div>
 
-        <div ref={scrollRef} onScroll={handleScroll} style={{overflowY:'auto',padding:'20px 24px',fontSize:'13px',lineHeight:1.7,color:C.text,flex:1}}>
+        <div ref={scrollRef} onScroll={handleScroll} style={{overflowY:'auto',padding:'20px 24px',fontSize:'13px',lineHeight:1.7,color:C.text,flex:1,minHeight:0}}>
           <div style={{marginBottom:'20px'}}>
             <div style={{fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.6px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'1. What you are declaring':'1. 您所聲明的事項'}</div>
             {hideDeclaredDetail

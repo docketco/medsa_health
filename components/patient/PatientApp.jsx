@@ -3478,7 +3478,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
   const [viewingPlanIndex,setViewingPlanIndex]=useState(null)
-  const [expanded,setExpanded]=useState(null)
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
   const [suitabilityResults,setSuitabilityResults]=useState({}) // index -> {verdict, summary, quotedPremium, usedAI, mode}
@@ -3669,18 +3668,24 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   const [expandedPolicyId,setExpandedPolicyId]=useState(null)
   const [policyLoading,setPolicyLoading]=useState(true)
   const [renewalRequested,setRenewalRequested]=useState(false)
+  const [companyLogos,setCompanyLogos]=useState({}) // company_name -> logo_url, for the held-policy cards
 
   async function loadPolicy() {
     const medsaId = patient?.medsa_id
     if (!medsaId) { setPolicyLoading(false); return }
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setPolicyLoading(false); return }
-    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
+    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model, company_name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
     setHeldPolicies(all||[])
     const data = (all||[])[0]
     setActivePolicy(data||null)
     setRenewalRequested(!!data?.patient_requested_renewal_at)
     setPolicyLoading(false)
+    const companyNames = [...new Set((all||[]).map(p=>p.insurance_plans?.company_name).filter(Boolean))]
+    if (companyNames.length>0) {
+      const { data: companies } = await supabase.from('insurance_companies').select('name, logo_url').in('name', companyNames)
+      setCompanyLogos(Object.fromEntries((companies||[]).filter(c=>c.logo_url).map(c=>[c.name, c.logo_url])))
+    }
   }
   useEffect(() => {
     loadPolicy()
@@ -3979,16 +3984,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           several held policies. One shared label now, tighter spacing
           between cards, no repeated label per row. */}
       {!policyLoading&&heldPolicies.length>0&&<SecLabel>{isEn?'Policy on file':'已存檔保單'}</SecLabel>}
+      {/* Horizontally scrollable row of cards - a patient holding several
+          policies used to see them stacked full-width, one per row, which
+          got long fast. Each card is now a fixed-width tile carrying the
+          insurer's own logo (CompanyLogoUploader in the insurer portal),
+          swiped through instead of scrolled past. */}
+      {!policyLoading&&heldPolicies.length>0&&<div style={{display:'flex',gap:'10px',overflowX:'auto',padding:'0 16px 8px',WebkitOverflowScrolling:'touch'}}>
       {/* A policy linked via "I already have insurance" below (self-serve,
           out-of-network) has no premium/renewal_date - it was never sold
           through Medsa, just recorded so claims can process. The full
           premium/renewal card below assumes a Medsa-issued policy, so a
           self-linked one gets its own simpler card instead. */}
-      {!policyLoading&&heldPolicies.filter(p=>p.premium==null).map(policy=>{
+      {heldPolicies.filter(p=>p.premium==null).map(policy=>{
         const expanded = expandedPolicyId===policy.id
+        const logoUrl = companyLogos[policy.insurance_plans?.company_name]
         return (
-        <div key={policy.id} style={{margin:'0 16px 8px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
+        <div key={policy.id} style={{flexShrink:0,width:'240px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+            {logoUrl
+              ? <img src={logoUrl} alt="" style={{width:'22px',height:'22px',objectFit:'contain',borderRadius:'5px',flexShrink:0,background:'#fff',border:`0.5px solid ${C.border}`}}/>
+              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:C.beige,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700,color:C.textMuted}}>{(policy.insurance_plans?.company_name||'?')[0]}</div>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:'13px',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
             </div>
@@ -4015,7 +4030,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           activePolicy (heldPolicies[0]) - a patient holding more than one
           real Medsa-sold policy only ever saw the first. Now renders
           every held policy of this kind as its own card. */}
-      {!policyLoading&&heldPolicies.filter(p=>p.premium!=null).map(policy=>{
+      {heldPolicies.filter(p=>p.premium!=null).map(policy=>{
         const daysLeft = Math.ceil((new Date(policy.renewal_date).getTime() - Date.now()) / (1000*60*60*24))
         const inProgress = policy.status==='renewal_in_progress'
         // Not renewal-gated any more - a freshly-issued policy (agent-
@@ -4031,15 +4046,19 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         const statusLabel = readyToSign ? (isEn?'Sign required':'需要簽署')
           : waitingOnAgent ? (isEn?'Renewal in progress':'續保處理中')
           : (isEn?'Active':'生效中')
+        const logoUrl = companyLogos[activePolicy.insurance_plans?.company_name]
         return (
-        <div key={policy.id} style={{margin:'0 16px 8px',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
+        <div key={policy.id} style={{flexShrink:0,width:'240px',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
+            {logoUrl
+              ? <img src={logoUrl} alt="" style={{width:'22px',height:'22px',objectFit:'contain',borderRadius:'5px',flexShrink:0,background:'#fff'}}/>
+              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:'rgba(255,255,255,0.15)',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700}}>{(activePolicy.insurance_plans?.company_name||'?')[0]}</div>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:'10px',opacity:0.7,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{activePolicy.plan_name}</div>
               <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginTop:'2px'}}>
                 <div style={{fontSize:'15px',fontWeight:700}}>HK${activePolicy.premium}/mo</div>
-                <div style={{fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'20px',background:readyToSign?'rgba(255,200,0,0.25)':'rgba(255,255,255,0.15)'}}>{statusLabel}</div>
               </div>
+              <div style={{fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'20px',background:readyToSign?'rgba(255,200,0,0.25)':'rgba(255,255,255,0.15)',display:'inline-block',marginTop:'4px'}}>{statusLabel}</div>
             </div>
             <span style={{fontSize:'10px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>
@@ -4081,6 +4100,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         </div>
         )
       })}
+      </div>}
 
       {/* Self-serve link to a plan already held outside Medsa's own
           marketplace - see comment on handleLinkPlan above. Always
@@ -4234,9 +4254,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
             <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
               {plan.criteria.map(c=><span key={c} style={{fontSize:'11px',background:C.card,color:C.textSub,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
             </div>
-            {expanded===i&&<div style={{marginBottom:'10px',display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {plan.covers.map(c=><span key={c} style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{pt(c)}</span>)}
-            </div>}
             {/* Real rebuild: this card is now just for browsing/comparing -
                 declaring and quoting happens on the plan's own dedicated
                 page (PlanDetailFlow.jsx), opened by "View plan" below.
@@ -4244,14 +4261,13 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
                 condition-chip form, the result card, the inline buy
                 panel) moved there as a real multi-step flow. Held-plan
                 and requires-agent messaging still shown here since
-                they're about browsing, not declaring. */}
+                they're about browsing, not declaring. Tapping the card
+                goes straight to the plan's own page - no separate
+                "see details" step first. */}
             {heldPolicies.some(hp=>hp.plan_id===plan.id)
               ? <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>{isEn?'✓ You already hold this plan.':'✓ 您已持有此計劃。'}</div>
               : <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent.`:''}</div>}
-            <div style={{display:'flex',gap:'8px'}}>
-              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExpanded(expanded===i?null:i)}>{expanded===i?'Hide details':'See details'}</Btn>
-              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
-            </div>
+            <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
           </Card>
         ))}
 

@@ -24,7 +24,8 @@
 // table, this module's save/load functions swapped for real API calls.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { supabase } from '../../lib/supabase'
 import C from '../shared/colours'
 import TermsAgreementModal from '../shared/TermsAgreementModal'
 
@@ -48,6 +49,26 @@ function YesNo({ value, onChange, label, hint }) {
     </div>
   )
 }
+const EMPTY_CUSTOM_QUESTIONS = { diagnosed: [], current: [], otherSymptoms: [], familyHistory: [] }
+const CUSTOM_CATEGORY_KEY = { diagnosed: 'diagnosed', current: 'current', other_symptoms: 'otherSymptoms', family_history: 'familyHistory' }
+
+// A plan's insurer can add their own items to the four list-questions
+// below (InsuranceApp.jsx's Plan Manager) - resolved by company name since
+// insurance_plans has no company_id FK, just company_name text. Company-
+// wide additions (plan_id null) apply alongside this specific plan's own.
+async function fetchCustomQuestions(companyName, planId) {
+  const grouped = { ...EMPTY_CUSTOM_QUESTIONS }
+  const { data: company } = await supabase.from('insurance_companies').select('id').eq('name', companyName).maybeSingle()
+  if (!company) return grouped
+  const { data: rows } = await supabase.from('insurance_plan_custom_questions')
+    .select('category, label, plan_id').eq('company_id', company.id).or(`plan_id.eq.${planId},plan_id.is.null`)
+  for (const r of rows || []) {
+    const key = CUSTOM_CATEGORY_KEY[r.category]
+    if (key) grouped[key].push(r.label)
+  }
+  return grouped
+}
+
 function MultiSelect({ options, selected, onToggle, label, hint }) {
   return (
     <div style={{marginBottom:'20px'}}>
@@ -139,13 +160,20 @@ function saveDeclaration(patientId, answers, conditions, consentHistoryShared) {
 }
 
 // ── The wizard itself: consent -> questionnaire -> review ───────────────────
-function HealthDeclarationWizard({ onComplete, onCancel }) {
+function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initialWeightKg, customQuestions = EMPTY_CUSTOM_QUESTIONS }) {
   const [step, setStep] = useState('consent')
   const [agree1, setAgree1] = useState(false)
   const [agree2, setAgree2] = useState(false)
   const [agree3, setAgree3] = useState(false)
   const [consentHistoryShared, setConsentHistoryShared] = useState(false)
-  const [a, setA] = useState(emptyAnswers())
+  // Height/weight default to the patient's most recent clinic-logged
+  // vitals (patient_vitals) so they don't have to know these off the top
+  // of their head - still a plain editable field, not locked in.
+  const [a, setA] = useState(() => ({
+    ...emptyAnswers(),
+    heightCm: initialHeightCm != null ? String(initialHeightCm) : '',
+    weightKg: initialWeightKg != null ? String(initialWeightKg) : '',
+  }))
   const set = (k, v) => setA(prev => ({ ...prev, [k]: v }))
   const toggle = (k, item) => setA(prev => ({ ...prev, [k]: prev[k].includes(item) ? prev[k].filter(x => x !== item) : [...prev[k], item] }))
 
@@ -173,7 +201,7 @@ function HealthDeclarationWizard({ onComplete, onCancel }) {
       <Card>
         <label style={{display:'flex',gap:'8px',alignItems:'flex-start',cursor:'pointer'}}>
           <input type="checkbox" checked={consentHistoryShared} onChange={e=>setConsentHistoryShared(e.target.checked)} style={{marginTop:'3px'}}/>
-          <span style={{fontSize:'12.5px',color:C.textSub,lineHeight:1.6}}><strong style={{color:C.text}}>Optional:</strong> let Medsa also check my own real visit history on this platform against whatever plan I apply for.</span>
+          <span style={{fontSize:'12.5px',color:C.textSub,lineHeight:1.6}}><strong style={{color:C.text}}>Optional:</strong> let Medsa also check my own real visit history on this platform against whatever plan I apply for. This is only ever used for matching - to check how well a plan actually suits you and to recommend better-fitting alternatives - never shown to an agent or insurer as raw history.</span>
         </label>
       </Card>
       <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
@@ -194,11 +222,11 @@ function HealthDeclarationWizard({ onComplete, onCancel }) {
         <input value={a.occupation} onChange={e=>set('occupation', e.target.value)} placeholder="e.g. Office worker" style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <div style={{display:'flex',gap:'8px'}}>
           <div style={{flex:1}}>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Height (cm)</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Height (cm){initialHeightCm!=null&&<span style={{color:C.textMuted}}> · from your last clinic visit, editable</span>}</div>
             <input type="number" value={a.heightCm} onChange={e=>set('heightCm', e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
           </div>
           <div style={{flex:1}}>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Weight (kg)</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Weight (kg){initialWeightKg!=null&&<span style={{color:C.textMuted}}> · from your last clinic visit, editable</span>}</div>
             <input type="number" value={a.weightKg} onChange={e=>set('weightKg', e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
           </div>
         </div>
@@ -214,8 +242,8 @@ function HealthDeclarationWizard({ onComplete, onCancel }) {
 
       <Card>
         <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.6,fontStyle:'italic'}}>You don't need to disclose: {NO_NEED_TO_DISCLOSE}</div>
-        <MultiSelect label="Have you ever been diagnosed with any of these?" hint="Select any that apply." options={DIAGNOSED_CONDITIONS} selected={a.diagnosed} onToggle={o=>toggle('diagnosed',o)}/>
-        <MultiSelect label="Do you currently have any of these?" options={CURRENT_CONDITIONS} selected={a.current} onToggle={o=>toggle('current',o)}/>
+        <MultiSelect label="Have you ever been diagnosed with any of these?" hint="Select any that apply." options={[...DIAGNOSED_CONDITIONS, ...customQuestions.diagnosed]} selected={a.diagnosed} onToggle={o=>toggle('diagnosed',o)}/>
+        <MultiSelect label="Do you currently have any of these?" options={[...CURRENT_CONDITIONS, ...customQuestions.current]} selected={a.current} onToggle={o=>toggle('current',o)}/>
       </Card>
 
       <Card>
@@ -227,8 +255,8 @@ function HealthDeclarationWizard({ onComplete, onCancel }) {
       </Card>
 
       <Card>
-        <MultiSelect label="Apart from anything above, do you have any of these?" options={OTHER_SYMPTOMS} selected={a.otherSymptoms} onToggle={o=>toggle('otherSymptoms',o)}/>
-        <MultiSelect label="To your knowledge, have any parents or siblings been diagnosed with any of these at or before age 60?" options={FAMILY_HISTORY_CONDITIONS} selected={a.familyHistory} onToggle={o=>toggle('familyHistory',o)}/>
+        <MultiSelect label="Apart from anything above, do you have any of these?" options={[...OTHER_SYMPTOMS, ...customQuestions.otherSymptoms]} selected={a.otherSymptoms} onToggle={o=>toggle('otherSymptoms',o)}/>
+        <MultiSelect label="To your knowledge, have any parents or siblings been diagnosed with any of these at or before age 60?" options={[...FAMILY_HISTORY_CONDITIONS, ...customQuestions.familyHistory]} selected={a.familyHistory} onToggle={o=>toggle('familyHistory',o)}/>
       </Card>
 
       <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
@@ -255,6 +283,22 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   const [declarationAck, setDeclarationAck] = useState(false)
   const [termsModalOpen, setTermsModalOpen] = useState(false)
   const [purchasing, setPurchasing] = useState(false)
+  const [vitals, setVitals] = useState(null)
+  const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
+
+  useEffect(() => {
+    let cancelled = false
+    supabase.from('patient_vitals').select('height_cm, weight_kg')
+      .eq('patient_id', patient.id).order('logged_at', { ascending: false }).limit(1).maybeSingle()
+      .then(({ data }) => { if (!cancelled) setVitals(data) })
+    return () => { cancelled = true }
+  }, [patient.id])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchCustomQuestions(plan.company, plan.id).then(grouped => { if (!cancelled) setCustomQuestions(grouped) })
+    return () => { cancelled = true }
+  }, [plan.company, plan.id])
 
   const alreadyHeld = heldPolicies.some(hp => hp.plan_id === plan.id)
 
@@ -332,7 +376,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
         </div>
       )}
 
-      {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')}/>}
+      {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')} initialHeightCm={vitals?.height_cm} initialWeightKg={vitals?.weight_kg} customQuestions={customQuestions}/>}
       {phase === 'submitting' && <div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted}}>Checking against this plan…</div>}
 
       {phase === 'result' && result && (
