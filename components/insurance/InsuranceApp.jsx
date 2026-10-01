@@ -719,7 +719,7 @@ const EMPTY_FORM = {
   plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
   overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
   pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
-  policy_document_path:'', billing_model:'direct',
+  policy_document_path:'', billing_model:'direct', logo_url:'',
 }
 function CoverageRulesManager({ company }) {
   const [plans,setPlans]=useState([])
@@ -791,7 +791,7 @@ function CoverageRulesManager({ company }) {
       pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
       preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
       category_limits, policy_document_path: plan.policy_document_path||'',
-      billing_model: plan.billing_model||'direct',
+      billing_model: plan.billing_model||'direct', logo_url: plan.logo_url||'',
     })
     setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
@@ -878,6 +878,7 @@ function CoverageRulesManager({ company }) {
       policy_document_path: form.policy_document_path || null,
       policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
       billing_model: form.billing_model || 'direct',
+      logo_url: form.logo_url || null,
     }
     if (editingId) {
       await supabase.from('insurance_plans').update(payload).eq('id', editingId)
@@ -922,6 +923,10 @@ function CoverageRulesManager({ company }) {
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Standard Outpatient"/>
+          </div>
+          <div style={{marginBottom:'14px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Plan logo</div>
+            <LogoField value={form.logo_url} onChange={v=>setForm(f=>({...f,logo_url:v}))} uploadPath={`insurers/${company.id}/plans/${editingId||'new'}`} fallbackUrl={company.logo_url} fallbackLabel="Using your company logo by default"/>
           </div>
           <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
             <div style={{flex:1}}>

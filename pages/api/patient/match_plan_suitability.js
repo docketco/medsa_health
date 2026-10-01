@@ -80,15 +80,13 @@ export default async function handler(req, res) {
   const resolved = codeMapToObject(await resolveManyIcd10(supabase, allTerms))
   const codes = { ...resolved, ...directCodes }
 
-  const declaredResult = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [], declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
-  const combinedResult = historyConditions.length > 0
-    ? matchPlanSuitability({ plan, patientAge: age, conditions: [...(declaredConditions || []), ...historyConditions], declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
-    : declaredResult
-  // The verdict shown to the patient/stored is the more cautious of the
-  // two - never let a clean declared-only read hide something the
-  // patient's own consented history would have flagged.
-  const rank = { approved: 0, flagged: 1, declined: 2 }
-  const result = rank[combinedResult.verdict] >= rank[declaredResult.verdict] ? combinedResult : declaredResult
+  // One call handles both sources - matchPlanSuitability itself only
+  // lets a DECLARED condition auto-decline; a history-pulled one (not
+  // something the patient affirmatively claimed applies here) can only
+  // ever flag, so a clean declared-only read still can't hide something
+  // consented history turns up, without letting old/irrelevant visit
+  // history auto-decline someone on its own.
+  const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [], historyConditions, declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
 
   const expiresAt = new Date(Date.now() + DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000).toISOString()
 

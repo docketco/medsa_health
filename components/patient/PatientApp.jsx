@@ -2727,6 +2727,14 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
 
   return (
     <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
+      {/* Real gap found live-testing: this confirm-and-pay step never
+          showed a price anywhere, even though one was already quoted and
+          on file (quoted_premium_hkd) - a patient was asked to "Confirm &
+          activate" blind. Ward class/payment frequency below are a plain
+          choice, not something that changes this number - the plan's own
+          age-based pricing tier is what sets it, decided before the
+          declaration even starts. */}
+      {inquiry.quoted_premium_hkd!=null&&<div style={{fontSize:'16px',fontWeight:700,color:C.navy,marginBottom:'10px'}}>{isEn?'Estimated':'預計'} HK${inquiry.quoted_premium_hkd}/mo</div>}
       <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
         <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
           <option value="">{isEn?'Ward class (optional)':'病房等級(可選)'}</option>
@@ -2840,9 +2848,17 @@ function MyInquiriesTab({ isEn, patient={} }) {
                   <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
                 </div>
                 {isAuto
-                  ? <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?C.greenLight:isDeclined?C.redLight:isPending?C.amberLight:C.greenLight,color:isPurchased?C.green:isDeclined?C.red:isPending?C.amber:C.green}}>
-                      {isPurchased?(isEn?'✓ Purchased':'✓ 已購買'):isDeclined?(isEn?'✕ Declined':'✕ 已拒絕'):isPending?(isEn?'⚠ Pending approval':'⚠ 待批核'):(isEn?'✓ Approved':'✓ 已批核')}
-                    </span>
+                  ? <div style={{textAlign:'right',flexShrink:0}}>
+                      <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?C.greenLight:isDeclined?C.redLight:isPending?C.amberLight:C.greenLight,color:isPurchased?C.green:isDeclined?C.red:isPending?C.amber:C.green}}>
+                        {isPurchased?(isEn?'✓ Purchased':'✓ 已購買'):isDeclined?(isEn?'✕ Declined':'✕ 已拒絕'):isPending?(isEn?'⚠ Pending approval':'⚠ 待批核'):(isEn?'✓ Approved':'✓ 已批核')}
+                      </span>
+                      {/* Real gap found live-testing: a clean/approved case
+                          never showed its price anywhere on this card - only
+                          buried in the expanded summary sentence - so a
+                          patient deciding whether to tap in and buy had no
+                          price to go on. */}
+                      {!isDeclined&&i.quoted_premium_hkd!=null&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>HK${i.quoted_premium_hkd}/mo</div>}
+                    </div>
                   : (i.agents?.full_name
                     ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
                     : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>)}
