@@ -3675,7 +3675,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     if (!medsaId) { setPolicyLoading(false); return }
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setPolicyLoading(false); return }
-    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model, company_name)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
+    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model, company_name, logo_url)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
     setHeldPolicies(all||[])
     const data = (all||[])[0]
     setActivePolicy(data||null)
@@ -3997,7 +3997,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
           self-linked one gets its own simpler card instead. */}
       {heldPolicies.filter(p=>p.premium==null).map(policy=>{
         const expanded = expandedPolicyId===policy.id
-        const logoUrl = companyLogos[policy.insurance_plans?.company_name]
+        const logoUrl = policy.insurance_plans?.logo_url || companyLogos[policy.insurance_plans?.company_name]
         return (
         <div key={policy.id} style={{flexShrink:0,width:'240px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
@@ -4046,7 +4046,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
         const statusLabel = readyToSign ? (isEn?'Sign required':'需要簽署')
           : waitingOnAgent ? (isEn?'Renewal in progress':'續保處理中')
           : (isEn?'Active':'生效中')
-        const logoUrl = companyLogos[activePolicy.insurance_plans?.company_name]
+        const logoUrl = activePolicy.insurance_plans?.logo_url || companyLogos[activePolicy.insurance_plans?.company_name]
         return (
         <div key={policy.id} style={{flexShrink:0,width:'240px',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>

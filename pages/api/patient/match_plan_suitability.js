@@ -119,12 +119,14 @@ export default async function handler(req, res) {
   const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
 
-  if (result.verdict === 'flagged') {
-    await supabase.from('underwriting_audit_log').insert({
-      inquiry_id: inquiry.id, actor_type: 'system', actor_name: 'Matching engine',
-      action: 'flagged', detail: result.flagCategory,
-    })
-  }
+  // Logs every auto-decision, not just flagged ones - an insurer's audit
+  // log (medsa-admin, aq2-16) should show what the matching engine
+  // actually decided on its own, including the clean approvals/declines
+  // it never needed a human for, not only the cases that went to one.
+  await supabase.from('underwriting_audit_log').insert({
+    inquiry_id: inquiry.id, actor_type: 'system', actor_name: 'Matching engine',
+    action: result.verdict, detail: result.verdict === 'flagged' ? result.flagCategory : result.summary,
+  })
 
   // Seeds the same inquiry_messages thread the agent side (and the
   // patient's own My Inquiries tab) already read/write to, so a
