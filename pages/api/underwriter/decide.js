@@ -59,6 +59,19 @@ export default async function handler(req, res) {
       inquiry_id: inquiryId, actor_type: actorType, actor_name: underwriterName || null, action: 'requested_report',
       detail: `${reportDoctor?.trim() ? `From ${reportDoctor.trim()}: ` : ''}${reportNote.trim()}`,
     })
+    // Real gap found live-testing: this used to be a one-shot field with
+    // no patient-facing surface at all - a patient asked for more detail
+    // just saw "Pending" with nothing telling them anything was needed.
+    // Seeds the same inquiry_messages thread the agent-mode conversation
+    // already uses (PatientInquiryThread/AgentApp.jsx) - same real
+    // reply-with-text-or-upload mechanism, not a separate one-way notice.
+    // An uploaded file is only ever on file, never auto-validated - an
+    // underwriter still reads it and judges it themselves, same as any
+    // document a patient hands over in a real application.
+    await supabase.from('inquiry_messages').insert({
+      inquiry_id: inquiryId, sender_type: 'underwriter', sender_name: underwriterName || 'Underwriter',
+      body: `${reportDoctor?.trim() ? `Requesting a report from ${reportDoctor.trim()}: ` : ''}${reportNote.trim()}`,
+    })
   }
 
   return res.status(200).json({ status: 'OK' })

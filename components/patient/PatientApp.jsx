@@ -2632,13 +2632,13 @@ function PatientInquiryThread({ inquiry, patientName }) {
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px',maxHeight:260,overflowY:'auto'}}>
         {messages.map(m=>(
           <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
-            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':m.sender_type==='underwriter'?'Underwriter':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
             {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
             {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
           </div>
         ))}
       </div>
-      <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Message your agent..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
+      <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Type a message..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
       <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
         <label style={{fontSize:'11px',color:C.textSub,cursor:'pointer',padding:'8px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}>
           {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Attach file')}
@@ -2660,7 +2660,7 @@ function PatientInquiryThread({ inquiry, patientName }) {
 // aq2-08/aq2-13 - a decline is never a dead end. System-matched
 // alternatives (never an agent's judgment - see find_alternative_plans.js),
 // labeled same-insurer vs. cross-insurer, plus the fallback to a real agent.
-function AlternativePlansPanel({ isEn, inquiryId }) {
+function AlternativePlansPanel({ isEn, inquiryId, onViewPlan }) {
   const [loaded,setLoaded]=useState(false)
   const [alternatives,setAlternatives]=useState([])
   const [loading,setLoading]=useState(false)
@@ -2682,12 +2682,17 @@ function AlternativePlansPanel({ isEn, inquiryId }) {
     <div style={{marginTop:'10px'}}>
       {alternatives.length===0
         ? <div style={{fontSize:'11px',color:C.textMuted}}>{isEn?'No matching alternative found automatically - talking to an agent is your best next step.':'未能自動找到合適的替代計劃 - 建議聯絡代理跟進。'}</div>
+        // Real gap found live-testing: these were inert text - tapping one
+        // did nothing (and this copy of the panel wasn't even wired up
+        // when the same fix landed on the plan-page one, since it's a
+        // separate component used here in My Inquiries).
         : alternatives.map(a=>(
-          <div key={a.planId} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:'#fff',borderRadius:'8px',marginBottom:'6px'}}>
+          <div key={a.planId} onClick={()=>onViewPlan&&onViewPlan(a.planId)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 10px',background:'#fff',borderRadius:'8px',marginBottom:'6px',cursor:onViewPlan?'pointer':'default'}}>
             <div>
               <div style={{fontSize:'12px',fontWeight:600}}>{a.planName}</div>
               <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?(isEn?' · same insurer':' · 同一保險公司'):(isEn?' · different insurer':' · 不同保險公司')}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
             </div>
+            {onViewPlan&&<span style={{fontSize:'11px',color:C.textMuted}}>{isEn?'View →':'查看 →'}</span>}
           </div>
         ))}
     </div>
@@ -2766,7 +2771,7 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
   )
 }
 
-function MyInquiriesTab({ isEn, patient={} }) {
+function MyInquiriesTab({ isEn, patient={}, onViewPlan }) {
   const [inquiries,setInquiries]=useState([])
   const [agentQuotes,setAgentQuotes]=useState([])
   const [loading,setLoading]=useState(true)
@@ -2890,18 +2895,24 @@ function MyInquiriesTab({ isEn, patient={} }) {
                     <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginTop:'10px'}}>{i.suitability_summary}</div>
                     {isPending&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{isEn?'An underwriter usually decides within 2-3 business days - check back here any time.':'核保員一般於2-3個工作天內作出決定 - 可隨時回來查看。'}</div>}
                     {/* Real gap found live-testing: an underwriter's "Request
-                        report" action (UnderwriterApp.jsx) wrote
-                        requested_report_note/_doctor to this same row, but
-                        nothing on the patient side ever read them back - a
-                        patient asked for more detail just saw "Pending",
-                        with nothing telling them anything was needed from
-                        them at all. */}
-                    {isPending&&i.requested_report_note&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginTop:'8px',fontSize:'12px',color:C.text,lineHeight:1.5}}>
-                      <div style={{fontWeight:600,marginBottom:'2px'}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
-                      {i.requested_report_note}{i.requested_report_doctor?(isEn?` (requesting a report from ${i.requested_report_doctor})`:` (向${i.requested_report_doctor}索取報告)`):''}
+                        report" was a one-way field with no patient-facing
+                        surface at all - a patient asked for more detail
+                        just saw "Pending". A static banner fixed visibility
+                        but not the actual ask: "it should be a bubble for
+                        chat, or a way to select/send medical history or
+                        upload a document." It's now the same real
+                        inquiry_messages thread + upload PatientInquiryThread
+                        already gives an agent-mode inquiry (decide.js seeds
+                        the underwriter's request into this same thread) -
+                        an uploaded file is only ever on file, never
+                        auto-validated, same as any document an underwriter
+                        reviews themselves in a real application. */}
+                    {isPending&&i.requested_report_note&&<div style={{marginTop:'8px'}}>
+                      <div style={{fontWeight:600,fontSize:'12px',color:C.text}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
+                      <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
                     </div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
-                    {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id}/>}
+                    {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id} onViewPlan={onViewPlan}/>}
                     {isApprovedToBuy&&!isPurchased&&<AutoInquiryPurchasePanel isEn={isEn} inquiry={i} patient={patient} onPurchased={load}/>}
                   </>
                 ) : (i.agents?.full_name
@@ -4360,7 +4371,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       </>}
 
       {/* ── MY INQUIRIES ── */}
-      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient}/>}
+      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById}/>}
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}

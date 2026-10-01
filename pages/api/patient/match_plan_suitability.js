@@ -90,6 +90,18 @@ export default async function handler(req, res) {
 
   const expiresAt = new Date(Date.now() + DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000).toISOString()
 
+  // Real gap found live-testing: every re-declaration against the same
+  // plan (including just re-running the wizard to amend an answer) always
+  // inserted a brand new row, so a patient could end up with several
+  // simultaneous "pending" inquiries for the one plan they're actually
+  // trying to get decided - which then made whichever one an underwriter
+  // had actually acted on (e.g. requested a report) invisible the moment
+  // a newer, unrelated one got created. An outstanding, undecided
+  // application for a plan is amended in place, not duplicated - this is
+  // the same inquiry, re-run with updated answers, not a parallel one.
+  const { data: existingPending } = await supabase.from('plan_inquiries')
+    .select('id').eq('patient_id', patientId).eq('plan_id', planId).eq('underwriter_status', 'pending').maybeSingle()
+
   const inquiryPayload = {
     patient_id: patientId, plan_id: planId,
     applicant_full_name: patient.full_name || null, applicant_hkid: patient.hkid || null,
@@ -114,7 +126,9 @@ export default async function handler(req, res) {
     // of asking the patient again for something they already answered.
     ward_class: wardClass || null, payment_frequency: paymentFrequency || null,
   }
-  const { data: inquiry, error: insErr } = await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
+  const { data: inquiry, error: insErr } = existingPending
+    ? await supabase.from('plan_inquiries').update(inquiryPayload).eq('id', existingPending.id).select('id').maybeSingle()
+    : await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
 
   // Logs every auto-decision, not just flagged ones - an insurer's audit
