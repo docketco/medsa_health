@@ -56,7 +56,7 @@ export default async function handler(req, res) {
     const { data: fullInquiry } = await supabase.from('plan_inquiries').select('declared_conditions').eq('id', inquiryId).maybeSingle()
     const { data: patient } = await supabase.from('patients').select('date_of_birth').eq('id', patientId).maybeSingle()
     const age = patient?.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
-    const { quotedPremium } = matchPlanSuitability({ plan: fullPlan, patientAge: age, conditions: fullInquiry?.declared_conditions || [] })
+    const { quotedPremium } = matchPlanSuitability({ plan: fullPlan, patientAge: age, conditions: fullInquiry?.declared_conditions || [], wardClass })
 
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'

@@ -345,7 +345,7 @@ function PlanManager({ company }) {
   const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
-  const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
   // Whether this insurer's own Stripe account is actually ready to take a
   // charge - the self-serve toggle below is per-PLAN (an insurer might
@@ -370,7 +370,7 @@ function PlanManager({ company }) {
     setTiers(t => t.map((tier,idx) => idx===i ? {...tier, [field]: value} : tier))
   }
   function addTier() {
-    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setTiers(t => [...t, { age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   }
   function removeTier(i) {
     setTiers(t => t.filter((_,idx)=>idx!==i))
@@ -412,7 +412,7 @@ function PlanManager({ company }) {
   function startCreate() {
     setEditingId(null)
     setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
-    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
   }
@@ -433,8 +433,8 @@ function PlanManager({ company }) {
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
-      ? existingTiers.map(t=>({ age_min:String(t.age_min), age_max:String(t.age_max), monthly_premium:String(t.monthly_premium), annual_limit:t.annual_limit!=null?String(t.annual_limit):'' }))
-      : [{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+      ? existingTiers.map(t=>({ age_min:String(t.age_min), age_max:String(t.age_max), monthly_premium:String(t.monthly_premium), semi_private_premium:t.semi_private_premium!=null?String(t.semi_private_premium):'', private_premium:t.private_premium!=null?String(t.private_premium):'', annual_limit:t.annual_limit!=null?String(t.annual_limit):'' }))
+      : [{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
   }
@@ -488,13 +488,18 @@ function PlanManager({ company }) {
         validTiers.map(t => ({
           plan_id: planId, age_min: parseInt(t.age_min), age_max: parseInt(t.age_max),
           monthly_premium: parseFloat(t.monthly_premium),
+          // Optional - left blank, a ward class is purely descriptive
+          // (today's behavior); set, it's a real price difference the
+          // patient sees live when picking a ward class at purchase.
+          semi_private_premium: t.semi_private_premium!=='' ? parseFloat(t.semi_private_premium) : null,
+          private_premium: t.private_premium!=='' ? parseFloat(t.private_premium) : null,
           annual_limit: t.annual_limit ? parseFloat(t.annual_limit) : null,
         }))
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
     setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
-    setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     load()
   }
 
@@ -529,17 +534,21 @@ function PlanManager({ company }) {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Plan logo</div>
             <LogoField value={form.logo_url} onChange={v=>setForm(f=>({...f,logo_url:v}))} uploadPath={`insurers/${company.id}/plans/${editingId||'new'}`} fallbackUrl={company.logo_url} fallbackLabel="Using your company logo by default"/>
           </div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real pricing varies by age, so at least one tier is required</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real pricing varies by age, so at least one tier is required. Semi-private/private premiums are optional - leave blank and that ward class stays the same price as General.</div>
           {tiers.map((tier,i)=>(
             <div key={i} style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
               <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
                 <input type="number" value={tier.age_min} onChange={e=>updateTier(i,'age_min',e.target.value)} placeholder="Age from" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
                 <input type="number" value={tier.age_max} onChange={e=>updateTier(i,'age_max',e.target.value)} placeholder="Age to (120 for +)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
               </div>
-              <div style={{display:'flex',gap:'6px'}}>
-                <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="Monthly premium (HK$)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+              <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+                <input type="number" value={tier.monthly_premium} onChange={e=>updateTier(i,'monthly_premium',e.target.value)} placeholder="General ward HK$/mo" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
                 <input type="number" value={tier.annual_limit} onChange={e=>updateTier(i,'annual_limit',e.target.value)} placeholder="Annual limit (optional)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
                 {tiers.length>1&&<button onClick={()=>removeTier(i)} style={{padding:'0 10px',background:C.redLight,color:C.red,border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>×</button>}
+              </div>
+              <div style={{display:'flex',gap:'6px'}}>
+                <input type="number" value={tier.semi_private_premium} onChange={e=>updateTier(i,'semi_private_premium',e.target.value)} placeholder="Semi-private HK$/mo (optional)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                <input type="number" value={tier.private_premium} onChange={e=>updateTier(i,'private_premium',e.target.value)} placeholder="Private HK$/mo (optional)" style={{flex:1,padding:'8px',fontSize:'12px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
               </div>
             </div>
           ))}
