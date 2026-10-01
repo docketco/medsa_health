@@ -39,7 +39,7 @@ function Card({ children, style:sx={} }) {
 // (find_alternative_plans.js) and the old inline flow always offered
 // them. Same small fetch-on-demand panel PatientApp.jsx's My Inquiries
 // uses for the same purpose.
-function AlternativePlansPanel({ inquiryId }) {
+function AlternativePlansPanel({ inquiryId, onViewPlan }) {
   const [loaded, setLoaded] = useState(false)
   const [alternatives, setAlternatives] = useState([])
   const [loading, setLoading] = useState(false)
@@ -58,10 +58,17 @@ function AlternativePlansPanel({ inquiryId }) {
     <div style={{marginTop:'10px'}}>
       {alternatives.length===0
         ? <div style={{fontSize:'12px',color:C.textMuted}}>No matching alternative found automatically - talking to an agent is your best next step.</div>
+        // Real gap found live-testing: these used to just be text - tapping
+        // one did nothing, since this page had no way to open a DIFFERENT
+        // plan's own page from inside itself. onViewPlan (from PatientApp,
+        // which owns the full plan list) makes it a real navigation.
         : alternatives.map(a=>(
-          <div key={a.planId} style={{padding:'10px 12px',background:C.beige,borderRadius:'8px',marginBottom:'6px'}}>
-            <div style={{fontSize:'13px',fontWeight:600}}>{a.planName}</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?' · same insurer':' · different insurer'}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
+          <div key={a.planId} onClick={()=>onViewPlan&&onViewPlan(a.planId)} style={{padding:'10px 12px',background:C.beige,borderRadius:'8px',marginBottom:'6px',cursor:onViewPlan?'pointer':'default',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{a.planName}</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?' · same insurer':' · different insurer'}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
+            </div>
+            {onViewPlan&&<span style={{fontSize:'12px',color:C.textMuted}}>View →</span>}
           </div>
         ))}
     </div>
@@ -306,7 +313,7 @@ function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initia
 }
 
 // ── The dedicated plan page itself ───────────────────────────────────────────
-export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldPolicies=[] }) {
+export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldPolicies=[], onViewPlan }) {
   const [phase, setPhase] = useState('overview') // overview | wizard | submitting | result | purchasing
   const [mode, setMode] = useState('auto')
   const [result, setResult] = useState(null)
@@ -319,12 +326,17 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   const [vitals, setVitals] = useState(null)
   const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
   const [savedDeclaration, setSavedDeclaration] = useState(null) // null until loaded, or {conditions, consentHistoryShared, createdAt, expiresAt}
+  const [agentRequestSent, setAgentRequestSent] = useState(false)
+  const [requestingAgent, setRequestingAgent] = useState(false)
 
   // Real gap found live-testing: this is a long page (wizard -> result),
   // so landing on the result while still scrolled down from the
   // questionnaire made the verdict card invisible until manually
-  // scrolled back up - looked like nothing happened.
-  useEffect(() => { window.scrollTo(0, 0) }, [phase])
+  // scrolled back up - looked like nothing happened. window.scrollTo did
+  // nothing because the window itself never scrolls here - PatientApp's
+  // shell is a fixed-height column with its own inner scroll container
+  // (data-app-scroll-root), same pattern as the insurer portal.
+  useEffect(() => { document.querySelector('[data-app-scroll-root]')?.scrollTo(0, 0) }, [phase])
 
   useEffect(() => {
     let cancelled = false
@@ -376,6 +388,26 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
     const saved = await saveDeclaration(patient.id, {}, conditions, consentHistoryShared)
     if (saved) setSavedDeclaration(saved)
     runMatch(conditions, consentHistoryShared, mode)
+  }
+
+  // Real gap: re-running the full match on "talk to an agent about this
+  // instead" re-showed the exact same decline screen (deterministic
+  // engine, same declaration) - looked like the button did nothing, even
+  // though a real agent-mode inquiry was created behind it. This posts
+  // directly and shows a plain confirmation instead of re-rendering the
+  // result.
+  async function requestAgentForDecline() {
+    if (!savedDeclaration) return
+    setRequestingAgent(true)
+    try {
+      await fetch('/api/patient/match_plan_suitability', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: 'agent', consentHistoryShared: savedDeclaration.consentHistoryShared, declaredConditions: savedDeclaration.conditions }),
+      })
+      setAgentRequestSent(true)
+    } finally {
+      setRequestingAgent(false)
+    }
   }
 
   async function handlePurchase() {
@@ -476,8 +508,10 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
           {result.verdict==='declined'&&<Card>
             <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>What now?</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'4px'}}>This plan's own exclusion rule means it can't be sold automatically with what's declared above - that doesn't mean every plan is off the table.</div>
-            <AlternativePlansPanel inquiryId={result.inquiryId}/>
-            {mode==='auto'&&<Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>savedDeclaration&&runMatch(savedDeclaration.conditions, savedDeclaration.consentHistoryShared, 'agent')}>Talk to an agent about this instead</Btn>}
+            <AlternativePlansPanel inquiryId={result.inquiryId} onViewPlan={onViewPlan}/>
+            {mode==='auto'&&(agentRequestSent
+              ? <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginTop:'8px'}}>✓ Sent - an agent will review this personally and reach out. Check "My inquiries".</div>
+              : <Btn style={{width:'100%',marginTop:'8px'}} disabled={requestingAgent} onClick={requestAgentForDecline}>{requestingAgent?'Sending…':'Talk to an agent about this instead'}</Btn>)}
           </Card>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
         </div>

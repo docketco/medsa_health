@@ -2812,13 +2812,21 @@ function MyInquiriesTab({ isEn, patient={} }) {
 
   // Real gap found live-testing: re-declaring against the same plan
   // several times (expected while testing, but also real over a patient's
-  // lifetime) left every past attempt stacked in the list forever - the
-  // one that actually matters (the latest, which is also the only one
-  // that's still actionable) got buried. Collapsed to the latest inquiry
-  // per plan by default; older ones are one tap away, not gone.
-  const latestIdPerPlan = new Map()
-  for (const i of inquiries) if (!latestIdPerPlan.has(i.plan_id)) latestIdPerPlan.set(i.plan_id, i.id)
-  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => latestIdPerPlan.get(i.plan_id) === i.id)
+  // lifetime) left every past attempt stacked in the list forever. First
+  // cut just picked the latest per plan - but that actively hid a real
+  // bug: a still-pending case an underwriter had requested a report on
+  // got buried the moment a newer declaration against the same plan was
+  // submitted, even though the pending one was the one actually waiting
+  // on the patient. The one shown per plan is now whichever is still
+  // pending (there's normally only one at a time), falling back to the
+  // latest only when nothing for that plan is still open.
+  const shownIdPerPlan = new Map()
+  for (const i of inquiries) {
+    const current = shownIdPerPlan.get(i.plan_id)
+    if (!current) { shownIdPerPlan.set(i.plan_id, i.id); continue }
+    if (i.underwriter_status === 'pending' && !inquiries.find(x => x.id === current).underwriter_status) shownIdPerPlan.set(i.plan_id, i.id)
+  }
+  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => shownIdPerPlan.get(i.plan_id) === i.id)
   const hiddenCount = inquiries.length - visibleInquiries.length
 
   return (
@@ -4005,6 +4013,17 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
     ? plans.filter(p => [p.name, p.company, p.type, ...(p.covers||[]), ...(p.criteria||[])].some(s => (s||'').toLowerCase().includes(planSearchLower)))
     : plans
 
+  // Real gap found live-testing: a declined plan's "see other plans that
+  // might work" list was pure text - tapping an alternative did nothing,
+  // since PlanDetailPage had no way to open a DIFFERENT plan's own page
+  // from inside itself. Clears any active search first so the index
+  // below (into the unfiltered list) lines up.
+  function viewPlanById(planId) {
+    setPlanSearch('')
+    const idx = plans.findIndex(p => p.id === planId)
+    if (idx >= 0) setViewingPlanIndex(idx)
+  }
+
   // Real rebuild: tapping a plan now opens its OWN full page
   // (PlanDetailFlow.jsx) - a real multi-step health declaration
   // (consent + a structured questionnaire modeled on a real insurer's
@@ -4012,7 +4031,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
   // form inline on the list card. This short-circuits the whole tab
   // view, same as navigating to a different page would.
   if (viewingPlanIndex != null && visiblePlans[viewingPlanIndex]) {
-    return <PlanDetailPage plan={visiblePlans[viewingPlanIndex]} patient={patient} isEn={isEn} heldPolicies={heldPolicies} onBack={()=>{setViewingPlanIndex(null);loadPolicy()}}/>
+    return <PlanDetailPage plan={visiblePlans[viewingPlanIndex]} patient={patient} isEn={isEn} heldPolicies={heldPolicies} onBack={()=>{setViewingPlanIndex(null);loadPolicy()}} onViewPlan={viewPlanById}/>
   }
 
   return (
@@ -5336,7 +5355,7 @@ export default function PatientApp({ liveData={} }) {
           ))}
         </div>
       </div>
-      <div style={{flex:1,overflowY:'auto'}}>
+      <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
