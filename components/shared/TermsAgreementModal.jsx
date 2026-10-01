@@ -18,7 +18,7 @@
 // (agent-issued policy) so both flows go through the same real screen.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import C from './colours'
 
 export default function TermsAgreementModal({
@@ -28,6 +28,20 @@ export default function TermsAgreementModal({
 }) {
   const [scrolledToEnd, setScrolledToEnd] = useState(false)
   const scrollRef = useRef(null)
+
+  // Real cause of "can't scroll" reports even after the flex min-height
+  // fix: with the body still scrollable behind it, a touch-drag that
+  // starts over the modal can get captured by the page underneath
+  // instead of the modal's own scroll container (especially on iOS) -
+  // it looks like the modal itself won't scroll, when actually the whole
+  // page is moving behind it. Locking body scroll while open removes
+  // that ambiguity.
+  useEffect(() => {
+    if (!open) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prevOverflow }
+  }, [open])
 
   if (!open) return null
 
@@ -47,7 +61,7 @@ export default function TermsAgreementModal({
           <div style={{fontSize:'12px',color:C.textMuted,marginTop:'2px'}}>{planName}{companyName?` — ${companyName}`:''}</div>
         </div>
 
-        <div ref={scrollRef} onScroll={handleScroll} style={{overflowY:'auto',padding:'20px 24px',fontSize:'13px',lineHeight:1.7,color:C.text,flex:1,minHeight:0}}>
+        <div ref={scrollRef} onScroll={handleScroll} style={{overflowY:'auto',padding:'20px 24px',fontSize:'13px',lineHeight:1.7,color:C.text,flex:1,minHeight:0,WebkitOverflowScrolling:'touch',overscrollBehavior:'contain'}}>
           <div style={{marginBottom:'20px'}}>
             <div style={{fontSize:'11px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.6px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'1. What you are declaring':'1. 您所聲明的事項'}</div>
             {hideDeclaredDetail

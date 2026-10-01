@@ -19,6 +19,11 @@ import { SecLabel } from '../components/shared/UI'
 
 export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
+  // Real gap reported live-testing: switching tabs kept whatever scroll
+  // position the previous tab was left at - a tab opened while scrolled
+  // partway down the last one looked blank/confusing until you noticed
+  // you had to scroll up first.
+  useEffect(() => { window.scrollTo(0, 0) }, [tab])
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Medsa Admin</div>

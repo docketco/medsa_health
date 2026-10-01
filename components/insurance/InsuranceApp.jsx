@@ -1,4 +1,4 @@
-import { useState, useEffect, Component } from 'react'
+import { useState, useEffect, useRef, Component } from 'react'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import { supabase } from '../../lib/supabase'
@@ -266,6 +266,40 @@ function CustomQuestionsManager({ company, planId }) {
   )
 }
 
+// Reusable local-preview + upload widget. Used for a plan's own logo
+// (falls back to the company's when unset) and could be reused anywhere
+// else a single-image field is needed.
+function LogoField({ value, onChange, uploadPath, fallbackUrl, fallbackLabel }) {
+  const [uploading, setUploading] = useState(false)
+  const inputId = `logo-field-${uploadPath.replace(/[^a-z0-9]/gi,'-')}`
+  async function handleFile(file) {
+    setUploading(true)
+    const path = `${uploadPath}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('clinic-branding').upload(path, file)
+    if (!error) {
+      const { data } = supabase.storage.from('clinic-branding').getPublicUrl(path)
+      onChange(data.publicUrl)
+    }
+    setUploading(false)
+  }
+  const shown = value || fallbackUrl
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+      {shown
+        ? <img src={shown} alt="" style={{width:'40px',height:'40px',objectFit:'contain',borderRadius:'8px',border:`0.5px solid ${C.border}`,background:'#fff'}}/>
+        : <div style={{width:'40px',height:'40px',borderRadius:'8px',border:`1px dashed ${C.border}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'9px',color:C.textMuted}}>No logo</div>}
+      <div style={{flex:1}}>
+        {!value&&fallbackUrl&&<div style={{fontSize:'10.5px',color:C.textMuted,marginBottom:'4px'}}>{fallbackLabel}</div>}
+        <input type="file" accept="image/*" id={inputId} style={{display:'none'}} onChange={e=>{const f=e.target.files[0]; if(f) handleFile(f)}}/>
+        <div style={{display:'flex',gap:'6px'}}>
+          <Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>document.getElementById(inputId).click()} disabled={uploading}>{uploading?'Uploading…':value?'Replace':'Upload'}</Btn>
+          {value&&<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>onChange('')}>Use company logo</Btn>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Shows this insurer's own logo to patients - on the horizontally
 // scrollable "Policy on file" cards in the patient app. Reuses the same
 // Storage bucket + upload pattern as clinic receipt branding.
@@ -308,7 +342,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
+  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
   const [customCategory,setCustomCategory]=useState('')
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
@@ -377,7 +411,7 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
@@ -395,6 +429,7 @@ function PlanManager({ company }) {
       additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
       self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
       auto_buy_on_clean: !!plan.auto_buy_on_clean,
+      logo_url: plan.logo_url||'',
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -436,6 +471,7 @@ function PlanManager({ company }) {
       // when the account does connect, but never lets a not-ready
       // account be silently selected as a checkout destination.
       self_serve_checkout_enabled: connectActive ? form.self_serve_checkout_enabled : false,
+      logo_url: form.logo_url || null,
     }
     let planId = editingId
     if (editingId) {
@@ -457,7 +493,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false })
+    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
     load()
   }
@@ -488,6 +524,10 @@ function PlanManager({ company }) {
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan type</div>
             <input value={form.plan_type} onChange={e=>setForm(f=>({...f,plan_type:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Comprehensive, Critical illness"/>
+          </div>
+          <div style={{marginBottom:'14px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Plan logo</div>
+            <LogoField value={form.logo_url} onChange={v=>setForm(f=>({...f,logo_url:v}))} uploadPath={`insurers/${company.id}/plans/${editingId||'new'}`} fallbackUrl={company.logo_url} fallbackLabel="Using your company logo by default"/>
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Pricing tiers - real pricing varies by age, so at least one tier is required</div>
           {tiers.map((tier,i)=>(
@@ -612,6 +652,13 @@ function PlanManager({ company }) {
               </div>
             ))}
           </div>}
+          {/* Real bug found live-testing: a plan with no pricing tier yet
+              (e.g. one created before a tier was added, or where tiers
+              got cleared) left Save permanently disabled with zero
+              explanation - toggling an unrelated setting like "Buy
+              immediately on a clean verdict" looked like it silently did
+              nothing, since there was nothing to click. */}
+          {!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'8px'}}>Add at least one pricing tier above (age range + monthly premium) before you can save.</div>}
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
             <Btn variant="navy" style={{flex:1}} onClick={handleSubmit} disabled={saving||!form.plan_name||!tiers.some(t=>t.age_min!==''&&t.age_max!==''&&t.monthly_premium!=='')}>{saving?'Saving…':editingId?'Save changes':'Submit plan'}</Btn>
@@ -2645,6 +2692,13 @@ function TeamsAndAgents({ company }) {
 export default function InsuranceApp({ company, onLogout }) {
   const [screen,setScreen]=useState('dashboard')
   const [openClaimRef,setOpenClaimRef]=useState(null)
+  // Real gap reported live-testing: this column is its own scroll
+  // container (window itself doesn't scroll, see the fixed-height note
+  // below), so a regular window.scrollTo on navigation does nothing -
+  // switching screens kept whatever scroll position the PREVIOUS screen
+  // was left at, landing partway down a page that looks blank/broken.
+  const contentRef = useRef(null)
+  useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
   const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
@@ -2673,7 +2727,7 @@ export default function InsuranceApp({ company, onLogout }) {
         <span style={{fontSize:'10px',background:C.navyLight,color:C.navy,padding:'3px 9px',borderRadius:'20px',fontWeight:600}}>⬡ {company?.name||'Preview'}</span>
         {onLogout&&<span onClick={onLogout} style={{fontSize:'11px',color:'rgba(255,255,255,0.6)',cursor:'pointer'}}>Sign out</span>}
       </div>
-      <div style={{flex:1,overflowY:'auto'}}>
+      <div ref={contentRef} style={{flex:1,overflowY:'auto'}}>
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}

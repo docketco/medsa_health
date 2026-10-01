@@ -15,13 +15,8 @@
 // matched (lib/planSuitabilityMatch.js and its dual text+ICD-10 mechanism
 // are untouched).
 //
-// Storage note: the Supabase connection needed to add a real persisted
-// declaration table isn't available right now (needs reauthorizing) - so
-// a completed declaration is kept in sessionStorage for the rest of this
-// browser session (still reused across every plan without re-asking,
-// aq2-20's intent) rather than the real 30-day server-persisted record.
-// Upgrade path once DB access returns: a patient_health_declarations
-// table, this module's save/load functions swapped for real API calls.
+// A completed declaration is kept in patient_health_declarations for 30
+// real days, reused across every plan without re-asking.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react'
@@ -137,26 +132,29 @@ function deriveConditions(a) {
   return c
 }
 
-function storageKey(patientId) { return `medsa_declaration_${patientId}` }
+// Real 30-day declaration record (patient_health_declarations) - a
+// completed wizard is reused across every plan without re-asking
+// (aq2-20's intent) for up to DECLARATION_VALIDITY_DAYS, a real
+// server-persisted window rather than tied to how long the browser tab
+// happens to stay open. Each completed wizard inserts a new row rather
+// than overwriting, so old declarations stay on file as a history.
 const DECLARATION_VALIDITY_DAYS = 30
 
-export function clearSavedDeclaration(patientId) {
-  try { sessionStorage.removeItem(storageKey(patientId)) } catch (e) { /* ignore */ }
+async function loadSavedDeclaration(patientId) {
+  const { data } = await supabase.from('patient_health_declarations')
+    .select('conditions, consent_history_shared, created_at, expires_at')
+    .eq('patient_id', patientId).gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (!data) return null
+  return { conditions: data.conditions || [], consentHistoryShared: data.consent_history_shared, createdAt: data.created_at, expiresAt: data.expires_at }
 }
-export function loadSavedDeclaration(patientId) {
-  try {
-    const raw = sessionStorage.getItem(storageKey(patientId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    const ageMs = Date.now() - new Date(parsed.createdAt).getTime()
-    if (ageMs > DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000) return null
-    return parsed
-  } catch (e) { return null }
-}
-function saveDeclaration(patientId, answers, conditions, consentHistoryShared) {
-  try {
-    sessionStorage.setItem(storageKey(patientId), JSON.stringify({ answers, conditions, consentHistoryShared, createdAt: new Date().toISOString() }))
-  } catch (e) { /* private-browsing or storage disabled - declaration still works this one time, just won't be remembered */ }
+async function saveDeclaration(patientId, answers, conditions, consentHistoryShared) {
+  const expiresAt = new Date(Date.now() + DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000).toISOString()
+  const { data } = await supabase.from('patient_health_declarations').insert({
+    patient_id: patientId, answers, conditions, consent_history_shared: consentHistoryShared, expires_at: expiresAt,
+  }).select('conditions, consent_history_shared, created_at, expires_at').maybeSingle()
+  if (!data) return null
+  return { conditions: data.conditions || [], consentHistoryShared: data.consent_history_shared, createdAt: data.created_at, expiresAt: data.expires_at }
 }
 
 // ── The wizard itself: consent -> questionnaire -> review ───────────────────
@@ -285,6 +283,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   const [purchasing, setPurchasing] = useState(false)
   const [vitals, setVitals] = useState(null)
   const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
+  const [savedDeclaration, setSavedDeclaration] = useState(null) // null until loaded, or {conditions, consentHistoryShared, createdAt, expiresAt}
 
   useEffect(() => {
     let cancelled = false
@@ -299,6 +298,12 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
     fetchCustomQuestions(plan.company, plan.id).then(grouped => { if (!cancelled) setCustomQuestions(grouped) })
     return () => { cancelled = true }
   }, [plan.company, plan.id])
+
+  useEffect(() => {
+    let cancelled = false
+    loadSavedDeclaration(patient.id).then(d => { if (!cancelled) setSavedDeclaration(d) })
+    return () => { cancelled = true }
+  }, [patient.id])
 
   const alreadyHeld = heldPolicies.some(hp => hp.plan_id === plan.id)
 
@@ -322,13 +327,13 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
 
   function startFlow(chosenMode, forceNew=false) {
     setMode(chosenMode)
-    const saved = !forceNew && loadSavedDeclaration(patient.id)
-    if (saved) { runMatch(saved.conditions, saved.consentHistoryShared, chosenMode); return }
+    if (!forceNew && savedDeclaration) { runMatch(savedDeclaration.conditions, savedDeclaration.consentHistoryShared, chosenMode); return }
     setPhase('wizard')
   }
 
-  function onWizardComplete({ conditions, consentHistoryShared }) {
-    saveDeclaration(patient.id, {}, conditions, consentHistoryShared)
+  async function onWizardComplete({ conditions, consentHistoryShared }) {
+    const saved = await saveDeclaration(patient.id, {}, conditions, consentHistoryShared)
+    if (saved) setSavedDeclaration(saved)
     runMatch(conditions, consentHistoryShared, mode)
   }
 
@@ -371,7 +376,10 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             : <>
               <Btn variant="primary" style={{width:'100%',marginBottom:'10px'}} disabled={plan.requiresAgent} onClick={()=>startFlow('auto')}>{plan.requiresAgent?'Automated quote not offered for this plan':'Quote immediately'}</Btn>
               <Btn style={{width:'100%'}} onClick={()=>startFlow('agent')}>Talk to an agent</Btn>
-              {loadSavedDeclaration(patient.id)&&<div style={{textAlign:'center',marginTop:'12px'}}><span onClick={()=>{clearSavedDeclaration(patient.id);setPhase('wizard')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',textDecoration:'underline'}}>Update your health declaration</span></div>}
+              {savedDeclaration&&<div style={{textAlign:'center',marginTop:'12px'}}>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Using your health declaration from {new Date(savedDeclaration.createdAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - valid until {new Date(savedDeclaration.expiresAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}.</div>
+                <span onClick={()=>setPhase('wizard')} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',textDecoration:'underline'}}>Update your health declaration</span>
+              </div>}
             </>}
         </div>
       )}
