@@ -2729,15 +2729,16 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
     <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
       {/* Real gap found live-testing: this confirm-and-pay step never
           showed a price anywhere, even though one was already quoted and
-          on file (quoted_premium_hkd) - a patient was asked to "Confirm &
-          activate" blind. Ward class/payment frequency below are a plain
-          choice, not something that changes this number - the plan's own
-          age-based pricing tier is what sets it, decided before the
-          declaration even starts. */}
-      {inquiry.quoted_premium_hkd!=null&&<div style={{fontSize:'16px',fontWeight:700,color:C.navy,marginBottom:'10px'}}>{isEn?'Estimated':'預計'} HK${inquiry.quoted_premium_hkd}/mo</div>}
+          on file - a patient was asked to "Confirm & activate" blind.
+          Ward class is a real price lever (private can run 2-3x general),
+          so the number here updates live as it's picked, before
+          confirming - not revealed only after. */}
+      {inquiry.quoted_premium_hkd_by_ward
+        ? <div style={{fontSize:'16px',fontWeight:700,color:C.navy,marginBottom:'10px'}}>{isEn?'Estimated':'預計'} HK${inquiry.quoted_premium_hkd_by_ward[wardClass||'general']}/mo</div>
+        : inquiry.quoted_premium_hkd!=null&&<div style={{fontSize:'16px',fontWeight:700,color:C.navy,marginBottom:'10px'}}>{isEn?'Estimated':'預計'} HK${inquiry.quoted_premium_hkd}/mo</div>}
       <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
         <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'12px'}}>
-          <option value="">{isEn?'Ward class (optional)':'病房等級(可選)'}</option>
+          <option value="">{isEn?'Ward class (General)':'病房等級(普通)'}</option>
           <option value="general">{isEn?'General ward':'普通病房'}</option>
           <option value="semi_private">{isEn?'Semi-private':'半私家'}</option>
           <option value="private">{isEn?'Private':'私家'}</option>
@@ -2771,6 +2772,7 @@ function MyInquiriesTab({ isEn, patient={} }) {
   const [loading,setLoading]=useState(true)
   const [expandedId,setExpandedId]=useState(null)
   const [switching,setSwitching]=useState(null)
+  const [showAllInquiries,setShowAllInquiries]=useState(false)
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
@@ -2808,6 +2810,17 @@ function MyInquiriesTab({ isEn, patient={} }) {
     load()
   }
 
+  // Real gap found live-testing: re-declaring against the same plan
+  // several times (expected while testing, but also real over a patient's
+  // lifetime) left every past attempt stacked in the list forever - the
+  // one that actually matters (the latest, which is also the only one
+  // that's still actionable) got buried. Collapsed to the latest inquiry
+  // per plan by default; older ones are one tap away, not gone.
+  const latestIdPerPlan = new Map()
+  for (const i of inquiries) if (!latestIdPerPlan.has(i.plan_id)) latestIdPerPlan.set(i.plan_id, i.id)
+  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => latestIdPerPlan.get(i.plan_id) === i.id)
+  const hiddenCount = inquiries.length - visibleInquiries.length
+
   return (
     <div style={{padding:'16px'}}>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
@@ -2829,7 +2842,7 @@ function MyInquiriesTab({ isEn, patient={} }) {
         ))}
       </div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {inquiries.map(i=>{
+        {visibleInquiries.map(i=>{
           // A patient's real return path to a flagged/pending 'auto'
           // inquiry (aq2-14) - suitabilityResults in Compare Plans is
           // session-only, so this is the only place a case that got
@@ -2868,6 +2881,17 @@ function MyInquiriesTab({ isEn, patient={} }) {
                   <>
                     <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginTop:'10px'}}>{i.suitability_summary}</div>
                     {isPending&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{isEn?'An underwriter usually decides within 2-3 business days - check back here any time.':'核保員一般於2-3個工作天內作出決定 - 可隨時回來查看。'}</div>}
+                    {/* Real gap found live-testing: an underwriter's "Request
+                        report" action (UnderwriterApp.jsx) wrote
+                        requested_report_note/_doctor to this same row, but
+                        nothing on the patient side ever read them back - a
+                        patient asked for more detail just saw "Pending",
+                        with nothing telling them anything was needed from
+                        them at all. */}
+                    {isPending&&i.requested_report_note&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px',marginTop:'8px',fontSize:'12px',color:C.text,lineHeight:1.5}}>
+                      <div style={{fontWeight:600,marginBottom:'2px'}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
+                      {i.requested_report_note}{i.requested_report_doctor?(isEn?` (requesting a report from ${i.requested_report_doctor})`:` (向${i.requested_report_doctor}索取報告)`):''}
+                    </div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
                     {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id}/>}
                     {isApprovedToBuy&&!isPurchased&&<AutoInquiryPurchasePanel isEn={isEn} inquiry={i} patient={patient} onPurchased={load}/>}
@@ -2882,6 +2906,8 @@ function MyInquiriesTab({ isEn, patient={} }) {
             </div>
           </Card>
         )})}
+        {!showAllInquiries&&hiddenCount>0&&<div onClick={()=>setShowAllInquiries(true)} style={{textAlign:'center',fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px',textDecoration:'underline'}}>{isEn?`Show ${hiddenCount} earlier inquir${hiddenCount===1?'y':'ies'}`:`顯示${hiddenCount}個較早的查詢`}</div>}
+        {showAllInquiries&&hiddenCount>0&&<div onClick={()=>setShowAllInquiries(false)} style={{textAlign:'center',fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px',textDecoration:'underline'}}>{isEn?'Hide earlier inquiries':'隱藏較早的查詢'}</div>}
       </div>
     </div>
   )

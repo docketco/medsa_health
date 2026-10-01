@@ -32,6 +32,41 @@ function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) 
 function Card({ children, style:sx={} }) {
   return <div style={{background:'#fff',border:`1px solid ${C.border}`,borderRadius:'14px',padding:'18px',marginBottom:'14px',...sx}}>{children}</div>
 }
+
+// Real gap found live-testing: a declined verdict on this (new) dedicated
+// plan page was a dead end - a "Done" button and nothing else, even
+// though the matching engine already computes real alternatives
+// (find_alternative_plans.js) and the old inline flow always offered
+// them. Same small fetch-on-demand panel PatientApp.jsx's My Inquiries
+// uses for the same purpose.
+function AlternativePlansPanel({ inquiryId }) {
+  const [loaded, setLoaded] = useState(false)
+  const [alternatives, setAlternatives] = useState([])
+  const [loading, setLoading] = useState(false)
+  async function load() {
+    setLoading(true)
+    const res = await fetch('/api/patient/find_alternative_plans', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ inquiryId }),
+    })
+    const data = await res.json()
+    setAlternatives(data.alternatives || [])
+    setLoading(false)
+    setLoaded(true)
+  }
+  if (!loaded) return <Btn style={{width:'100%',marginTop:'10px'}} disabled={loading} onClick={load}>{loading?'Looking…':'See other plans that might work'}</Btn>
+  return (
+    <div style={{marginTop:'10px'}}>
+      {alternatives.length===0
+        ? <div style={{fontSize:'12px',color:C.textMuted}}>No matching alternative found automatically - talking to an agent is your best next step.</div>
+        : alternatives.map(a=>(
+          <div key={a.planId} style={{padding:'10px 12px',background:C.beige,borderRadius:'8px',marginBottom:'6px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{a.planName}</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>{a.companyName}{a.sameInsurer?' · same insurer':' · different insurer'}{a.quotedPremium!=null?` · HK$${a.quotedPremium}/mo`:''}</div>
+          </div>
+        ))}
+    </div>
+  )
+}
 function YesNo({ value, onChange, label, hint }) {
   return (
     <div style={{marginBottom:'20px'}}>
@@ -285,6 +320,12 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
   const [savedDeclaration, setSavedDeclaration] = useState(null) // null until loaded, or {conditions, consentHistoryShared, createdAt, expiresAt}
 
+  // Real gap found live-testing: this is a long page (wizard -> result),
+  // so landing on the result while still scrolled down from the
+  // questionnaire made the verdict card invisible until manually
+  // scrolled back up - looked like nothing happened.
+  useEffect(() => { window.scrollTo(0, 0) }, [phase])
+
   useEffect(() => {
     let cancelled = false
     supabase.from('patient_vitals').select('height_cm, weight_kg')
@@ -404,15 +445,20 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
           {result.verdict!=='declined'&&!result.underwriterPending&&!purchasing&&phase!=='purchased'&&(
             <Card>
               <div style={{fontSize:'13px',fontWeight:600,marginBottom:'12px'}}>Complete your purchase</div>
-              <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+              <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
                 <select value={purchaseWardClass} onChange={e=>setPurchaseWardClass(e.target.value)} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px'}}>
-                  <option value="">Ward class (optional)</option>
+                  <option value="">Ward class (General)</option>
                   <option value="general">General</option><option value="semi_private">Semi-private</option><option value="private">Private</option>
                 </select>
                 <select value={purchasePaymentFrequency} onChange={e=>setPurchasePaymentFrequency(e.target.value)} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px'}}>
                   <option value="monthly">Monthly</option><option value="annual">Annually</option>
                 </select>
               </div>
+              {/* Ward class is a real price lever, not just a label - this
+                  updates live as it's picked, before the patient commits,
+                  per your own note that they should see the real price
+                  before the end of the flow, not after. */}
+              {result.quotedPremiumByWard&&<div style={{fontSize:'15px',fontWeight:700,color:C.navy,marginBottom:'12px'}}>HK${result.quotedPremiumByWard[purchaseWardClass||'general']}/mo</div>}
               {declarationAck
                 ? <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ Health declaration & terms reviewed and accepted.</div>
                 : <Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
@@ -422,6 +468,17 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             </Card>
           )}
           {result.underwriterPending&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center'}}>Waiting on a quick sign-off before this can be purchased - check "My inquiries".</div>}
+          {/* Real gap: a decline used to be a dead end here (just "Done")
+              - the patient has two real next steps instead: a plan that
+              would actually approve them, or a human who can look at the
+              specific exclusion. Only offered for the auto path - "talk to
+              an agent" already took them to a human the first time. */}
+          {result.verdict==='declined'&&<Card>
+            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>What now?</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'4px'}}>This plan's own exclusion rule means it can't be sold automatically with what's declared above - that doesn't mean every plan is off the table.</div>
+            <AlternativePlansPanel inquiryId={result.inquiryId}/>
+            {mode==='auto'&&<Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>savedDeclaration&&runMatch(savedDeclaration.conditions, savedDeclaration.consentHistoryShared, 'agent')}>Talk to an agent about this instead</Btn>}
+          </Card>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
         </div>
       )}

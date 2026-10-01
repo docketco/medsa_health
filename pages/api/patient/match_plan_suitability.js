@@ -86,7 +86,7 @@ export default async function handler(req, res) {
   // ever flag, so a clean declared-only read still can't hide something
   // consented history turns up, without letting old/irrelevant visit
   // history auto-decline someone on its own.
-  const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [], historyConditions, declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
+  const result = matchPlanSuitability({ plan, patientAge: age, conditions: declaredConditions || [], historyConditions, wardClass, declaredCodes: codes, coveredCodes: codes, flagCodes: codes })
 
   const expiresAt = new Date(Date.now() + DECLARATION_VALIDITY_DAYS * 24 * 3600 * 1000).toISOString()
 
@@ -100,7 +100,7 @@ export default async function handler(req, res) {
     declared_conditions: declaredConditions || [],
     suitability_verdict: result.verdict, suitability_summary: result.summary,
     flag_category: result.flagCategory,
-    quoted_premium_hkd: result.quotedPremium, used_ai: false,
+    quoted_premium_hkd: result.quotedPremium, quoted_premium_hkd_by_ward: result.quotedPremiumByWard, used_ai: false,
     declaration_expires_at: expiresAt,
     // A clean verdict still waits for a quick human sign-off before buying
     // when the insurer hasn't opted into auto-buy (aq2-19) - reuses the
@@ -140,7 +140,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     status: 'OK', inquiryId: inquiry.id,
     verdict: result.verdict, flagCategory: result.flagCategory, summary: result.summary,
-    quotedPremium: result.quotedPremium, autoBuyOnClean: !!plan.auto_buy_on_clean,
+    quotedPremium: result.quotedPremium, quotedPremiumByWard: result.quotedPremiumByWard, autoBuyOnClean: !!plan.auto_buy_on_clean,
     underwriterPending: inquiryPayload.underwriter_status === 'pending',
     waitingPeriodDays: plan.waiting_period_days, preExistingConditionPolicy: plan.pre_existing_condition_policy,
     additionalTerms: plan.additional_terms, declarationExpiresAt: expiresAt,
