@@ -43,6 +43,23 @@ export default function TermsAgreementModal({
     return () => { document.body.style.overflow = prevOverflow }
   }, [open])
 
+  // Real bug: "I agree" only ever enabled via a scroll event, but a short
+  // declaration (few declared conditions, no insurer additional terms)
+  // can fit entirely without the content ever overflowing - no scroll
+  // event then fires, ever, so "I agree" stayed permanently disabled with
+  // no way to confirm a purchase. Also resets the flag on each fresh
+  // open - the component stays mounted between opens (this file always
+  // renders, open just toggles an early return), so a previous open's
+  // scrolled-to-end state would otherwise leak into the next one.
+  useEffect(() => {
+    if (!open) { setScrolledToEnd(false); return }
+    const id = requestAnimationFrame(() => {
+      const el = scrollRef.current
+      if (el && el.scrollHeight <= el.clientHeight + 4) setScrolledToEnd(true)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [open])
+
   if (!open) return null
 
   function handleScroll(e) {
