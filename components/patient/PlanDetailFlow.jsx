@@ -338,6 +338,12 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   // (data-app-scroll-root), same pattern as the insurer portal.
   useEffect(() => { document.querySelector('[data-app-scroll-root]')?.scrollTo(0, 0) }, [phase])
 
+  // Real gap found live-testing: this is a long page (wizard -> result),
+  // so landing on the result while still scrolled down from the
+  // questionnaire made the verdict card invisible until manually
+  // scrolled back up - looked like nothing happened.
+  useEffect(() => { window.scrollTo(0, 0) }, [phase])
+
   useEffect(() => {
     let cancelled = false
     supabase.from('patient_vitals').select('height_cm, weight_kg')
