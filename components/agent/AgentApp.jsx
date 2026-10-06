@@ -1023,6 +1023,11 @@ function InquiryMessageThread({ inquiry, agentName }) {
     const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
     setMessages(data||[])
     setLoading(false)
+    // Expanding the card is what "reading" the thread means here - clears
+    // the unread badge on the claimed-inquiries list the moment the agent
+    // actually opens the conversation.
+    const unreadIds = (data||[]).filter(m=>!m.read_by_agent).map(m=>m.id)
+    if (unreadIds.length>0) await supabase.from('inquiry_messages').update({ read_by_agent: true }).in('id', unreadIds)
   }
   useEffect(() => { load() }, [inquiry.id])
 
@@ -1043,6 +1048,7 @@ function InquiryMessageThread({ inquiry, agentName }) {
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'agent', sender_name: agentName,
       body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+      read_by_agent: true, read_by_patient: false,
     })
     setBody(''); setAttachment(null); setSending(false)
     load()
@@ -1087,6 +1093,13 @@ function PlanInquiriesScreen({ agent, onConvert }) {
   const [claimingId,setClaimingId]=useState(null)
   const [claimNotice,setClaimNotice]=useState(null)
   const [expandedId,setExpandedId]=useState(null)
+  // inquiry_id -> { count, preview } for messages the agent hasn't opened
+  // yet - real gap found live-testing: the message thread already existed
+  // (InquiryMessageThread below) but nothing on the collapsed card ever
+  // hinted it had anything in it, so an agent had no reason to click to
+  // expand a card that otherwise just repeats the same summary they
+  // already saw when they claimed it.
+  const [unreadByInquiry,setUnreadByInquiry]=useState({})
 
   async function load() {
     setLoading(true)
@@ -1113,6 +1126,24 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
     setMine(mineRows||[])
+
+    // Unread-by-agent messages across claimed inquiries - grouped
+    // client-side (Supabase JS has no GROUP BY) since a single agent's
+    // claimed list is never large enough for this to matter.
+    const claimedIds = (mineRows||[]).map(i=>i.id)
+    if (claimedIds.length>0) {
+      const { data: unreadMsgs } = await supabase.from('inquiry_messages').select('inquiry_id, body, attachment_name, sender_type, sender_name, created_at')
+        .in('inquiry_id', claimedIds).eq('read_by_agent', false).order('created_at',{ascending:true})
+      const byInquiry = {}
+      for (const m of (unreadMsgs||[])) {
+        if (!byInquiry[m.inquiry_id]) byInquiry[m.inquiry_id] = { count: 0, preview: null }
+        byInquiry[m.inquiry_id].count += 1
+        byInquiry[m.inquiry_id].preview = m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')
+      }
+      setUnreadByInquiry(byInquiry)
+    } else {
+      setUnreadByInquiry({})
+    }
     // Which claimed inquiries already converted to a real policy - so
     // "Convert to policy" only ever shows once, not every visit.
     const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
@@ -1239,7 +1270,10 @@ function PlanInquiriesScreen({ agent, onConvert }) {
           <Card key={i.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
-                <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
+                <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                  <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
+                  {unreadByInquiry[i.id]?.count>0&&<span style={{background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',minWidth:18,height:18,padding:'0 5px',display:'inline-flex',alignItems:'center',justifyContent:'center'}}>{unreadByInquiry[i.id].count}</span>}
+                </div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
               </div>
@@ -1269,6 +1303,16 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               {i.quoted_premium_hkd!=null&&i.suitability_verdict!=='declined'&&<span> · Est. HK${i.quoted_premium_hkd}/mo</span>}
               {i.suitability_verdict==='flagged'&&i.flag_category&&<div style={{marginTop:'2px'}}>Reason category: {i.flag_category}</div>}
               {i.suitability_verdict==='declined'&&<div style={{marginTop:'2px'}}>Doesn't work for this patient - consider another plan from your basket.</div>}
+            </div>}
+            {/* Real gap found live-testing: the message thread already
+                existed below (claim → expand) but a collapsed card gave
+                no sign a message or attachment was even waiting - "no
+                place to receive" was really "no visible reason to open
+                it." This preview is the link to the conversation: tapping
+                it (or the card) opens the thread directly. */}
+            {expandedId!==i.id&&unreadByInquiry[i.id]&&<div onClick={e=>{e.stopPropagation();setExpandedId(i.id)}} style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.text,cursor:'pointer',display:'flex',justifyContent:'space-between',gap:'8px'}}>
+              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>✉ {unreadByInquiry[i.id].preview || 'New message'}</span>
+              <span style={{color:C.red,fontWeight:600,flexShrink:0}}>View ›</span>
             </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
