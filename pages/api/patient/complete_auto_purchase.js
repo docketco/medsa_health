@@ -75,7 +75,15 @@ export default async function handler(req, res) {
         transfer_data: { destination: company.stripe_connect_account_id },
         application_fee_amount: 0,
       },
-      success_url: `${siteUrl}/patient?auto_purchase=1`,
+      // Real bug found live-testing: this was the one checkout session in
+      // the app that never passed {CHECKOUT_SESSION_ID} back - every
+      // other Stripe flow here (subscription, sponsorship, video consult)
+      // already needed it for its own verify-on-return fallback, since
+      // the webhook is confirmed not firing in this environment. Without
+      // it, a real payment completed, redirected back, and there was no
+      // way for the page to even ask what to verify - the policy simply
+      // never got created.
+      success_url: `${siteUrl}/patient?auto_purchase=1&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${siteUrl}/patient?auto_purchase_cancelled=1`,
       metadata: {
         // Namespaced auto_purchase_* keys - the webhook's sponsor-plan

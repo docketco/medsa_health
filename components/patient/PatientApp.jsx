@@ -5232,6 +5232,32 @@ export default function PatientApp({ liveData={} }) {
   const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
   const [realPatientData,setRealPatientData]=useState(null) // null = not fetched yet, object = real fetched data
+  const [autoPurchaseNotice,setAutoPurchaseNotice]=useState(null)
+
+  // Real bug found live-testing: the self-serve Stripe path for an
+  // automated purchase only ever created the policy from the
+  // checkout.session.completed webhook, which is confirmed not firing in
+  // this environment (same root cause already fixed for subscriptions
+  // and sponsorships) - a real payment completed, redirected back here,
+  // and the plan just never showed up under "Policy on file." Verifies
+  // the real Stripe session directly instead, same pattern as those.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('auto_purchase') === '1' && sessionId) {
+      fetch('/api/patient/verify_auto_purchase_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK') { setAutoPurchaseNotice({ ok: true, text: 'Payment confirmed - your plan is now active, see "Policy on file".' }); setScreen('insurance') }
+        else if (data.status === 'NOT_PAID') setAutoPurchaseNotice({ ok: false, text: `Payment didn't complete (status: ${data.paymentStatus}) - nothing was charged.` })
+        else setAutoPurchaseNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('auto_purchase_cancelled') === '1') {
+      setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
 
   // Once we know who's really signed in, fetch everything fresh from
   // Supabase - conditions, allergies, medications, records, appointments,
@@ -5356,6 +5382,7 @@ export default function PatientApp({ liveData={} }) {
     // scrolls internally, so the nav never leaves.
     <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+      {autoPurchaseNotice&&<div onClick={()=>setAutoPurchaseNotice(null)} style={{padding:'10px 16px',fontSize:'12px',lineHeight:1.5,textAlign:'center',cursor:'pointer',background:autoPurchaseNotice.ok?C.greenXLight:C.redLight,color:autoPurchaseNotice.ok?C.green:C.red}}>{autoPurchaseNotice.text}</div>}
       <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
         {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
