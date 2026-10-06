@@ -147,7 +147,7 @@ export default async function handler(req, res) {
   if (message && message.trim()) {
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patient.full_name || null,
-      body: message.trim(),
+      body: message.trim(), read_by_patient: true, read_by_agent: false,
     })
   }
 

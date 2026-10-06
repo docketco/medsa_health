@@ -71,6 +71,7 @@ export default async function handler(req, res) {
     const { error: msgErr } = await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiryId, sender_type: 'underwriter', sender_name: underwriterName || 'Underwriter',
       body: `${reportDoctor?.trim() ? `Requesting a report from ${reportDoctor.trim()}: ` : ''}${reportNote.trim()}`,
+      read_by_patient: false, read_by_agent: false,
     })
     // Real bug found live-testing: this insert was failing silently - the
     // table's own check constraint only allowed sender_type 'agent' or

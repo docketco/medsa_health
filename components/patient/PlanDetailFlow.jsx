@@ -502,7 +502,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
                 : <Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
               <TermsAgreementModal open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn} planName={plan.name} companyName={plan.company} declaredConditions={result.declaredConditions} waitingPeriodDays={plan.waitingPeriodDays} preExistingConditionPolicy={plan.preExistingConditionPolicy} additionalTerms={plan.additionalTerms} onAccept={()=>{setDeclarationAck(true);setTermsModalOpen(false)}}/>
               {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
-              <Btn variant="primary" style={{width:'100%'}} disabled={!declarationAck||purchasing} onClick={handlePurchase}>{purchasing?'Confirming…':'Confirm & activate'}</Btn>
+              <Btn variant="primary" style={{width:'100%'}} disabled={!declarationAck||purchasing} onClick={handlePurchase}>{purchasing?'Confirming…':'Confirm & checkout'}</Btn>
             </Card>
           )}
           {result.underwriterPending&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center'}}>Waiting on a quick sign-off before this can be purchased - check "My inquiries".</div>}

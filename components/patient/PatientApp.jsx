@@ -288,7 +288,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData }) {
+function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -346,6 +346,33 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
 
   useEffect(() => { loadDoctorMessages() }, [patient?.medsa_id])
 
+  // Unread messages on the patient's own insurance inquiries (agent or
+  // underwriter replies) - same shared inquiry_messages thread the My
+  // Inquiries tab reads/writes, surfaced here too so a reply doesn't sit
+  // invisible until the patient happens to reopen that specific inquiry.
+  const [inquiryThreadsUnread,setInquiryThreadsUnread]=useState([]) // [{inquiryId, planName, companyName, count, preview}]
+  async function loadInquiryMessageSummary(patientRowId) {
+    if (!patientRowId) return
+    const { data: myInquiries } = await supabase.from('plan_inquiries')
+      .select('id, insurance_plans(plan_name, company_name)').eq('patient_id', patientRowId)
+    const ids = (myInquiries||[]).map(i=>i.id)
+    if (ids.length===0) { setInquiryThreadsUnread([]); return }
+    const { data: unreadMsgs } = await supabase.from('inquiry_messages').select('inquiry_id, body, attachment_name, created_at')
+      .in('inquiry_id', ids).eq('read_by_patient', false).order('created_at',{ascending:true})
+    const byInquiry = {}
+    for (const m of (unreadMsgs||[])) {
+      if (!byInquiry[m.inquiry_id]) byInquiry[m.inquiry_id] = { count: 0, preview: null }
+      byInquiry[m.inquiry_id].count += 1
+      byInquiry[m.inquiry_id].preview = m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')
+    }
+    const planById = Object.fromEntries((myInquiries||[]).map(i=>[i.id, i.insurance_plans]))
+    setInquiryThreadsUnread(Object.entries(byInquiry).map(([inquiryId, v]) => ({
+      inquiryId, count: v.count, preview: v.preview,
+      planName: planById[inquiryId]?.plan_name, companyName: planById[inquiryId]?.company_name,
+    })))
+  }
+  const inquiryUnreadTotal = inquiryThreadsUnread.reduce((sum,t)=>sum+t.count, 0)
+
   // One entry per conversation, latest message first - this feeds both the
   // message board list and the urgent banner at the top.
   const doctorThreadsLatestFirst = Object.values(
@@ -357,6 +384,8 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
   ).sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
 
   const urgentMessages = doctorThreadsLatestFirst.filter(m=>m.urgent && !m.read_by_patient)
+
+  useEffect(() => { loadInquiryMessageSummary(homePatientId) }, [homePatientId])
 
   function getThreadFrom(list, m) {
     const key = msgThreadKey(m)
@@ -624,7 +653,7 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
           {key:'records',icon:'records',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
-          {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:'2'},
+          {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:inquiryUnreadTotal>0?String(inquiryUnreadTotal):null},
           {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
           {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
         ].map(item=>(
@@ -717,6 +746,26 @@ function HomeScreen({ onNav, isEn, onOpenEmergencySetup, onOpenShare, onOpenSign
             <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
           </div>
         ))}
+        {/* Real gap found live-testing: a reply from an agent or
+            underwriter on an insurance inquiry (PatientInquiryThread,
+            same shared inquiry_messages table) never showed anywhere on
+            the home screen - only inside that one inquiry's own card in
+            My Inquiries, which nothing here pointed to. Same
+            dot/preview/tap-to-open pattern as the doctor messages above,
+            tapping jumps straight into that inquiry's conversation. */}
+        {inquiryThreadsUnread.length>0&&<>
+          <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {isEn?'Messages about your applications':'關於您申請的訊息'}</div>
+          {inquiryThreadsUnread.map((t,i)=>(
+            <div key={t.inquiryId} onClick={()=>onOpenInquiry&&onOpenInquiry(t.inquiryId)} style={{padding:'10px 14px',borderBottom:i<inquiryThreadsUnread.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer'}}>
+              <div style={{width:8,height:8,borderRadius:'50%',background:C.green,marginTop:'5px',flexShrink:0}}/>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'12px',fontWeight:700}}>{t.planName||''}{t.companyName?` - ${t.companyName}`:''}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{t.preview}</div>
+              </div>
+              <span style={{background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',minWidth:18,height:18,padding:'0 5px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{t.count}</span>
+            </div>
+          ))}
+        </>}
       </Card>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
         <span style={{color:C.brown}}>◇</span>
@@ -2600,6 +2649,11 @@ function PatientInquiryThread({ inquiry, patientName }) {
     const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
     setMessages(data||[])
     setLoading(false)
+    // Opening the thread is what "reading" it means here - clears the
+    // unread badge on the message board the moment the patient actually
+    // sees the conversation, same as the doctor-messages thread already does.
+    const unreadIds = (data||[]).filter(m=>!m.read_by_patient).map(m=>m.id)
+    if (unreadIds.length>0) await supabase.from('inquiry_messages').update({ read_by_patient: true }).in('id', unreadIds)
   }
   useEffect(() => { load() }, [inquiry.id])
 
@@ -2620,6 +2674,7 @@ function PatientInquiryThread({ inquiry, patientName }) {
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patientName,
       body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+      read_by_patient: true, read_by_agent: false,
     })
     setBody(''); setAttachment(null); setSending(false)
     load()
@@ -2765,19 +2820,31 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
       {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
       <div style={{display:'flex',gap:'8px'}}>
         <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
-        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!declarationAck} onClick={handlePurchase}>{purchasing?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm & activate':'確認並啟用')}</Btn>
+        <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={purchasing||!declarationAck} onClick={handlePurchase}>{purchasing?(isEn?'Confirming…':'確認中…'):(isEn?'Confirm & checkout':'確認並結賬')}</Btn>
       </div>
     </div>
   )
 }
 
-function MyInquiriesTab({ isEn, patient={}, onViewPlan }) {
+function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, onConsumeDeepLink }) {
   const [inquiries,setInquiries]=useState([])
   const [agentQuotes,setAgentQuotes]=useState([])
   const [loading,setLoading]=useState(true)
   const [expandedId,setExpandedId]=useState(null)
   const [switching,setSwitching]=useState(null)
   const [showAllInquiries,setShowAllInquiries]=useState(false)
+
+  // Arriving here via the home screen's "message about your application"
+  // tap (or an unread badge) - jump straight to that inquiry's card,
+  // forcing it visible even if the declutter view above would otherwise
+  // hide it as an "earlier" one.
+  useEffect(() => {
+    if (!initialExpandedId || loading) return
+    if (!inquiries.find(i=>i.id===initialExpandedId)) return
+    setExpandedId(initialExpandedId)
+    setShowAllInquiries(true)
+    onConsumeDeepLink && onConsumeDeepLink()
+  }, [initialExpandedId, loading, inquiries])
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
@@ -3535,9 +3602,13 @@ function ForumScreen({ isEn, patient={} }) {
   )
 }
 
-function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
+function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInquiryId=null, onConsumeInquiryDeepLink }) {
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
+  // Jumping straight to a specific inquiry's conversation from the home
+  // screen's message board - switching tabs is this screen's job,
+  // MyInquiriesTab itself expands the right card once its own list loads.
+  useEffect(() => { if (deepLinkInquiryId) setTab('inquiries') }, [deepLinkInquiryId])
   const [viewingPlanIndex,setViewingPlanIndex]=useState(null)
   const [inquired,setInquired]=useState(null)
   const [inquiring,setInquiring]=useState(null)
@@ -4371,7 +4442,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[] }) {
       </>}
 
       {/* ── MY INQUIRIES ── */}
-      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById}/>}
+      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById} initialExpandedId={deepLinkInquiryId} onConsumeDeepLink={onConsumeInquiryDeepLink}/>}
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
@@ -5223,6 +5294,7 @@ export default function PatientApp({ liveData={} }) {
   // record (expanded, real PDF triggered) instead of a second, weaker
   // summary living inside Calendar itself.
   const [deepLinkRecordId,setDeepLinkRecordId]=useState(null)
+  const [deepLinkInquiryId,setDeepLinkInquiryId]=useState(null)
   const [lang,setLang]=useState('en') // 'en' | 'zh-TW' | 'zh-CN'
   const isEn = lang==='en' // kept so every existing isEn?'EN':'Traditional' string throughout this file works unchanged
   const [emergencyOpen,setEmergencyOpen]=useState(false)
@@ -5394,11 +5466,11 @@ export default function PatientApp({ liveData={} }) {
         </div>
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
-        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords}/>}
+        {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='family'&&<FamilyScreen isEn={isEn}/>}
