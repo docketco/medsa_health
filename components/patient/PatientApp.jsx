@@ -3821,6 +3821,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   }
   const [activePolicy,setActivePolicy]=useState(null)
   const [heldPolicies,setHeldPolicies]=useState([]) // every held policy, not just the one shown up top - a patient can hold more than one, and ClaimsTab needs all of them to let the patient pick which to bill
+  const [lapsedPolicies,setLapsedPolicies]=useState([]) // a monthly self-serve policy whose recurring premium stopped clearing - shown separately so it doesn't just silently vanish
   // Compact-by-default: once "Policy on file" could show several real
   // cards (see comment below), a full card per policy made the list too
   // long to scan. Only one expands at a time, collapsed by default.
@@ -3840,6 +3841,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     setActivePolicy(data||null)
     setRenewalRequested(!!data?.patient_requested_renewal_at)
     setPolicyLoading(false)
+    // Real life: a monthly-billed self-serve policy whose recurring
+    // premium stopped clearing doesn't just vanish once it lapses - the
+    // patient needs to actually see that it ended and why, not have it
+    // silently disappear from "Policy on file" with no explanation.
+    const { data: lapsed } = await supabase.from('agent_policies').select('id, plan_name, lapsed_at, insurance_plans(company_name)').eq('patient_id', patientRow.id).eq('status','lapsed').order('lapsed_at',{ascending:false})
+    setLapsedPolicies(lapsed||[])
     const companyNames = [...new Set((all||[]).map(p=>p.insurance_plans?.company_name).filter(Boolean))]
     if (companyNames.length>0) {
       const { data: companies } = await supabase.from('insurance_companies').select('name, logo_url').in('name', companyNames)
@@ -4169,6 +4176,17 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           label, and 16px of top margin per card added up fast with
           several held policies. One shared label now, tighter spacing
           between cards, no repeated label per row. */}
+      {/* Real life: once a monthly self-serve policy's recurring premium
+          genuinely stops clearing (Stripe's own retries exhausted),
+          coverage actually ends - reinstating isn't a billing fix, it
+          needs a fresh application. Shown plainly rather than letting
+          the policy just disappear with no trace. */}
+      {!policyLoading&&lapsedPolicies.length>0&&<div style={{margin:'0 16px 10px'}}>
+        {lapsedPolicies.map(p=><div key={p.id} style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'6px'}}>
+          <div style={{fontSize:'12px',fontWeight:600,color:C.red}}>{isEn?`${p.plan_name} - coverage ended`:`${p.plan_name} - 保障已終止`}</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{isEn?`Your card payment couldn't be collected and coverage lapsed on ${new Date(p.lapsed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}. To get covered again, you'll need to apply and be screened as a new application.`:`信用卡付款未能成功扣取,保障已於${new Date(p.lapsed_at).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}終止。如需重新投保,須以新申請重新辦理。`}</div>
+        </div>)}
+      </div>}
       {!policyLoading&&heldPolicies.length>0&&<SecLabel>{isEn?'Policy on file':'已存檔保單'}</SecLabel>}
       {/* Horizontally scrollable row of cards - a patient holding several
           policies used to see them stacked full-width, one per row, which
@@ -4251,6 +4269,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                   no way to tell, from this card, whether a payment
                   actually happened on Medsa's side. */}
               {activePolicy.amount_paid_hkd!=null&&<div style={{fontSize:'10px',opacity:0.8,marginTop:'2px'}}>{isEn?`✓ Paid by card - HK$${activePolicy.amount_paid_hkd}`:`✓ 已透過信用卡付款 - HK$${activePolicy.amount_paid_hkd}`}</div>}
+              {/* Real life: a missed recurring premium doesn't lapse
+                  coverage instantly - there's a grace period while
+                  Stripe keeps retrying the card. This is that warning,
+                  not a "coverage already ended" notice (see
+                  lapsedPolicies below for that). */}
+              {activePolicy.payment_past_due_since&&<div style={{fontSize:'10px',fontWeight:700,color:'#ffd966',marginTop:'2px'}}>{isEn?'⚠ Card payment failed - update your card to avoid losing coverage':'⚠ 卡片付款失敗 - 請更新付款方式以免失去保障'}</div>}
             </div>
             <span style={{fontSize:'10px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>
@@ -4261,6 +4285,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
               ? (isEn?'⚠ Reimbursement plan - you pay in full at the clinic, then claim it back':'⚠ 自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
               : (isEn?'✓ Direct billing - your clinic bills this plan, you pay only the copay':'✓ 直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
           </div>
+          {/* Real gap: commission was computed throughout the
+              agent/insurer/admin screens but never disclosed to the
+              patient who actually pays for the policy - added per your
+              call. The real figure, not a generic line, since this
+              policy is already issued and the amount is on file. */}
+          {activePolicy.broker_commission_hkd!=null&&<div style={{fontSize:'11px',opacity:0.8,marginTop:'6px'}}>{isEn?`This policy includes an agent commission of HK$${activePolicy.broker_commission_hkd}, paid by the insurer - never added to your premium.`:`此保單包含HK$${activePolicy.broker_commission_hkd}的代理佣金,由保險公司支付 - 不會加入您的保費。`}</div>}
 
           {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
             {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}

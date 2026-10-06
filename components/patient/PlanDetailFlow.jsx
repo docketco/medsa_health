@@ -470,6 +470,14 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             : <>
               <Btn variant="primary" style={{width:'100%',marginBottom:'10px'}} disabled={plan.requiresAgent} onClick={()=>startFlow('auto')}>{plan.requiresAgent?'Automated quote not offered for this plan':'Quote immediately'}</Btn>
               <Btn style={{width:'100%'}} onClick={()=>startFlow('agent')}>Talk to an agent</Btn>
+              {/* Real gap: commission/referral-fee figures were computed
+                  throughout the agent/insurer/admin screens but never
+                  disclosed to the patient actually paying for the
+                  policy - added per your call. Generic here since no
+                  specific agent is assigned yet; the real HK$ figure
+                  shows once a policy is actually issued (see the held-
+                  policy card). */}
+              <div style={{fontSize:'10px',color:C.textMuted,textAlign:'center',marginTop:'8px',lineHeight:1.5}}>If an agent helps you with this plan, the insurer may pay them (and Medsa) a commission - this is never added to your premium.</div>
               {savedDeclaration&&<div style={{textAlign:'center',marginTop:'12px'}}>
                 <div style={{fontSize:'11px',color:C.textMuted}}>Using your health declaration from {new Date(savedDeclaration.createdAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - valid until {new Date(savedDeclaration.expiresAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}.</div>
                 <span onClick={()=>setPhase('wizard')} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',textDecoration:'underline'}}>Update your health declaration</span>
