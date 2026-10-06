@@ -2897,20 +2897,20 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   }
 
   // Real gap found live-testing: re-declaring against the same plan
-  // several times (expected while testing, but also real over a patient's
-  // lifetime) left every past attempt stacked in the list forever. First
-  // cut just picked the latest per plan - but that actively hid a real
-  // bug: a still-pending case an underwriter had requested a report on
-  // got buried the moment a newer declaration against the same plan was
-  // submitted, even though the pending one was the one actually waiting
-  // on the patient. The one shown per plan is now whichever is still
-  // pending (there's normally only one at a time), falling back to the
-  // latest only when nothing for that plan is still open.
+  // several times left every past attempt stacked in this list forever,
+  // with no simple, predictable rule for which one was "the" result for
+  // that plan. match_plan_suitability.js now blocks the duplicate at the
+  // source instead (amends the one open, non-converted inquiry in place
+  // rather than inserting a new row every time) - a pending underwriter
+  // case can no longer get silently buried by a newer declaration the
+  // way it could before, because there's only ever one open row per
+  // plan to begin with. That means the declutter rule here can go back
+  // to the simple, obviously-correct one: inquiries already arrive
+  // newest-first, so the first one seen per plan_id IS the newest -
+  // always the latest quote result, in real chronological order.
   const shownIdPerPlan = new Map()
   for (const i of inquiries) {
-    const current = shownIdPerPlan.get(i.plan_id)
-    if (!current) { shownIdPerPlan.set(i.plan_id, i.id); continue }
-    if (i.underwriter_status === 'pending' && !inquiries.find(x => x.id === current).underwriter_status) shownIdPerPlan.set(i.plan_id, i.id)
+    if (!shownIdPerPlan.has(i.plan_id)) shownIdPerPlan.set(i.plan_id, i.id)
   }
   // Real gap found live-testing: the message-board deep link forced
   // showAllInquiries open to guarantee the targeted inquiry was in the
@@ -4245,6 +4245,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                 <div style={{fontSize:'15px',fontWeight:700}}>HK${activePolicy.premium}/mo</div>
               </div>
               <div style={{fontSize:'11px',fontWeight:600,padding:'2px 8px',borderRadius:'20px',background:readyToSign?'rgba(255,200,0,0.25)':'rgba(255,255,255,0.15)',display:'inline-block',marginTop:'4px'}}>{statusLabel}</div>
+              {/* Real gap this closes: a policy bought via a real Stripe
+                  charge and one billed directly by the insurer (no money
+                  through Medsa at all) used to render identically here -
+                  no way to tell, from this card, whether a payment
+                  actually happened on Medsa's side. */}
+              {activePolicy.amount_paid_hkd!=null&&<div style={{fontSize:'10px',opacity:0.8,marginTop:'2px'}}>{isEn?`✓ Paid by card - HK$${activePolicy.amount_paid_hkd}`:`✓ 已透過信用卡付款 - HK$${activePolicy.amount_paid_hkd}`}</div>}
             </div>
             <span style={{fontSize:'10px',opacity:0.8,flexShrink:0}}>{expanded?(isEn?'Hide ▲':'收起 ▲'):(isEn?'Details ▼':'詳情 ▼')}</span>
           </div>

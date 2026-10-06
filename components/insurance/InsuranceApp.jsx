@@ -347,6 +347,16 @@ function PlanManager({ company }) {
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
+  // Bulk CSV plan import - requested live-testing: a platform partner's
+  // whole real plan catalog should be able to land on Medsa in one pass,
+  // not typed in one at a time through the form above. Same
+  // parseCSV/insert-directly-from-the-browser pattern this app already
+  // uses for agent and roster bulk uploads.
+  const [bulkPlanOpen,setBulkPlanOpen]=useState(false)
+  const [bulkPlanRows,setBulkPlanRows]=useState([])
+  const [bulkPlanFileName,setBulkPlanFileName]=useState('')
+  const [bulkPlanImporting,setBulkPlanImporting]=useState(false)
+  const [bulkPlanResult,setBulkPlanResult]=useState(null)
   // Whether this insurer's own Stripe account is actually ready to take a
   // charge - the self-serve toggle below is per-PLAN (an insurer might
   // want it for some plans and not others), but it can only ever be
@@ -439,6 +449,70 @@ function PlanManager({ company }) {
     scrollFormIntoView('plan-manager-form')
   }
 
+  // tiers column format: "ageMin-ageMax:monthlyPremium:semiPrivatePremium:privatePremium:annualLimit"
+  // entries separated by ";" - semi-private/private/annual limit may be
+  // left blank (e.g. "0-30:300::: ") when the insurer doesn't vary by ward
+  // or hasn't set a limit.
+  function parseTiersField(raw) {
+    if (!raw) return []
+    return raw.split(';').map(s=>s.trim()).filter(Boolean).map(entry => {
+      const [ageRange, monthly, semi, priv, limit] = entry.split(':')
+      const [ageMin, ageMax] = (ageRange||'').split('-')
+      return {
+        age_min: parseInt(ageMin,10), age_max: parseInt(ageMax,10),
+        monthly_premium: parseFloat(monthly),
+        semi_private_premium: semi?.trim() ? parseFloat(semi) : null,
+        private_premium: priv?.trim() ? parseFloat(priv) : null,
+        annual_limit: limit?.trim() ? parseFloat(limit) : null,
+      }
+    }).filter(t => Number.isFinite(t.age_min) && Number.isFinite(t.age_max) && Number.isFinite(t.monthly_premium))
+  }
+  function splitList(raw) {
+    return (raw||'').split(';').map(s=>s.trim()).filter(Boolean)
+  }
+  async function handleBulkPlanFile(file) {
+    const text = await file.text()
+    const { rows } = parseCSV(text)
+    setBulkPlanRows(rows)
+    setBulkPlanFileName(file.name)
+    setBulkPlanResult(null)
+  }
+  async function handleBulkPlanImport() {
+    setBulkPlanImporting(true)
+    const results = { total: bulkPlanRows.length, imported: 0, errors: [] }
+    for (const row of bulkPlanRows) {
+      const planName = row.plan_name?.trim()
+      if (!planName) { results.errors.push('Row skipped - missing plan_name.'); continue }
+      const tiersParsed = parseTiersField(row.tiers)
+      const { data: newPlan, error } = await supabase.from('insurance_plans').insert({
+        company_name: company.name, status: 'active',
+        plan_name: planName, plan_type: row.plan_type || null,
+        key_benefits: row.key_benefits || null,
+        covered_categories: splitList(row.covered_categories),
+        covered_conditions: splitList(row.covered_conditions),
+        insurer_flags: splitList(row.insurer_flags),
+        additional_terms: row.additional_terms || null,
+        pre_existing_condition_policy: row.pre_existing_condition_policy || null,
+        waiting_period_days: row.waiting_period_days ? parseInt(row.waiting_period_days,10) : null,
+        copay_rate: row.copay_rate_pct ? parseFloat(row.copay_rate_pct)/100 : null,
+        annual_deductible_hkd: row.annual_deductible_hkd ? parseFloat(row.annual_deductible_hkd) : null,
+        commission_rate_pct: row.commission_rate_pct ? parseFloat(row.commission_rate_pct) : null,
+        requires_agent: String(row.requires_agent).trim().toLowerCase()==='true',
+        auto_buy_on_clean: String(row.auto_buy_on_clean).trim().toLowerCase()==='true',
+      }).select().maybeSingle()
+      if (error || !newPlan) { results.errors.push(`${planName}: ${error?.message||'could not be created'}`); continue }
+      if (tiersParsed.length>0) {
+        const { error: tErr } = await supabase.from('insurance_plan_pricing_tiers').insert(tiersParsed.map(t=>({...t, plan_id:newPlan.id})))
+        if (tErr) results.errors.push(`${planName}: plan created, but pricing tiers failed - ${tErr.message}`)
+      }
+      results.imported++
+    }
+    setBulkPlanResult(results)
+    setBulkPlanImporting(false)
+    setBulkPlanRows([]); setBulkPlanFileName('')
+    load()
+  }
+
   async function handleSubmit() {
     const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
     if (!form.plan_name || validTiers.length===0) return
@@ -517,7 +591,26 @@ function PlanManager({ company }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <CompanyLogoUploader company={company}/>
-      {!creating&&<div style={{padding:'16px 16px 0'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn></div>}
+      {!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
+        <Btn variant="navy" style={{flex:1}} onClick={startCreate}>+ Add new plan</Btn>
+        <Btn style={{flex:1}} onClick={()=>setBulkPlanOpen(o=>!o)}>{bulkPlanOpen?'Hide bulk import':'⭱ Bulk import plans (CSV)'}</Btn>
+      </div>}
+      {!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Bulk import your whole plan catalog</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>
+          CSV columns: plan_name (required), plan_type, key_benefits, covered_categories, covered_conditions, insurer_flags (each semicolon-separated, e.g. "Dental;Optical"), pre_existing_condition_policy, waiting_period_days, copay_rate_pct, annual_deductible_hkd, commission_rate_pct, requires_agent (true/false), auto_buy_on_clean (true/false), additional_terms.<br/>
+          <strong>tiers</strong> (semicolon-separated per age band): <span style={{fontFamily:'monospace'}}>ageMin-ageMax:monthlyPremium:semiPrivatePremium:privatePremium:annualLimit</span> - e.g. "0-30:300:360:450:500000;31-60:450:540:675:500000". Semi-private/private/annual limit may be left blank if this plan doesn't vary by ward or has no cap.
+        </div>
+        <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}}>
+          <input type="file" accept=".csv" onChange={e=>e.target.files?.[0]&&handleBulkPlanFile(e.target.files[0])} style={{flex:1,fontSize:'11px'}}/>
+        </div>
+        {bulkPlanRows.length>0&&<div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{bulkPlanFileName} - {bulkPlanRows.length} plan{bulkPlanRows.length!==1?'s':''} ready to import.</div>}
+        <Btn variant="primary" disabled={bulkPlanRows.length===0||bulkPlanImporting} onClick={handleBulkPlanImport} style={{width:'100%'}}>{bulkPlanImporting?'Importing…':`Import ${bulkPlanRows.length||''} plan${bulkPlanRows.length!==1?'s':''}`}</Btn>
+        {bulkPlanResult&&<div style={{marginTop:'10px',fontSize:'12px',color:C.text}}>
+          <div style={{color:C.green,fontWeight:600}}>{bulkPlanResult.imported} of {bulkPlanResult.total} imported.</div>
+          {bulkPlanResult.errors.length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkPlanResult.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}
+        </div>}
+      </Card>}
       {creating&&(
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
