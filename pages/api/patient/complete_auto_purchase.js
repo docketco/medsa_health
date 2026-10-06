@@ -68,52 +68,80 @@ export default async function handler(req, res) {
 
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      payment_method_types: ['card'],
-      line_items: [{
-        price_data: {
-          currency: 'hkd',
-          product_data: { name: `${plan.plan_name} - ${company.name} (${freq === 'annual' ? 'annual premium' : 'first month\'s premium'})` },
-          unit_amount: Math.round(amountDue * 100),
-        },
-        quantity: 1,
-      }],
-      payment_intent_data: {
-        transfer_data: { destination: company.stripe_connect_account_id },
-        application_fee_amount: 0,
-      },
-      // Real bug found live-testing: this was the one checkout session in
-      // the app that never passed {CHECKOUT_SESSION_ID} back - every
-      // other Stripe flow here (subscription, sponsorship, video consult)
-      // already needed it for its own verify-on-return fallback, since
-      // the webhook is confirmed not firing in this environment. Without
-      // it, a real payment completed, redirected back, and there was no
-      // way for the page to even ask what to verify - the policy simply
-      // never got created.
-      success_url: `${siteUrl}/patient?auto_purchase=1&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl}/patient?auto_purchase_cancelled=1`,
-      metadata: {
-        // Namespaced auto_purchase_* keys - the webhook's sponsor-plan
-        // branch already reads a bare "plan_id" key for a different
-        // purpose (marking a plan sponsored), so reusing that name here
-        // would make this checkout get misread as a sponsorship payment.
-        auto_purchase_inquiry_id: inquiryId, auto_purchase_patient_id: patientId, auto_purchase_plan_id: planId,
-        auto_purchase_ward_class: wardClass || '', auto_purchase_payment_frequency: paymentFrequency || 'monthly',
-        // Read back verbatim by the webhook/verify-on-return path rather
-        // than recomputed independently there - the amount actually
-        // charged should never drift from what Stripe's own session says.
-        auto_purchase_amount_due_hkd: String(amountDue),
-      },
-    })
-    // Known gap, not fixed this round: "monthly" here still only ever
-    // produces ONE charge (this session, for one month's worth) - there's
-    // no recurring billing wired for self-serve checkout, so a
-    // monthly-frequency policy holds a full year of coverage after a
-    // single month's payment. A real fix is a Stripe Subscription
-    // (mode:'subscription') instead of a one-time payment, which also
-    // needs a design call on what happens to coverage if a later
-    // recurring charge fails - flagging rather than guessing at that.
+    const metadata = {
+      // Namespaced auto_purchase_* keys - the webhook's sponsor-plan
+      // branch already reads a bare "plan_id" key for a different
+      // purpose (marking a plan sponsored), so reusing that name here
+      // would make this checkout get misread as a sponsorship payment.
+      auto_purchase_inquiry_id: inquiryId, auto_purchase_patient_id: patientId, auto_purchase_plan_id: planId,
+      auto_purchase_ward_class: wardClass || '', auto_purchase_payment_frequency: freq,
+      // Read back verbatim by the webhook/verify-on-return path rather
+      // than recomputed independently there - the amount actually
+      // charged should never drift from what Stripe's own session says.
+      auto_purchase_amount_due_hkd: String(amountDue),
+    }
+    // Real gap found live-testing: "monthly" used to run through this
+    // same one-time mode:'payment' branch - a single charge for one
+    // month's premium, then the policy held a full YEAR of coverage with
+    // no further charge ever collected. A monthly-frequency policy is a
+    // real recurring obligation (same as a direct-debit premium at any
+    // real insurer), so it needs a real Stripe Subscription, not a
+    // one-time payment - Stripe's own card-decline retry schedule plus
+    // the webhook handlers below (invoice.payment_failed,
+    // customer.subscription.updated/deleted) are what actually enforce
+    // that payment keeps happening, same as the rest of this app never
+    // trusts the client for anything money-related.
+    const session = freq === 'monthly'
+      ? await stripe.checkout.sessions.create({
+          mode: 'subscription',
+          payment_method_types: ['card'],
+          line_items: [{
+            price_data: {
+              currency: 'hkd',
+              product_data: { name: `${plan.plan_name} - ${company.name} (monthly premium)` },
+              unit_amount: Math.round(amountDue * 100),
+              recurring: { interval: 'month' },
+            },
+            quantity: 1,
+          }],
+          subscription_data: {
+            transfer_data: { destination: company.stripe_connect_account_id },
+            // Subscription-lifecycle events (invoice.payment_failed,
+            // customer.subscription.updated/deleted) carry the
+            // subscription object itself, never the checkout session -
+            // this metadata is what lets the webhook find the right
+            // policy from those events, not just from checkout.session.completed.
+            metadata,
+          },
+          success_url: `${siteUrl}/patient?auto_purchase=1&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${siteUrl}/patient?auto_purchase_cancelled=1`,
+          metadata,
+        })
+      : await stripe.checkout.sessions.create({
+          mode: 'payment',
+          payment_method_types: ['card'],
+          line_items: [{
+            price_data: {
+              currency: 'hkd',
+              product_data: { name: `${plan.plan_name} - ${company.name} (annual premium)` },
+              unit_amount: Math.round(amountDue * 100),
+            },
+            quantity: 1,
+          }],
+          payment_intent_data: {
+            transfer_data: { destination: company.stripe_connect_account_id },
+            application_fee_amount: 0,
+          },
+          // Real bug found live-testing: this was the one checkout
+          // session in the app that never passed {CHECKOUT_SESSION_ID}
+          // back - every other Stripe flow here (subscription,
+          // sponsorship, video consult) already needed it for its own
+          // verify-on-return fallback, since the webhook is confirmed
+          // not firing in this environment.
+          success_url: `${siteUrl}/patient?auto_purchase=1&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${siteUrl}/patient?auto_purchase_cancelled=1`,
+          metadata,
+        })
     return res.status(200).json({ status: 'REDIRECT', checkoutUrl: session.url })
   }
 

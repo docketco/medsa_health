@@ -3,7 +3,10 @@
 // Needs the raw request body for signature verification, so Next's
 // default JSON body parser is disabled below. Configure this URL
 // (https://medsa.health/api/webhooks/stripe) as a webhook endpoint in
-// the Stripe Dashboard listening for checkout.session.completed, and
+// the Stripe Dashboard listening for checkout.session.completed,
+// customer.subscription.created/updated/deleted, invoice.payment_failed,
+// and invoice.payment_succeeded (the last three are what drive the
+// monthly self-serve premium's grace-period/lapse handling below), and
 // set STRIPE_WEBHOOK_SECRET in Vercel to the signing secret it gives you.
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
@@ -60,6 +63,43 @@ export default async function handler(req, res) {
     const sub = event.data.object
     const companyId = sub.metadata?.company_id
     if (companyId) await supabase.from('insurance_companies').update({ subscription_status: 'canceled' }).eq('id', companyId)
+    // Real life: a monthly-billed policy's recurring premium stopped
+    // clearing, Stripe's own retry schedule (Smart Retries) exhausted,
+    // and Stripe cancelled the subscription - this is the actual lapse
+    // moment, not the earlier first-failed-payment one (see
+    // invoice.payment_failed below). Coverage stops here. Reinstating a
+    // lapsed policy isn't a billing fix - it needs a fresh application
+    // and a fresh declaration, same underwriting a new policy would
+    // need, so this never tries to auto-reinstate.
+    if (sub.metadata?.auto_purchase_inquiry_id) {
+      await supabase.from('agent_policies').update({ status: 'lapsed', lapsed_at: new Date().toISOString() }).eq('stripe_subscription_id', sub.id)
+    }
+  }
+
+  // A monthly self-serve premium failed to collect. Real life: a missed
+  // premium payment doesn't lapse coverage instantly - insurers give a
+  // grace period (commonly around 30 days, set by the policy contract)
+  // during which the policy stays in force while they keep trying to
+  // collect, before it actually lapses. Stripe's Smart Retries do the
+  // actual retrying on their own schedule; this just reflects that
+  // state onto the policy (first failure only - a flag, not a counter)
+  // so the patient sees a clear warning instead of silence.
+  if (event.type === 'invoice.payment_failed') {
+    const invoice = event.data.object
+    if (invoice.subscription) {
+      const { data: policy } = await supabase.from('agent_policies').select('id, payment_past_due_since').eq('stripe_subscription_id', invoice.subscription).maybeSingle()
+      if (policy && !policy.payment_past_due_since) {
+        await supabase.from('agent_policies').update({ payment_past_due_since: new Date().toISOString() }).eq('id', policy.id)
+      }
+    }
+  }
+  // A later retry succeeded - coverage was never actually interrupted,
+  // clear the past-due warning.
+  if (event.type === 'invoice.payment_succeeded') {
+    const invoice = event.data.object
+    if (invoice.subscription) {
+      await supabase.from('agent_policies').update({ payment_past_due_since: null }).eq('stripe_subscription_id', invoice.subscription)
+    }
   }
 
   // Keeps stripe_connect_status in sync as an insurer completes (or later
@@ -102,6 +142,7 @@ export default async function handler(req, res) {
         wardClass: session.metadata?.auto_purchase_ward_class || null,
         paymentFrequency: session.metadata?.auto_purchase_payment_frequency || null,
         stripeCheckoutSessionId: session.id,
+        stripeSubscriptionId: session.subscription || null,
         amountPaidHkd: session.metadata?.auto_purchase_amount_due_hkd ? Number(session.metadata.auto_purchase_amount_due_hkd) : null,
       })
     }
