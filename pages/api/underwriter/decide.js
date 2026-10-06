@@ -68,10 +68,17 @@ export default async function handler(req, res) {
     // An uploaded file is only ever on file, never auto-validated - an
     // underwriter still reads it and judges it themselves, same as any
     // document a patient hands over in a real application.
-    await supabase.from('inquiry_messages').insert({
+    const { error: msgErr } = await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiryId, sender_type: 'underwriter', sender_name: underwriterName || 'Underwriter',
       body: `${reportDoctor?.trim() ? `Requesting a report from ${reportDoctor.trim()}: ` : ''}${reportNote.trim()}`,
     })
+    // Real bug found live-testing: this insert was failing silently - the
+    // table's own check constraint only allowed sender_type 'agent' or
+    // 'patient' (now widened), so every request landed in
+    // requested_report_note (still shown) but never in the thread itself,
+    // and the API kept returning OK regardless since nothing checked the
+    // insert's own error.
+    if (msgErr) return res.status(500).json({ status: 'ERROR', message: msgErr.message })
   }
 
   return res.status(200).json({ status: 'OK' })
