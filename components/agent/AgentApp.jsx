@@ -456,8 +456,24 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       .ilike('plan_name', `%${q}%`).limit(10)
     if (agent.agent_type==='captive' && agent.institutions?.name) query = query.eq('company_name', agent.institutions.name)
     const { data } = await query
+    // Real gap found live-testing (ag-02): this search bypassed the
+    // basket's own team-authorization filter (hi-05) entirely - typing a
+    // team-gated plan's exact name here found it anyway. The actual save
+    // is now blocked server-side regardless (/api/agent/create_policy.js),
+    // but filtering it out of the results too means a team-gated agent
+    // never sees it offered as an option in the first place.
+    let results = data || []
+    if (agent.team_id && results.length > 0) {
+      const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', results.map(p=>p.id))
+      const authTeamsByPlan = {}
+      for (const a of (auths||[])) (authTeamsByPlan[a.plan_id] ||= []).push(a.team_id)
+      results = results.filter(p => {
+        const authTeams = authTeamsByPlan[p.id]
+        return !authTeams || authTeams.length === 0 || authTeams.includes(agent.team_id)
+      })
+    }
     setPlanSearching(false)
-    setPlanSearchResults(data||[])
+    setPlanSearchResults(results)
   }
   async function selectSearchedPlan(plan) {
     const { data: company } = await supabase.from('insurance_companies').select('institution_ref_id').eq('name', plan.company_name).maybeSingle()
@@ -518,34 +534,27 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     setSaving(true)
     setError(null)
     try {
-      // One policy_bundles row when combining multiple plans, one
-      // agent_policies row per plan, riders linked per policy.
-      let bundleId = null
-      if (lineItems.length > 1) {
-        const { data: bundle, error: bErr } = await supabase.from('policy_bundles').insert({
-          agent_id: agent.id, patient_id: foundPatient?.id||null, patient_name: foundPatient?.full_name||patientSearch,
-          discount_hkd: bundleDiscountNum, notes: null,
-        }).select().maybeSingle()
-        if (bErr) throw bErr
-        bundleId = bundle.id
-      }
-      for (const li of lineItems) {
-        const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
-          agent_id: agent.id, institution_id: li.institutionId, patient_id: foundPatient?.id||null,
-          patient_name: foundPatient?.full_name||patientSearch, plan_name: li.planName, plan_id: li.planId,
-          policy_number: policyNumber||null, status, premium: li.premium, deductible_hkd: li.deductibleHkd,
-          start_date: startDate||null, renewal_date: renewalDate||null, bundle_id: bundleId,
-          inquiry_id: prefillInquiry?.id || null,
-          broker_commission_hkd: prefillInquiry && brokerCommission ? commissionNum : null,
-          referral_fee_hkd: prefillInquiry && referralFee ? referralFeeNum : null,
-          ward_class: wardClass||null, payment_frequency: paymentFrequency,
-          health_declaration_acknowledged_at: healthDeclarationAck ? new Date().toISOString() : null,
-        }).select().maybeSingle()
-        if (pErr) throw pErr
-        if (li.riderIds.length > 0) {
-          await supabase.from('agent_policy_riders').insert(li.riderIds.map(riderId => ({ policy_id: pol.id, rider_id: riderId })))
-        }
-      }
+      // Real gap found live-testing (ag-02): this used to insert straight
+      // into agent_policies from the browser - the basket's own team-
+      // authorization filter (hi-05) was UI-only, and "search any other
+      // plan by name" skipped it entirely with nothing underneath to stop
+      // it. Routed through a real server-side check now (see
+      // /api/agent/create_policy.js), which re-derives the agent's team
+      // itself rather than trusting anything the client sends.
+      const res = await fetch('/api/agent/create_policy', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          agentId: agent.id, patientId: foundPatient?.id||null, patientName: foundPatient?.full_name||patientSearch,
+          lineItems, bundleDiscountHkd: bundleDiscountNum,
+          policyNumber: policyNumber||null, status, startDate: startDate||null, renewalDate: renewalDate||null,
+          inquiryId: prefillInquiry?.id || null,
+          brokerCommissionHkd: prefillInquiry && brokerCommission ? commissionNum : null,
+          referralFeeHkd: prefillInquiry && referralFee ? referralFeeNum : null,
+          wardClass: wardClass||null, paymentFrequency, healthDeclarationAcknowledged: healthDeclarationAck,
+        }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setError(data.message || 'Could not save this policy.'); return }
       onSaved()
     } catch (e) {
       setError(e.message)

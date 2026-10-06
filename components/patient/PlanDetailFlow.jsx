@@ -452,6 +452,21 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
           {alreadyHeld
             ? <div style={{fontSize:'13px',color:C.green,fontWeight:600}}>✓ You already hold this plan - see "Policy on file".</div>
+            /* Real gap found live-testing: a sponsored, TPA-only
+               insurer's plan (noTiersAtAll) still sent the patient
+               through the whole health-declaration flow and ended on a
+               dead end - "approved", no price, no agent who could ever
+               claim it, nothing to actually buy. Medsa has no real
+               sellable relationship for this plan at all, so the honest
+               next step is the insurer's own contact, not either button. */
+            : plan.noTiersAtAll
+            ? <Card style={{background:C.amberLight,border:`1px solid ${C.amber}`}}>
+                <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'6px'}}>Not sold through Medsa</div>
+                <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}>{plan.company} hasn't set this plan up to be quoted or bought on Medsa - contact them directly for a real quote.</div>
+                {plan.companyContactEmail&&<a href={`mailto:${plan.companyContactEmail}`} style={{display:'block',fontSize:'13px',color:C.navy,fontWeight:600,marginBottom:'4px'}}>✉ {plan.companyContactEmail}</a>}
+                {plan.companyContactPhone&&<a href={`tel:${plan.companyContactPhone}`} style={{display:'block',fontSize:'13px',color:C.navy,fontWeight:600}}>☎ {plan.companyContactPhone}</a>}
+                {!plan.companyContactEmail&&!plan.companyContactPhone&&<div style={{fontSize:'12px',color:C.textMuted}}>No contact on file yet - check back later.</div>}
+              </Card>
             : <>
               <Btn variant="primary" style={{width:'100%',marginBottom:'10px'}} disabled={plan.requiresAgent} onClick={()=>startFlow('auto')}>{plan.requiresAgent?'Automated quote not offered for this plan':'Quote immediately'}</Btn>
               <Btn style={{width:'100%'}} onClick={()=>startFlow('agent')}>Talk to an agent</Btn>
@@ -480,7 +495,20 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>
           </Card>
 
-          {result.verdict!=='declined'&&!result.underwriterPending&&!purchasing&&phase!=='purchased'&&(
+          {/* Real gap found live-testing: "Talk to an agent" with a clean
+              (approved, non-pending) verdict showed this exact same
+              self-checkout panel - no mention of an agent anywhere, no way
+              to reach the conversation the mode='agent' inquiry already
+              created behind the scenes. Self-checkout is the auto path's
+              job only; agent mode always hands off to a human instead,
+              same as the declined branch below already did. */}
+          {mode==='agent'&&result.verdict!=='declined'&&!purchasing&&phase!=='purchased'&&(
+            <Card>
+              <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Sent to an agent</div>
+              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>An agent will review this and reach out shortly - check "My inquiries" to follow the conversation once they do.</div>
+            </Card>
+          )}
+          {mode==='auto'&&result.verdict!=='declined'&&!result.underwriterPending&&!purchasing&&phase!=='purchased'&&(
             <Card>
               <div style={{fontSize:'13px',fontWeight:600,marginBottom:'12px'}}>Complete your purchase</div>
               <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
