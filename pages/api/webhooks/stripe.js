@@ -101,6 +101,8 @@ export default async function handler(req, res) {
         planId: session.metadata?.auto_purchase_plan_id,
         wardClass: session.metadata?.auto_purchase_ward_class || null,
         paymentFrequency: session.metadata?.auto_purchase_payment_frequency || null,
+        stripeCheckoutSessionId: session.id,
+        amountPaidHkd: session.metadata?.auto_purchase_amount_due_hkd ? Number(session.metadata.auto_purchase_amount_due_hkd) : null,
       })
     }
     if (videoConsultInstitutionId) {

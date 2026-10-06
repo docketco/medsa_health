@@ -57,6 +57,14 @@ export default async function handler(req, res) {
     const { data: patient } = await supabase.from('patients').select('date_of_birth').eq('id', patientId).maybeSingle()
     const age = patient?.date_of_birth ? Math.floor((Date.now() - new Date(patient.date_of_birth).getTime()) / (365.25 * 24 * 3600 * 1000)) : null
     const { quotedPremium } = matchPlanSuitability({ plan: fullPlan, patientAge: age, conditions: fullInquiry?.declared_conditions || [], wardClass })
+    // Real bug found live-testing: this charged the raw monthly-quoted
+    // figure no matter what payment frequency the patient picked - an
+    // "Annually" choice still only ever collected one month's worth for
+    // a full year of coverage. quotedPremium is always the per-month
+    // rate (see planSuitabilityMatch.js / the pricing tier it reads),
+    // so the real amount due for an annual term is 12x that.
+    const freq = paymentFrequency || 'monthly'
+    const amountDue = freq === 'annual' ? quotedPremium * 12 : quotedPremium
 
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
@@ -66,8 +74,8 @@ export default async function handler(req, res) {
       line_items: [{
         price_data: {
           currency: 'hkd',
-          product_data: { name: `${plan.plan_name} - ${company.name} (first premium)` },
-          unit_amount: Math.round(quotedPremium * 100),
+          product_data: { name: `${plan.plan_name} - ${company.name} (${freq === 'annual' ? 'annual premium' : 'first month\'s premium'})` },
+          unit_amount: Math.round(amountDue * 100),
         },
         quantity: 1,
       }],
@@ -92,8 +100,20 @@ export default async function handler(req, res) {
         // would make this checkout get misread as a sponsorship payment.
         auto_purchase_inquiry_id: inquiryId, auto_purchase_patient_id: patientId, auto_purchase_plan_id: planId,
         auto_purchase_ward_class: wardClass || '', auto_purchase_payment_frequency: paymentFrequency || 'monthly',
+        // Read back verbatim by the webhook/verify-on-return path rather
+        // than recomputed independently there - the amount actually
+        // charged should never drift from what Stripe's own session says.
+        auto_purchase_amount_due_hkd: String(amountDue),
       },
     })
+    // Known gap, not fixed this round: "monthly" here still only ever
+    // produces ONE charge (this session, for one month's worth) - there's
+    // no recurring billing wired for self-serve checkout, so a
+    // monthly-frequency policy holds a full year of coverage after a
+    // single month's payment. A real fix is a Stripe Subscription
+    // (mode:'subscription') instead of a one-time payment, which also
+    // needs a design call on what happens to coverage if a later
+    // recurring charge fails - flagging rather than guessing at that.
     return res.status(200).json({ status: 'REDIRECT', checkoutUrl: session.url })
   }
 
