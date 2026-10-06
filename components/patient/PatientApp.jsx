@@ -2833,6 +2833,32 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   const [expandedId,setExpandedId]=useState(null)
   const [switching,setSwitching]=useState(null)
   const [showAllInquiries,setShowAllInquiries]=useState(false)
+  // Kept separate from the initialExpandedId prop, which the parent
+  // clears (via onConsumeDeepLink) right after this fires - the ring
+  // highlight below needs to survive that, not vanish the instant the
+  // deep link is consumed.
+  const [justLinkedId,setJustLinkedId]=useState(null)
+
+  // Arriving here via the home screen's "message about your application"
+  // tap (or an unread badge) - jump straight to that inquiry's card.
+  // Real gap found live-testing: this used to force showAllInquiries
+  // open, which dumped every past declaration for every plan into view
+  // at once - with "a lot of inquiries for the same plan" all showing
+  // the same plan/company header, there was no way to tell which one the
+  // link actually meant. Fixed at the declutter list itself (see
+  // visibleInquiries above) to add only this one inquiry as an
+  // exception, never the whole hidden set - so this effect now only
+  // needs to expand it and scroll it into view, not blow open the list.
+  useEffect(() => {
+    if (!initialExpandedId || loading) return
+    if (!inquiries.find(i=>i.id===initialExpandedId)) return
+    setExpandedId(initialExpandedId)
+    setJustLinkedId(initialExpandedId)
+    onConsumeDeepLink && onConsumeDeepLink()
+    setTimeout(() => {
+      document.querySelector(`[data-inquiry-id="${initialExpandedId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }, [initialExpandedId, loading, inquiries])
 
   // Arriving here via the home screen's "message about your application"
   // tap (or an unread badge) - jump straight to that inquiry's card,
@@ -2898,7 +2924,14 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
     if (!current) { shownIdPerPlan.set(i.plan_id, i.id); continue }
     if (i.underwriter_status === 'pending' && !inquiries.find(x => x.id === current).underwriter_status) shownIdPerPlan.set(i.plan_id, i.id)
   }
-  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => shownIdPerPlan.get(i.plan_id) === i.id)
+  // Real gap found live-testing: the message-board deep link forced
+  // showAllInquiries open to guarantee the targeted inquiry was in the
+  // list - but that dumped every past declaration for every plan at
+  // once, so "a lot of inquiries for the same plan" with identical
+  // headers made it impossible to tell which one the link actually
+  // meant. The fix is narrower: add ONLY the specific deep-linked
+  // inquiry as an exception to the declutter, never the whole hidden set.
+  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => shownIdPerPlan.get(i.plan_id) === i.id || i.id === initialExpandedId)
   const hiddenCount = inquiries.length - visibleInquiries.length
 
   return (
@@ -2933,12 +2966,18 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
           const isPending = i.underwriter_status === 'pending'
           const isApprovedToBuy = !isDeclined && !isPending
           return (
-          <Card key={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
+          <Card key={i.id} data-inquiry-id={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)} style={i.id===justLinkedId?{boxShadow:`0 0 0 2px ${C.green}`}:undefined}>
             <div style={{padding:'14px 16px'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                 <div>
                   <div style={{fontSize:'14px',fontWeight:500}}>{i.insurance_plans?.plan_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.company_name}</div>
+                  {/* Real gap found live-testing: several inquiries for
+                      the same plan render with an identical header - with
+                      more than one visible at once there was no way to
+                      tell them apart. A submission date makes each one
+                      distinguishable at a glance. */}
+                  <div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
                 </div>
                 {isAuto
                   ? <div style={{textAlign:'right',flexShrink:0}}>
@@ -4012,6 +4051,20 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       // same as a partnered insurer's sponsored listing.
       const { data: realPlans } = await supabase.from('insurance_plans').select('*, insurance_plan_pricing_tiers(*)').eq('status','active').or('self_serve_only.eq.false,sponsored.eq.true')
 
+      // Real gap found live-testing: a sponsored, TPA-only insurer's plan
+      // (noTiersAtAll below) still sent the patient through the full
+      // "Quote immediately"/"Talk to an agent" declaration flow even
+      // though Medsa has no real sellable relationship for it at all -
+      // no pricing tiers, no agents onboarded for that company, nothing
+      // for an agent-mode inquiry to ever be claimed by. The only honest
+      // next step for one of these is the insurer's own real contact -
+      // same company_name join every other screen already uses.
+      const companyNames = [...new Set((realPlans||[]).map(p=>p.company_name).filter(Boolean))]
+      const { data: companyContacts } = companyNames.length>0
+        ? await supabase.from('insurance_companies').select('name, contact_email, contact_phone').in('name', companyNames)
+        : { data: [] }
+      const contactByCompany = Object.fromEntries((companyContacts||[]).map(c=>[c.name, c]))
+
       // Real age from the patient's actual date of birth - this is what
       // determines which tier's price actually applies to them.
       const patientAge = patient?.date_of_birth
@@ -4051,6 +4104,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           waitingPeriodDays: p.waiting_period_days ?? null,
           preExistingConditionPolicy: p.pre_existing_condition_policy || null,
           additionalTerms: p.additional_terms || null,
+          companyContactEmail: contactByCompany[p.company_name]?.contact_email || null,
+          companyContactPhone: contactByCompany[p.company_name]?.contact_phone || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
