@@ -3637,147 +3637,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // MyInquiriesTab itself expands the right card once its own list loads.
   useEffect(() => { if (deepLinkInquiryId) setTab('inquiries') }, [deepLinkInquiryId])
   const [viewingPlanIndex,setViewingPlanIndex]=useState(null)
-  const [inquired,setInquired]=useState(null)
-  const [inquiring,setInquiring]=useState(null)
-  const [suitabilityResults,setSuitabilityResults]=useState({}) // index -> {verdict, summary, quotedPremium, usedAI, mode}
-
-  // Bowtie's whole pitch is that most people don't need an agent to find
-  // out whether a plan suits them - a real read against their own health
-  // info, computed instantly, gets them most of the way there. This form
-  // is shared by BOTH paths below (auto and agent) for the same reason
-  // you asked for: whether or not an agent ends up involved, the same
-  // suitability analysis should run so nobody - patient or agent - starts
-  // from a blank slate.
-  const [inquiryForm,setInquiryForm]=useState(null) // {index, mode}
-  const [formConsent,setFormConsent]=useState(false)
-  const [formConditions,setFormConditions]=useState([])
-  const [formNoneApply,setFormNoneApply]=useState(false)
-  const [formOtherText,setFormOtherText]=useState('')
-  const [formMessage,setFormMessage]=useState('')
-  // Same ward class / payment frequency questions the automated-purchase
-  // confirmation screen already asks - collected here too, for the "talk
-  // to an agent" path, so the agent doesn't have to ask the patient again
-  // for something they already answered when they first asked about this
-  // specific plan.
-  const [formWardClass,setFormWardClass]=useState('')
-  const [formPaymentFrequency,setFormPaymentFrequency]=useState('monthly')
-
-  function openInquiryForm(i, mode, isSwitch) {
-    setInquiryForm({ index: i, mode, isSwitch: !!isSwitch })
-    setFormConsent(false); setFormConditions([]); setFormNoneApply(false); setFormOtherText(''); setFormMessage('')
-    setFormWardClass(''); setFormPaymentFrequency('monthly')
-  }
-  // Finishing the auto-quote into a real held policy - previously the
-  // automated path only ever produced a quote card, never an actual
-  // policy. Ward class/payment frequency/health declaration mirror what
-  // the agent side now also collects (see NewPolicyScreen), and the
-  // contract (when the insurer uploaded one for this plan) has to
-  // actually be opened before the declaration can be checked.
-  const [purchaseOpenIndex,setPurchaseOpenIndex]=useState(null)
-  const [purchaseWardClass,setPurchaseWardClass]=useState('')
-  const [purchasePaymentFrequency,setPurchasePaymentFrequency]=useState('monthly')
-  const [purchaseHealthDeclaration,setPurchaseHealthDeclaration]=useState(false)
-  const [purchasing,setPurchasing]=useState(false)
-  const [purchaseError,setPurchaseError]=useState(null)
-  const [termsModalOpen,setTermsModalOpen]=useState(false)
-
-  function openPurchaseForm(i) {
-    setPurchaseOpenIndex(i)
-    setPurchaseWardClass(''); setPurchasePaymentFrequency('monthly'); setPurchaseHealthDeclaration(false); setPurchaseError(null)
-  }
-  async function handleCompletePurchase(i, plan, result) {
-    if (!purchaseHealthDeclaration) return
-    setPurchasing(true)
-    setPurchaseError(null)
-    try {
-      // Doesn't route through Stripe or collect the premium - real HK
-      // insurers bill premiums directly to the patient, never through a
-      // broker, so Medsa isn't in the business of charging this card for
-      // insurance. This just creates the held policy; the patient's actual
-      // premium payment gets set up directly with the insurer afterward.
-      const res = await fetch('/api/patient/complete_auto_purchase', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          inquiryId: result.inquiryId, patientId: patient.id, planId: plan.id,
-          wardClass: purchaseWardClass || null, paymentFrequency: purchasePaymentFrequency,
-          healthDeclarationAcknowledged: purchaseHealthDeclaration,
-        }),
-      })
-      const data = await res.json()
-      // An insurer that has connected their own Stripe account for
-      // self-serve checkout (see the insurer portal's Payments tab) gets
-      // a real Checkout redirect here instead - the policy itself isn't
-      // created until Stripe confirms the payment landed in THEIR
-      // account, via the webhook. Everyone else keeps the direct,
-      // no-Stripe path (status 'OK', policy held immediately).
-      if (data.status === 'REDIRECT' && data.checkoutUrl) { window.location.href = data.checkoutUrl; return }
-      if (data.status !== 'OK') { setPurchaseError(data.message || 'Could not complete the purchase.'); return }
-      setPurchaseOpenIndex(null)
-      loadPolicy()
-    } finally {
-      setPurchasing(false)
-    }
-  }
-  function toggleFormCondition(c) {
-    setFormNoneApply(false)
-    setFormConditions(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
-  }
-  // Free-text add, for a condition not already offered as a quick-pick
-  // chip below - the chips only ever list what THIS plan has an explicit
-  // covered_conditions stance on, so anything else needs somewhere to go
-  // (previously there was none: a static "Other pre-existing condition"
-  // chip got submitted as if it were a real condition name).
-  function addOtherCondition() {
-    const v = formOtherText.trim()
-    if (!v) return
-    setFormNoneApply(false)
-    setFormConditions(prev => prev.includes(v) ? prev : [...prev, v])
-    setFormOtherText('')
-  }
-
-  // Real save - and a real snapshot, not just two foreign keys. This
-  // claimed "forwarded to the insurer" but plan_inquiries was never
-  // read anywhere else in the app - nobody, human or system, ever saw
-  // an inquiry after it was written. Now runs the same suitability
-  // engine an agent's own pre-analysis uses (lib/planSuitability.js via
-  // /api/patient/match_plan_suitability) for both paths - "auto" shows
-  // the result straight to the patient, "agent" still routes to an
-  // agent but attaches the same read so they aren't starting cold.
-  async function handleInquire(i, plan) {
-    if (!patient?.id || !plan.id || !inquiryForm) return
-    setInquiring(i)
-    try {
-      // Real bug found live-testing: typing a condition into the free-text
-      // "other" box and hitting Submit without first pressing Add/Enter
-      // silently dropped it - formOtherText never made it into
-      // formConditions, so the declaration went through empty ("nothing
-      // declared") with no indication anything was lost. Flushed here as a
-      // safety net so a typed-but-not-explicitly-added condition still
-      // counts.
-      const pendingOther = formOtherText.trim()
-      const effectiveConditions = formNoneApply ? [] : (pendingOther && !formConditions.includes(pendingOther) ? [...formConditions, pendingOther] : formConditions)
-      const res = await fetch('/api/patient/match_plan_suitability', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          patientId: patient.id, planId: plan.id, mode: inquiryForm.mode,
-          consentHistoryShared: formConsent,
-          declaredConditions: effectiveConditions,
-          isSwitchRequest: !!inquiryForm.isSwitch,
-          message: inquiryForm.mode==='agent' ? formMessage.trim() : '',
-          wardClass: inquiryForm.mode==='agent' ? (formWardClass||null) : null,
-          paymentFrequency: inquiryForm.mode==='agent' ? formPaymentFrequency : null,
-        }),
-      })
-      const data = await res.json()
-      if (data.status === 'OK') {
-        setSuitabilityResults(prev => ({ ...prev, [i]: { verdict: data.verdict, summary: data.summary, quotedPremium: data.quotedPremium, underwriterPending: data.underwriterPending, mode: inquiryForm.mode, inquiryId: data.inquiryId, declaredConditions: effectiveConditions } }))
-        setInquired(i)
-        setInquiryForm(null)
-      }
-    } finally {
-      setInquiring(null)
-    }
-  }
   const [anonRating,setAnonRating]=useState(null)
   const [feedbackText,setFeedbackText]=useState('')
   const [feedbackSubmitted,setFeedbackSubmitted]=useState(false)
@@ -4429,9 +4288,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                                 <div style={{fontSize:'12px',fontWeight:600}}>{m.planName}</div>
                                 <div style={{fontSize:'11px',color:C.textMuted}}>{m.companyName}{m.quotedPremium!=null?` · HK$${m.quotedPremium}/mo`:''}</div>
                               </div>
+                              {/* Confirmed dead code found & removed this round: this
+                                  used to open an inline declaration form that no
+                                  longer exists (and, it turned out, never actually
+                                  rendered even before removal) - a result here now
+                                  goes straight to the plan's own real page, same as
+                                  every other "view a specific plan" entry point. */}
                               {idx>=0&&<Btn style={{fontSize:'11px',padding:'6px 12px'}} onClick={()=>{
-                                setFormConditions(findPlanConditions); setFormConsent(findPlanConsent); setFormNoneApply(findPlanConditions.length===0)
-                                openInquiryForm(idx, m.requiresAgent?'agent':'auto')
+                                viewPlanById(m.planId)
                                 setFindPlanOpen(false); setFindPlanResults(null)
                               }}>{isEn?'View':'查看'}</Btn>}
                             </div>
@@ -4492,16 +4356,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
           </Card>
         ))}
-
-        {purchaseOpenIndex!=null&&visiblePlans[purchaseOpenIndex]&&<TermsAgreementModal
-          open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn}
-          planName={visiblePlans[purchaseOpenIndex].name} companyName={visiblePlans[purchaseOpenIndex].company}
-          declaredConditions={suitabilityResults[purchaseOpenIndex]?.declaredConditions||[]}
-          waitingPeriodDays={visiblePlans[purchaseOpenIndex].waitingPeriodDays}
-          preExistingConditionPolicy={visiblePlans[purchaseOpenIndex].preExistingConditionPolicy}
-          additionalTerms={visiblePlans[purchaseOpenIndex].additionalTerms}
-          onAccept={()=>{setPurchaseHealthDeclaration(true);setTermsModalOpen(false)}}
-        />}
 
         {/* Search all plans */}
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
