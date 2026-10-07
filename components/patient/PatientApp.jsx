@@ -3679,6 +3679,33 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     setFeedbackSubmitted(true)
   }
   const [activePolicy,setActivePolicy]=useState(null)
+  // Real gap found live-testing (UX audit item 3): "where do I stand on
+  // insurance" had no single answer - the Home tile badge, My Inquiries,
+  // and Policy on file each showed a different slice with no one place
+  // that just says "here's everything." This summary (+ localJumpId,
+  // combined with the deep-link prop below) is that one place - tapping
+  // a pending/unread row jumps straight into My Inquiries with that
+  // exact inquiry already open, the same mechanism the home screen's
+  // message board already uses.
+  const [coverageSummary,setCoverageSummary]=useState({ pendingCount:0, unreadCount:0, firstPendingId:null })
+  const [localJumpId,setLocalJumpId]=useState(null)
+  async function loadCoverageSummary() {
+    const medsaId = patient?.medsa_id
+    if (!medsaId) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) return
+    const { data: inquiries } = await supabase.from('plan_inquiries').select('id, underwriter_status, status')
+      .eq('patient_id', patientRow.id).neq('status', 'converted').neq('status', 'superseded')
+    const pending = (inquiries||[]).filter(i=>i.underwriter_status==='pending')
+    const ids = (inquiries||[]).map(i=>i.id)
+    let unreadCount = 0
+    if (ids.length>0) {
+      const { count } = await supabase.from('inquiry_messages').select('id',{count:'exact',head:true}).in('inquiry_id', ids).eq('read_by_patient', false)
+      unreadCount = count || 0
+    }
+    setCoverageSummary({ pendingCount: pending.length, unreadCount, firstPendingId: pending[0]?.id || null })
+  }
+  useEffect(() => { loadCoverageSummary() }, [patient?.medsa_id])
   const [heldPolicies,setHeldPolicies]=useState([]) // every held policy, not just the one shown up top - a patient can hold more than one, and ClaimsTab needs all of them to let the patient pick which to bill
   const [lapsedPolicies,setLapsedPolicies]=useState([]) // a monthly self-serve policy whose recurring premium stopped clearing - shown separately so it doesn't just silently vanish
   // Compact-by-default: once "Policy on file" could show several real
@@ -4218,6 +4245,31 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         </Card>}
       </div>
 
+      {/* "Your coverage" - one consolidated answer, see loadCoverageSummary above */}
+      {(heldPolicies.length>0||lapsedPolicies.length>0||coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'12px 16px 0',background:'#fff',border:`1.5px solid ${C.green}`,borderRadius:'14px',padding:'14px'}}>
+        <div style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Your coverage':'您的保障'}</div>
+        {heldPolicies.map(p=>(
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
+          </div>
+        ))}
+        {lapsedPolicies.map(p=>(
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
+          </div>
+        ))}
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.greenXLight}`:'none',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+        </div>}
+        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
+          <span style={{color:C.green,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+        </div>}
+      </div>}
+
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
         {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
@@ -4375,7 +4427,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       </>}
 
       {/* ── MY INQUIRIES ── */}
-      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById} initialExpandedId={deepLinkInquiryId} onConsumeDeepLink={onConsumeInquiryDeepLink}/>}
+      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById} initialExpandedId={deepLinkInquiryId||localJumpId} onConsumeDeepLink={()=>{onConsumeInquiryDeepLink&&onConsumeInquiryDeepLink();setLocalJumpId(null)}}/>}
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
