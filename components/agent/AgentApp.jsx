@@ -270,7 +270,37 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
 // Phase 1: manual entry. The AI-assisted entry mentioned for later would
 // pre-fill this form from a signed contract document once that pipeline
 // exists - this form is built so that slots in without changing structure.
+// Rebuilt as a 4-step flow (UX audit item 2) - the single-page version
+// showed every field (patient search, plan builder, riders, dates,
+// commission, declaration, policy number) at once regardless of how far
+// along the agent actually was. Splitting it into Patient → Plan → Terms
+// → Confirm doesn't reduce how much a complex sale (riders, bundles, a
+// real commission) needs filling in - that's still the same fields,
+// just one screen at a time. What it actually buys: a simple sale (one
+// plan, no riders) blows through the empty steps fast instead of
+// scrolling past fields that don't apply, and an agent always knows
+// which step they're missing instead of hunting a long page for the one
+// blocking field.
+const NEW_POLICY_STEPS = [{n:1,label:'Patient'},{n:2,label:'Plan'},{n:3,label:'Terms'},{n:4,label:'Confirm'}]
+function NewPolicyStepIndicator({ current }) {
+  return (
+    <div style={{display:'flex',alignItems:'center',marginBottom:'16px'}}>
+      {NEW_POLICY_STEPS.map((s,i) => (
+        <div key={s.n} style={{display:'flex',alignItems:'center',flex:i<NEW_POLICY_STEPS.length-1?1:'none'}}>
+          <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
+            <div style={{width:22,height:22,borderRadius:'50%',fontSize:'11px',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',
+              background:s.n<current?C.green:s.n===current?C.navy:C.beige,
+              color:s.n<=current?'#fff':C.textMuted}}>{s.n<current?'✓':s.n}</div>
+            <div style={{fontSize:'9px',fontWeight:s.n===current?700:500,color:s.n<=current?C.text:C.textMuted,whiteSpace:'nowrap'}}>{s.label}</div>
+          </div>
+          {i<NEW_POLICY_STEPS.length-1&&<div style={{flex:1,height:2,background:s.n<current?C.green:C.border,margin:'0 4px 16px'}}/>}
+        </div>
+      ))}
+    </div>
+  )
+}
 function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
+  const [step,setStep]=useState(prefillInquiry?.patient_id ? 2 : 1)
   const [patientSearch,setPatientSearch]=useState(prefillInquiry?.applicant_full_name || '')
   const [foundPatient,setFoundPatient]=useState(prefillInquiry?.patient_id ? { id: prefillInquiry.patient_id, full_name: prefillInquiry.applicant_full_name, medsa_id: null } : null)
   const [patientAge,setPatientAge]=useState(null)
@@ -563,13 +593,30 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
     }
   }
 
+  function canAdvanceStep(s) {
+    if (s===1) return !!(foundPatient || patientSearch.trim())
+    if (s===2) return lineItems.length>0
+    if (s===3) return status!=='active' || healthDeclarationAck
+    return true
+  }
+
   return (
     <PageWrap maxWidth={560}>
       <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>Back</div>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Issue Policy / Quote</h2>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'16px',textAlign:'center'}}>Issue Policy / Quote</h2>
 
-      {prefillInquiry&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'20px',fontSize:'12px',color:C.text,lineHeight:1.5}}>Converting the plan inquiry from <strong>{prefillInquiry.applicant_full_name||'this applicant'}</strong> - saving below links this policy back to it, closing the loop for referral-fee tracking.</div>}
+      {/* Reflects how this screen was opened, not a clickable switch - a
+          lead is converted from that inquiry's own "Convert" button
+          elsewhere, not from inside this form. */}
+      <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+        <div style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'11px',fontWeight:600,background:prefillInquiry?C.green:C.card,color:prefillInquiry?'#fff':C.textMuted,border:prefillInquiry?'none':`0.5px solid ${C.border}`}}>Converting a lead</div>
+        <div style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'11px',fontWeight:600,background:!prefillInquiry?C.navy:C.card,color:!prefillInquiry?'#fff':C.textMuted,border:!prefillInquiry?'none':`0.5px solid ${C.border}`}}>Write new policy</div>
+      </div>
+      {prefillInquiry&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'12px'}}>{prefillInquiry.applicant_full_name||'This applicant'}'s inquiry - already pre-filled below, and saving links this policy back to it for referral-fee tracking.</div>}
 
+      <NewPolicyStepIndicator current={step}/>
+
+      {step===1 && (<>
       <SecLabel>Patient</SecLabel>
       <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
         <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search by name or Medsa ID" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
@@ -589,8 +636,10 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           {patientDetails?.hkid&&` · HKID ${patientDetails.hkid}`}
         </div>
       </div>}
-      {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually below and continue without linking a Medsa profile.</div>}
+      {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually and continue without linking a Medsa profile.</div>}
+      </>)}
 
+      {step===2 && (<>
       {prefillInquiry&&prefillInquiry.suitability_verdict&&<div style={{background:prefillInquiry.suitability_verdict==='flagged'?C.amberLight:prefillInquiry.suitability_verdict==='declined'?C.redLight:C.card,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',lineHeight:1.6}}>
         <div style={{fontWeight:600,marginBottom:'4px',color:prefillInquiry.suitability_verdict==='flagged'?C.amber:prefillInquiry.suitability_verdict==='declined'?C.red:C.green}}>
           {prefillInquiry.suitability_verdict==='approved'&&'✓ Pre-checked: suitable'}
@@ -680,22 +729,35 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
             </div>
           </div>
         ))}
-        {lineItems.length>1&&<div style={{marginTop:'10px'}}>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Bundle discount (HK$/mo, real negotiated figure)</div>
-          <input value={bundleDiscount} onChange={e=>setBundleDiscount(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-        </div>}
         <div style={{display:'flex',justifyContent:'space-between',fontSize:'13px',fontWeight:700,marginTop:'12px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
-          <span>Total</span><span>HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</span>
+          <span>Subtotal</span><span>HK${lineItemsTotal.toFixed(2)}/mo</span>
         </div>
       </Card>}
+      </>)}
+
+      {step===3 && (<>
+      {/* Bundle discount, dates, commission and the health declaration all
+          moved here from the single long page - none of them meant
+          anything until a real plan existed (step 2), so this is just
+          making that dependency explicit in the flow instead of leaving
+          it conditionally hidden on one long page. */}
+      {lineItems.length>1&&<>
+      <SecLabel>Bundle discount</SecLabel>
+      <div style={{marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>HK$/mo, real negotiated figure</div>
+        <input value={bundleDiscount} onChange={e=>setBundleDiscount(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',fontWeight:600,marginTop:'8px'}}>
+          <span>Total after discount</span><span>HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</span>
+        </div>
+      </div>
+      </>}
 
       {/* Real gap found live-testing: these dates apply to the whole
           policy - basket-built or not - but used to live only under "Or
           add a plan not in the basket," which reads as optional/manual-
           only. An agent building straight from the basket had no visible
           reason to scroll down into that section at all, so a basket-
-          built policy could go out with no start/renewal date on file.
-          Always shown now, ahead of the basket-vs-manual plan fields. */}
+          built policy could go out with no start/renewal date on file. */}
       <SecLabel>Policy dates</SecLabel>
       <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
         <div style={{flex:1}}>
@@ -730,32 +792,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           </select>
         </div>
       </div>
-      {/* Real gap this closes: this used to be one inline checkbox
-          sentence, ticked by the agent alone with no real document - not
-          something the agent could actually walk the patient through.
-          Now a real, scrollable declaration screen (Uber-Merchant-
-          onboarding style) built from the plan's own on-file terms and
-          whatever the inquiry already declared, meant to be reviewed
-          together with the patient before issuing an active policy. */}
-      <div style={{marginBottom:'20px'}}>
-        {healthDeclarationAck
-          ? <div style={{fontSize:'12px',color:C.green,fontWeight:600}}>✓ Health declaration & terms reviewed and accepted with the patient.</div>
-          : <Btn style={{width:'100%'}} disabled={lineItems.length===0} onClick={()=>setTermsModalOpen(true)}>{lineItems.length===0?'Add a plan first to review the health declaration':'Review & accept health declaration with patient'}</Btn>}
-      </div>
-      {lineItems.length>0&&<TermsAgreementModal
-        open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={true}
-        planName={lineItems.map(l=>l.planName).join(', ')}
-        hideDeclaredDetail={true}
-        waitingPeriodDays={lineItems[0]?.waitingPeriodDays}
-        preExistingConditionPolicy={lineItems[0]?.preExistingConditionPolicy}
-        additionalTerms={lineItems[0]?.additionalTerms}
-        onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
-      />}
-
-      <SecLabel>Policy number</SecLabel>
-      <div style={{marginBottom:'16px'}}>
-        <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number, once the insurer issues it (optional for quotes)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-      </div>
 
       <SecLabel>Status</SecLabel>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
@@ -763,6 +799,29 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           <div key={s} onClick={()=>setStatus(s)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:status===s?C.green:C.card,color:status===s?'#fff':C.text,textTransform:'capitalize'}}>{s}</div>
         ))}
       </div>
+
+      {/* Real gap this closes: this used to be one inline checkbox
+          sentence, ticked by the agent alone with no real document - not
+          something the agent could actually walk the patient through.
+          Now a real, scrollable declaration screen (Uber-Merchant-
+          onboarding style) built from the plan's own on-file terms and
+          whatever the inquiry already declared, meant to be reviewed
+          together with the patient before issuing an active policy. */}
+      <div style={{marginBottom:'8px'}}>
+        {healthDeclarationAck
+          ? <div style={{fontSize:'12px',color:C.green,fontWeight:600}}>✓ Health declaration & terms reviewed and accepted with the patient.</div>
+          : <Btn style={{width:'100%'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration with patient</Btn>}
+      </div>
+      <TermsAgreementModal
+        open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={true}
+        planName={lineItems.map(l=>l.planName).join(', ')}
+        hideDeclaredDetail={true}
+        waitingPeriodDays={lineItems[0]?.waitingPeriodDays}
+        preExistingConditionPolicy={lineItems[0]?.preExistingConditionPolicy}
+        additionalTerms={lineItems[0]?.additionalTerms}
+        onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
+      />
+      {status==='active'&&!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Needed to continue, since this policy is set to issue active - a quote doesn't need it yet.</div>}
 
       {/* Real fix: this used to only show the computed HK$ commission
           figure, unlabelled beyond a placeholder, buried inside a block
@@ -773,41 +832,62 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           about) never showed at all, only the dollar amount it produced.
           Now: a real "Your commission" label, the insurer's % rate shown
           first, then the HK$ figure it computes to. */}
-      {lineItems.length>0&&<>
-        <SecLabel>Your commission</SecLabel>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>
-          {anyLineItemMissingCommissionRate ? "The insurer hasn't set a commission rate for this plan yet - not something you enter." : "Set by the insurer's own published rate for this plan, not something you enter."}
+      <SecLabel>Your commission</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>
+        {anyLineItemMissingCommissionRate ? "The insurer hasn't set a commission rate for this plan yet - not something you enter." : "Set by the insurer's own published rate for this plan, not something you enter."}
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
+        <div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>
+          {anyLineItemMissingCommissionRate ? 'Rate not set' : `${lineItems.map(l=>l.commissionRatePct).filter((v,idx,arr)=>arr.indexOf(v)===idx).join(', ')}%`}
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
-          <div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>
-            {anyLineItemMissingCommissionRate ? 'Rate not set' : `${lineItems.map(l=>l.commissionRatePct).filter((v,idx,arr)=>arr.indexOf(v)===idx).join(', ')}%`}
-          </div>
-          <div style={{color:C.textMuted,fontSize:'13px'}}>→</div>
-          <input value={brokerCommission} disabled type="number" placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
-        </div>
-      </>}
+        <div style={{color:C.textMuted,fontSize:'13px'}}>→</div>
+        <input value={brokerCommission} disabled type="number" placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+      </div>
       {REFERRAL_FEE_ENABLED && prefillInquiry&&<>
         <SecLabel>Referral fee owed to Medsa</SecLabel>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
-          {lineItems.length>0
-            ? `Medsa's fee is its own contracted rate against that commission${medsaReferralFeeRatePct!=null?` (${medsaReferralFeeRatePct}%, set by Medsa admin)`:' (not set yet by Medsa admin)'}, capped at 50% either way (the Insurance Authority's own referral-fee benchmark).`
-            : "Add a plan to this policy first - Medsa's fee is set by Medsa's own contracted rate, never typed in by an agent."}
+          Medsa's fee is its own contracted rate against that commission{medsaReferralFeeRatePct!=null?` (${medsaReferralFeeRatePct}%, set by Medsa admin)`:' (not set yet by Medsa admin)'}, capped at 50% either way (the Insurance Authority's own referral-fee benchmark).
         </div>
         <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'8px'}}>
           {medsaReferralFeeRatePct!=null&&<div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>{medsaReferralFeeRatePct}%</div>}
           {medsaReferralFeeRatePct!=null&&<div style={{color:C.textMuted,fontSize:'13px'}}>→</div>}
-          <input value={referralFee} disabled type="number" placeholder={lineItems.length===0?'Add a plan first':(medsaReferralFeeRatePct==null?'Not set by Medsa admin yet':'Referral fee to Medsa (HK$)')} style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+          <input value={referralFee} disabled type="number" placeholder={medsaReferralFeeRatePct==null?'Not set by Medsa admin yet':'Referral fee to Medsa (HK$)'} style={{flex:1,border:`0.5px solid ${referralFeeExceedsCap?C.red:C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
         </div>
         {referralFeeExceedsCap&&<div style={{fontSize:'11px',color:C.red,marginBottom:'12px'}}>That's more than 50% of the commission entered (HK${(commissionNum*0.5).toFixed(0)} max) - the IA's referral-fee benchmark.</div>}
       </>}
+      </>)}
+
+      {step===4 && (<>
+      <SecLabel>Review</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}><strong style={{color:C.text}}>Patient:</strong> {foundPatient?.full_name||patientSearch||'Not set'}</div>
+        {lineItems.map((li,i)=>(
+          <div key={i} style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{li.planName} - HK${li.premium}/mo{li.riderNames.length>0?` (+${li.riderNames.join(', ')})`:''}</div>
+        ))}
+        {bundleDiscountNum>0&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Bundle discount: -HK${bundleDiscountNum}/mo</div>}
+        <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>Total: HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>{startDate?`Starts ${startDate}`:'Start date not set'}{renewalDate?` · renews ${renewalDate}`:''}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>{wardClass?wardClass.replace('_',' '):'Ward class not set'} · {paymentFrequency}</div>
+        <div style={{fontSize:'12px',color:C.textSub,textTransform:'capitalize'}}>Status: {status}{status==='active'&&(healthDeclarationAck?' · declaration accepted':' · declaration still needed')}</div>
+      </Card>
+
+      <SecLabel>Policy number</SecLabel>
+      <div style={{marginBottom:'16px'}}>
+        <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number, once the insurer issues it (optional for quotes)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+      </div>
 
       <div style={{background:C.blueLight,borderRadius:'8px',padding:'10px 14px',marginBottom:'16px',fontSize:'11px',color:C.blue,lineHeight:1.5}}>
         {'\u25c7'} Manual entry for now. Once a contract is signed and written up, this form is designed to be pre-filled automatically from that document in a future update.
       </div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-      <Btn variant="primary" style={{width:'100%'}} onClick={handleSave} disabled={saving||lineItems.length===0||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':lineItems.length>0?`Save policy (${lineItems.length} plan${lineItems.length>1?'s':''})`:'Add a plan above to save'}</Btn>
-      {status==='active'&&!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'6px'}}>Acknowledge the health declaration above to issue an active policy - a quote doesn't need it yet.</div>}
+      </>)}
+
+      <div style={{display:'flex',gap:'8px',marginTop:'24px'}}>
+        {step>1&&<Btn style={{flex:1}} onClick={()=>setStep(s=>s-1)}>← Back</Btn>}
+        {step<4&&<Btn variant="primary" style={{flex:1}} onClick={()=>setStep(s=>s+1)} disabled={!canAdvanceStep(step)}>Next: {NEW_POLICY_STEPS[step].label} →</Btn>}
+        {step===4&&<Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||lineItems.length===0||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':`Save policy (${lineItems.length} plan${lineItems.length>1?'s':''})`}</Btn>}
+      </div>
     </PageWrap>
   )
 }
