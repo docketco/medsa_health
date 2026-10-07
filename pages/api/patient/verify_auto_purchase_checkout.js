@@ -30,7 +30,7 @@ export default async function handler(req, res) {
   const inquiryId = session.metadata?.auto_purchase_inquiry_id
   if (!inquiryId) return res.status(200).json({ status: 'ERROR', message: 'This session has no automated-purchase inquiry on file - contact Medsa.' })
 
-  const result = await createAutoPurchasePolicy(supabase, {
+  const purchaseResult = await createAutoPurchasePolicy(supabase, {
     inquiryId,
     patientId: session.metadata?.auto_purchase_patient_id,
     planId: session.metadata?.auto_purchase_plan_id,
@@ -41,6 +41,6 @@ export default async function handler(req, res) {
     amountPaidHkd: session.metadata?.auto_purchase_amount_due_hkd ? Number(session.metadata.auto_purchase_amount_due_hkd) : null,
   })
 
-  if (result.status === 'ERROR') return res.status(200).json(result)
-  return res.status(200).json({ status: 'OK', policyId: result.policyId })
+  if (purchaseResult.status === 'ERROR') return res.status(200).json(purchaseResult)
+  return res.status(200).json({ status: 'OK', policyId: purchaseResult.policyId })
 }
