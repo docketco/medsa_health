@@ -3133,7 +3133,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   useEffect(() => {
     const claimIds = [...new Set(records.map(r=>r.insurance_claim_id).filter(Boolean))]
     if (claimIds.length===0) { setExistingClaimsById({}); return }
-    supabase.from('insurance_claims').select('id, plan_id, insurance_plans(plan_name)').in('id', claimIds)
+    supabase.from('insurance_claims').select('id, plan_id, amount, insurer_covered_amount, insurance_plans(plan_name)').in('id', claimIds)
       .then(({data}) => setExistingClaimsById(Object.fromEntries((data||[]).map(c=>[c.id,c]))))
   }, [records])
 
@@ -3146,6 +3146,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   const [manualSelectedIds,setManualSelectedIds]=useState(new Set())
   const [manualAmount,setManualAmount]=useState('')
+  const [manualServiceDate,setManualServiceDate]=useState('')
   const [manualClinicName,setManualClinicName]=useState('')
   const [manualClinicCheck,setManualClinicCheck]=useState(null) // null=not checked, 'checking', {verified,label}
   const [manualPlanId,setManualPlanId]=useState(activePolicy?.plan_id || '')
@@ -3173,6 +3174,27 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   // legitimate coordination-of-benefits submission to a second insurer,
   // not a duplicate, so it's warned rather than blocked.
   const isDuplicateForSelectedPlan = selectedVisitExistingClaim && selectedVisitExistingClaim.plan_id === visitPlanId
+  // Real coordination-of-benefits rule this was missing: a second
+  // insurer only ever owes what the FIRST one left unpaid on the same
+  // bill, never the full amount again - otherwise claiming the same
+  // visit against two policies pays out more than the visit actually
+  // cost. This isn't something that varies by policy wording the way
+  // waiting periods or deductibles do - every indemnity health policy's
+  // "other insurance" clause works this way, so it's applied here
+  // unconditionally rather than as a per-plan setting.
+  const isCoordinationClaim = selectedVisitExistingClaim && !isDuplicateForSelectedPlan
+  const billTotal = visitAmount.trim() ? Number(visitAmount) : (selectedVisit?.total_fee ?? 0)
+  const alreadyCoveredByFirstInsurer = selectedVisitExistingClaim?.insurer_covered_amount ?? 0
+  const coordinationCappedAmount = isCoordinationClaim ? Math.max(0, billTotal - alreadyCoveredByFirstInsurer) : billTotal
+  // Real timely-filing rule this was missing: a claim for a visit that
+  // happened long ago should be flagged, not quietly accepted as if it
+  // were submitted the same week - real plans almost universally require
+  // filing within a set window of the service date (often ~90 days).
+  // Platform default, same idea as the deductible/copay defaults in
+  // lib/insuranceAdapter.js - not yet a per-plan setting.
+  const CLAIM_FILING_DEADLINE_DAYS = 90
+  const visitDaysOld = selectedVisit?.date_of_record ? Math.floor((Date.now() - new Date(selectedVisit.date_of_record).getTime()) / (1000*60*60*24)) : null
+  const visitPastFilingDeadline = visitDaysOld != null && visitDaysOld > CLAIM_FILING_DEADLINE_DAYS
 
   function pickVisit(id) {
     setSelectedVisitId(id)
@@ -3183,12 +3205,16 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   async function handleSubmitFromVisit() {
     if (!selectedVisit || !visitPlanId || !patient?.id || isDuplicateForSelectedPlan) return
+    if (visitPastFilingDeadline) { setVisitSubmitError(`This visit was ${visitDaysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window, so it can't be submitted here. Contact the insurer directly if you believe an exception applies.`); return }
     setVisitSubmitting(true); setVisitSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: visitPlanId,
       claim_type: selectedVisit.record_type || 'outpatient',
-      amount: visitAmount.trim() ? Number(visitAmount) : (selectedVisit.total_fee ?? null),
+      // Coordination of benefits: a second insurer on the same visit only
+      // ever owes what the first left unpaid, never the full bill again.
+      amount: coordinationCappedAmount,
+      service_date: selectedVisit.date_of_record || null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
       institution_id: selectedVisit.institution_id || null,
@@ -3247,11 +3273,19 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   async function handleSubmitManualClaim() {
     if (!manualPlanId || manualSelectedIds.size===0 || !patient?.id) return
+    // Same filing-window rule as the visit-based path above - this form
+    // has no linked visit record to read a date from, so it asks for one
+    // directly instead of silently skipping the check.
+    if (manualServiceDate) {
+      const daysOld = Math.floor((Date.now() - new Date(manualServiceDate).getTime()) / (1000*60*60*24))
+      if (daysOld > CLAIM_FILING_DEADLINE_DAYS) { setManualSubmitError(`That date was ${daysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window. Contact the insurer directly if you believe an exception applies.`); return }
+    }
     setManualSubmitting(true); setManualSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: manualPlanId,
       claim_type: 'outpatient', amount: manualAmount.trim() ? Number(manualAmount) : null,
+      service_date: manualServiceDate || null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
       claimed_clinic_name: manualClinicName.trim() || null,
@@ -3262,7 +3296,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
     const { error: linkErr } = await supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', ids)
     if (linkErr) { setManualSubmitError(linkErr.message); setManualSubmitting(false); return }
     await loadAttachments()
-    setManualSelectedIds(new Set()); setManualAmount(''); setManualClinicName(''); setManualClinicCheck(null)
+    setManualSelectedIds(new Set()); setManualAmount(''); setManualServiceDate(''); setManualClinicName(''); setManualClinicCheck(null)
     setManualSubmitSuccess(claimRef)
     setManualSubmitting(false)
   }
@@ -3342,13 +3376,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
           {selectedVisitExistingClaim&&(isDuplicateForSelectedPlan
             ? <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'⚠'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'this plan'} - can't submit the same visit twice under the same plan.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'此計劃'}提交索償 - 不能就同一計劃重複提交。`}</div>
-            : <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'◇'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'another plan'} - only continue if you're also claiming this from a second insurer.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'另一計劃'}提交索償 - 僅在您同時向第二間保險公司申請索償時才繼續。`}</div>)}
+            : <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'◇'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'another plan'} - that insurer already covered HK$${alreadyCoveredByFirstInsurer}, so this one can only claim the remaining HK$${coordinationCappedAmount} of the bill, never the full amount again.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'另一計劃'}提交索償 - 該保險公司已支付HK$${alreadyCoveredByFirstInsurer},故此次只可就餘下的HK$${coordinationCappedAmount}提出索償,不可重複索取全額。`}</div>)}
+          {visitPastFilingDeadline&&<div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'⚠'} {isEn?`This visit was ${visitDaysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window most plans allow. Contact the insurer directly if you believe an exception applies.`:`此診症已過去${visitDaysOld}天 - 超出大部分計劃的${CLAIM_FILING_DEADLINE_DAYS}天提交期限。如認為適用例外情況,請直接聯絡保險公司。`}</div>}
 
           <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           {visitSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{visitSubmitError}</div>}
           {visitSubmitSuccess
             ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
-            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan||visitPastFilingDeadline} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
         </div>}
       </div>}
 
@@ -3393,6 +3428,8 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
             </select>
           </>}
 
+          <div style={{fontSize:'11px',opacity:0.8,margin:'10px 0 4px'}}>{isEn?'Date of service':'診症日期'}</div>
+          <input value={manualServiceDate} onChange={e=>setManualServiceDate(e.target.value)} type="date" max={new Date().toISOString().slice(0,10)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0',background:'#fff',color:C.text}}/>
           {manualSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{manualSubmitError}</div>}
           {manualSubmitSuccess
@@ -3891,6 +3928,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     setCancelTargetId(null)
     loadPolicy()
   }
+  // Free-look is the policyholder's unconditional right, so it shouldn't
+  // wait on an agent the way a normal (past-21-day) cancellation genuinely
+  // needs to - this refunds a real Stripe charge directly and cancels on
+  // the spot when there's one on file, instead of just recording a request.
+  const [freeLookError,setFreeLookError]=useState(null)
+  async function handleFreeLookCancel(policy) {
+    setCancelling(true); setFreeLookError(null)
+    try {
+      const res = await fetch('/api/patient/cancel_free_look', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ policyId: policy.id, patientId: patient.id }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setFreeLookError(data.message || 'Could not cancel this policy.'); setCancelling(false); return }
+      setCancelTargetId(null)
+      loadPolicy()
+    } finally {
+      setCancelling(false)
+    }
+  }
   // A self-linked policy (see handleLinkPlan) was never sold through
   // Medsa and has no agent attached - agent_id is null. Real gap found
   // live-testing: the agent-mediated cancellation flow below silently
@@ -3927,14 +3984,16 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       )
     }
     const { withinFreeLook, daysInto } = cancellationWindow(policy)
+    const hasStripePayment = !!(policy.stripe_subscription_id || policy.stripe_checkout_session_id)
     return (
       <div style={{marginTop:'10px',background:light?'rgba(255,255,255,0.15)':C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',lineHeight:1.5,color:textColor}}>
         {withinFreeLook
-          ? (isEn?`You're within the 21-day cooling-off period (day ${daysInto ?? 0}) - cancelling now qualifies for a full premium refund.`:`您仍在21天冷靜期內(第${daysInto ?? 0}天)- 現在取消可獲全額保費退還。`)
+          ? (isEn?`You're within the 21-day cooling-off period (day ${daysInto ?? 0}) - cancelling now qualifies for a full premium refund${hasStripePayment?', issued right away':' - your agent will arrange it with the insurer, since this wasn\'t paid through Medsa'}.`:`您仍在21天冷靜期內(第${daysInto ?? 0}天)- 現在取消可獲全額保費退還${hasStripePayment?',並即時處理':' - 由於並非透過Medsa付款,代理人將與保險公司安排退款'}。`)
           : (isEn?"You're past the 21-day cooling-off period, so cancellation needs 30 days' notice and isn't instant - your agent will confirm the effective date with the insurer.":'您已超過21天冷靜期,取消保單需提前30天通知,並非即時生效 - 代理人將與保險公司確認生效日期。')}
+        {freeLookError&&<div style={{marginTop:'8px',color:light?'#ffb3b3':C.red}}>{freeLookError}</div>}
         <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
           <Btn style={{flex:1,fontSize:'11px',padding:'6px 10px',...(light?{background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)'}:{})}} onClick={()=>setCancelTargetId(null)}>{isEn?'Never mind':'不用了'}</Btn>
-          <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>handleRequestCancellation(policy)}>{cancelling?(isEn?'Requesting…':'請求中…'):(isEn?'Confirm request':'確認請求')}</Btn>
+          <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>withinFreeLook&&hasStripePayment?handleFreeLookCancel(policy):handleRequestCancellation(policy)}>{cancelling?(isEn?'Processing…':'處理中…'):(withinFreeLook&&hasStripePayment?(isEn?'Cancel & refund now':'立即取消並退款'):(isEn?'Confirm request':'確認請求'))}</Btn>
         </div>
       </div>
     )
@@ -4242,6 +4301,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
               call. The real figure, not a generic line, since this
               policy is already issued and the amount is on file. */}
           {activePolicy.broker_commission_hkd!=null&&<div style={{fontSize:'11px',opacity:0.8,marginTop:'6px'}}>{isEn?`This policy includes an agent commission of HK$${activePolicy.broker_commission_hkd}, paid by the insurer - never added to your premium.`:`此保單包含HK$${activePolicy.broker_commission_hkd}的代理佣金,由保險公司支付 - 不會加入您的保費。`}</div>}
+          {/* Industry-standard protection most policies carry (an
+              "incontestable clause") - after 2 years of continuous cover,
+              an insurer can no longer void the whole policy over an
+              honest (non-fraudulent) mistake on the original application;
+              only outright fraud stays contestable forever. */}
+          {activePolicy.start_date&&(() => {
+            const contestableUntil = new Date(activePolicy.start_date); contestableUntil.setFullYear(contestableUntil.getFullYear()+2)
+            const stillContestable = Date.now() < contestableUntil.getTime()
+            return <div style={{fontSize:'11px',opacity:0.75,marginTop:'6px'}}>{stillContestable
+              ? (isEn?`Contestable for an honest non-disclosure until ${contestableUntil.toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - after that, only outright fraud can void this policy.`:`如申請時有誠實的遺漏,保險公司可於${contestableUntil.toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}前就此爭議 - 之後僅欺詐行為可令保單失效。`)
+              : (isEn?'Past its 2-year contestability period - only outright fraud can void this policy now.':'已超過2年可爭議期 - 現時僅欺詐行為可令保單失效。')}</div>
+          })()}
 
           {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
             {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}
