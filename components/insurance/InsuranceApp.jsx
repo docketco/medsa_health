@@ -2044,6 +2044,17 @@ export function AgentClaimView({ claimRef }) {
         status: payable===0 ? 'settled' : 'approved',
         settled_at: payable===0 ? new Date().toISOString() : null,
       }).eq('id', claim.id)
+      // Real gap this closes: a receipt could sit "unverified" forever
+      // even after a real human actually checked it closely enough to
+      // pay out against it - approving IS that check. Doesn't help this
+      // same claim (already decided either way), but a verified document
+      // is trusted evidence for whatever comes next - a different
+      // insurer's underwriting, a renewal, another claim - without that
+      // next reviewer re-checking it from scratch.
+      const unverifiedIds = attachments.filter(a=>a.verification_status!=='verified').map(a=>a.id)
+      if (unverifiedIds.length>0) {
+        await supabase.from('medical_record_attachments').update({ verification_status: 'verified' }).in('id', unverifiedIds)
+      }
     } else {
       await supabase.from('insurance_claims').update({ status:'rejected', rejection_reason: finalReason||null }).eq('id', claim.id)
     }
@@ -2170,7 +2181,10 @@ export function AgentClaimView({ claimRef }) {
       <Card style={{padding:'12px 16px'}}>
         {attachments.length===0&&<div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',padding:'4px 0'}}>None on file.</div>}
         {attachments.map((doc,i,arr)=>(
-          <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text}}>{doc.file_name||doc.category}</div>
+          <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>{doc.file_name||doc.category}</span>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:doc.verification_status==='verified'?C.greenLight:C.card,color:doc.verification_status==='verified'?C.green:C.textMuted}}>{doc.verification_status==='verified'?'Verified':'Unverified'}</span>
+          </div>
         ))}
       </Card>
       <SecLabel>{alreadyDecided?`Override decision (currently ${decidedStatusLabel})`:'Your decision'}</SecLabel>

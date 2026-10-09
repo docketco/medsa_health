@@ -2636,14 +2636,43 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
 // agent, this just releases the claim (clears claimed_by_agent_id) so
 // the inquiry re-enters the same first-come-first-served pool for
 // another agent to pick up, rather than routing through Medsa Admin.
-function PatientInquiryThread({ inquiry, patientName }) {
+// A message's attachment is either an old-style public URL (agent-side
+// uploads, and anything sent before this existed) or a reference to a
+// medical_record_attachments row (everything the patient sends now,
+// below) - that bucket is private by design, so viewing it means a
+// fresh signed URL each time, same pattern as "Your uploads" already
+// uses, never a permanent public link to a medical document.
+function InquiryMessageAttachment({ m }) {
+  const [opening,setOpening]=useState(false)
+  async function openLinkedRecord() {
+    setOpening(true)
+    const { data: rec } = await supabase.from('medical_record_attachments').select('file_url').eq('id', m.attachment_record_id).maybeSingle()
+    if (rec?.file_url) {
+      const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(rec.file_url, 300)
+      if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+    }
+    setOpening(false)
+  }
+  if (m.attachment_record_id) {
+    return <span onClick={openLinkedRecord} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'📎'} {opening?'Opening…':(m.attachment_name||'Attachment')}</span>
+  }
+  if (m.attachment_url) {
+    return <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>
+  }
+  return null
+}
+
+function PatientInquiryThread({ inquiry, patientName, patientId }) {
   const [messages,setMessages]=useState([])
   const [loading,setLoading]=useState(true)
   const [body,setBody]=useState('')
   const [sending,setSending]=useState(false)
-  const [attachment,setAttachment]=useState(null)
+  const [attachment,setAttachment]=useState(null) // {recordId, name}
   const [uploading,setUploading]=useState(false)
   const [uploadError,setUploadError]=useState(null)
+  const [pickerOpen,setPickerOpen]=useState(false)
+  const [myFiles,setMyFiles]=useState([])
+  const [loadingMyFiles,setLoadingMyFiles]=useState(false)
 
   async function load() {
     const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
@@ -2657,14 +2686,40 @@ function PatientInquiryThread({ inquiry, patientName }) {
   }
   useEffect(() => { load() }, [inquiry.id])
 
+  // Real gap this closes: an underwriter's "Request report" had no way
+  // for the patient to actually hand over a document in response -
+  // only a plain upload, every time, even when the exact file they'd
+  // send (a past receipt, a doctor's letter already on file) was
+  // already sitting in their own profile. Picking one of those just
+  // references the existing medical_record_attachments row - uploading
+  // fresh here lands in that same profile list too (same pattern as
+  // "Your uploads" elsewhere), unverified until an insurer actually
+  // confirms it against something real (see the claim-approval flow).
+  async function openPicker() {
+    setPickerOpen(o=>!o)
+    if (!pickerOpen && myFiles.length===0) {
+      setLoadingMyFiles(true)
+      const { data } = await supabase.from('medical_record_attachments').select('*').eq('patient_id', patientId).order('uploaded_at',{ascending:false})
+      setMyFiles(data||[])
+      setLoadingMyFiles(false)
+    }
+  }
+  function pickExistingFile(f) {
+    setAttachment({ recordId: f.id, name: f.file_name })
+    setPickerOpen(false)
+  }
+
   async function handleFile(file) {
     setUploading(true)
     setUploadError(null)
-    const path = `${inquiry.id}/${Date.now()}-${file.name}`
-    const { error } = await supabase.storage.from('inquiry-attachments').upload(path, file)
+    const path = `${patientId}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
     if (error) { setUploadError(error.message); setUploading(false); return }
-    const { data } = supabase.storage.from('inquiry-attachments').getPublicUrl(path)
-    setAttachment({ url: data.publicUrl, name: file.name })
+    const { data: rec, error: insErr } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patientId, category: 'underwriting', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    if (insErr || !rec) { setUploadError(insErr?.message||'Could not save this file.'); setUploading(false); return }
+    setAttachment({ recordId: rec.id, name: file.name })
     setUploading(false)
   }
 
@@ -2673,7 +2728,7 @@ function PatientInquiryThread({ inquiry, patientName }) {
     setSending(true)
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patientName,
-      body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+      body: body.trim()||null, attachment_record_id: attachment?.recordId||null, attachment_name: attachment?.name||null,
       read_by_patient: true, read_by_agent: false,
     })
     setBody(''); setAttachment(null); setSending(false)
@@ -2689,16 +2744,27 @@ function PatientInquiryThread({ inquiry, patientName }) {
           <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
             <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':m.sender_type==='underwriter'?'Underwriter':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
             {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
-            {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
+            <InquiryMessageAttachment m={m}/>
           </div>
         ))}
       </div>
       <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Type a message..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
-      <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+      {pickerOpen&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',marginBottom:'6px',maxHeight:160,overflowY:'auto'}}>
+        {loadingMyFiles&&<div style={{fontSize:'11px',color:C.textMuted}}>Loading your files…</div>}
+        {!loadingMyFiles&&myFiles.length===0&&<div style={{fontSize:'11px',color:C.textMuted}}>No files in your profile yet - upload one instead.</div>}
+        {myFiles.map(f=>(
+          <div key={f.id} onClick={()=>pickExistingFile(f)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+            <span>{f.file_name}</span>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:f.verification_status==='verified'?C.greenLight:C.card,color:f.verification_status==='verified'?C.green:C.textMuted}}>{f.verification_status==='verified'?'Verified':'Unverified'}</span>
+          </div>
+        ))}
+      </div>}
+      <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap'}}>
         <label style={{fontSize:'11px',color:C.textSub,cursor:'pointer',padding:'8px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}>
-          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Attach file')}
+          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Upload file')}
           <input type="file" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
         </label>
+        <Btn style={{fontSize:'11px',padding:'8px 10px'}} onClick={openPicker}>{pickerOpen?'Hide my files':'Choose from my files'}</Btn>
         <Btn style={{flex:1}} onClick={handleSend} disabled={sending||uploading}>{sending?'Sending…':'Send'}</Btn>
       </div>
       {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Attachment failed: {uploadError}</div>}
@@ -3003,7 +3069,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                         reviews themselves in a real application. */}
                     {isPending&&i.requested_report_note&&<div style={{marginTop:'8px'}}>
                       <div style={{fontWeight:600,fontSize:'12px',color:C.text}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
-                      <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
+                      <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
                     </div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
                     {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id} onViewPlan={onViewPlan}/>}
@@ -3011,7 +3077,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                   </>
                 ) : (i.agents?.full_name
                   ? <>
-                    <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
+                    <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
                   : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
@@ -3907,7 +3973,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // recommendations back, instead of browsing every plan blind.
   const [findPlanOpen,setFindPlanOpen]=useState(false)
   const [findPlanConditions,setFindPlanConditions]=useState([])
-  const [findPlanConsent,setFindPlanConsent]=useState(false)
   const [findPlanLoading,setFindPlanLoading]=useState(false)
   const [findPlanResults,setFindPlanResults]=useState(null)
 
@@ -4305,10 +4370,15 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             : <Card style={{padding:'16px'}}>
                 <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>{isEn?'Find me a plan':'為我配對方案'}</div>
                 {!findPlanResults ? <>
-                  <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
-                    <input type="checkbox" checked={findPlanConsent} onChange={e=>setFindPlanConsent(e.target.checked)} style={{marginTop:'2px'}}/>
-                    {isEn?"Let Medsa check my own visit history on this platform against every plan's coverage (optional)":'讓Medsa將我在平台上的就診記錄與各方案的保障範圍核對(可選)'}
-                  </label>
+                  {/* Was its own re-asked-every-time checkbox (default off);
+                      now reflects the standing Settings preference instead
+                      (default on, see EditProfileScreen) - one line here
+                      rather than asking again on every search. */}
+                  <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>
+                    {patient.history_matching_enabled !== false
+                      ? (isEn?'Your visit history on this platform will be checked against every plan\'s coverage, as set in your Settings.':'您在平台上的就診記錄將與各方案的保障範圍核對，設定見您的Settings。')
+                      : (isEn?'Visit history is off in your Settings - matching will only use what you select below.':'您的Settings已關閉就診記錄配對 - 配對只會根據下方所選項目。')}
+                  </div>
                   <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Do any of these apply to you?':'以下是否適用於您?'}</div>
                   <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
                     {[...new Set(plans.flatMap(p=>p.criteria||[]))].slice(0,20).concat(['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition']).map(c=>(
@@ -4316,12 +4386,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                     ))}
                   </div>
                   <div style={{display:'flex',gap:'8px'}}>
-                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([]);setFindPlanConsent(false)}}>{isEn?'Cancel':'取消'}</Btn>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([])}}>{isEn?'Cancel':'取消'}</Btn>
                     <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={findPlanLoading} onClick={async()=>{
                       setFindPlanLoading(true)
                       const res = await fetch('/api/patient/find_me_a_plan', {
                         method:'POST', headers:{'Content-Type':'application/json'},
-                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: findPlanConsent }),
+                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: patient.history_matching_enabled !== false }),
                       })
                       const data = await res.json()
                       setFindPlanResults(data.matches||[])
@@ -4667,6 +4737,24 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
     onSaved?.()
   }
 
+  // Default on for everyone (patients table default), one standing
+  // setting instead of a checkbox re-asked on every single plan
+  // declaration - PlanDetailFlow.jsx and the "Find me a plan" flow both
+  // now read this instead of showing their own consent checkbox. Off
+  // never hides any plan from a patient - it only stops the matching
+  // engine from folding their on-platform visit history into the
+  // suitability check, so matching falls back to declared answers alone.
+  const [historyMatchingEnabled,setHistoryMatchingEnabled]=useState(patient.history_matching_enabled !== false)
+  const [savingHistoryMatching,setSavingHistoryMatching]=useState(false)
+  async function handleToggleHistoryMatching() {
+    const next = !historyMatchingEnabled
+    setHistoryMatchingEnabled(next)
+    setSavingHistoryMatching(true)
+    await supabase.from('patients').update({ history_matching_enabled: next }).eq('id', patient.id)
+    setSavingHistoryMatching(false)
+    onSaved?.()
+  }
+
   const [myAllergies,setMyAllergies]=useState([])
   const [loadingAllergies,setLoadingAllergies]=useState(true)
   const [newAllergen,setNewAllergen]=useState('')
@@ -4738,6 +4826,17 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
             <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Not connected yet - coming once Medsa has an SMS provider':'尚未連接 - Medsa 接入短訊服務後開放'}</div>
           </div>
           <Toggle checked={false} onChange={()=>{}} disabled/>
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Plan matching':'方案配對'}</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'Use my visit history to help match plans':'使用我的就診記錄協助配對方案'}</div>
+            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5}}>{isEn?"On by default. When on, your own on-platform visit history is folded into checking which plans suit you - it can only ever flag something for an underwriter to double check, never auto-decline you on its own. Off, matching uses only what you declare yourself. Either way, no insurer or agent ever sees your raw visit history - only the verdict it produces.":'預設開啟。開啟時，您在平台上的就診記錄會用於核對哪些方案適合您 - 最多只會標記予核保員再次核實，絕不會據此自動拒保。關閉後，配對只會根據您自行申報的內容。無論開關，保險公司或代理均不會看到您的原始就診記錄 - 只會看到配對結果。'}</div>
+          </div>
+          <Toggle checked={historyMatchingEnabled} onChange={handleToggleHistoryMatching} disabled={savingHistoryMatching}/>
         </div>
       </Card>
 

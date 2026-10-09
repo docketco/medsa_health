@@ -200,12 +200,16 @@ async function saveDeclaration(patientId, answers, conditions, consentHistorySha
 }
 
 // ── The wizard itself: consent -> questionnaire -> review ───────────────────
-function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initialWeightKg, customQuestions = EMPTY_CUSTOM_QUESTIONS }) {
+function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initialWeightKg, customQuestions = EMPTY_CUSTOM_QUESTIONS, historyMatchingEnabled=true }) {
   const [step, setStep] = useState('consent')
   const [agree1, setAgree1] = useState(false)
   const [agree2, setAgree2] = useState(false)
   const [agree3, setAgree3] = useState(false)
-  const [consentHistoryShared, setConsentHistoryShared] = useState(false)
+  // Was its own re-asked-every-time checkbox (default off); now a single
+  // standing setting in the patient's own Settings (default on, see
+  // EditProfileScreen in PatientApp.jsx) - this just reflects that live
+  // value rather than asking again on every declaration.
+  const consentHistoryShared = historyMatchingEnabled
   // Height/weight default to the patient's most recent clinic-logged
   // vitals (patient_vitals) so they don't have to know these off the top
   // of their head - still a plain editable field, not locked in.
@@ -239,10 +243,12 @@ function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initia
         <label style={{display:'flex',gap:'8px',alignItems:'flex-start',cursor:'pointer'}}><input type="checkbox" checked={agree3} onChange={e=>setAgree3(e.target.checked)} style={{marginTop:'3px'}}/><span style={{fontSize:'13px',fontWeight:600}}>I agree</span></label>
       </Card>
       <Card>
-        <label style={{display:'flex',gap:'8px',alignItems:'flex-start',cursor:'pointer'}}>
-          <input type="checkbox" checked={consentHistoryShared} onChange={e=>setConsentHistoryShared(e.target.checked)} style={{marginTop:'3px'}}/>
-          <span style={{fontSize:'12.5px',color:C.textSub,lineHeight:1.6}}><strong style={{color:C.text}}>Optional:</strong> let Medsa also check my own real visit history on this platform against whatever plan I apply for. This is only ever used for matching - to check how well a plan actually suits you and to recommend better-fitting alternatives - never shown to an agent or insurer as raw history.</span>
-        </label>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>Visit history in matching</div>
+        <div style={{fontSize:'12.5px',color:C.textSub,lineHeight:1.6}}>
+          {consentHistoryShared
+            ? <>Your own real visit history on this platform is checked against whatever plan you apply for, to see how well it actually suits you - it can only ever flag something for an underwriter to double check, never decline you on its own, and it's never shown to an agent or insurer as raw history.</>
+            : <>Off in your Settings - matching will only use what you answer below, not your visit history.</>} Change this any time under Settings &gt; Plan matching.
+        </div>
       </Card>
       <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
         <Btn style={{flex:1}} onClick={onCancel}>Cancel</Btn>
@@ -386,7 +392,10 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
 
   function startFlow(chosenMode, forceNew=false) {
     setMode(chosenMode)
-    if (!forceNew && savedDeclaration) { runMatch(savedDeclaration.conditions, savedDeclaration.consentHistoryShared, chosenMode); return }
+    // Always the patient's CURRENT Settings value, not whatever was true
+    // when this declaration was first saved - it's a live standing
+    // preference now, not a per-declaration snapshot.
+    if (!forceNew && savedDeclaration) { runMatch(savedDeclaration.conditions, patient.history_matching_enabled !== false, chosenMode); return }
     setPhase('wizard')
   }
 
@@ -408,7 +417,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
     try {
       await fetch('/api/patient/match_plan_suitability', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: 'agent', consentHistoryShared: savedDeclaration.consentHistoryShared, declaredConditions: savedDeclaration.conditions }),
+        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: 'agent', consentHistoryShared: patient.history_matching_enabled !== false, declaredConditions: savedDeclaration.conditions }),
       })
       setAgentRequestSent(true)
     } finally {
@@ -486,7 +495,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
         </div>
       )}
 
-      {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')} initialHeightCm={vitals?.height_cm} initialWeightKg={vitals?.weight_kg} customQuestions={customQuestions}/>}
+      {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')} initialHeightCm={vitals?.height_cm} initialWeightKg={vitals?.weight_kg} customQuestions={customQuestions} historyMatchingEnabled={patient.history_matching_enabled !== false}/>}
       {phase === 'submitting' && <div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted}}>Checking against this plan…</div>}
 
       {phase === 'result' && result && (
