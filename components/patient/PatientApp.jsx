@@ -3092,6 +3092,245 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   )
 }
 
+// ── DOCUMENT PREP TAB ────────────────────────────────────────────────────────
+// Real gap: a patient facing an insurer's pre-authorization or application
+// form (GOP request, a specific claim, whatever) had no way to assemble the
+// right documents in one place before sending them off manually. This isn't
+// claims adjudication or a live insurer connection - no API exists for
+// either yet - it's a checklist: name what's needed, attach what's already
+// on file or upload what isn't, see what's still missing. Works standalone
+// today; if/when a real insurer or partner connection exists later, this is
+// the exact shape that would feed it.
+const DOC_PREP_PRESETS = [
+  'Policy ID / membership card', 'Referral letter', 'Diagnosis / medical report',
+  'Lab result', 'Receipt / invoice', 'Prescription',
+  'NIPT / T21 screening report', '20-week structural ultrasound', 'OGTT glucose result',
+  'GBS swab result', 'Antenatal history card',
+]
+function DocumentPrepTab({ isEn, patient={} }) {
+  const [bundles,setBundles]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [creating,setCreating]=useState(false)
+  const [openBundleId,setOpenBundleId]=useState(null)
+
+  async function loadBundles() {
+    if (!patient?.id) { setLoading(false); return }
+    setLoading(true)
+    const { data } = await supabase.from('document_prep_bundles').select('*').eq('patient_id', patient.id).order('created_at',{ascending:false})
+    setBundles(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { loadBundles() }, [patient?.id])
+
+  const openBundle = bundles.find(b=>b.id===openBundleId) || null
+
+  function completeness(b) {
+    const items = b.items||[]
+    if (items.length===0) return { done:0, total:0 }
+    return { done: items.filter(i=>i.attachment_id).length, total: items.length }
+  }
+
+  async function updateBundleItems(bundleId, newItems) {
+    const allReady = newItems.length>0 && newItems.every(i=>i.attachment_id)
+    const { data } = await supabase.from('document_prep_bundles')
+      .update({ items: newItems, status: allReady?'ready':'in_progress', updated_at: new Date().toISOString() })
+      .eq('id', bundleId).select().maybeSingle()
+    if (data) setBundles(prev => prev.map(b=>b.id===bundleId?data:b))
+  }
+
+  if (openBundle) return <DocumentPrepBundleDetail isEn={isEn} patient={patient} bundle={openBundle} onBack={()=>setOpenBundleId(null)} onItemsChange={newItems=>updateBundleItems(openBundle.id, newItems)}/>
+
+  return (
+    <div>
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+        ◈ {isEn
+          ? "Build a checklist of what an insurer needs (a pre-authorization, an application, anything else), then attach what you already have on file or upload what's missing."
+          : '為保險公司所需的文件建立清單(預先授權、申請或其他),然後附上已存檔的文件或上傳缺少的文件。'}
+      </div>
+
+      <SecLabel>{isEn?'Document bundles':'文件組合'}</SecLabel>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'16px'}}>{isEn?'Loading…':'載入中…'}</div>}
+      {!loading&&bundles.length===0&&!creating&&<div style={{margin:'0 16px',textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px 0'}}>{isEn?'No document bundles yet.':'暫無文件組合。'}</div>}
+      {!loading&&bundles.map(b=>{
+        const { done, total } = completeness(b)
+        return (
+          <Card key={b.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setOpenBundleId(b.id)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{b.title}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{b.insurer_name||(isEn?'No insurer named':'未指定保險公司')}</div>
+              </div>
+              <Badge text={b.status==='ready'?(isEn?'Ready':'已就緒'):`${done}/${total}`} type={b.status==='ready'?'ok':'due'}/>
+            </div>
+          </Card>
+        )
+      })}
+
+      {!creating
+        ? <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setCreating(true)}>+ {isEn?'New document bundle':'新增文件組合'}</Btn></div>
+        : <NewDocumentBundleForm isEn={isEn} patient={patient} onCancel={()=>setCreating(false)} onCreated={b=>{setCreating(false);setBundles(prev=>[b,...prev]);setOpenBundleId(b.id)}}/>}
+    </div>
+  )
+}
+
+function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
+  const [title,setTitle]=useState('')
+  const [insurerName,setInsurerName]=useState('')
+  const [selectedPresets,setSelectedPresets]=useState(new Set())
+  const [customItem,setCustomItem]=useState('')
+  const [customItems,setCustomItems]=useState([])
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  function togglePreset(label) {
+    setSelectedPresets(prev => { const next = new Set(prev); next.has(label)?next.delete(label):next.add(label); return next })
+  }
+  function addCustom() {
+    const v = customItem.trim()
+    if (!v || customItems.includes(v)) return
+    setCustomItems(prev => [...prev, v])
+    setCustomItem('')
+  }
+
+  async function handleCreate() {
+    const labels = [...selectedPresets, ...customItems]
+    if (!title.trim() || labels.length===0 || !patient?.id) return
+    setSaving(true); setError(null)
+    const items = labels.map(label => ({ label, attachment_id: null }))
+    const { data, error: insErr } = await supabase.from('document_prep_bundles').insert({
+      patient_id: patient.id, title: title.trim(), insurer_name: insurerName.trim()||null, items,
+    }).select().maybeSingle()
+    if (insErr) { setError(insErr.message); setSaving(false); return }
+    onCreated(data)
+  }
+
+  return (
+    <Card style={{margin:'0 16px 20px',padding:'16px'}}>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'What is this for?':'此組合用途'}</div>
+      <input value={title} onChange={e=>setTitle(e.target.value)} placeholder={isEn?'e.g. AIA pre-authorization request':'例如:AIA預先授權申請'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Insurer (optional)':'保險公司(可選)'}</div>
+      <input value={insurerName} onChange={e=>setInsurerName(e.target.value)} placeholder={isEn?'e.g. AIA':'例如:AIA'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'14px'}}/>
+
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'What documents are needed?':'需要哪些文件?'}</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {DOC_PREP_PRESETS.map(label=>(
+          <div key={label} onClick={()=>togglePreset(label)} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:selectedPresets.has(label)?C.green:C.beige,color:selectedPresets.has(label)?'#fff':C.textSub}}>{label}</div>
+        ))}
+      </div>
+      {customItems.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {customItems.map(label=>(
+          <div key={label} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',background:C.navy,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+            {label}<span onClick={()=>setCustomItems(prev=>prev.filter(l=>l!==label))} style={{cursor:'pointer',fontWeight:700}}>×</span>
+          </div>
+        ))}
+      </div>}
+      <div style={{display:'flex',gap:'6px',marginBottom:'14px'}}>
+        <input value={customItem} onChange={e=>setCustomItem(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustom())} placeholder={isEn?'Other document (type your own)':'其他文件(自行輸入)'} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        <button onClick={addCustom} disabled={!customItem.trim()} style={{padding:'0 14px',background:C.beige,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ {isEn?'Add':'新增'}</button>
+      </div>
+
+      {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1}} onClick={onCancel}>{isEn?'Cancel':'取消'}</Btn>
+        <Btn variant="primary" style={{flex:1}} disabled={saving||!title.trim()||(selectedPresets.size===0&&customItems.length===0)} onClick={handleCreate}>{saving?(isEn?'Creating…':'建立中…'):(isEn?'Create':'建立')}</Btn>
+      </div>
+    </Card>
+  )
+}
+
+function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange }) {
+  const [attachments,setAttachments]=useState([])
+  const [pickerForIdx,setPickerForIdx]=useState(null)
+  const [uploading,setUploading]=useState(false)
+
+  async function loadAttachments() {
+    if (!patient?.id) return
+    const { data } = await supabase.from('medical_record_attachments')
+      .select('id, category, file_name, uploaded_at').eq('patient_id', patient.id).order('uploaded_at',{ascending:false})
+    setAttachments(data||[])
+  }
+  useEffect(() => { loadAttachments() }, [patient?.id])
+
+  function setItemAttachment(idx, attachmentId) {
+    const next = (bundle.items||[]).map((it,i)=> i===idx ? { ...it, attachment_id: attachmentId } : it)
+    onItemsChange(next)
+    setPickerForIdx(null)
+  }
+
+  async function uploadForItem(idx, file) {
+    if (!file || !patient?.id) return
+    setUploading(true)
+    const path = `${patient.medsa_id || patient.id}/docprep-${Date.now()}-${file.name}`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setUploading(false); return }
+    const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    setUploading(false)
+    if (newAtt) { await loadAttachments(); setItemAttachment(idx, newAtt.id) }
+  }
+
+  async function viewAttachment(attachmentId) {
+    const att = attachments.find(a=>a.id===attachmentId)
+    if (!att) return
+    const { data: full } = await supabase.from('medical_record_attachments').select('file_url').eq('id', attachmentId).maybeSingle()
+    if (!full?.file_url) return
+    const { data } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(full.file_url, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  const items = bundle.items||[]
+  const done = items.filter(i=>i.attachment_id).length
+
+  return (
+    <div>
+      <div style={{padding:'16px 16px 0'}}>
+        <span onClick={onBack} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>← {isEn?'Back':'返回'}</span>
+      </div>
+      <div style={{padding:'10px 16px 0'}}>
+        <div style={{fontSize:'17px',fontWeight:700}}>{bundle.title}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{bundle.insurer_name||(isEn?'No insurer named':'未指定保險公司')} · {done}/{items.length} {isEn?'attached':'已附上'}</div>
+      </div>
+
+      {items.map((item,idx)=>(
+        <Card key={idx} style={{margin:'10px 16px 0',padding:'12px 14px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:item.attachment_id||pickerForIdx===idx?'10px':0}}>
+            <div style={{fontSize:'13px',fontWeight:500}}>{item.label}</div>
+            {item.attachment_id
+              ? <Badge text={isEn?'Attached':'已附上'} type="ok"/>
+              : <Badge text={isEn?'Missing':'缺少'} type="due"/>}
+          </div>
+          {item.attachment_id && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span onClick={()=>viewAttachment(item.attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {attachments.find(a=>a.id===item.attachment_id)?.file_name||(isEn?'View file':'查看文件')}</span>
+            <span onClick={()=>setItemAttachment(idx,null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>
+          </div>}
+          {!item.attachment_id && pickerForIdx!==idx && <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPickerForIdx(idx)}>{isEn?'Choose existing':'選擇已有文件'}</Btn>
+            <label style={{flex:1}}>
+              <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'10px',padding:'9px',cursor:uploading?'default':'pointer',fontSize:'12px',fontWeight:500,opacity:uploading?0.6:1}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload':'+ 上傳')}</div>
+              <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadForItem(idx,f)}}/>
+            </label>
+          </div>}
+          {pickerForIdx===idx && <div style={{marginTop:'6px'}}>
+            {attachments.length===0
+              ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'No files on file yet - upload one instead.':'暫無已存檔文件 - 請改為上傳。'}</div>
+              : attachments.map(a=>(
+                <div key={a.id} onClick={()=>setItemAttachment(idx,a.id)} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:'12px'}}>{a.file_name||a.category}</div>
+              ))}
+            <span onClick={()=>setPickerForIdx(null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',display:'block',marginTop:'6px'}}>{isEn?'Cancel':'取消'}</span>
+          </div>}
+        </Card>
+      ))}
+
+      <div style={{margin:'16px 16px 20px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
+        ⚠ {isEn
+          ? 'This organizes your own documents for you to send yourself - Medsa does not submit this to any insurer automatically yet.'
+          : '此功能僅為您整理文件,供您自行發送 - Medsa目前尚未自動將文件提交予任何保險公司。'}
+      </div>
+    </div>
+  )
+}
+
 // ── CLAIMS TAB ───────────────────────────────────────────────────────────────
 // Two real submission paths:
 // 1) A visit already on file at a Medsa-connected clinic - receipt and
@@ -4416,7 +4655,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
@@ -4580,6 +4819,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
+
+      {/* ── DOCUMENT PREP ── */}
+      {tab==='documents'&&<DocumentPrepTab isEn={isEn} patient={patient}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
