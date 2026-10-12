@@ -455,8 +455,13 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
           <Card>
             <div style={{fontSize:'12px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'10px'}}>Coverage</div>
             {(plan.covers||[]).map(c=><span key={c} style={{display:'inline-block',fontSize:'12px',background:C.card,color:C.textSub,padding:'4px 10px',borderRadius:'20px',marginRight:'6px',marginBottom:'6px'}}>{c}</span>)}
+            {plan.keyBenefits&&<div style={{fontSize:'13px',color:C.text,lineHeight:1.6,marginTop:'10px'}}>{plan.keyBenefits}</div>}
             {plan.waitingPeriodDays!=null&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>Waiting period: {plan.waitingPeriodDays} days for new conditions.</div>}
             {plan.price!=null&&<div style={{fontSize:'18px',fontWeight:700,color:C.navy,marginTop:'12px'}}>Estimated HK${plan.price}/mo</div>}
+            {/* Keeps this summary short and comparable across insurers -
+                the full legal brochure/T&Cs stays the insurer's own
+                document, not something Medsa rewrites or maintains. */}
+            {plan.policyDocumentPath&&<div onClick={async()=>{const {data}=await supabase.storage.from('policy-contracts').createSignedUrl(plan.policyDocumentPath,300);if(data?.signedUrl)window.open(data.signedUrl,'_blank')}} style={{fontSize:'12px',color:C.navy,fontWeight:600,marginTop:'12px',cursor:'pointer'}}>📄 View {plan.company}'s full plan document →</div>}
           </Card>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
           {alreadyHeld

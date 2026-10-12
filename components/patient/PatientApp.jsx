@@ -4111,6 +4111,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           additionalTerms: p.additional_terms || null,
           companyContactEmail: contactByCompany[p.company_name]?.contact_email || null,
           companyContactPhone: contactByCompany[p.company_name]?.contact_phone || null,
+          // The insurer's own uploaded brochure/T&Cs (policy-contracts
+          // bucket) - was collected via PlanManager but never surfaced to
+          // the patient anywhere. Rather than Medsa writing and
+          // maintaining its own copy of each plan's full legal detail,
+          // link out to the insurer's real document for that - keep only
+          // a short comparable summary in Medsa's own UI.
+          policyDocumentPath: p.policy_document_path || null,
+          keyBenefits: p.key_benefits || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored

@@ -60,7 +60,32 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
 }
 
 // ── INSURANCE DASHBOARD ───────────────────────────────────────────────────────
+// Real gap: every number here used to be a hardcoded string ("4,821" plan
+// views, "142" new clients...) shown to a real logged-in insurer partner -
+// not computed from anything. "Plan views" is dropped rather than faked
+// again - Medsa has no view-tracking anywhere, so there's no honest number
+// to show. The other three are real counts off this company's own plans.
 function InsuranceDashboard({ onNav, company }) {
+  const [stats, setStats] = useState({ loading: true, activePlans: 0, newInquiries30d: 0, pendingClaims: 0 })
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!company?.name) { setStats(s => ({ ...s, loading: false })); return }
+      const { data: plans } = await supabase.from('insurance_plans').select('id, status').eq('company_name', company.name)
+      const planIds = (plans || []).map(p => p.id)
+      const activePlans = (plans || []).filter(p => p.status === 'active').length
+      if (planIds.length === 0) { if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: 0, pendingClaims: 0 }); return }
+      const since30d = new Date(Date.now() - 30*24*60*60*1000).toISOString()
+      const [{ count: newInquiries30d }, { count: pendingClaims }] = await Promise.all([
+        supabase.from('plan_inquiries').select('id', { count: 'exact', head: true }).in('plan_id', planIds).gte('created_at', since30d),
+        supabase.from('insurance_claims').select('id', { count: 'exact', head: true }).in('plan_id', planIds).in('status', ['pending', 'pending_review']),
+      ])
+      if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: newInquiries30d || 0, pendingClaims: pendingClaims || 0 })
+    }
+    load()
+    return () => { cancelled = true }
+  }, [company?.name])
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
@@ -69,11 +94,10 @@ function InsuranceDashboard({ onNav, company }) {
         <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
       </div>
       <SecLabel>Performance</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
-        <StatCard icon="◎" label="Plan views" value="4,821" sub="this month"/>
-        <StatCard icon="◈" label="New clients" value="142" sub="via Medsa referral" color={C.green} bg={C.greenLight}/>
-        <StatCard icon="▣" label="Active plans" value="3" sub="listed on Medsa"/>
-        <StatCard icon="◇" label="Pending claims" value="2" sub="require attention" color={C.amber} bg={C.amberLight}/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
+        <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
+        <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>
+        <StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
@@ -2828,16 +2852,28 @@ export default function InsuranceApp({ company, onLogout }) {
   // was left at, landing partway down a page that looks blank/broken.
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
   // is - swapped for shapes that at least gesture at the real meaning
-  // (a house for Overview, a document for Plans/Coverage, people for
-  // Teams, a shield for Verify, a stamp for Preauth, a clipboard for
-  // Claims, a star for Sponsored/Promote, a bar chart for Analytics).
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Sponsored'}]
-    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Promote'}]
+  // (a house for Overview, a document for Plans/Coverage, a shield for
+  // Verify, a clipboard for Claims, a star for Sponsored/Promote).
+  //
+  // Strategy pivot (see the milestone doc): Medsa doesn't adjudicate
+  // claims, authorize treatment, run payment settlement, or manage an
+  // insurer's own agent/broker force - the insurer already has (or a
+  // partner like a BeeFintech-style vendor already has) their own
+  // systems for all of that, and duplicating it isn't the product.
+  // Medsa's job is sending clean, verified claim packages and syncing
+  // the insurer's own decisions back to the patient. Teams & Agents,
+  // Pre-authorization (as something MEDSA approves), and Payments
+  // (claim settlement) are shelved from the nav below for that reason -
+  // the components (TeamsAndAgents/PreauthRequestsManager/PaymentsManager)
+  // are left defined further up this file, not deleted, in case a real
+  // TPA-style deal ever actually calls for them.
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'}]
+    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2860,11 +2896,8 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
-        {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
-        {screen==='preauth'&&<PreauthRequestsManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
-        {screen==='payments'&&<PaymentsManager company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
