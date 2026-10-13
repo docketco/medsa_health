@@ -5187,6 +5187,8 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         </div>
       </Card>
 
+      <MedsaBumpSection isEn={isEn} patient={patient}/>
+
       <SecLabel>{isEn?'My allergies':'我的過敏'}</SecLabel>
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
         {isEn?"Allergies you add here are self-reported by you, not confirmed by a clinician - they're clearly labelled as such wherever shown, including on your emergency card.":'您在此新增的過敏為自行申報，並非由醫護人員確認 - 於所有顯示位置（包括緊急卡）均會清楚標示。'}
@@ -5209,6 +5211,127 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         <Btn variant="primary" style={{width:'100%'}} onClick={handleAddAllergy} disabled={savingAllergy||!newAllergen.trim()}>{savingAllergy?'Adding…':(isEn?'+ Add allergy':'+ 新增過敏')}</Btn>
       </Card>
     </div>
+  )
+}
+
+// ── MEDSA BUMP (account settings entry point) ──────────────────────────────
+// Pink, per the brand note. Lives under Account Settings, pays directly to
+// Medsa via Stripe (this is Medsa's own revenue - not an insurance premium,
+// which is bank transfer between agent/insurer and out of scope here), and
+// starts right away on payment, during pregnancy rather than after birth -
+// predicted due date and how far along the patient is are collected up
+// front so there's something to track against immediately.
+function MedsaBumpSection({ isEn, patient }) {
+  const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=active
+  const [dueDate,setDueDate]=useState('')
+  const [weeksNow,setWeeksNow]=useState('')
+  const [discoveredAt,setDiscoveredAt]=useState('')
+  const [checkupFiles,setCheckupFiles]=useState([])
+  const [uploading,setUploading]=useState(false)
+  const [starting,setStarting]=useState(false)
+  const [error,setError]=useState(null)
+  const [verifying,setVerifying]=useState(false)
+
+  async function loadBump() {
+    if (!patient?.id) { setActiveBump(null); return }
+    const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    setActiveBump(data||null)
+  }
+  useEffect(() => { loadBump() }, [patient?.id])
+
+  // Checkout verification on return - the webhook path is confirmed
+  // unreliable elsewhere in this app (see verify_video_consult_checkout.js's
+  // own comment), so this checks the real Stripe session directly instead
+  // of trusting a webhook that may never fire.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('bump_started')==='1' && sessionId) {
+      setVerifying(true)
+      fetch('/api/patient/verify_bump_checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }) })
+        .then(r=>r.json()).then(()=>{ loadBump(); setVerifying(false); window.history.replaceState({}, '', window.location.pathname) })
+    } else if (params.get('bump_cancelled')==='1') {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  async function uploadCheckup(file) {
+    if (!file || !patient?.id) return
+    setUploading(true)
+    const path = `${patient.medsa_id || patient.id}/bump-checkup-${Date.now()}-${file.name}`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setUploading(false); return }
+    const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'bump_prenatal', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    setUploading(false)
+    if (newAtt) setCheckupFiles(prev => [...prev, newAtt])
+  }
+
+  async function handleStart() {
+    setStarting(true); setError(null)
+    try {
+      const res = await fetch('/api/patient/create_bump_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ patientId: patient.id, predictedDueDate: dueDate||null, gestationalWeeksAtSignup: weeksNow?Number(weeksNow):null, discoveredPregnantAt: discoveredAt||null }),
+      })
+      const data = await res.json()
+      if (data.status==='CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setError(data.message || (isEn?'Could not start checkout.':'無法啟動付款程序。'))
+    } catch {
+      setError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
+    }
+    setStarting(false)
+  }
+
+  if (activeBump===undefined || verifying) return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
+    </>
+  )
+
+  if (activeBump) return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px',background:'#fce4ec',border:'1px solid #f8bbd0'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:'#ad1457',marginBottom:'4px'}}>{isEn?'Active':'已啟用'}</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
+          {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
+          {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
+        </div>
+      </Card>
+    </>
+  )
+
+  return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'12px'}}>
+          {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months. One-time payment; a discount applies automatically if you've used Medsa Bump before.":'由懷孕至寶寶18個月大的孕產照護追蹤。一次性付款;如曾使用Medsa Bump,將自動享有折扣。'}
+        </div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
+        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
+        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px'}}/>
+
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
+        <label style={{display:'block'}}>
+          <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
+          <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadCheckup(f)}}/>
+        </label>
+        {checkupFiles.length>0&&<div style={{marginBottom:'12px'}}>
+          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:C.textSub,padding:'4px 0'}}>📄 {f.file_name}</div>)}
+        </div>}
+
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+      </Card>
+    </>
   )
 }
 
