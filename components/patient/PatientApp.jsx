@@ -682,7 +682,6 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{padding:'0 16px'}}>
         {[
           {key:'doctors',icon:'doctors',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'family',icon:'family',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
@@ -5017,49 +5016,6 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   )
 }
 
-function FamilyScreen({ isEn }) {
-  const members=[] // No real family-monitoring data model exists yet -
-  // showing an honest empty state rather than the same fake family for
-  // every patient. Building real add/invite/monitor functionality is a
-  // separate, larger feature.
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>HK$38/mo</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Add a family member to start monitoring':'新增家庭成員以開始監護'}</div>
-      </div>
-      <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
-      {members.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No family members added yet.':'尚未新增家庭成員。'}</div>}
-      {members.map((m,i)=>(
-        <Card key={i} style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:m.type==='Minor'?C.blueLight:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:m.type==='Minor'?C.blue:C.amber,flexShrink:0}}>{m.name[0]}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:600}}>{m.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{m.relation} · Age {m.age} · {m.type}</div></div>
-            <div style={{textAlign:'right'}}>
-              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:m.status==='Active'?C.greenLight:C.amberLight,color:m.status==='Active'?C.green:C.amber}}>{m.status}</span>
-              {m.alerts>0&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>⚠ {m.alerts} alert{m.alerts>1?'s':''}</div>}
-            </div>
-          </div>
-          <div style={{background:C.beige,borderRadius:'10px',padding:'10px 12px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Guardian access':'監護人存取'}</div>
-            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {['Medication reminders','Appointment alerts','Emergency card','Vitals summary'].map(tag=>(
-                <span key={tag} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px'}}>{tag}</span>
-              ))}
-            </div>
-          </div>
-          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>View health</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Manage access</Btn></div>
-        </Card>
-      ))}
-      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
-      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
-      </div>
-    </div>
-  )
-}
-
 function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
@@ -5996,7 +5952,6 @@ export default function PatientApp({ liveData={} }) {
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
-        {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
