@@ -17,8 +17,8 @@ import { grossUpForStripeFee } from '../../../lib/paymentFees'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
-const BUMP_PRICE_HKD = null // TODO: set the real one-time Medsa Bump price once confirmed
-const BUMP_LOYALTY_DISCOUNT_PCT = 0.20 // TODO: confirm the real repeat-use discount rate
+const BUMP_PRICE_HKD = 888
+const BUMP_LOYALTY_DISCOUNT_PCT = 0.20
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })

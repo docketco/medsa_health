@@ -684,7 +684,6 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           {key:'doctors',icon:'doctors',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
           {key:'family',icon:'family',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
-          {key:'storage',icon:'storage',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:C.green,flexShrink:0}}><Icon name={item.icon}/></div>
@@ -5061,7 +5060,7 @@ function FamilyScreen({ isEn }) {
   )
 }
 
-function EditProfileScreen({ isEn, patient={}, onSaved }) {
+function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
   })
@@ -5210,6 +5209,10 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         <input value={newSeverity} onChange={e=>setNewSeverity(e.target.value)} placeholder={isEn?'Severity (optional, e.g. Severe)':'嚴重程度（選填，例如：嚴重）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleAddAllergy} disabled={savingAllergy||!newAllergen.trim()}>{savingAllergy?'Adding…':(isEn?'+ Add allergy':'+ 新增過敏')}</Btn>
       </Card>
+
+      {onSignOut&&<div style={{margin:'24px 16px 0',textAlign:'center'}}>
+        <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
+      </div>}
     </div>
   )
 }
@@ -5332,40 +5335,6 @@ function MedsaBumpSection({ isEn, patient }) {
         <Btn variant="primary" style={{width:'100%'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </Card>
     </>
-  )
-}
-
-function StorageScreen({ isEn, patient={}, onSignOut }) {
-  const tiers=[
-    {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
-    {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
-    {name:'Family',price:'HK$38/mo',storage:'50 GB shared',perks:['Everything in Personal','Up to 5 family members','Guardian monitoring for seniors/minors','Priority support','Family emergency card'],current:false,color:C.brown,bg:C.brownLight},
-  ]
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{isEn?'Your storage':'您的儲存空間'}</SecLabel>
-      <Card style={{padding:'16px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
-        <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
-        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?"At current rate you'll reach your limit in ~14 months.":'按目前速度，約14個月內達到限額。'}</div>
-      </Card>
-      <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
-      {tiers.map((tier,i)=>(
-        <div key={i} style={{background:C.cream,border:`0.5px solid ${tier.current?tier.color:C.border}`,borderRadius:'14px',margin:'0 16px 10px',padding:'16px',position:'relative'}}>
-          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{isEn?'Current plan':'目前計劃'}</span>}
-          <div style={{fontSize:'16px',fontWeight:700,color:tier.color,marginBottom:'2px'}}>{tier.name}</div>
-          <div style={{fontSize:'22px',fontWeight:800,color:C.text,marginBottom:'2px'}}>{tier.price}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {isEn?'cloud storage':'雲端儲存'}</div>
-          <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'14px'}}>
-            {tier.perks.map(p=><div key={p} style={{fontSize:'12px',color:C.text,display:'flex',alignItems:'center',gap:'7px'}}><span style={{color:tier.color,fontSize:'10px'}}>✓</span>{p}</div>)}
-          </div>
-          {!tier.current&&<button style={{width:'100%',border:'none',background:tier.color,borderRadius:'10px',padding:'11px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'inherit',color:'#fff'}}>{isEn?`Upgrade to ${tier.name}`:`升級至${tier.name}`}</button>}
-        </div>
-      ))}
-      {onSignOut&&<div style={{margin:'20px 16px 0',textAlign:'center'}}>
-        <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
-      </div>}
-    </div>
   )
 }
 
@@ -6032,8 +6001,7 @@ export default function PatientApp({ liveData={} }) {
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
-        }}/>}
-        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient} onSignOut={()=>{
+        }} onSignOut={()=>{
           setSignedInPatient(null); setShowGate(true)
           if (typeof window!=='undefined') window.localStorage.removeItem('medsa_signed_in_patient_id')
         }}/>}
