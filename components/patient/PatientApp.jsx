@@ -5350,6 +5350,8 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   const [profiles,setProfiles]=useState([])
   const [managingAdult,setManagingAdult]=useState(null)
   const [loading,setLoading]=useState(true)
+  const [subscribing,setSubscribing]=useState(false)
+  const [subscribeError,setSubscribeError]=useState(null)
 
   useEffect(() => {
     if (!open || !activePatient?.id) return
@@ -5371,34 +5373,62 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   }, [open, activePatient?.id])
 
   if (!open) return null
-  // One linked Kids profile is free - managing a SECOND one under the same
-  // login is the paid Guardian feature. A parent can still create a second
-  // child's account for free, it just won't link/switch under this login
-  // without Guardian (handled inside the "add a child" flow itself).
+  // Real-time check, not just "was Guardian active when this kid was
+  // added" - a lapsed subscription actually locks access to any kid
+  // beyond the first free one, re-checked every time this opens. Same
+  // active+expiry combination already used elsewhere in this app for a
+  // paid add-on (see claims_plugin_enabled/_expires_at in medsa-admin.jsx).
+  const today = new Date().toISOString().slice(0,10)
+  const guardianActive = !!managingAdult?.guardian_subscription_active && (!managingAdult?.guardian_subscription_expires_at || managingAdult.guardian_subscription_expires_at >= today)
+  // Index 0 is always the adult, free. Index 1 (the first linked kid) is
+  // free too. Anything beyond that needs an active Guardian subscription
+  // right now, not just at the moment it was added.
+  const isLocked = (idx) => idx >= 2 && !guardianActive
   const canAddFree = profiles.length <= 1
+
+  async function handleSubscribeGuardian() {
+    if (!managingAdult?.id) return
+    setSubscribing(true); setSubscribeError(null)
+    try {
+      const res = await fetch('/api/patient/create_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ patientId: managingAdult.id }),
+      })
+      const data = await res.json()
+      if (data.status==='CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setSubscribeError(data.message || 'Could not start checkout.')
+    } catch {
+      setSubscribeError('Could not reach the server - try again.')
+    }
+    setSubscribing(false)
+  }
+
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:50,display:'flex',alignItems:'flex-end'}}>
       <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:'20px 16px 24px',width:'100%',maxWidth:440,margin:'0 auto',maxHeight:'70vh',overflowY:'auto'}}>
         <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:'0 auto 16px'}}/>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'14px'}}>Switch profile</div>
         {loading&&<div style={{fontSize:'12px',color:C.textMuted,padding:'12px'}}>Loading…</div>}
-        {!loading&&profiles.map(p=>{
+        {!loading&&profiles.map((p,idx)=>{
           const isKid = p.account_type==='kids'
+          const locked = isLocked(idx)
           return (
-            <div key={p.id} onClick={()=>{onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?C.greenXLight:'transparent',borderRadius:'10px'}}>
+            <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?C.greenXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
               <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{isKid?'Medsa Kids':'You'}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isKid?'Medsa Kids':'You'}</div>
               </div>
-              {p.id===activePatient.id&&<span style={{color:C.green,fontSize:'16px',flexShrink:0}}>✓</span>}
+              {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:C.green,fontSize:'16px',flexShrink:0}}>✓</span>}
             </div>
           )
         })}
+        {subscribeError&&<div style={{fontSize:'12px',color:C.red,margin:'8px 6px 0'}}>{subscribeError}</div>}
         <div style={{marginTop:'12px'}}>
           {canAddFree
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a child's Medsa Kids profile</Btn>
-            : <div onClick={()=>{onAddChild(managingAdult,true);onClose()}} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6,cursor:'pointer'}}>Managing more than one child under this login needs Medsa Guardian. Tap to learn more.</div>}
+            : guardianActive
+              ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another Medsa Kids profile</Btn>
+              : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
         </div>
       </div>
     </div>
@@ -5936,6 +5966,26 @@ export default function PatientApp({ liveData={} }) {
       }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
       window.history.replaceState({}, '', window.location.pathname)
     } else if (params.get('auto_purchase_cancelled') === '1') {
+      setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  // Same verify-on-return pattern as the auto-purchase effect above, for
+  // Medsa Guardian - reuses autoPurchaseNotice as a generic top banner
+  // rather than adding a near-duplicate piece of state just for this.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('guardian_started') === '1' && sessionId) {
+      fetch('/api/patient/verify_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK' && data.isActive) setAutoPurchaseNotice({ ok: true, text: 'Medsa Guardian is now active - you can manage more than one profile under this login.' })
+        else setAutoPurchaseNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('guardian_cancelled') === '1') {
       setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
       window.history.replaceState({}, '', window.location.pathname)
     }
