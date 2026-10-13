@@ -3179,6 +3179,7 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
   const [selectedPresets,setSelectedPresets]=useState(new Set())
   const [customItem,setCustomItem]=useState('')
   const [customItems,setCustomItems]=useState([])
+  const [sourceFormFile,setSourceFormFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
 
@@ -3196,9 +3197,25 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
     const labels = [...selectedPresets, ...customItems]
     if (!title.trim() || labels.length===0 || !patient?.id) return
     setSaving(true); setError(null)
+    // The insurer's own form/instructions, kept as a reference alongside
+    // the checklist it's for - not parsed, just attached so the patient
+    // (or whoever eventually submits this) can check the bundle against
+    // what the form actually asks for.
+    let sourceFormAttachmentId = null
+    if (sourceFormFile) {
+      const path = `${patient.medsa_id || patient.id}/docprep-form-${Date.now()}-${sourceFormFile.name}`
+      const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, sourceFormFile)
+      if (upErr) { setError(upErr.message); setSaving(false); return }
+      const { data: formAtt, error: attErr } = await supabase.from('medical_record_attachments').insert({
+        patient_id: patient.id, category: 'claim_document', file_url: path, file_name: sourceFormFile.name, verification_status: 'unverified',
+      }).select().maybeSingle()
+      if (attErr) { setError(attErr.message); setSaving(false); return }
+      sourceFormAttachmentId = formAtt?.id || null
+    }
     const items = labels.map(label => ({ label, attachment_id: null }))
     const { data, error: insErr } = await supabase.from('document_prep_bundles').insert({
       patient_id: patient.id, title: title.trim(), insurer_name: insurerName.trim()||null, items,
+      source_form_attachment_id: sourceFormAttachmentId,
     }).select().maybeSingle()
     if (insErr) { setError(insErr.message); setSaving(false); return }
     onCreated(data)
@@ -3210,6 +3227,14 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
       <input value={title} onChange={e=>setTitle(e.target.value)} placeholder={isEn?'e.g. AIA pre-authorization request':'例如:AIA預先授權申請'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Insurer (optional)':'保險公司(可選)'}</div>
       <input value={insurerName} onChange={e=>setInsurerName(e.target.value)} placeholder={isEn?'e.g. AIA':'例如:AIA'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'14px'}}/>
+
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?"The insurer's form or instructions (optional)":'保險公司表格或指示(可選)'}</div>
+      <label style={{display:'block'}}>
+        <div style={{textAlign:'left',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px 12px',cursor:'pointer',fontSize:'12px',color:sourceFormFile?C.text:C.textMuted,marginBottom:'14px'}}>
+          {sourceFormFile ? `📄 ${sourceFormFile.name}` : (isEn?'+ Attach the form/letter you received, if any':'+ 附上收到的表格或信件(如有)')}
+        </div>
+        <input type="file" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(f) setSourceFormFile(f)}}/>
+      </label>
 
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'What documents are needed?':'需要哪些文件?'}</div>
       <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
@@ -3290,6 +3315,7 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
       <div style={{padding:'10px 16px 0'}}>
         <div style={{fontSize:'17px',fontWeight:700}}>{bundle.title}</div>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{bundle.insurer_name||(isEn?'No insurer named':'未指定保險公司')} · {done}/{items.length} {isEn?'attached':'已附上'}</div>
+        {bundle.source_form_attachment_id&&<span onClick={()=>viewAttachment(bundle.source_form_attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {isEn?"View the insurer's form you uploaded":'查看已上傳的保險公司表格'} →</span>}
       </div>
 
       {items.map((item,idx)=>(
