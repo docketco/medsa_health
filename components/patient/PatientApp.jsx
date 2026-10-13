@@ -5337,6 +5337,131 @@ function LoginFlow({ onBack, onComplete }) {
   )
 }
 
+// ── PROFILE SWITCHER (Instagram-style) ──────────────────────────────────────
+// Clicking your own profile icon shows every profile switchable from this
+// login: yourself plus any Medsa Kids linked under you (patients.
+// parent_patient_id). Switching just re-points signedInPatient at a
+// different real row - everything downstream already keys off its id, no
+// separate "active profile" concept needed. The managing adult is derived
+// from whichever profile is currently active (itself, if it's the top-
+// level account, or its parent_patient_id if it's a Kids profile), so this
+// works correctly even mid-session as a different profile.
+function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild }) {
+  const [profiles,setProfiles]=useState([])
+  const [managingAdult,setManagingAdult]=useState(null)
+  const [loading,setLoading]=useState(true)
+
+  useEffect(() => {
+    if (!open || !activePatient?.id) return
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      const adultId = activePatient.account_type==='kids' ? activePatient.parent_patient_id : activePatient.id
+      const [{ data: adult }, { data: kids }] = await Promise.all([
+        supabase.from('patients').select('*').eq('id', adultId).maybeSingle(),
+        supabase.from('patients').select('*').eq('parent_patient_id', adultId).order('created_at',{ascending:true}),
+      ])
+      if (cancelled) return
+      setManagingAdult(adult||null)
+      setProfiles([adult, ...(kids||[])].filter(Boolean))
+      setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [open, activePatient?.id])
+
+  if (!open) return null
+  // One linked Kids profile is free - managing a SECOND one under the same
+  // login is the paid Guardian feature. A parent can still create a second
+  // child's account for free, it just won't link/switch under this login
+  // without Guardian (handled inside the "add a child" flow itself).
+  const canAddFree = profiles.length <= 1
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:50,display:'flex',alignItems:'flex-end'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:'20px 16px 24px',width:'100%',maxWidth:440,margin:'0 auto',maxHeight:'70vh',overflowY:'auto'}}>
+        <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:'0 auto 16px'}}/>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'14px'}}>Switch profile</div>
+        {loading&&<div style={{fontSize:'12px',color:C.textMuted,padding:'12px'}}>Loading…</div>}
+        {!loading&&profiles.map(p=>{
+          const isKid = p.account_type==='kids'
+          return (
+            <div key={p.id} onClick={()=>{onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?C.greenXLight:'transparent',borderRadius:'10px'}}>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{isKid?'Medsa Kids':'You'}</div>
+              </div>
+              {p.id===activePatient.id&&<span style={{color:C.green,fontSize:'16px',flexShrink:0}}>✓</span>}
+            </div>
+          )
+        })}
+        <div style={{marginTop:'12px'}}>
+          {canAddFree
+            ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a child's Medsa Kids profile</Btn>
+            : <div onClick={()=>{onAddChild(managingAdult,true);onClose()}} style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6,cursor:'pointer'}}>Managing more than one child under this login needs Medsa Guardian. Tap to learn more.</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Reuses SelfRegisterFlow's step-by-step visual shape, but not its HKID +
+// selfie identity verification - that exists to prove a STRANGER with no
+// prior anchor really is who they claim, which doesn't apply here: the
+// parent creating this is already signed in, and the child usually has no
+// HKID yet anyway (HK doesn't require one until around age 11). A birth
+// certificate upload is the real equivalent proof for this case instead.
+function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
+  const [form,setForm]=useState({fullName:'',dob:''})
+  const [certFile,setCertFile]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handleSubmit() {
+    setSaving(true); setError(null)
+    try {
+      const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      const { data: child, error: insErr } = await supabase.from('patients').insert({
+        medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob,
+        account_type: 'kids', parent_patient_id: parentPatient.id, registration_path: 'guardian_created',
+      }).select().maybeSingle()
+      if (insErr) throw insErr
+      if (certFile) {
+        const path = `${medsaId}/birth-cert-${Date.now()}-${certFile.name}`
+        await supabase.storage.from('id-verification').upload(path, certFile)
+        const { data: att } = await supabase.from('medical_record_attachments').insert({
+          patient_id: child.id, category: 'birth_certificate', file_url: path, file_name: certFile.name, verification_status: 'unverified',
+        }).select().maybeSingle()
+        if (att) await supabase.from('patients').update({ birth_certificate_attachment_id: att.id }).eq('id', child.id)
+      }
+      onComplete(child)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a Medsa Kids profile</div>
+        {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one child under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Same information as a regular Medsa profile - your child likely doesn't have an HKID yet, so a birth certificate works instead.</div>
+        <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'14px'}}>
+          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Child's full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} type="date" max={new Date().toISOString().slice(0,10)} placeholder="Date of birth" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Birth certificate (optional, can add later)</div>
+        <input type="file" accept="image/*,application/pdf" onChange={e=>setCertFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Creating…':'Create profile'}</Btn>
+      </div>
+    </div>
+  )
+}
+
 function SignUpGate({ onComplete, onSkipDemo }) {
   const [mode,setMode]=useState(null) // null | 'claim' | 'register'
 
@@ -5753,6 +5878,12 @@ export default function PatientApp({ liveData={} }) {
   // between renders. This was the actual cause of the sign-up gate crash.
   const [signedInPatient,setSignedInPatient]=useState(null)
   const [showGate,setShowGate]=useState(true)
+  const [switcherOpen,setSwitcherOpen]=useState(false)
+  const [creatingKid,setCreatingKid]=useState(null) // null | {parent, guardianRequired}
+  function switchToPatient(p) {
+    setSignedInPatient(p)
+    if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+  }
   const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
 
   // Don't trust liveData.patient as proof someone's really signed in - it
@@ -5907,6 +6038,12 @@ export default function PatientApp({ liveData={} }) {
     }} onSkipDemo={()=>setShowGate(false)}/>
   }
 
+  if (creatingKid) {
+    return <CreateKidsProfileFlow parentPatient={creatingKid.parent} guardianRequired={creatingKid.guardianRequired}
+      onBack={()=>setCreatingKid(null)}
+      onComplete={(child)=>{ setCreatingKid(null); switchToPatient(child) }}/>
+  }
+
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
   const liveTransactions = signedInPatient ? (realPatientData?.transactions||[]) : []
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
@@ -5943,6 +6080,11 @@ export default function PatientApp({ liveData={} }) {
             <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?C.green:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
           ))}
         </div>
+        {/* Instagram-style profile switcher entry point - tap your own
+            avatar to switch into a linked Medsa Kids profile or add one.
+            Only shown for a real signed-in account (switching makes no
+            sense in demo mode, which has no real patient row to link). */}
+        {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:C.green,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
@@ -5982,6 +6124,9 @@ export default function PatientApp({ liveData={} }) {
       <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
       <ExternalRequestModal request={pendingExternalRequest} records={liveRecords} onDone={()=>setPendingExternalRequest(null)}/>
       <IncomingCallOverlay call={incomingCall} isEn={isEn} patient={patient} onDismiss={()=>setIncomingCall(null)}/>
+      {signedInPatient&&<ProfileSwitcherModal open={switcherOpen} onClose={()=>setSwitcherOpen(false)} activePatient={signedInPatient}
+        onSwitch={switchToPatient}
+        onAddChild={(parent,guardianRequired)=>setCreatingKid({parent,guardianRequired})}/>}
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
