@@ -18,9 +18,9 @@ import Stripe from 'stripe'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
-const GUARDIAN_PACKAGE_PRICE_HKD = null // TODO: set the real monthly package price once confirmed
+const GUARDIAN_PACKAGE_PRICE_HKD = 148
 const GUARDIAN_PACKAGE_SIZE = 4
-const GUARDIAN_ADDON_PER_HEAD_HKD = null // TODO: set the real per-extra-head add-on price once confirmed
+const GUARDIAN_ADDON_PER_HEAD_HKD = null // TODO: set the real per-extra-head add-on price once confirmed (not wired into checkout yet - package only)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
