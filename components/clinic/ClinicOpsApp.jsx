@@ -4627,6 +4627,65 @@ function PracticeManagerStaffScreen({ staffMember, institutionId }) {
 // downloads); this is the practice manager's own view of the same
 // underlying data - who billed it, and what category it falls under -
 // filterable and exportable rather than just a running list.
+// Real gap: this screen had no way to see whether revenue was trending
+// up/down or spot an unusual day - only a flat running total and a row-
+// by-row list. Daily totals over the last 30 days, independent of this
+// screen's own doctor/category/search filters (those are for finding one
+// transaction, not for reshaping what "the trend" means) - a single-hue
+// magnitude-over-time bar chart, per the dataviz skill's form heuristic,
+// with a per-bar hover tooltip since a bare sparkline with no numbers
+// invites exactly the "what day was that spike" question it can't answer.
+function RevenueTrendChart({ rows }) {
+  const [hoverIdx, setHoverIdx] = useState(null)
+  const DAYS = 30
+  // HK wall-clock calendar day, not the UTC day a naive toISOString()
+  // slice would give - a late-night HK visit (HK is UTC+8) can fall on
+  // the PREVIOUS UTC date, which would silently bucket it onto the wrong
+  // bar. Same hkParts helper the rest of this file already uses for
+  // exactly this reason (see its own comment in lib/hkTime.js).
+  const dayKey = p => `${p.year}-${String(p.month).padStart(2,'0')}-${String(p.day).padStart(2,'0')}`
+  const todayParts = hkParts(new Date())
+  const days = []
+  for (let i = DAYS-1; i >= 0; i--) {
+    const d = hkWallTimeToUTC(todayParts.year, todayParts.month, todayParts.day - i, 12, 0, 0)
+    days.push({ date: d, key: dayKey(hkParts(d)), total: 0 })
+  }
+  const byKey = Object.fromEntries(days.map((d,i) => [d.key, i]))
+  for (const r of rows) {
+    const idx = byKey[dayKey(hkParts(r.created_at))]
+    if (idx != null) days[idx].total += (r.patient_pays||0) + (r.insurer_covers||0)
+  }
+  const max = Math.max(1, ...days.map(d=>d.total))
+  const periodTotal = days.reduce((s,d)=>s+d.total,0)
+  const hovered = hoverIdx!=null ? days[hoverIdx] : null
+
+  return (
+    <Card style={{padding:'16px',marginBottom:'16px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:'2px'}}>
+        <div style={{fontSize:'12px',fontWeight:600,color:C.textSub,textTransform:'uppercase',letterSpacing:'0.3px'}}>Revenue, last 30 days</div>
+        <div style={{fontSize:'15px',fontWeight:700,color:C.green}}>HK${periodTotal.toLocaleString(undefined,{maximumFractionDigits:0})}</div>
+      </div>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',height:'14px'}}>
+        {hovered ? `${hovered.date.toLocaleDateString('en-HK',{day:'numeric',month:'short'})} · HK$${hovered.total.toLocaleString(undefined,{maximumFractionDigits:0})}` : ' '}
+      </div>
+      <div style={{display:'flex',alignItems:'flex-end',gap:'2px',height:'64px',borderBottom:`1px solid ${C.border}`,paddingBottom:'1px'}}>
+        {days.map((d,i) => (
+          <div key={d.key} onMouseEnter={()=>setHoverIdx(i)} onMouseLeave={()=>setHoverIdx(null)}
+            style={{flex:1,height:'100%',display:'flex',alignItems:'flex-end',cursor:'default'}}>
+            <div style={{width:'100%',minHeight:d.total>0?'3px':0,height:`${(d.total/max)*100}%`,
+              background:hoverIdx===i?C.green:(d.total>0?C.greenMid:'transparent'),
+              borderRadius:'3px 3px 0 0',transition:'background 0.1s'}}/>
+          </div>
+        ))}
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',fontSize:'10px',color:C.textMuted,marginTop:'4px'}}>
+        <span>{days[0].date.toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+        <span>{days[Math.floor(DAYS/2)].date.toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+        <span>{days[DAYS-1].date.toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+      </div>
+    </Card>
+  )
+}
 function PaymentLogScreen({ institutionId }) {
   const [loading,setLoading]=useState(true)
   const [rows,setRows]=useState([])
@@ -4698,6 +4757,18 @@ function PaymentLogScreen({ institutionId }) {
   // this screen had no way to see the insurer's share at all.
   const totalPatientPays = filtered.reduce((sum,r)=>sum+(r.patient_pays||0),0)
   const totalInsurerCovers = filtered.reduce((sum,r)=>sum+(r.insurer_covers||0),0)
+  // Real gap: till reconciliation needs how much cash/card/Octopus was
+  // actually collected, not just the patient-pays/insurer-covers split -
+  // front desk balancing the drawer at end of day had no way to get this
+  // off this screen at all. Only patient_pays counts here (what insurers
+  // cover never crosses the till, whatever the method tag on that row).
+  const METHOD_LABELS = { cash:'Cash', card:'Card', octopus:'Octopus', insurance:'Insurer-settled', treatment_plan:'Treatment plan' }
+  const byMethod = filtered.reduce((acc,r)=>{
+    const key = r.payment_method || 'other'
+    acc[key] = (acc[key]||0) + (r.patient_pays||0)
+    return acc
+  },{})
+  const methodBreakdown = Object.entries(byMethod).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1])
 
   function exportCSV() {
     if (typeof window === 'undefined') return // SSR safety guard
@@ -4725,6 +4796,7 @@ function PaymentLogScreen({ institutionId }) {
         <SecLabel>Payment log - every doctor & consultation charge, categorized</SecLabel>
         <Btn variant="primary" style={{fontSize:'12px'}} onClick={exportCSV} disabled={filtered.length===0}>Export to Excel/CSV</Btn>
       </div>
+      {!loading&&rows.length>0&&<RevenueTrendChart rows={rows}/>}
       <div style={{display:'flex',gap:'8px',marginBottom:'12px',flexWrap:'wrap'}}>
         <input type="text" placeholder="Search receipt no, claim ref, or patient..." value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',minWidth:'220px'}}/>
         <select value={doctorFilter} onChange={e=>setDoctorFilter(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff'}}>
@@ -4739,7 +4811,8 @@ function PaymentLogScreen({ institutionId }) {
         <input type="date" value={toDate} onChange={e=>setToDate(e.target.value)} style={{padding:'8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
         {(doctorFilter||categoryFilter||fromDate||toDate||searchQuery)&&<div onClick={()=>{setDoctorFilter('');setCategoryFilter('');setFromDate('');setToDate('');setSearchQuery('')}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px 4px'}}>Clear filters</div>}
       </div>
-      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Patient paid HK${totalPatientPays.toFixed(2)} · Insurers covered HK${totalInsurerCovers.toFixed(2)} · Total HK${(totalPatientPays+totalInsurerCovers).toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{filtered.length} transaction{filtered.length!==1?'s':''} · Patient paid HK${totalPatientPays.toFixed(2)} · Insurers covered HK${totalInsurerCovers.toFixed(2)} · Total HK${(totalPatientPays+totalInsurerCovers).toFixed(2)}{rows.length>=1000?' (showing most recent 1000)':''}</div>
+      {methodBreakdown.length>0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'12px'}}>Collected at till — {methodBreakdown.map(([k,v])=>`${METHOD_LABELS[k]||k} HK$${v.toFixed(2)}`).join(' · ')}</div>}
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px'}}>No transactions match.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -6301,6 +6374,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:'flex-end',flexShrink:0}}>
                   {m.coveredItems.length>0&&<Badge text="Eligible" type="ok"/>}
                   {m.verificationRequired&&<Badge text={m.hasVerifiedPolicyNumber?'Policy verified':'No verified policy'} type={m.hasVerifiedPolicyNumber?'ok':'full'}/>}
+                  {!m.isPartnered&&<Badge text="Not a Medsa partner" type="full"/>}
                 </div>
               </div>
               {/* Roster/API-resolved plans share one link per patient+insurer,
@@ -6313,6 +6387,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {m.notCovered&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>None of this visit's items matched this plan's registered categories - select it anyway if you know it covers this visit.</div>}
               {!m.notCovered&&m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
               {m.verificationRequired&&!m.hasVerifiedPolicyNumber&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} requires a verified policy number - this link doesn't have one, so billing will be rejected. Use "check by their real policy number" instead of "add it."</div>}
+              {!m.isPartnered&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} isn't a fully signed Medsa partner - Medsa has no real coverage terms to bill against, so this will be rejected. Have the patient pay in full and claim reimbursement with {m.plan.company_name} directly.</div>}
             </Card>
           ))}
           {/* Optional - only matters if this visit actually needs

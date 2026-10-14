@@ -14,21 +14,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
-import Stripe from 'stripe'
+import { retrievePaidSession } from '../../../lib/verifyStripeCheckout'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  if (!process.env.STRIPE_SECRET_KEY) return res.status(200).json({ status: 'NOT_CONFIGURED' })
   const { sessionId } = req.body || {}
-  if (!sessionId) return res.status(400).json({ status: 'ERROR', message: 'sessionId is required.' })
-
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
-  const session = await stripe.checkout.sessions.retrieve(sessionId, { expand: ['subscription'] })
-  if (session.payment_status !== 'paid' && session.status !== 'complete') {
-    return res.status(200).json({ status: 'NOT_PAID', paymentStatus: session.payment_status })
-  }
+  const result = await retrievePaidSession(sessionId, { expand: ['subscription'] })
+  if (result.status !== 'PAID') return res.status(result.status === 'ERROR' ? 400 : 200).json(result)
+  const { session } = result
 
   const companyId = session.metadata?.company_id
   if (!companyId) return res.status(200).json({ status: 'ERROR', message: 'This session has no company on file - contact Medsa.' })

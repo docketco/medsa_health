@@ -60,7 +60,32 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
 }
 
 // ── INSURANCE DASHBOARD ───────────────────────────────────────────────────────
+// Real gap: every number here used to be a hardcoded string ("4,821" plan
+// views, "142" new clients...) shown to a real logged-in insurer partner -
+// not computed from anything. "Plan views" is dropped rather than faked
+// again - Medsa has no view-tracking anywhere, so there's no honest number
+// to show. The other three are real counts off this company's own plans.
 function InsuranceDashboard({ onNav, company }) {
+  const [stats, setStats] = useState({ loading: true, activePlans: 0, newInquiries30d: 0, pendingClaims: 0 })
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!company?.name) { setStats(s => ({ ...s, loading: false })); return }
+      const { data: plans } = await supabase.from('insurance_plans').select('id, status').eq('company_name', company.name)
+      const planIds = (plans || []).map(p => p.id)
+      const activePlans = (plans || []).filter(p => p.status === 'active').length
+      if (planIds.length === 0) { if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: 0, pendingClaims: 0 }); return }
+      const since30d = new Date(Date.now() - 30*24*60*60*1000).toISOString()
+      const [{ count: newInquiries30d }, { count: pendingClaims }] = await Promise.all([
+        supabase.from('plan_inquiries').select('id', { count: 'exact', head: true }).in('plan_id', planIds).gte('created_at', since30d),
+        supabase.from('insurance_claims').select('id', { count: 'exact', head: true }).in('plan_id', planIds).in('status', ['pending', 'pending_review']),
+      ])
+      if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: newInquiries30d || 0, pendingClaims: pendingClaims || 0 })
+    }
+    load()
+    return () => { cancelled = true }
+  }, [company?.name])
+
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
@@ -69,11 +94,10 @@ function InsuranceDashboard({ onNav, company }) {
         <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
       </div>
       <SecLabel>Performance</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
-        <StatCard icon="◎" label="Plan views" value="4,821" sub="this month"/>
-        <StatCard icon="◈" label="New clients" value="142" sub="via Medsa referral" color={C.green} bg={C.greenLight}/>
-        <StatCard icon="▣" label="Active plans" value="3" sub="listed on Medsa"/>
-        <StatCard icon="◇" label="Pending claims" value="2" sub="require attention" color={C.amber} bg={C.amberLight}/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
+        <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
+        <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>
+        <StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
@@ -81,10 +105,12 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
           {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
+          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
+          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
@@ -334,7 +360,20 @@ function CompanyLogoUploader({ company }) {
 }
 
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
-const PLAN_MANAGER_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
+// Shares its claims-adjudication fields (copay, deductible, covered
+// categories, per-category limits, overall/room-&-board limits, billing
+// model, network, pre-auth threshold) with CoverageRulesManager below via
+// AdjudicationFieldsSection/DocumentAutoFillCard (UX audit item 5) - see
+// the comment above those shared components for why.
+const PLAN_MANAGER_EMPTY_FORM = {
+  plan_name:'', plan_type:'', key_benefits:'',
+  copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
+  overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
+  pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
+  policy_document_path:'', billing_model:'direct',
+  commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
+  self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
+}
 function PlanManager({ company }) {
   const [plans,setPlans]=useState([])
   const [search,setSearch]=useState('')
@@ -342,8 +381,7 @@ function PlanManager({ company }) {
   const [creating,setCreating]=useState(false)
   const [saving,setSaving]=useState(false)
   const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
-  const [customCategory,setCustomCategory]=useState('')
+  const [form,setForm]=useState(PLAN_MANAGER_EMPTY_FORM)
   const [customFlag,setCustomFlag]=useState('')
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
@@ -385,15 +423,6 @@ function PlanManager({ company }) {
   function removeTier(i) {
     setTiers(t => t.filter((_,idx)=>idx!==i))
   }
-  function toggleCategory(cat) {
-    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
-  }
-  function addCustomCategory() {
-    const val = customCategory.trim()
-    if (!val || form.covered_categories.includes(val)) return
-    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
-    setCustomCategory('')
-  }
   // The insurer's own "always flag this" list - separate from covered
   // categories, matched against a patient's declared/history conditions
   // by lib/planSuitability.js regardless of the plan's own coverage
@@ -421,22 +450,38 @@ function PlanManager({ company }) {
 
   function startCreate() {
     setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
+    setForm(PLAN_MANAGER_EMPTY_FORM)
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
   }
   function startEdit(plan) {
     setEditingId(plan.id)
+    const category_limits = {}
+    for (const cat of (plan.covered_categories||[])) {
+      const stored = (plan.category_limits||{})[cat] || {}
+      category_limits[cat] = {
+        annual_limit_hkd: stored.annual_limit_hkd!=null ? String(stored.annual_limit_hkd) : '',
+        per_visit_limit_hkd: stored.per_visit_limit_hkd!=null ? String(stored.per_visit_limit_hkd) : '',
+        requires_preauth: !!stored.requires_preauth, requires_referral: !!stored.requires_referral,
+      }
+    }
     setForm({
       plan_name: plan.plan_name||'', plan_type: plan.plan_type||'', key_benefits: plan.key_benefits||'',
       copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
       annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
       covered_categories: plan.covered_categories||[],
+      overall_annual_limit_hkd: plan.overall_annual_limit_hkd!=null ? String(plan.overall_annual_limit_hkd) : '',
+      room_board_daily_limit_hkd: plan.room_board_daily_limit_hkd!=null ? String(plan.room_board_daily_limit_hkd) : '',
+      network_type: plan.network_type||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
+      pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
+      preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
+      category_limits, policy_document_path: plan.policy_document_path||'',
+      billing_model: plan.billing_model||'direct',
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
       requires_agent: !!plan.requires_agent,
       insurer_flags: plan.insurer_flags||[],
-      additional_terms: plan.additional_terms||'', pre_existing_condition_policy: plan.pre_existing_condition_policy||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
+      additional_terms: plan.additional_terms||'',
       self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
       auto_buy_on_clean: !!plan.auto_buy_on_clean,
       logo_url: plan.logo_url||'',
@@ -517,6 +562,16 @@ function PlanManager({ company }) {
     const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
     if (!form.plan_name || validTiers.length===0) return
     setSaving(true)
+    const category_limits = {}
+    for (const cat of form.covered_categories) {
+      const cl = form.category_limits[cat]
+      if (!cl) continue
+      category_limits[cat] = {
+        annual_limit_hkd: cl.annual_limit_hkd!=='' ? parseFloat(cl.annual_limit_hkd) : null,
+        per_visit_limit_hkd: cl.per_visit_limit_hkd!=='' ? parseFloat(cl.per_visit_limit_hkd) : null,
+        requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
+      }
+    }
     const payload = {
       plan_name: form.plan_name, plan_type: form.plan_type || null,
       key_benefits: form.key_benefits || null,
@@ -527,6 +582,18 @@ function PlanManager({ company }) {
       // 10% copay / $500 deductible regardless of what was entered here.
       copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
       annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
+      // Same gap as copay/deductible above, for the fields Plan Manager
+      // was missing entirely until now (see AdjudicationFieldsSection) -
+      // a partnered insurer's marketplace-sold plan now adjudicates
+      // claims with the same accuracy as an unpartnered one's.
+      overall_annual_limit_hkd: form.overall_annual_limit_hkd!=='' ? parseFloat(form.overall_annual_limit_hkd) : null,
+      room_board_daily_limit_hkd: form.room_board_daily_limit_hkd!=='' ? parseFloat(form.room_board_daily_limit_hkd) : null,
+      network_type: form.network_type || null,
+      preauth_threshold_hkd: form.preauth_threshold_hkd!=='' ? parseFloat(form.preauth_threshold_hkd) : null,
+      category_limits,
+      policy_document_path: form.policy_document_path || null,
+      policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
+      billing_model: form.billing_model || 'direct',
       // Real gap: an agent's own commission on a policy was a free-text
       // field THEY typed, with Medsa's referral fee capped against
       // whatever number they entered - backwards, since commission is
@@ -572,7 +639,7 @@ function PlanManager({ company }) {
       )
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm({ plan_name:'', plan_type:'', key_benefits:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[], commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'', pre_existing_condition_policy:'', waiting_period_days:'', self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'' })
+    setForm(PLAN_MANAGER_EMPTY_FORM)
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     load()
   }
@@ -615,6 +682,7 @@ function PlanManager({ company }) {
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
+          <DocumentAutoFillCard form={form} setForm={setForm} uploadPathPrefix={`insurers/${company.id}/plans`}/>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. AIA Gold Health"/>
@@ -650,17 +718,10 @@ function PlanManager({ company }) {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>What's covered (key benefits)</div>
             <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
           </div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Copay rate (%)</div>
-              <input type="number" value={form.copay_rate} onChange={e=>setForm(f=>({...f,copay_rate:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 10 (defaults to 10%)"/>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
-              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
-            </div>
-          </div>
+          {/* Shared with Coverage Rules (UX audit item 5) - the exact same
+              claims-adjudication fields, so a partnered insurer's plan and
+              an unpartnered one's calculate claims with the same accuracy. */}
+          <AdjudicationFieldsSection form={form} setForm={setForm}/>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Commission rate (%) - what you pay an agent on this plan</div>
             <input type="number" value={form.commission_rate_pct} onChange={e=>setForm(f=>({...f,commission_rate_pct:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 20"/>
@@ -702,25 +763,6 @@ function PlanManager({ company }) {
               <button onClick={addFlag} disabled={!customFlag.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
             </div>
           </div>
-          {/* Real gap this closes: waiting period and pre-existing-condition
-              policy were only ever settable for self-serve/TPA plans
-              (CoverageRulesManager) - a broker-sold plan created here had
-              no way to set either, so the health-declaration screen a
-              patient/agent sees before buying always showed "not set by
-              the insurer yet" for a plan that actually has real terms. */}
-          <div style={{display:'flex',gap:'10px',marginBottom:'12px'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Waiting period (days)</div>
-              <input type="number" value={form.waiting_period_days} onChange={e=>setForm(f=>({...f,waiting_period_days:e.target.value}))} placeholder="e.g. 30" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Pre-existing conditions</div>
-              <select value={form.pre_existing_condition_policy} onChange={e=>setForm(f=>({...f,pre_existing_condition_policy:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
-                <option value="">Not set</option>
-                {PRE_EXISTING_POLICIES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
-              </select>
-            </div>
-          </div>
           {/* Real gap this closes: the previous "upload a contract for
               patients to e-sign" feature made Medsa the custodian of a
               real legal document, which isn't a role it wants - this is
@@ -737,23 +779,6 @@ function PlanManager({ company }) {
             <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={5} placeholder="e.g. exclusions, what counts as a pre-existing condition, how claims are assessed…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
           </div>
           <CustomQuestionsManager company={company} planId={editingId}/>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories - what the adjudication engine matches claims against</div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-            {PLAN_MANAGER_CATEGORIES.map(cat=>(
-              <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
-            ))}
-          </div>
-          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
-            <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
-          </div>
-          {form.covered_categories.filter(c=>!PLAN_MANAGER_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
-            {form.covered_categories.filter(c=>!PLAN_MANAGER_CATEGORIES.includes(c)).map(cat=>(
-              <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
-                {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
-              </div>
-            ))}
-          </div>}
           {/* Real bug found live-testing: a plan with no pricing tier yet
               (e.g. one created before a tier was added, or where tiers
               got cleared) left Save permanently disabled with zero
@@ -817,34 +842,96 @@ function PlanManager({ company }) {
 const COVERAGE_RULE_CATEGORIES = ['Hospitalisation','Outpatient','Specialist','Labs & imaging','Dental (basic)','Surgery','Travel emergency','Mental health','Critical illness lump sum']
 const NETWORK_TYPES = [['any_licensed','Any licensed clinic/hospital'],['panel_only','Panel providers only'],['hong_kong_only','Hong Kong only'],['asia_pacific','Asia-Pacific'],['worldwide','Worldwide']]
 const PRE_EXISTING_POLICIES = [['excluded','Excluded permanently'],['covered_after_waiting','Covered after waiting period'],['covered','Covered from day one']]
-const EMPTY_FORM = {
-  plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
-  overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
-  pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
-  policy_document_path:'', billing_model:'direct', logo_url:'',
+
+// ── Shared claims-adjudication fields (UX audit item 5) ──────────────────────
+// Real gap found live-testing: Plan Manager (partnered insurers) and
+// Coverage Rules (unpartnered/TPA-tier) were two completely separately-
+// built forms for "describe a plan's claims terms" - and they'd actually
+// drifted to cover DIFFERENT fields, not just look different. Coverage
+// Rules had per-category limits, pre-authorization threshold, network
+// type, and AI document auto-fill; Plan Manager had none of them, which
+// means a fully partnered insurer's plan - the ones actually sold on the
+// marketplace - was adjudicating claims with LESS accuracy than an
+// unpartnered one's. This is the one shared section both forms now
+// render, so a field added here helps every plan, not just one tier's.
+function mergeExtractedIntoForm(prevForm, extracted) {
+  const category_limits = { ...prevForm.category_limits }
+  const covered_categories = [...prevForm.covered_categories]
+  for (const cl of (extracted.category_limits||[])) {
+    if (!covered_categories.includes(cl.category)) covered_categories.push(cl.category)
+    category_limits[cl.category] = {
+      annual_limit_hkd: cl.annual_limit_hkd!=null ? String(cl.annual_limit_hkd) : (category_limits[cl.category]?.annual_limit_hkd||''),
+      per_visit_limit_hkd: cl.per_visit_limit_hkd!=null ? String(cl.per_visit_limit_hkd) : (category_limits[cl.category]?.per_visit_limit_hkd||''),
+      requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
+    }
+  }
+  for (const cat of (extracted.covered_categories||[])) {
+    if (!covered_categories.includes(cat)) covered_categories.push(cat)
+    if (!category_limits[cat]) category_limits[cat] = { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
+  }
+  return {
+    ...prevForm,
+    plan_name: extracted.plan_name || prevForm.plan_name,
+    copay_rate: extracted.copay_rate_pct!=null ? String(extracted.copay_rate_pct) : prevForm.copay_rate,
+    annual_deductible_hkd: extracted.annual_deductible_hkd!=null ? String(extracted.annual_deductible_hkd) : prevForm.annual_deductible_hkd,
+    overall_annual_limit_hkd: extracted.overall_annual_limit_hkd!=null ? String(extracted.overall_annual_limit_hkd) : prevForm.overall_annual_limit_hkd,
+    room_board_daily_limit_hkd: extracted.room_board_daily_limit_hkd!=null ? String(extracted.room_board_daily_limit_hkd) : prevForm.room_board_daily_limit_hkd,
+    network_type: extracted.network_type || prevForm.network_type,
+    waiting_period_days: extracted.waiting_period_days!=null ? String(extracted.waiting_period_days) : prevForm.waiting_period_days,
+    pre_existing_condition_policy: extracted.pre_existing_condition_policy || prevForm.pre_existing_condition_policy,
+    preauth_threshold_hkd: extracted.preauth_threshold_hkd!=null ? String(extracted.preauth_threshold_hkd) : prevForm.preauth_threshold_hkd,
+    covered_categories, category_limits,
+  }
 }
-function CoverageRulesManager({ company }) {
-  const [plans,setPlans]=useState([])
-  const [search,setSearch]=useState('')
-  const [loading,setLoading]=useState(true)
-  const [creating,setCreating]=useState(false)
-  const [saving,setSaving]=useState(false)
-  const [editingId,setEditingId]=useState(null)
-  const [form,setForm]=useState(EMPTY_FORM)
-  const [customCategory,setCustomCategory]=useState('')
+
+function DocumentAutoFillCard({ form, setForm, uploadPathPrefix }) {
   const [docFile,setDocFile]=useState(null)
   const [uploadingDoc,setUploadingDoc]=useState(false)
   const [parsingDoc,setParsingDoc]=useState(false)
   const [docError,setDocError]=useState(null)
   const [autoFilledNote,setAutoFilledNote]=useState(null)
 
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('insurance_plans').select('*').eq('company_name',company.name).eq('self_serve_only',true).order('created_at',{ascending:false})
-    setPlans(data||[])
-    setLoading(false)
+  async function handleUploadDoc() {
+    if (!docFile) return
+    setUploadingDoc(true); setDocError(null); setAutoFilledNote(null)
+    try {
+      const path = `${uploadPathPrefix}/${Date.now()}-${docFile.name}`
+      const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, docFile)
+      if (upErr) throw upErr
+      setForm(f => ({ ...f, policy_document_path: path }))
+      setParsingDoc(true)
+      const res = await fetch('/api/insurer/parse_plan_document', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentPath: path }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Could not read this document')
+      setForm(f => mergeExtractedIntoForm(f, json.extracted))
+      setAutoFilledNote('Filled in from your document - review every field before saving, nothing here was applied automatically.')
+    } catch (e) {
+      setDocError(e.message)
+    } finally {
+      setUploadingDoc(false); setParsingDoc(false)
+    }
   }
-  useEffect(() => { load() }, [])
+
+  return (
+    <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',marginBottom:'14px'}}>
+      <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>✨ Auto-fill from your policy document</div>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px',lineHeight:1.5}}>Upload the real plan/policy document (PDF or a clear photo) and every field below gets proposed from it - review and edit before saving, nothing is applied automatically.</div>
+      <div style={{display:'flex',gap:'6px'}}>
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>setDocFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
+        <Btn variant="navy" style={{flexShrink:0}} onClick={handleUploadDoc} disabled={!docFile||uploadingDoc||parsingDoc}>{uploadingDoc?'Uploading…':parsingDoc?'Reading…':'Upload & fill'}</Btn>
+      </div>
+      {docError&&<div style={{fontSize:'11px',color:C.red,marginTop:'8px'}}>{docError}</div>}
+      {autoFilledNote&&<div style={{fontSize:'11px',color:C.green,marginTop:'8px'}}>{autoFilledNote}</div>}
+      {form.policy_document_path&&!docError&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Document on file - will be saved with this plan.</div>}
+    </div>
+  )
+}
+
+function AdjudicationFieldsSection({ form, setForm }) {
+  const [customCategory,setCustomCategory]=useState('')
 
   function toggleCategory(cat) {
     setForm(f => {
@@ -866,10 +953,131 @@ function CoverageRulesManager({ company }) {
     setCustomCategory('')
   }
 
+  return (
+    <>
+      <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Copay rate (%)</div>
+          <input type="number" value={form.copay_rate} onChange={e=>setForm(f=>({...f,copay_rate:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 10"/>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
+          <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
+        </div>
+      </div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {COVERAGE_RULE_CATEGORIES.map(cat=>(
+          <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+        <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+      </div>
+      {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+        {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).map(cat=>(
+          <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+            {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
+          </div>
+        ))}
+      </div>}
+
+      {form.covered_categories.length>0&&<>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Per-category limits (optional - leave blank for uncapped)</div>
+        {form.covered_categories.map(cat=>{
+          const cl = form.category_limits[cat] || { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
+          return (
+            <div key={cat} style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+              <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>{cat}</div>
+              <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+                <input type="number" value={cl.annual_limit_hkd} onChange={e=>updateCategoryLimit(cat,'annual_limit_hkd',e.target.value)} placeholder="Annual cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+                <input type="number" value={cl.per_visit_limit_hkd} onChange={e=>updateCategoryLimit(cat,'per_visit_limit_hkd',e.target.value)} placeholder="Per-visit cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+              </div>
+              <div style={{display:'flex',gap:'14px'}}>
+                <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_preauth} onChange={e=>updateCategoryLimit(cat,'requires_preauth',e.target.checked)}/>Needs pre-authorization</label>
+                <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_referral} onChange={e=>updateCategoryLimit(cat,'requires_referral',e.target.checked)}/>Needs doctor referral</label>
+              </div>
+            </div>
+          )
+        })}
+      </>}
+
+      <div style={{fontSize:'12px',color:C.textSub,margin:'14px 0 6px'}}>Overall plan limits</div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Overall annual limit (HK$)</div>
+          <input type="number" value={form.overall_annual_limit_hkd} onChange={e=>setForm(f=>({...f,overall_annual_limit_hkd:e.target.value}))} placeholder="e.g. 2000000" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Room & board (HK$/day)</div>
+          <input type="number" value={form.room_board_daily_limit_hkd} onChange={e=>setForm(f=>({...f,room_board_daily_limit_hkd:e.target.value}))} placeholder="e.g. 1500" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        </div>
+      </div>
+      <div style={{marginBottom:'10px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Billing model</div>
+        <select value={form.billing_model} onChange={e=>setForm(f=>({...f,billing_model:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+          <option value="direct">Direct billing (default) - clinic bills us, patient pays copay only</option>
+          <option value="reimbursement">Reimbursement only - patient always pays in full and claims it back</option>
+        </select>
+        {form.billing_model==='reimbursement'
+          ? <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Reimbursement-only plans are never pre-authorized or billed directly - every claim goes straight to review after the patient has already paid. The pre-authorization threshold below won't apply.</div>
+          : <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>This only decides who pays upfront and who submits the claim - it doesn't mean claims settle automatically. The pre-authorization threshold and per-category rules below still apply and can still send a claim to review.</div>}
+      </div>
+      <div style={{marginBottom:'10px',opacity:form.billing_model==='reimbursement'?0.5:1}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$){form.billing_model==='reimbursement'?' - not used for reimbursement-only plans':''}</div>
+        <input type="number" disabled={form.billing_model==='reimbursement'} value={form.preauth_threshold_hkd} onChange={e=>setForm(f=>({...f,preauth_threshold_hkd:e.target.value}))} placeholder="e.g. 5000 - claims over this need review before auto-settling" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Network</div>
+          <select value={form.network_type} onChange={e=>setForm(f=>({...f,network_type:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+            <option value="">Not set</option>
+            {NETWORK_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+          </select>
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Waiting period (days)</div>
+          <input type="number" value={form.waiting_period_days} onChange={e=>setForm(f=>({...f,waiting_period_days:e.target.value}))} placeholder="e.g. 30" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        </div>
+      </div>
+      <div style={{marginBottom:'14px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-existing conditions</div>
+        <select value={form.pre_existing_condition_policy} onChange={e=>setForm(f=>({...f,pre_existing_condition_policy:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
+          <option value="">Not set</option>
+          {PRE_EXISTING_POLICIES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
+        </select>
+      </div>
+    </>
+  )
+}
+const EMPTY_FORM = {
+  plan_name:'', copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
+  overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
+  pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
+  policy_document_path:'', billing_model:'direct', logo_url:'',
+}
+function CoverageRulesManager({ company }) {
+  const [plans,setPlans]=useState([])
+  const [search,setSearch]=useState('')
+  const [loading,setLoading]=useState(true)
+  const [creating,setCreating]=useState(false)
+  const [saving,setSaving]=useState(false)
+  const [editingId,setEditingId]=useState(null)
+  const [form,setForm]=useState(EMPTY_FORM)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_plans').select('*').eq('company_name',company.name).eq('self_serve_only',true).order('created_at',{ascending:false})
+    setPlans(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
   function startCreate() {
     setEditingId(null)
     setForm(EMPTY_FORM)
-    setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
   }
   function startEdit(plan) {
@@ -895,61 +1103,7 @@ function CoverageRulesManager({ company }) {
       category_limits, policy_document_path: plan.policy_document_path||'',
       billing_model: plan.billing_model||'direct', logo_url: plan.logo_url||'',
     })
-    setDocFile(null); setDocError(null); setAutoFilledNote(null)
     setCreating(true)
-  }
-
-  async function handleUploadDoc() {
-    if (!docFile) return
-    setUploadingDoc(true); setDocError(null); setAutoFilledNote(null)
-    try {
-      const path = `coverage-rules/${company.id}/${Date.now()}-${docFile.name}`
-      const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, docFile)
-      if (upErr) throw upErr
-      setForm(f => ({ ...f, policy_document_path: path }))
-      setParsingDoc(true)
-      const res = await fetch('/api/insurer/parse_plan_document', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentPath: path }),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Could not read this document')
-      const e = json.extracted
-      setForm(f => {
-        const category_limits = {...f.category_limits}
-        const covered_categories = [...f.covered_categories]
-        for (const cl of (e.category_limits||[])) {
-          if (!covered_categories.includes(cl.category)) covered_categories.push(cl.category)
-          category_limits[cl.category] = {
-            annual_limit_hkd: cl.annual_limit_hkd!=null ? String(cl.annual_limit_hkd) : (category_limits[cl.category]?.annual_limit_hkd||''),
-            per_visit_limit_hkd: cl.per_visit_limit_hkd!=null ? String(cl.per_visit_limit_hkd) : (category_limits[cl.category]?.per_visit_limit_hkd||''),
-            requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
-          }
-        }
-        for (const cat of (e.covered_categories||[])) {
-          if (!covered_categories.includes(cat)) covered_categories.push(cat)
-          if (!category_limits[cat]) category_limits[cat] = { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
-        }
-        return {
-          ...f,
-          plan_name: e.plan_name || f.plan_name,
-          copay_rate: e.copay_rate_pct!=null ? String(e.copay_rate_pct) : f.copay_rate,
-          annual_deductible_hkd: e.annual_deductible_hkd!=null ? String(e.annual_deductible_hkd) : f.annual_deductible_hkd,
-          overall_annual_limit_hkd: e.overall_annual_limit_hkd!=null ? String(e.overall_annual_limit_hkd) : f.overall_annual_limit_hkd,
-          room_board_daily_limit_hkd: e.room_board_daily_limit_hkd!=null ? String(e.room_board_daily_limit_hkd) : f.room_board_daily_limit_hkd,
-          network_type: e.network_type || f.network_type,
-          waiting_period_days: e.waiting_period_days!=null ? String(e.waiting_period_days) : f.waiting_period_days,
-          pre_existing_condition_policy: e.pre_existing_condition_policy || f.pre_existing_condition_policy,
-          preauth_threshold_hkd: e.preauth_threshold_hkd!=null ? String(e.preauth_threshold_hkd) : f.preauth_threshold_hkd,
-          covered_categories, category_limits,
-        }
-      })
-      setAutoFilledNote('Filled in from your document - review every field before saving, nothing here was applied automatically.')
-    } catch (e) {
-      setDocError(e.message)
-    } finally {
-      setUploadingDoc(false); setParsingDoc(false)
-    }
   }
 
   async function handleSubmit() {
@@ -991,7 +1145,7 @@ function CoverageRulesManager({ company }) {
       })
     }
     setSaving(false); setCreating(false); setEditingId(null)
-    setForm(EMPTY_FORM); setDocFile(null); setAutoFilledNote(null)
+    setForm(EMPTY_FORM)
     load()
   }
 
@@ -1010,17 +1164,7 @@ function CoverageRulesManager({ company }) {
         <Card style={{padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan':'New plan'}</div>
 
-          <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',marginBottom:'14px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>✨ Auto-fill from your policy document</div>
-            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px',lineHeight:1.5}}>Upload the real plan/policy document (PDF or a clear photo) and every field below gets proposed from it - review and edit before saving, nothing is applied automatically.</div>
-            <div style={{display:'flex',gap:'6px'}}>
-              <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>setDocFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
-              <Btn variant="navy" style={{flexShrink:0}} onClick={handleUploadDoc} disabled={!docFile||uploadingDoc||parsingDoc}>{uploadingDoc?'Uploading…':parsingDoc?'Reading…':'Upload & fill'}</Btn>
-            </div>
-            {docError&&<div style={{fontSize:'11px',color:C.red,marginTop:'8px'}}>{docError}</div>}
-            {autoFilledNote&&<div style={{fontSize:'11px',color:C.green,marginTop:'8px'}}>{autoFilledNote}</div>}
-            {form.policy_document_path&&!docError&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Document on file - will be saved with this plan.</div>}
-          </div>
+          <DocumentAutoFillCard form={form} setForm={setForm} uploadPathPrefix={`coverage-rules/${company.id}`}/>
 
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
@@ -1030,121 +1174,11 @@ function CoverageRulesManager({ company }) {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Plan logo</div>
             <LogoField value={form.logo_url} onChange={v=>setForm(f=>({...f,logo_url:v}))} uploadPath={`insurers/${company.id}/plans/${editingId||'new'}`} fallbackUrl={company.logo_url} fallbackLabel="Using your company logo by default"/>
           </div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Copay rate (%)</div>
-              <input type="number" value={form.copay_rate} onChange={e=>setForm(f=>({...f,copay_rate:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 10"/>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Annual deductible (HK$)</div>
-              <input type="number" value={form.annual_deductible_hkd} onChange={e=>setForm(f=>({...f,annual_deductible_hkd:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 500"/>
-              {/* Real gap this closes: leaving this blank silently applied a
-                  HK$500/year platform default at claim time - nothing on
-                  this form ever said so, only a placeholder that disappears
-                  the moment you focus the field. Enter 0 for no deductible. */}
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Leave blank and claims default to a HK$500/year deductible. Enter 0 for no deductible.</div>
-            </div>
-          </div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>
-          <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
-            {COVERAGE_RULE_CATEGORIES.map(cat=>(
-              <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
-            ))}
-          </div>
-          {/* Not every insurer's category names match the fixed list above -
-              this is a real column (insurance_plans.covered_categories,
-              text[]), free-form on write already, just missing a way to
-              actually type a custom value in rather than only toggling
-              from a fixed set. */}
-          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
-            <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
-          </div>
-          {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
-            {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).map(cat=>(
-              <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
-                {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
-              </div>
-            ))}
-          </div>}
 
-          {/* Per-category sub-limits - the single biggest lever for
-              calculation accuracy: a real HK medical plan almost never
-              covers every category at the same rate/cap (e.g. unlimited
-              hospitalisation but a capped physiotherapy allowance), so a
-              flat plan-wide copay+deductible alone under-models most real
-              policies. */}
-          {form.covered_categories.length>0&&<>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Per-category limits (optional - leave blank for uncapped)</div>
-            {form.covered_categories.map(cat=>{
-              const cl = form.category_limits[cat] || { annual_limit_hkd:'', per_visit_limit_hkd:'', requires_preauth:false, requires_referral:false }
-              return (
-                <div key={cat} style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
-                  <div style={{fontSize:'11px',fontWeight:600,marginBottom:'6px'}}>{cat}</div>
-                  <div style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
-                    <input type="number" value={cl.annual_limit_hkd} onChange={e=>updateCategoryLimit(cat,'annual_limit_hkd',e.target.value)} placeholder="Annual cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-                    <input type="number" value={cl.per_visit_limit_hkd} onChange={e=>updateCategoryLimit(cat,'per_visit_limit_hkd',e.target.value)} placeholder="Per-visit cap (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 9px',fontSize:'11px',background:C.card,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-                  </div>
-                  <div style={{display:'flex',gap:'14px'}}>
-                    <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_preauth} onChange={e=>updateCategoryLimit(cat,'requires_preauth',e.target.checked)}/>Needs pre-authorization</label>
-                    <label style={{fontSize:'11px',color:C.textSub,display:'flex',alignItems:'center',gap:'5px',cursor:'pointer'}}><input type="checkbox" checked={cl.requires_referral} onChange={e=>updateCategoryLimit(cat,'requires_referral',e.target.checked)}/>Needs doctor referral</label>
-                  </div>
-                </div>
-              )
-            })}
-          </>}
-
-          <div style={{fontSize:'12px',color:C.textSub,margin:'14px 0 6px'}}>Overall plan limits</div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Overall annual limit (HK$)</div>
-              <input type="number" value={form.overall_annual_limit_hkd} onChange={e=>setForm(f=>({...f,overall_annual_limit_hkd:e.target.value}))} placeholder="e.g. 2000000" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Room & board (HK$/day)</div>
-              <input type="number" value={form.room_board_daily_limit_hkd} onChange={e=>setForm(f=>({...f,room_board_daily_limit_hkd:e.target.value}))} placeholder="e.g. 1500" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            </div>
-          </div>
-          <div style={{marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Billing model</div>
-            <select value={form.billing_model} onChange={e=>setForm(f=>({...f,billing_model:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
-              <option value="direct">Direct billing (default) - clinic bills us, patient pays copay only</option>
-              <option value="reimbursement">Reimbursement only - patient always pays in full and claims it back</option>
-            </select>
-            {/* Real gap this closes: only the reimbursement case explained
-                itself here - "Direct billing" on its own reads like "bills
-                automatically, nothing else applies," when a direct-billing
-                plan is exactly the one where the pre-authorization/high-
-                value threshold below still gates settlement. Both options
-                now say plainly what they do and don't control. */}
-            {form.billing_model==='reimbursement'
-              ? <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Reimbursement-only plans are never pre-authorized or billed directly - every claim goes straight to review after the patient has already paid. The pre-authorization threshold below won't apply.</div>
-              : <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>This only decides who pays upfront and who submits the claim - it doesn't mean claims settle automatically. The pre-authorization threshold and per-category rules below still apply and can still send a claim to review.</div>}
-          </div>
-          <div style={{marginBottom:'10px',opacity:form.billing_model==='reimbursement'?0.5:1}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-authorization required above (HK$){form.billing_model==='reimbursement'?' - not used for reimbursement-only plans':''}</div>
-            <input type="number" disabled={form.billing_model==='reimbursement'} value={form.preauth_threshold_hkd} onChange={e=>setForm(f=>({...f,preauth_threshold_hkd:e.target.value}))} placeholder="e.g. 5000 - claims over this need review before auto-settling" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-          </div>
-          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Network</div>
-              <select value={form.network_type} onChange={e=>setForm(f=>({...f,network_type:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
-                <option value="">Not set</option>
-                {NETWORK_TYPES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
-              </select>
-            </div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Waiting period (days)</div>
-              <input type="number" value={form.waiting_period_days} onChange={e=>setForm(f=>({...f,waiting_period_days:e.target.value}))} placeholder="e.g. 30" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
-            </div>
-          </div>
-          <div style={{marginBottom:'14px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Pre-existing conditions</div>
-            <select value={form.pre_existing_condition_policy} onChange={e=>setForm(f=>({...f,pre_existing_condition_policy:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}>
-              <option value="">Not set</option>
-              {PRE_EXISTING_POLICIES.map(([k,l])=><option key={k} value={k}>{l}</option>)}
-            </select>
-          </div>
+          {/* Shared with Plan Manager (UX audit item 5) - the exact same
+              claims-adjudication fields, so a partnered insurer's plan and
+              an unpartnered one's calculate claims with the same accuracy. */}
+          <AdjudicationFieldsSection form={form} setForm={setForm}/>
 
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
@@ -2036,6 +2070,17 @@ export function AgentClaimView({ claimRef }) {
         status: payable===0 ? 'settled' : 'approved',
         settled_at: payable===0 ? new Date().toISOString() : null,
       }).eq('id', claim.id)
+      // Real gap this closes: a receipt could sit "unverified" forever
+      // even after a real human actually checked it closely enough to
+      // pay out against it - approving IS that check. Doesn't help this
+      // same claim (already decided either way), but a verified document
+      // is trusted evidence for whatever comes next - a different
+      // insurer's underwriting, a renewal, another claim - without that
+      // next reviewer re-checking it from scratch.
+      const unverifiedIds = attachments.filter(a=>a.verification_status!=='verified').map(a=>a.id)
+      if (unverifiedIds.length>0) {
+        await supabase.from('medical_record_attachments').update({ verification_status: 'verified' }).in('id', unverifiedIds)
+      }
     } else {
       await supabase.from('insurance_claims').update({ status:'rejected', rejection_reason: finalReason||null }).eq('id', claim.id)
     }
@@ -2162,7 +2207,10 @@ export function AgentClaimView({ claimRef }) {
       <Card style={{padding:'12px 16px'}}>
         {attachments.length===0&&<div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic',padding:'4px 0'}}>None on file.</div>}
         {attachments.map((doc,i,arr)=>(
-          <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text}}>{doc.file_name||doc.category}</div>
+          <div key={doc.id} style={{padding:'8px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none',fontSize:'13px',color:C.text,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span>{doc.file_name||doc.category}</span>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:doc.verification_status==='verified'?C.greenLight:C.card,color:doc.verification_status==='verified'?C.green:C.textMuted}}>{doc.verification_status==='verified'?'Verified':'Unverified'}</span>
+          </div>
         ))}
       </Card>
       <SecLabel>{alreadyDecided?`Override decision (currently ${decidedStatusLabel})`:'Your decision'}</SecLabel>
@@ -2787,6 +2835,87 @@ function TeamsAndAgents({ company }) {
   )
 }
 
+// Real regression found while updating the QA checklist: shelving Teams &
+// Agents (brokerage/agent management, out of scope after the pivot) took
+// underwriter onboarding down with it, since both lived in the same
+// TeamsAndAgents component - but underwriters aren't brokerage management,
+// they're the insurer's own claims-decision staff, core to the flagged-case
+// review flow this app still actively uses. Standalone, so it doesn't drag
+// the rest of Teams/Agents back in with it.
+function UnderwritersManager({ company }) {
+  const [underwriters,setUnderwriters]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showAdd,setShowAdd]=useState(false)
+  const [form,setForm]=useState({ fullName:'', email:'' })
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+  const [credentialNotice,setCredentialNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_underwriters')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setUnderwriters(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id, company.name])
+
+  async function handleAdd() {
+    if (!form.fullName.trim()||!form.email.trim()) return
+    setSaving(true); setNotice(null); setCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_underwriter', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...form, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message||'Could not add underwriter.'); setSaving(false); return }
+      setCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setForm({ fullName:'', email:'' })
+      setShowAdd(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.green,marginBottom:'4px'}}>Underwriters - review flagged plan applications</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>A different role from a sales agent - reviews cases in the Underwriter Portal, never sees them here.</div>
+        {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - flagged applications wait here until someone can review them.</div>}
+        {underwriters.map(u=>(
+          <div key={u.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{u.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+          </div>
+        ))}
+        {notice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{notice}</div>}
+        {credentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+          {credentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{credentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+        </div>}
+        {showAdd ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={form.fullName} onChange={e=>setForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAdd(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAdd} disabled={saving||!form.fullName.trim()||!form.email.trim()}>{saving?'Saving…':'Add underwriter'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAdd(true)}>+ Add an underwriter</Btn>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── ROOT ─────────────────────────────────────────────────────────────────────
 // company: {id, name, relationshipType}. This used to be entirely
 // hardcoded to "AIA" everywhere below (a demo shell, reachable only from
@@ -2806,16 +2935,28 @@ export default function InsuranceApp({ company, onLogout }) {
   // was left at, landing partway down a page that looks blank/broken.
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',teams:'Teams & Agents',verify:'Policy verification',preauth:'Pre-authorizations',payments:'Payments'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',underwriters:'Underwriters'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
   // is - swapped for shapes that at least gesture at the real meaning
-  // (a house for Overview, a document for Plans/Coverage, people for
-  // Teams, a shield for Verify, a stamp for Preauth, a clipboard for
-  // Claims, a star for Sponsored/Promote, a bar chart for Analytics).
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'teams',icon:'⚇',label:'Teams'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Sponsored'}]
-    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'preauth',icon:'⚑',label:'Preauth'},{key:'claims',icon:'▤',label:'Claims'},{key:'payments',icon:'$',label:'Payments'},{key:'ads',icon:'✦',label:'Promote'}]
+  // (a house for Overview, a document for Plans/Coverage, a shield for
+  // Verify, a clipboard for Claims, a star for Sponsored/Promote).
+  //
+  // Strategy pivot (see the milestone doc): Medsa doesn't adjudicate
+  // claims, authorize treatment, run payment settlement, or manage an
+  // insurer's own agent/broker force - the insurer already has (or a
+  // partner like a BeeFintech-style vendor already has) their own
+  // systems for all of that, and duplicating it isn't the product.
+  // Medsa's job is sending clean, verified claim packages and syncing
+  // the insurer's own decisions back to the patient. Teams & Agents,
+  // Pre-authorization (as something MEDSA approves), and Payments
+  // (claim settlement) are shelved from the nav below for that reason -
+  // the components (TeamsAndAgents/PreauthRequestsManager/PaymentsManager)
+  // are left defined further up this file, not deleted, in case a real
+  // TPA-style deal ever actually calls for them.
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'}]
+    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2838,16 +2979,14 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
-        {screen==='teams'&&isPartnered&&<TeamsAndAgents company={company}/>}
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
-        {screen==='preauth'&&<PreauthRequestsManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
-        {screen==='payments'&&<PaymentsManager company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
         {screen==='ads'&&<SponsoredListings company={company}/>}
+        {screen==='underwriters'&&<UnderwritersManager company={company}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{

@@ -682,9 +682,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{padding:'0 16px'}}>
         {[
           {key:'doctors',icon:'doctors',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'family',icon:'family',bg:C.brownLight,label:isEn?'Family & guardians':'家庭與監護',sub:isEn?'Monitor family members · HK$38/mo':'監護家庭成員'},
           {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
-          {key:'storage',icon:'storage',bg:C.card,label:isEn?'Storage & plan':'儲存與計劃',sub:isEn?'Free · 0.8 GB of 2 GB used':'免費 · 已使用0.8 GB / 2 GB'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:C.green,flexShrink:0}}><Icon name={item.icon}/></div>
@@ -2636,14 +2634,43 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
 // agent, this just releases the claim (clears claimed_by_agent_id) so
 // the inquiry re-enters the same first-come-first-served pool for
 // another agent to pick up, rather than routing through Medsa Admin.
-function PatientInquiryThread({ inquiry, patientName }) {
+// A message's attachment is either an old-style public URL (agent-side
+// uploads, and anything sent before this existed) or a reference to a
+// medical_record_attachments row (everything the patient sends now,
+// below) - that bucket is private by design, so viewing it means a
+// fresh signed URL each time, same pattern as "Your uploads" already
+// uses, never a permanent public link to a medical document.
+function InquiryMessageAttachment({ m }) {
+  const [opening,setOpening]=useState(false)
+  async function openLinkedRecord() {
+    setOpening(true)
+    const { data: rec } = await supabase.from('medical_record_attachments').select('file_url').eq('id', m.attachment_record_id).maybeSingle()
+    if (rec?.file_url) {
+      const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(rec.file_url, 300)
+      if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+    }
+    setOpening(false)
+  }
+  if (m.attachment_record_id) {
+    return <span onClick={openLinkedRecord} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'📎'} {opening?'Opening…':(m.attachment_name||'Attachment')}</span>
+  }
+  if (m.attachment_url) {
+    return <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>
+  }
+  return null
+}
+
+function PatientInquiryThread({ inquiry, patientName, patientId }) {
   const [messages,setMessages]=useState([])
   const [loading,setLoading]=useState(true)
   const [body,setBody]=useState('')
   const [sending,setSending]=useState(false)
-  const [attachment,setAttachment]=useState(null)
+  const [attachment,setAttachment]=useState(null) // {recordId, name}
   const [uploading,setUploading]=useState(false)
   const [uploadError,setUploadError]=useState(null)
+  const [pickerOpen,setPickerOpen]=useState(false)
+  const [myFiles,setMyFiles]=useState([])
+  const [loadingMyFiles,setLoadingMyFiles]=useState(false)
 
   async function load() {
     const { data } = await supabase.from('inquiry_messages').select('*').eq('inquiry_id', inquiry.id).order('created_at',{ascending:true})
@@ -2657,14 +2684,40 @@ function PatientInquiryThread({ inquiry, patientName }) {
   }
   useEffect(() => { load() }, [inquiry.id])
 
+  // Real gap this closes: an underwriter's "Request report" had no way
+  // for the patient to actually hand over a document in response -
+  // only a plain upload, every time, even when the exact file they'd
+  // send (a past receipt, a doctor's letter already on file) was
+  // already sitting in their own profile. Picking one of those just
+  // references the existing medical_record_attachments row - uploading
+  // fresh here lands in that same profile list too (same pattern as
+  // "Your uploads" elsewhere), unverified until an insurer actually
+  // confirms it against something real (see the claim-approval flow).
+  async function openPicker() {
+    setPickerOpen(o=>!o)
+    if (!pickerOpen && myFiles.length===0) {
+      setLoadingMyFiles(true)
+      const { data } = await supabase.from('medical_record_attachments').select('*').eq('patient_id', patientId).order('uploaded_at',{ascending:false})
+      setMyFiles(data||[])
+      setLoadingMyFiles(false)
+    }
+  }
+  function pickExistingFile(f) {
+    setAttachment({ recordId: f.id, name: f.file_name })
+    setPickerOpen(false)
+  }
+
   async function handleFile(file) {
     setUploading(true)
     setUploadError(null)
-    const path = `${inquiry.id}/${Date.now()}-${file.name}`
-    const { error } = await supabase.storage.from('inquiry-attachments').upload(path, file)
+    const path = `${patientId}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
     if (error) { setUploadError(error.message); setUploading(false); return }
-    const { data } = supabase.storage.from('inquiry-attachments').getPublicUrl(path)
-    setAttachment({ url: data.publicUrl, name: file.name })
+    const { data: rec, error: insErr } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patientId, category: 'underwriting', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    if (insErr || !rec) { setUploadError(insErr?.message||'Could not save this file.'); setUploading(false); return }
+    setAttachment({ recordId: rec.id, name: file.name })
     setUploading(false)
   }
 
@@ -2673,7 +2726,7 @@ function PatientInquiryThread({ inquiry, patientName }) {
     setSending(true)
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patientName,
-      body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
+      body: body.trim()||null, attachment_record_id: attachment?.recordId||null, attachment_name: attachment?.name||null,
       read_by_patient: true, read_by_agent: false,
     })
     setBody(''); setAttachment(null); setSending(false)
@@ -2689,16 +2742,27 @@ function PatientInquiryThread({ inquiry, patientName }) {
           <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
             <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':m.sender_type==='underwriter'?'Underwriter':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
             {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
-            {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
+            <InquiryMessageAttachment m={m}/>
           </div>
         ))}
       </div>
       <textarea value={body} onChange={e=>setBody(e.target.value)} placeholder="Type a message..." rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',fontSize:'13px',boxSizing:'border-box',marginBottom:'6px',fontFamily:'inherit'}}/>
-      <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+      {pickerOpen&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px',marginBottom:'6px',maxHeight:160,overflowY:'auto'}}>
+        {loadingMyFiles&&<div style={{fontSize:'11px',color:C.textMuted}}>Loading your files…</div>}
+        {!loadingMyFiles&&myFiles.length===0&&<div style={{fontSize:'11px',color:C.textMuted}}>No files in your profile yet - upload one instead.</div>}
+        {myFiles.map(f=>(
+          <div key={f.id} onClick={()=>pickExistingFile(f)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+            <span>{f.file_name}</span>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:f.verification_status==='verified'?C.greenLight:C.card,color:f.verification_status==='verified'?C.green:C.textMuted}}>{f.verification_status==='verified'?'Verified':'Unverified'}</span>
+          </div>
+        ))}
+      </div>}
+      <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap'}}>
         <label style={{fontSize:'11px',color:C.textSub,cursor:'pointer',padding:'8px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}>
-          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Attach file')}
+          {uploading?'Uploading…':(attachment?`✓ ${attachment.name}`:'Upload file')}
           <input type="file" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
         </label>
+        <Btn style={{fontSize:'11px',padding:'8px 10px'}} onClick={openPicker}>{pickerOpen?'Hide my files':'Choose from my files'}</Btn>
         <Btn style={{flex:1}} onClick={handleSend} disabled={sending||uploading}>{sending?'Sending…':'Send'}</Btn>
       </div>
       {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Attachment failed: {uploadError}</div>}
@@ -3003,7 +3067,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                         reviews themselves in a real application. */}
                     {isPending&&i.requested_report_note&&<div style={{marginTop:'8px'}}>
                       <div style={{fontWeight:600,fontSize:'12px',color:C.text}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
-                      <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
+                      <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
                     </div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
                     {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id} onViewPlan={onViewPlan}/>}
@@ -3011,7 +3075,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                   </>
                 ) : (i.agents?.full_name
                   ? <>
-                    <PatientInquiryThread inquiry={i} patientName={patient.full_name}/>
+                    <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
                   : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
@@ -3021,6 +3085,271 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
         )})}
         {!showAllInquiries&&hiddenCount>0&&<div onClick={()=>setShowAllInquiries(true)} style={{textAlign:'center',fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px',textDecoration:'underline'}}>{isEn?`Show ${hiddenCount} earlier inquir${hiddenCount===1?'y':'ies'}`:`顯示${hiddenCount}個較早的查詢`}</div>}
         {showAllInquiries&&hiddenCount>0&&<div onClick={()=>setShowAllInquiries(false)} style={{textAlign:'center',fontSize:'12px',color:C.textMuted,cursor:'pointer',padding:'8px',textDecoration:'underline'}}>{isEn?'Hide earlier inquiries':'隱藏較早的查詢'}</div>}
+      </div>
+    </div>
+  )
+}
+
+// ── DOCUMENT PREP TAB ────────────────────────────────────────────────────────
+// Real gap: a patient facing an insurer's pre-authorization or application
+// form (GOP request, a specific claim, whatever) had no way to assemble the
+// right documents in one place before sending them off manually. This isn't
+// claims adjudication or a live insurer connection - no API exists for
+// either yet - it's a checklist: name what's needed, attach what's already
+// on file or upload what isn't, see what's still missing. Works standalone
+// today; if/when a real insurer or partner connection exists later, this is
+// the exact shape that would feed it.
+const DOC_PREP_PRESETS = [
+  'Policy ID / membership card', 'Referral letter', 'Diagnosis / medical report',
+  'Lab result', 'Receipt / invoice', 'Prescription',
+  'NIPT / T21 screening report', '20-week structural ultrasound', 'OGTT glucose result',
+  'GBS swab result', 'Antenatal history card',
+]
+function DocumentPrepTab({ isEn, patient={} }) {
+  const [bundles,setBundles]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [creating,setCreating]=useState(false)
+  const [openBundleId,setOpenBundleId]=useState(null)
+
+  async function loadBundles() {
+    if (!patient?.id) { setLoading(false); return }
+    setLoading(true)
+    const { data } = await supabase.from('document_prep_bundles').select('*').eq('patient_id', patient.id).order('created_at',{ascending:false})
+    setBundles(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { loadBundles() }, [patient?.id])
+
+  const openBundle = bundles.find(b=>b.id===openBundleId) || null
+
+  function completeness(b) {
+    const items = b.items||[]
+    if (items.length===0) return { done:0, total:0 }
+    return { done: items.filter(i=>i.attachment_id).length, total: items.length }
+  }
+
+  async function updateBundleItems(bundleId, newItems) {
+    const allReady = newItems.length>0 && newItems.every(i=>i.attachment_id)
+    const { data } = await supabase.from('document_prep_bundles')
+      .update({ items: newItems, status: allReady?'ready':'in_progress', updated_at: new Date().toISOString() })
+      .eq('id', bundleId).select().maybeSingle()
+    if (data) setBundles(prev => prev.map(b=>b.id===bundleId?data:b))
+  }
+
+  if (openBundle) return <DocumentPrepBundleDetail isEn={isEn} patient={patient} bundle={openBundle} onBack={()=>setOpenBundleId(null)} onItemsChange={newItems=>updateBundleItems(openBundle.id, newItems)}/>
+
+  return (
+    <div>
+      <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.navy,lineHeight:1.6}}>
+        ◈ {isEn
+          ? "Build a checklist of what an insurer needs (a pre-authorization, an application, anything else), then attach what you already have on file or upload what's missing."
+          : '為保險公司所需的文件建立清單(預先授權、申請或其他),然後附上已存檔的文件或上傳缺少的文件。'}
+      </div>
+
+      <SecLabel>{isEn?'Document bundles':'文件組合'}</SecLabel>
+      {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'16px'}}>{isEn?'Loading…':'載入中…'}</div>}
+      {!loading&&bundles.length===0&&!creating&&<div style={{margin:'0 16px',textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'20px 0'}}>{isEn?'No document bundles yet.':'暫無文件組合。'}</div>}
+      {!loading&&bundles.map(b=>{
+        const { done, total } = completeness(b)
+        return (
+          <Card key={b.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setOpenBundleId(b.id)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{b.title}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{b.insurer_name||(isEn?'No insurer named':'未指定保險公司')}</div>
+              </div>
+              <Badge text={b.status==='ready'?(isEn?'Ready':'已就緒'):`${done}/${total}`} type={b.status==='ready'?'ok':'due'}/>
+            </div>
+          </Card>
+        )
+      })}
+
+      {!creating
+        ? <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setCreating(true)}>+ {isEn?'New document bundle':'新增文件組合'}</Btn></div>
+        : <NewDocumentBundleForm isEn={isEn} patient={patient} onCancel={()=>setCreating(false)} onCreated={b=>{setCreating(false);setBundles(prev=>[b,...prev]);setOpenBundleId(b.id)}}/>}
+    </div>
+  )
+}
+
+function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
+  const [title,setTitle]=useState('')
+  const [insurerName,setInsurerName]=useState('')
+  const [selectedPresets,setSelectedPresets]=useState(new Set())
+  const [customItem,setCustomItem]=useState('')
+  const [customItems,setCustomItems]=useState([])
+  const [sourceFormFile,setSourceFormFile]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  function togglePreset(label) {
+    setSelectedPresets(prev => { const next = new Set(prev); next.has(label)?next.delete(label):next.add(label); return next })
+  }
+  function addCustom() {
+    const v = customItem.trim()
+    if (!v || customItems.includes(v)) return
+    setCustomItems(prev => [...prev, v])
+    setCustomItem('')
+  }
+
+  async function handleCreate() {
+    const labels = [...selectedPresets, ...customItems]
+    if (!title.trim() || labels.length===0 || !patient?.id) return
+    setSaving(true); setError(null)
+    // The insurer's own form/instructions, kept as a reference alongside
+    // the checklist it's for - not parsed, just attached so the patient
+    // (or whoever eventually submits this) can check the bundle against
+    // what the form actually asks for.
+    let sourceFormAttachmentId = null
+    if (sourceFormFile) {
+      const path = `${patient.medsa_id || patient.id}/docprep-form-${Date.now()}-${sourceFormFile.name}`
+      const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, sourceFormFile)
+      if (upErr) { setError(upErr.message); setSaving(false); return }
+      const { data: formAtt, error: attErr } = await supabase.from('medical_record_attachments').insert({
+        patient_id: patient.id, category: 'claim_document', file_url: path, file_name: sourceFormFile.name, verification_status: 'unverified',
+      }).select().maybeSingle()
+      if (attErr) { setError(attErr.message); setSaving(false); return }
+      sourceFormAttachmentId = formAtt?.id || null
+    }
+    const items = labels.map(label => ({ label, attachment_id: null }))
+    const { data, error: insErr } = await supabase.from('document_prep_bundles').insert({
+      patient_id: patient.id, title: title.trim(), insurer_name: insurerName.trim()||null, items,
+      source_form_attachment_id: sourceFormAttachmentId,
+    }).select().maybeSingle()
+    if (insErr) { setError(insErr.message); setSaving(false); return }
+    onCreated(data)
+  }
+
+  return (
+    <Card style={{margin:'0 16px 20px',padding:'16px'}}>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'What is this for?':'此組合用途'}</div>
+      <input value={title} onChange={e=>setTitle(e.target.value)} placeholder={isEn?'e.g. AIA pre-authorization request':'例如:AIA預先授權申請'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Insurer (optional)':'保險公司(可選)'}</div>
+      <input value={insurerName} onChange={e=>setInsurerName(e.target.value)} placeholder={isEn?'e.g. AIA':'例如:AIA'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'14px'}}/>
+
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?"The insurer's form or instructions (optional)":'保險公司表格或指示(可選)'}</div>
+      <label style={{display:'block'}}>
+        <div style={{textAlign:'left',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px 12px',cursor:'pointer',fontSize:'12px',color:sourceFormFile?C.text:C.textMuted,marginBottom:'14px'}}>
+          {sourceFormFile ? `📄 ${sourceFormFile.name}` : (isEn?'+ Attach the form/letter you received, if any':'+ 附上收到的表格或信件(如有)')}
+        </div>
+        <input type="file" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(f) setSourceFormFile(f)}}/>
+      </label>
+
+      <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'What documents are needed?':'需要哪些文件?'}</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {DOC_PREP_PRESETS.map(label=>(
+          <div key={label} onClick={()=>togglePreset(label)} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:selectedPresets.has(label)?C.green:C.beige,color:selectedPresets.has(label)?'#fff':C.textSub}}>{label}</div>
+        ))}
+      </div>
+      {customItems.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {customItems.map(label=>(
+          <div key={label} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',background:C.navy,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+            {label}<span onClick={()=>setCustomItems(prev=>prev.filter(l=>l!==label))} style={{cursor:'pointer',fontWeight:700}}>×</span>
+          </div>
+        ))}
+      </div>}
+      <div style={{display:'flex',gap:'6px',marginBottom:'14px'}}>
+        <input value={customItem} onChange={e=>setCustomItem(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustom())} placeholder={isEn?'Other document (type your own)':'其他文件(自行輸入)'} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        <button onClick={addCustom} disabled={!customItem.trim()} style={{padding:'0 14px',background:C.beige,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ {isEn?'Add':'新增'}</button>
+      </div>
+
+      {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1}} onClick={onCancel}>{isEn?'Cancel':'取消'}</Btn>
+        <Btn variant="primary" style={{flex:1}} disabled={saving||!title.trim()||(selectedPresets.size===0&&customItems.length===0)} onClick={handleCreate}>{saving?(isEn?'Creating…':'建立中…'):(isEn?'Create':'建立')}</Btn>
+      </div>
+    </Card>
+  )
+}
+
+function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange }) {
+  const [attachments,setAttachments]=useState([])
+  const [pickerForIdx,setPickerForIdx]=useState(null)
+  const [uploading,setUploading]=useState(false)
+
+  async function loadAttachments() {
+    if (!patient?.id) return
+    const { data } = await supabase.from('medical_record_attachments')
+      .select('id, category, file_name, uploaded_at').eq('patient_id', patient.id).order('uploaded_at',{ascending:false})
+    setAttachments(data||[])
+  }
+  useEffect(() => { loadAttachments() }, [patient?.id])
+
+  function setItemAttachment(idx, attachmentId) {
+    const next = (bundle.items||[]).map((it,i)=> i===idx ? { ...it, attachment_id: attachmentId } : it)
+    onItemsChange(next)
+    setPickerForIdx(null)
+  }
+
+  async function uploadForItem(idx, file) {
+    if (!file || !patient?.id) return
+    setUploading(true)
+    const path = `${patient.medsa_id || patient.id}/docprep-${Date.now()}-${file.name}`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setUploading(false); return }
+    const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    setUploading(false)
+    if (newAtt) { await loadAttachments(); setItemAttachment(idx, newAtt.id) }
+  }
+
+  async function viewAttachment(attachmentId) {
+    const att = attachments.find(a=>a.id===attachmentId)
+    if (!att) return
+    const { data: full } = await supabase.from('medical_record_attachments').select('file_url').eq('id', attachmentId).maybeSingle()
+    if (!full?.file_url) return
+    const { data } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(full.file_url, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  const items = bundle.items||[]
+  const done = items.filter(i=>i.attachment_id).length
+
+  return (
+    <div>
+      <div style={{padding:'16px 16px 0'}}>
+        <span onClick={onBack} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>← {isEn?'Back':'返回'}</span>
+      </div>
+      <div style={{padding:'10px 16px 0'}}>
+        <div style={{fontSize:'17px',fontWeight:700}}>{bundle.title}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{bundle.insurer_name||(isEn?'No insurer named':'未指定保險公司')} · {done}/{items.length} {isEn?'attached':'已附上'}</div>
+        {bundle.source_form_attachment_id&&<span onClick={()=>viewAttachment(bundle.source_form_attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {isEn?"View the insurer's form you uploaded":'查看已上傳的保險公司表格'} →</span>}
+      </div>
+
+      {items.map((item,idx)=>(
+        <Card key={idx} style={{margin:'10px 16px 0',padding:'12px 14px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:item.attachment_id||pickerForIdx===idx?'10px':0}}>
+            <div style={{fontSize:'13px',fontWeight:500}}>{item.label}</div>
+            {item.attachment_id
+              ? <Badge text={isEn?'Attached':'已附上'} type="ok"/>
+              : <Badge text={isEn?'Missing':'缺少'} type="due"/>}
+          </div>
+          {item.attachment_id && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span onClick={()=>viewAttachment(item.attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {attachments.find(a=>a.id===item.attachment_id)?.file_name||(isEn?'View file':'查看文件')}</span>
+            <span onClick={()=>setItemAttachment(idx,null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>
+          </div>}
+          {!item.attachment_id && pickerForIdx!==idx && <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPickerForIdx(idx)}>{isEn?'Choose existing':'選擇已有文件'}</Btn>
+            <label style={{flex:1}}>
+              <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'10px',padding:'9px',cursor:uploading?'default':'pointer',fontSize:'12px',fontWeight:500,opacity:uploading?0.6:1}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload':'+ 上傳')}</div>
+              <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadForItem(idx,f)}}/>
+            </label>
+          </div>}
+          {pickerForIdx===idx && <div style={{marginTop:'6px'}}>
+            {attachments.length===0
+              ? <div style={{fontSize:'12px',color:C.textMuted,fontStyle:'italic'}}>{isEn?'No files on file yet - upload one instead.':'暫無已存檔文件 - 請改為上傳。'}</div>
+              : attachments.map(a=>(
+                <div key={a.id} onClick={()=>setItemAttachment(idx,a.id)} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:'12px'}}>{a.file_name||a.category}</div>
+              ))}
+            <span onClick={()=>setPickerForIdx(null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',display:'block',marginTop:'6px'}}>{isEn?'Cancel':'取消'}</span>
+          </div>}
+        </Card>
+      ))}
+
+      <div style={{margin:'16px 16px 20px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>
+        ⚠ {isEn
+          ? 'This organizes your own documents for you to send yourself - Medsa does not submit this to any insurer automatically yet.'
+          : '此功能僅為您整理文件,供您自行發送 - Medsa目前尚未自動將文件提交予任何保險公司。'}
       </div>
     </div>
   )
@@ -3067,7 +3396,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   useEffect(() => {
     const claimIds = [...new Set(records.map(r=>r.insurance_claim_id).filter(Boolean))]
     if (claimIds.length===0) { setExistingClaimsById({}); return }
-    supabase.from('insurance_claims').select('id, plan_id, insurance_plans(plan_name)').in('id', claimIds)
+    supabase.from('insurance_claims').select('id, plan_id, amount, insurer_covered_amount, insurance_plans(plan_name)').in('id', claimIds)
       .then(({data}) => setExistingClaimsById(Object.fromEntries((data||[]).map(c=>[c.id,c]))))
   }, [records])
 
@@ -3080,6 +3409,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   const [manualSelectedIds,setManualSelectedIds]=useState(new Set())
   const [manualAmount,setManualAmount]=useState('')
+  const [manualServiceDate,setManualServiceDate]=useState('')
   const [manualClinicName,setManualClinicName]=useState('')
   const [manualClinicCheck,setManualClinicCheck]=useState(null) // null=not checked, 'checking', {verified,label}
   const [manualPlanId,setManualPlanId]=useState(activePolicy?.plan_id || '')
@@ -3107,6 +3437,27 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   // legitimate coordination-of-benefits submission to a second insurer,
   // not a duplicate, so it's warned rather than blocked.
   const isDuplicateForSelectedPlan = selectedVisitExistingClaim && selectedVisitExistingClaim.plan_id === visitPlanId
+  // Real coordination-of-benefits rule this was missing: a second
+  // insurer only ever owes what the FIRST one left unpaid on the same
+  // bill, never the full amount again - otherwise claiming the same
+  // visit against two policies pays out more than the visit actually
+  // cost. This isn't something that varies by policy wording the way
+  // waiting periods or deductibles do - every indemnity health policy's
+  // "other insurance" clause works this way, so it's applied here
+  // unconditionally rather than as a per-plan setting.
+  const isCoordinationClaim = selectedVisitExistingClaim && !isDuplicateForSelectedPlan
+  const billTotal = visitAmount.trim() ? Number(visitAmount) : (selectedVisit?.total_fee ?? 0)
+  const alreadyCoveredByFirstInsurer = selectedVisitExistingClaim?.insurer_covered_amount ?? 0
+  const coordinationCappedAmount = isCoordinationClaim ? Math.max(0, billTotal - alreadyCoveredByFirstInsurer) : billTotal
+  // Real timely-filing rule this was missing: a claim for a visit that
+  // happened long ago should be flagged, not quietly accepted as if it
+  // were submitted the same week - real plans almost universally require
+  // filing within a set window of the service date (often ~90 days).
+  // Platform default, same idea as the deductible/copay defaults in
+  // lib/insuranceAdapter.js - not yet a per-plan setting.
+  const CLAIM_FILING_DEADLINE_DAYS = 90
+  const visitDaysOld = selectedVisit?.date_of_record ? Math.floor((Date.now() - new Date(selectedVisit.date_of_record).getTime()) / (1000*60*60*24)) : null
+  const visitPastFilingDeadline = visitDaysOld != null && visitDaysOld > CLAIM_FILING_DEADLINE_DAYS
 
   function pickVisit(id) {
     setSelectedVisitId(id)
@@ -3117,12 +3468,16 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   async function handleSubmitFromVisit() {
     if (!selectedVisit || !visitPlanId || !patient?.id || isDuplicateForSelectedPlan) return
+    if (visitPastFilingDeadline) { setVisitSubmitError(`This visit was ${visitDaysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window, so it can't be submitted here. Contact the insurer directly if you believe an exception applies.`); return }
     setVisitSubmitting(true); setVisitSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: visitPlanId,
       claim_type: selectedVisit.record_type || 'outpatient',
-      amount: visitAmount.trim() ? Number(visitAmount) : (selectedVisit.total_fee ?? null),
+      // Coordination of benefits: a second insurer on the same visit only
+      // ever owes what the first left unpaid, never the full bill again.
+      amount: coordinationCappedAmount,
+      service_date: selectedVisit.date_of_record || null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
       institution_id: selectedVisit.institution_id || null,
@@ -3181,11 +3536,19 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   async function handleSubmitManualClaim() {
     if (!manualPlanId || manualSelectedIds.size===0 || !patient?.id) return
+    // Same filing-window rule as the visit-based path above - this form
+    // has no linked visit record to read a date from, so it asks for one
+    // directly instead of silently skipping the check.
+    if (manualServiceDate) {
+      const daysOld = Math.floor((Date.now() - new Date(manualServiceDate).getTime()) / (1000*60*60*24))
+      if (daysOld > CLAIM_FILING_DEADLINE_DAYS) { setManualSubmitError(`That date was ${daysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window. Contact the insurer directly if you believe an exception applies.`); return }
+    }
     setManualSubmitting(true); setManualSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
     const { data: newClaim, error: claimErr } = await supabase.from('insurance_claims').insert({
       claim_ref: claimRef, patient_id: patient.id, plan_id: manualPlanId,
       claim_type: 'outpatient', amount: manualAmount.trim() ? Number(manualAmount) : null,
+      service_date: manualServiceDate || null,
       status: 'pending_review', submitted_at: new Date().toISOString(),
       source_type: 'patient_unverified_upload', verification_flag: 'patient_unverified_receipt',
       claimed_clinic_name: manualClinicName.trim() || null,
@@ -3196,7 +3559,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
     const { error: linkErr } = await supabase.from('medical_record_attachments').update({ insurance_claim_id: newClaim.id }).in('id', ids)
     if (linkErr) { setManualSubmitError(linkErr.message); setManualSubmitting(false); return }
     await loadAttachments()
-    setManualSelectedIds(new Set()); setManualAmount(''); setManualClinicName(''); setManualClinicCheck(null)
+    setManualSelectedIds(new Set()); setManualAmount(''); setManualServiceDate(''); setManualClinicName(''); setManualClinicCheck(null)
     setManualSubmitSuccess(claimRef)
     setManualSubmitting(false)
   }
@@ -3276,13 +3639,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
           {selectedVisitExistingClaim&&(isDuplicateForSelectedPlan
             ? <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'⚠'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'this plan'} - can't submit the same visit twice under the same plan.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'此計劃'}提交索償 - 不能就同一計劃重複提交。`}</div>
-            : <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'◇'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'another plan'} - only continue if you're also claiming this from a second insurer.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'另一計劃'}提交索償 - 僅在您同時向第二間保險公司申請索償時才繼續。`}</div>)}
+            : <div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'◇'} {isEn?`Already claimed against ${selectedVisitExistingClaim.insurance_plans?.plan_name||'another plan'} - that insurer already covered HK$${alreadyCoveredByFirstInsurer}, so this one can only claim the remaining HK$${coordinationCappedAmount} of the bill, never the full amount again.`:`此診症已向${selectedVisitExistingClaim.insurance_plans?.plan_name||'另一計劃'}提交索償 - 該保險公司已支付HK$${alreadyCoveredByFirstInsurer},故此次只可就餘下的HK$${coordinationCappedAmount}提出索償,不可重複索取全額。`}</div>)}
+          {visitPastFilingDeadline&&<div style={{background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'12px'}}>{'⚠'} {isEn?`This visit was ${visitDaysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window most plans allow. Contact the insurer directly if you believe an exception applies.`:`此診症已過去${visitDaysOld}天 - 超出大部分計劃的${CLAIM_FILING_DEADLINE_DAYS}天提交期限。如認為適用例外情況,請直接聯絡保險公司。`}</div>}
 
           <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           {visitSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{visitSubmitError}</div>}
           {visitSubmitSuccess
             ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
-            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan||visitPastFilingDeadline} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
         </div>}
       </div>}
 
@@ -3327,6 +3691,8 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
             </select>
           </>}
 
+          <div style={{fontSize:'11px',opacity:0.8,margin:'10px 0 4px'}}>{isEn?'Date of service':'診症日期'}</div>
+          <input value={manualServiceDate} onChange={e=>setManualServiceDate(e.target.value)} type="date" max={new Date().toISOString().slice(0,10)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0',background:'#fff',color:C.text}}/>
           {manualSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{manualSubmitError}</div>}
           {manualSubmitSuccess
@@ -3679,6 +4045,33 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     setFeedbackSubmitted(true)
   }
   const [activePolicy,setActivePolicy]=useState(null)
+  // Real gap found live-testing (UX audit item 3): "where do I stand on
+  // insurance" had no single answer - the Home tile badge, My Inquiries,
+  // and Policy on file each showed a different slice with no one place
+  // that just says "here's everything." This summary (+ localJumpId,
+  // combined with the deep-link prop below) is that one place - tapping
+  // a pending/unread row jumps straight into My Inquiries with that
+  // exact inquiry already open, the same mechanism the home screen's
+  // message board already uses.
+  const [coverageSummary,setCoverageSummary]=useState({ pendingCount:0, unreadCount:0, firstPendingId:null })
+  const [localJumpId,setLocalJumpId]=useState(null)
+  async function loadCoverageSummary() {
+    const medsaId = patient?.medsa_id
+    if (!medsaId) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
+    if (!patientRow) return
+    const { data: inquiries } = await supabase.from('plan_inquiries').select('id, underwriter_status, status')
+      .eq('patient_id', patientRow.id).neq('status', 'converted').neq('status', 'superseded')
+    const pending = (inquiries||[]).filter(i=>i.underwriter_status==='pending')
+    const ids = (inquiries||[]).map(i=>i.id)
+    let unreadCount = 0
+    if (ids.length>0) {
+      const { count } = await supabase.from('inquiry_messages').select('id',{count:'exact',head:true}).in('inquiry_id', ids).eq('read_by_patient', false)
+      unreadCount = count || 0
+    }
+    setCoverageSummary({ pendingCount: pending.length, unreadCount, firstPendingId: pending[0]?.id || null })
+  }
+  useEffect(() => { loadCoverageSummary() }, [patient?.medsa_id])
   const [heldPolicies,setHeldPolicies]=useState([]) // every held policy, not just the one shown up top - a patient can hold more than one, and ClaimsTab needs all of them to let the patient pick which to bill
   const [lapsedPolicies,setLapsedPolicies]=useState([]) // a monthly self-serve policy whose recurring premium stopped clearing - shown separately so it doesn't just silently vanish
   // Compact-by-default: once "Policy on file" could show several real
@@ -3798,6 +4191,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     setCancelTargetId(null)
     loadPolicy()
   }
+  // Free-look is the policyholder's unconditional right, so it shouldn't
+  // wait on an agent the way a normal (past-21-day) cancellation genuinely
+  // needs to - this refunds a real Stripe charge directly and cancels on
+  // the spot when there's one on file, instead of just recording a request.
+  const [freeLookError,setFreeLookError]=useState(null)
+  async function handleFreeLookCancel(policy) {
+    setCancelling(true); setFreeLookError(null)
+    try {
+      const res = await fetch('/api/patient/cancel_free_look', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ policyId: policy.id, patientId: patient.id }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setFreeLookError(data.message || 'Could not cancel this policy.'); setCancelling(false); return }
+      setCancelTargetId(null)
+      loadPolicy()
+    } finally {
+      setCancelling(false)
+    }
+  }
   // A self-linked policy (see handleLinkPlan) was never sold through
   // Medsa and has no agent attached - agent_id is null. Real gap found
   // live-testing: the agent-mediated cancellation flow below silently
@@ -3834,14 +4247,16 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       )
     }
     const { withinFreeLook, daysInto } = cancellationWindow(policy)
+    const hasStripePayment = !!(policy.stripe_subscription_id || policy.stripe_checkout_session_id)
     return (
       <div style={{marginTop:'10px',background:light?'rgba(255,255,255,0.15)':C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',lineHeight:1.5,color:textColor}}>
         {withinFreeLook
-          ? (isEn?`You're within the 21-day cooling-off period (day ${daysInto ?? 0}) - cancelling now qualifies for a full premium refund.`:`您仍在21天冷靜期內(第${daysInto ?? 0}天)- 現在取消可獲全額保費退還。`)
+          ? (isEn?`You're within the 21-day cooling-off period (day ${daysInto ?? 0}) - cancelling now qualifies for a full premium refund${hasStripePayment?', issued right away':' - your agent will arrange it with the insurer, since this wasn\'t paid through Medsa'}.`:`您仍在21天冷靜期內(第${daysInto ?? 0}天)- 現在取消可獲全額保費退還${hasStripePayment?',並即時處理':' - 由於並非透過Medsa付款,代理人將與保險公司安排退款'}。`)
           : (isEn?"You're past the 21-day cooling-off period, so cancellation needs 30 days' notice and isn't instant - your agent will confirm the effective date with the insurer.":'您已超過21天冷靜期,取消保單需提前30天通知,並非即時生效 - 代理人將與保險公司確認生效日期。')}
+        {freeLookError&&<div style={{marginTop:'8px',color:light?'#ffb3b3':C.red}}>{freeLookError}</div>}
         <div style={{display:'flex',gap:'8px',marginTop:'8px'}}>
           <Btn style={{flex:1,fontSize:'11px',padding:'6px 10px',...(light?{background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)'}:{})}} onClick={()=>setCancelTargetId(null)}>{isEn?'Never mind':'不用了'}</Btn>
-          <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>handleRequestCancellation(policy)}>{cancelling?(isEn?'Requesting…':'請求中…'):(isEn?'Confirm request':'確認請求')}</Btn>
+          <Btn variant="primary" style={{flex:1,fontSize:'11px',padding:'6px 10px'}} disabled={cancelling} onClick={()=>withinFreeLook&&hasStripePayment?handleFreeLookCancel(policy):handleRequestCancellation(policy)}>{cancelling?(isEn?'Processing…':'處理中…'):(withinFreeLook&&hasStripePayment?(isEn?'Cancel & refund now':'立即取消並退款'):(isEn?'Confirm request':'確認請求'))}</Btn>
         </div>
       </div>
     )
@@ -3880,7 +4295,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // recommendations back, instead of browsing every plan blind.
   const [findPlanOpen,setFindPlanOpen]=useState(false)
   const [findPlanConditions,setFindPlanConditions]=useState([])
-  const [findPlanConsent,setFindPlanConsent]=useState(false)
   const [findPlanLoading,setFindPlanLoading]=useState(false)
   const [findPlanResults,setFindPlanResults]=useState(null)
 
@@ -3960,6 +4374,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           additionalTerms: p.additional_terms || null,
           companyContactEmail: contactByCompany[p.company_name]?.contact_email || null,
           companyContactPhone: contactByCompany[p.company_name]?.contact_phone || null,
+          // The insurer's own uploaded brochure/T&Cs (policy-contracts
+          // bucket) - was collected via PlanManager but never surfaced to
+          // the patient anywhere. Rather than Medsa writing and
+          // maintaining its own copy of each plan's full legal detail,
+          // link out to the insurer's real document for that - keep only
+          // a short comparable summary in Medsa's own UI.
+          policyDocumentPath: p.policy_document_path || null,
+          keyBenefits: p.key_benefits || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
@@ -4150,6 +4572,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
               call. The real figure, not a generic line, since this
               policy is already issued and the amount is on file. */}
           {activePolicy.broker_commission_hkd!=null&&<div style={{fontSize:'11px',opacity:0.8,marginTop:'6px'}}>{isEn?`This policy includes an agent commission of HK$${activePolicy.broker_commission_hkd}, paid by the insurer - never added to your premium.`:`此保單包含HK$${activePolicy.broker_commission_hkd}的代理佣金,由保險公司支付 - 不會加入您的保費。`}</div>}
+          {/* Industry-standard protection most policies carry (an
+              "incontestable clause") - after 2 years of continuous cover,
+              an insurer can no longer void the whole policy over an
+              honest (non-fraudulent) mistake on the original application;
+              only outright fraud stays contestable forever. */}
+          {activePolicy.start_date&&(() => {
+            const contestableUntil = new Date(activePolicy.start_date); contestableUntil.setFullYear(contestableUntil.getFullYear()+2)
+            const stillContestable = Date.now() < contestableUntil.getTime()
+            return <div style={{fontSize:'11px',opacity:0.75,marginTop:'6px'}}>{stillContestable
+              ? (isEn?`Contestable for an honest non-disclosure until ${contestableUntil.toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - after that, only outright fraud can void this policy.`:`如申請時有誠實的遺漏,保險公司可於${contestableUntil.toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}前就此爭議 - 之後僅欺詐行為可令保單失效。`)
+              : (isEn?'Past its 2-year contestability period - only outright fraud can void this policy now.':'已超過2年可爭議期 - 現時僅欺詐行為可令保單失效。')}</div>
+          })()}
 
           {waitingOnAgent&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'10px 12px',fontSize:'12px',lineHeight:1.5}}>
             {'\u25c7'} {isEn?`Your agent is preparing your renewal with ${activePolicy.institutions?.name||'your insurer'}.`:'您的代理人正在為您準備續保。'}
@@ -4218,9 +4652,34 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         </Card>}
       </div>
 
+      {/* "Your coverage" - one consolidated answer, see loadCoverageSummary above */}
+      {(heldPolicies.length>0||lapsedPolicies.length>0||coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'12px 16px 0',background:'#fff',border:`1.5px solid ${C.green}`,borderRadius:'14px',padding:'14px'}}>
+        <div style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Your coverage':'您的保障'}</div>
+        {heldPolicies.map(p=>(
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
+          </div>
+        ))}
+        {lapsedPolicies.map(p=>(
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
+            <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
+          </div>
+        ))}
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.greenXLight}`:'none',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+        </div>}
+        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
+          <span style={{color:C.green,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+        </div>}
+      </div>}
+
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
@@ -4253,10 +4712,15 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             : <Card style={{padding:'16px'}}>
                 <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>{isEn?'Find me a plan':'為我配對方案'}</div>
                 {!findPlanResults ? <>
-                  <label style={{display:'flex',alignItems:'flex-start',gap:'8px',fontSize:'11px',color:C.textSub,marginBottom:'10px',cursor:'pointer',lineHeight:1.5}}>
-                    <input type="checkbox" checked={findPlanConsent} onChange={e=>setFindPlanConsent(e.target.checked)} style={{marginTop:'2px'}}/>
-                    {isEn?"Let Medsa check my own visit history on this platform against every plan's coverage (optional)":'讓Medsa將我在平台上的就診記錄與各方案的保障範圍核對(可選)'}
-                  </label>
+                  {/* Was its own re-asked-every-time checkbox (default off);
+                      now reflects the standing Settings preference instead
+                      (default on, see EditProfileScreen) - one line here
+                      rather than asking again on every search. */}
+                  <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>
+                    {patient.history_matching_enabled !== false
+                      ? (isEn?'Your visit history on this platform will be checked against every plan\'s coverage, as set in your Settings.':'您在平台上的就診記錄將與各方案的保障範圍核對，設定見您的Settings。')
+                      : (isEn?'Visit history is off in your Settings - matching will only use what you select below.':'您的Settings已關閉就診記錄配對 - 配對只會根據下方所選項目。')}
+                  </div>
                   <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Do any of these apply to you?':'以下是否適用於您?'}</div>
                   <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
                     {[...new Set(plans.flatMap(p=>p.criteria||[]))].slice(0,20).concat(['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition']).map(c=>(
@@ -4264,12 +4728,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                     ))}
                   </div>
                   <div style={{display:'flex',gap:'8px'}}>
-                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([]);setFindPlanConsent(false)}}>{isEn?'Cancel':'取消'}</Btn>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setFindPlanOpen(false);setFindPlanConditions([])}}>{isEn?'Cancel':'取消'}</Btn>
                     <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={findPlanLoading} onClick={async()=>{
                       setFindPlanLoading(true)
                       const res = await fetch('/api/patient/find_me_a_plan', {
                         method:'POST', headers:{'Content-Type':'application/json'},
-                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: findPlanConsent }),
+                        body: JSON.stringify({ patientId: patient.id, declaredConditions: findPlanConditions, consentHistoryShared: patient.history_matching_enabled !== false }),
                       })
                       const data = await res.json()
                       setFindPlanResults(data.matches||[])
@@ -4375,10 +4839,13 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       </>}
 
       {/* ── MY INQUIRIES ── */}
-      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById} initialExpandedId={deepLinkInquiryId} onConsumeDeepLink={onConsumeInquiryDeepLink}/>}
+      {tab==='inquiries'&&<MyInquiriesTab isEn={isEn} patient={patient} onViewPlan={viewPlanById} initialExpandedId={deepLinkInquiryId||localJumpId} onConsumeDeepLink={()=>{onConsumeInquiryDeepLink&&onConsumeInquiryDeepLink();setLocalJumpId(null)}}/>}
 
       {/* ── CLAIMS ── */}
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
+
+      {/* ── DOCUMENT PREP ── */}
+      {tab==='documents'&&<DocumentPrepTab isEn={isEn} patient={patient}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
@@ -4549,50 +5016,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   )
 }
 
-function FamilyScreen({ isEn }) {
-  const members=[] // No real family-monitoring data model exists yet -
-  // showing an honest empty state rather than the same fake family for
-  // every patient. Building real add/invite/monitor functionality is a
-  // separate, larger feature.
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'14px',padding:'16px',color:'#fff'}}>
-        <div style={{fontSize:'11px',opacity:0.7,textTransform:'uppercase',letterSpacing:'1px',marginBottom:'4px'}}>{isEn?'Family guardian plan':'家庭監護計劃'}</div>
-        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>HK$38/mo</div>
-        <div style={{fontSize:'12px',opacity:0.8}}>{isEn?'Add a family member to start monitoring':'新增家庭成員以開始監護'}</div>
-      </div>
-      <SecLabel>{isEn?'Family members':'家庭成員'}</SecLabel>
-      {members.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No family members added yet.':'尚未新增家庭成員。'}</div>}
-      {members.map((m,i)=>(
-        <Card key={i} style={{padding:'14px 16px'}}>
-          <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:m.type==='Minor'?C.blueLight:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,color:m.type==='Minor'?C.blue:C.amber,flexShrink:0}}>{m.name[0]}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:600}}>{m.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{m.relation} · Age {m.age} · {m.type}</div></div>
-            <div style={{textAlign:'right'}}>
-              <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:m.status==='Active'?C.greenLight:C.amberLight,color:m.status==='Active'?C.green:C.amber}}>{m.status}</span>
-              {m.alerts>0&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>⚠ {m.alerts} alert{m.alerts>1?'s':''}</div>}
-            </div>
-          </div>
-          <div style={{background:C.beige,borderRadius:'10px',padding:'10px 12px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Guardian access':'監護人存取'}</div>
-            <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
-              {['Medication reminders','Appointment alerts','Emergency card','Vitals summary'].map(tag=>(
-                <span key={tag} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'2px 8px',borderRadius:'20px'}}>{tag}</span>
-              ))}
-            </div>
-          </div>
-          <div style={{display:'flex',gap:'8px'}}><Btn style={{flex:1,fontSize:'12px'}}>View health</Btn><Btn variant="primary" style={{flex:1,fontSize:'12px'}}>Manage access</Btn></div>
-        </Card>
-      ))}
-      <div style={{padding:'0 16px'}}><Btn variant="primary" style={{width:'100%',marginBottom:'10px'}}>+ {isEn?'Add family member':'新增家庭成員'}</Btn></div>
-      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.brown}}>
-        ◇ {isEn?'Guardian access is consent-based. Family members approve via their own Medsa account.':'監護人存取基於同意。家庭成員透過自己的Medsa帳戶批准。'}
-      </div>
-    </div>
-  )
-}
-
-function EditProfileScreen({ isEn, patient={}, onSaved }) {
+function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
   })
@@ -4612,6 +5036,24 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
     setSavingNotify(true)
     await supabase.from('patients').update({ notify_email: next }).eq('id', patient.id)
     setSavingNotify(false)
+    onSaved?.()
+  }
+
+  // Default on for everyone (patients table default), one standing
+  // setting instead of a checkbox re-asked on every single plan
+  // declaration - PlanDetailFlow.jsx and the "Find me a plan" flow both
+  // now read this instead of showing their own consent checkbox. Off
+  // never hides any plan from a patient - it only stops the matching
+  // engine from folding their on-platform visit history into the
+  // suitability check, so matching falls back to declared answers alone.
+  const [historyMatchingEnabled,setHistoryMatchingEnabled]=useState(patient.history_matching_enabled !== false)
+  const [savingHistoryMatching,setSavingHistoryMatching]=useState(false)
+  async function handleToggleHistoryMatching() {
+    const next = !historyMatchingEnabled
+    setHistoryMatchingEnabled(next)
+    setSavingHistoryMatching(true)
+    await supabase.from('patients').update({ history_matching_enabled: next }).eq('id', patient.id)
+    setSavingHistoryMatching(false)
     onSaved?.()
   }
 
@@ -4689,6 +5131,19 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         </div>
       </Card>
 
+      <SecLabel>{isEn?'Plan matching':'方案配對'}</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:500}}>{isEn?'Use my visit history to help match plans':'使用我的就診記錄協助配對方案'}</div>
+            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5}}>{isEn?"On by default. When on, your own on-platform visit history is folded into checking which plans suit you - it can only ever flag something for an underwriter to double check, never auto-decline you on its own. Off, matching uses only what you declare yourself. Either way, no insurer or agent ever sees your raw visit history - only the verdict it produces.":'預設開啟。開啟時，您在平台上的就診記錄會用於核對哪些方案適合您 - 最多只會標記予核保員再次核實，絕不會據此自動拒保。關閉後，配對只會根據您自行申報的內容。無論開關，保險公司或代理均不會看到您的原始就診記錄 - 只會看到配對結果。'}</div>
+          </div>
+          <Toggle checked={historyMatchingEnabled} onChange={handleToggleHistoryMatching} disabled={savingHistoryMatching}/>
+        </div>
+      </Card>
+
+      <MedsaBumpSection isEn={isEn} patient={patient}/>
+
       <SecLabel>{isEn?'My allergies':'我的過敏'}</SecLabel>
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
         {isEn?"Allergies you add here are self-reported by you, not confirmed by a clinician - they're clearly labelled as such wherever shown, including on your emergency card.":'您在此新增的過敏為自行申報，並非由醫護人員確認 - 於所有顯示位置（包括緊急卡）均會清楚標示。'}
@@ -4710,41 +5165,132 @@ function EditProfileScreen({ isEn, patient={}, onSaved }) {
         <input value={newSeverity} onChange={e=>setNewSeverity(e.target.value)} placeholder={isEn?'Severity (optional, e.g. Severe)':'嚴重程度（選填，例如：嚴重）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleAddAllergy} disabled={savingAllergy||!newAllergen.trim()}>{savingAllergy?'Adding…':(isEn?'+ Add allergy':'+ 新增過敏')}</Btn>
       </Card>
+
+      {onSignOut&&<div style={{margin:'24px 16px 0',textAlign:'center'}}>
+        <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
+      </div>}
     </div>
   )
 }
 
-function StorageScreen({ isEn, patient={}, onSignOut }) {
-  const tiers=[
-    {name:'Essential',price:isEn?'Free':'免費',storage:'2 GB',perks:['Emergency health card','Vaccination passport','Basic record storage','1 family member monitor'],current:true,color:C.green,bg:C.greenLight},
-    {name:'Personal',price:'HK$18/mo',storage:'20 GB',perks:['Everything in Essential','Full record history','Unlimited uploads','Medication alarms','AI insurance recommendations','Travel health mode'],current:false,color:C.navy,bg:C.navyLight},
-    {name:'Family',price:'HK$38/mo',storage:'50 GB shared',perks:['Everything in Personal','Up to 5 family members','Guardian monitoring for seniors/minors','Priority support','Family emergency card'],current:false,color:C.brown,bg:C.brownLight},
-  ]
-  return (
-    <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{isEn?'Your storage':'您的儲存空間'}</SecLabel>
-      <Card style={{padding:'16px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:'8px'}}><span style={{fontSize:'13px',fontWeight:500}}>Used: 0.8 GB of 2 GB</span><span style={{fontSize:'13px',fontWeight:600,color:C.green}}>40%</span></div>
-        <div style={{height:8,background:C.card,borderRadius:8,overflow:'hidden'}}><div style={{height:'100%',width:'40%',background:C.green,borderRadius:8}}/></div>
-        <div style={{fontSize:'11px',color:C.textSub,marginTop:'8px'}}>{isEn?"At current rate you'll reach your limit in ~14 months.":'按目前速度，約14個月內達到限額。'}</div>
-      </Card>
-      <SecLabel>{isEn?'Plans':'計劃'}</SecLabel>
-      {tiers.map((tier,i)=>(
-        <div key={i} style={{background:C.cream,border:`0.5px solid ${tier.current?tier.color:C.border}`,borderRadius:'14px',margin:'0 16px 10px',padding:'16px',position:'relative'}}>
-          {tier.current&&<span style={{position:'absolute',top:12,right:12,fontSize:'10px',background:tier.bg,color:tier.color,padding:'2px 10px',borderRadius:'20px',fontWeight:600}}>{isEn?'Current plan':'目前計劃'}</span>}
-          <div style={{fontSize:'16px',fontWeight:700,color:tier.color,marginBottom:'2px'}}>{tier.name}</div>
-          <div style={{fontSize:'22px',fontWeight:800,color:C.text,marginBottom:'2px'}}>{tier.price}</div>
-          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{tier.storage} {isEn?'cloud storage':'雲端儲存'}</div>
-          <div style={{display:'flex',flexDirection:'column',gap:'5px',marginBottom:'14px'}}>
-            {tier.perks.map(p=><div key={p} style={{fontSize:'12px',color:C.text,display:'flex',alignItems:'center',gap:'7px'}}><span style={{color:tier.color,fontSize:'10px'}}>✓</span>{p}</div>)}
-          </div>
-          {!tier.current&&<button style={{width:'100%',border:'none',background:tier.color,borderRadius:'10px',padding:'11px',fontSize:'13px',fontWeight:500,cursor:'pointer',fontFamily:'inherit',color:'#fff'}}>{isEn?`Upgrade to ${tier.name}`:`升級至${tier.name}`}</button>}
+// ── MEDSA BUMP (account settings entry point) ──────────────────────────────
+// Pink, per the brand note. Lives under Account Settings, pays directly to
+// Medsa via Stripe (this is Medsa's own revenue - not an insurance premium,
+// which is bank transfer between agent/insurer and out of scope here), and
+// starts right away on payment, during pregnancy rather than after birth -
+// predicted due date and how far along the patient is are collected up
+// front so there's something to track against immediately.
+function MedsaBumpSection({ isEn, patient }) {
+  const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=active
+  const [dueDate,setDueDate]=useState('')
+  const [weeksNow,setWeeksNow]=useState('')
+  const [discoveredAt,setDiscoveredAt]=useState('')
+  const [checkupFiles,setCheckupFiles]=useState([])
+  const [uploading,setUploading]=useState(false)
+  const [starting,setStarting]=useState(false)
+  const [error,setError]=useState(null)
+  const [verifying,setVerifying]=useState(false)
+
+  async function loadBump() {
+    if (!patient?.id) { setActiveBump(null); return }
+    const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    setActiveBump(data||null)
+  }
+  useEffect(() => { loadBump() }, [patient?.id])
+
+  // Checkout verification on return - the webhook path is confirmed
+  // unreliable elsewhere in this app (see verify_video_consult_checkout.js's
+  // own comment), so this checks the real Stripe session directly instead
+  // of trusting a webhook that may never fire.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('bump_started')==='1' && sessionId) {
+      setVerifying(true)
+      fetch('/api/patient/verify_bump_checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }) })
+        .then(r=>r.json()).then(()=>{ loadBump(); setVerifying(false); window.history.replaceState({}, '', window.location.pathname) })
+    } else if (params.get('bump_cancelled')==='1') {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  async function uploadCheckup(file) {
+    if (!file || !patient?.id) return
+    setUploading(true)
+    const path = `${patient.medsa_id || patient.id}/bump-checkup-${Date.now()}-${file.name}`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setUploading(false); return }
+    const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'bump_prenatal', file_url: path, file_name: file.name, verification_status: 'unverified',
+    }).select().maybeSingle()
+    setUploading(false)
+    if (newAtt) setCheckupFiles(prev => [...prev, newAtt])
+  }
+
+  async function handleStart() {
+    setStarting(true); setError(null)
+    try {
+      const res = await fetch('/api/patient/create_bump_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ patientId: patient.id, predictedDueDate: dueDate||null, gestationalWeeksAtSignup: weeksNow?Number(weeksNow):null, discoveredPregnantAt: discoveredAt||null }),
+      })
+      const data = await res.json()
+      if (data.status==='CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setError(data.message || (isEn?'Could not start checkout.':'無法啟動付款程序。'))
+    } catch {
+      setError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
+    }
+    setStarting(false)
+  }
+
+  if (activeBump===undefined || verifying) return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
+    </>
+  )
+
+  if (activeBump) return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px',background:'#fce4ec',border:'1px solid #f8bbd0'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:'#ad1457',marginBottom:'4px'}}>{isEn?'Active':'已啟用'}</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
+          {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
+          {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
         </div>
-      ))}
-      {onSignOut&&<div style={{margin:'20px 16px 0',textAlign:'center'}}>
-        <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
-      </div>}
-    </div>
+      </Card>
+    </>
+  )
+
+  return (
+    <>
+      <SecLabel>Medsa Bump</SecLabel>
+      <Card style={{padding:'16px',marginBottom:'20px'}}>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'12px'}}>
+          {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months. One-time payment; a discount applies automatically if you've used Medsa Bump before.":'由懷孕至寶寶18個月大的孕產照護追蹤。一次性付款;如曾使用Medsa Bump,將自動享有折扣。'}
+        </div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
+        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
+        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px'}}/>
+
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
+        <label style={{display:'block'}}>
+          <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
+          <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadCheckup(f)}}/>
+        </label>
+        {checkupFiles.length>0&&<div style={{marginBottom:'12px'}}>
+          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:C.textSub,padding:'4px 0'}}>📄 {f.file_name}</div>)}
+        </div>}
+
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+      </Card>
+    </>
   )
 }
 
@@ -4786,6 +5332,161 @@ function LoginFlow({ onBack, onComplete }) {
         <input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="Phone number on file" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'16px',boxSizing:'border-box'}}/>
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handleLogin} disabled={checking||!hkid||!phone}>{checking?'Checking…':'Log in'}</Btn>
+      </div>
+    </div>
+  )
+}
+
+// ── PROFILE SWITCHER (Instagram-style) ──────────────────────────────────────
+// Clicking your own profile icon shows every profile switchable from this
+// login: yourself plus any Medsa Kids linked under you (patients.
+// parent_patient_id). Switching just re-points signedInPatient at a
+// different real row - everything downstream already keys off its id, no
+// separate "active profile" concept needed. The managing adult is derived
+// from whichever profile is currently active (itself, if it's the top-
+// level account, or its parent_patient_id if it's a Kids profile), so this
+// works correctly even mid-session as a different profile.
+function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild }) {
+  const [profiles,setProfiles]=useState([])
+  const [managingAdult,setManagingAdult]=useState(null)
+  const [loading,setLoading]=useState(true)
+  const [subscribing,setSubscribing]=useState(false)
+  const [subscribeError,setSubscribeError]=useState(null)
+
+  useEffect(() => {
+    if (!open || !activePatient?.id) return
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      const adultId = activePatient.account_type==='kids' ? activePatient.parent_patient_id : activePatient.id
+      const [{ data: adult }, { data: kids }] = await Promise.all([
+        supabase.from('patients').select('*').eq('id', adultId).maybeSingle(),
+        supabase.from('patients').select('*').eq('parent_patient_id', adultId).order('created_at',{ascending:true}),
+      ])
+      if (cancelled) return
+      setManagingAdult(adult||null)
+      setProfiles([adult, ...(kids||[])].filter(Boolean))
+      setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [open, activePatient?.id])
+
+  if (!open) return null
+  // Real-time check, not just "was Guardian active when this kid was
+  // added" - a lapsed subscription actually locks access to any kid
+  // beyond the first free one, re-checked every time this opens. Same
+  // active+expiry combination already used elsewhere in this app for a
+  // paid add-on (see claims_plugin_enabled/_expires_at in medsa-admin.jsx).
+  const today = new Date().toISOString().slice(0,10)
+  const guardianActive = !!managingAdult?.guardian_subscription_active && (!managingAdult?.guardian_subscription_expires_at || managingAdult.guardian_subscription_expires_at >= today)
+  // Index 0 is always the adult, free. Index 1 (the first linked kid) is
+  // free too. Anything beyond that needs an active Guardian subscription
+  // right now, not just at the moment it was added.
+  const isLocked = (idx) => idx >= 2 && !guardianActive
+  const canAddFree = profiles.length <= 1
+
+  async function handleSubscribeGuardian() {
+    if (!managingAdult?.id) return
+    setSubscribing(true); setSubscribeError(null)
+    try {
+      const res = await fetch('/api/patient/create_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ patientId: managingAdult.id }),
+      })
+      const data = await res.json()
+      if (data.status==='CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setSubscribeError(data.message || 'Could not start checkout.')
+    } catch {
+      setSubscribeError('Could not reach the server - try again.')
+    }
+    setSubscribing(false)
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:50,display:'flex',alignItems:'flex-end'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'20px 20px 0 0',padding:'20px 16px 24px',width:'100%',maxWidth:440,margin:'0 auto',maxHeight:'70vh',overflowY:'auto'}}>
+        <div style={{width:36,height:4,background:C.border,borderRadius:2,margin:'0 auto 16px'}}/>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'14px'}}>Switch profile</div>
+        {loading&&<div style={{fontSize:'12px',color:C.textMuted,padding:'12px'}}>Loading…</div>}
+        {!loading&&profiles.map((p,idx)=>{
+          const isKid = p.account_type==='kids'
+          const locked = isLocked(idx)
+          return (
+            <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?C.greenXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isKid?'Medsa Kids':'You'}</div>
+              </div>
+              {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:C.green,fontSize:'16px',flexShrink:0}}>✓</span>}
+            </div>
+          )
+        })}
+        {subscribeError&&<div style={{fontSize:'12px',color:C.red,margin:'8px 6px 0'}}>{subscribeError}</div>}
+        <div style={{marginTop:'12px'}}>
+          {canAddFree
+            ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a child's Medsa Kids profile</Btn>
+            : guardianActive
+              ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another Medsa Kids profile</Btn>
+              : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Reuses SelfRegisterFlow's step-by-step visual shape, but not its HKID +
+// selfie identity verification - that exists to prove a STRANGER with no
+// prior anchor really is who they claim, which doesn't apply here: the
+// parent creating this is already signed in, and the child usually has no
+// HKID yet anyway (HK doesn't require one until around age 11). A birth
+// certificate upload is the real equivalent proof for this case instead.
+function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
+  const [form,setForm]=useState({fullName:'',dob:''})
+  const [certFile,setCertFile]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function handleSubmit() {
+    setSaving(true); setError(null)
+    try {
+      const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+      const { data: child, error: insErr } = await supabase.from('patients').insert({
+        medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob,
+        account_type: 'kids', parent_patient_id: parentPatient.id, registration_path: 'guardian_created',
+      }).select().maybeSingle()
+      if (insErr) throw insErr
+      if (certFile) {
+        const path = `${medsaId}/birth-cert-${Date.now()}-${certFile.name}`
+        await supabase.storage.from('id-verification').upload(path, certFile)
+        const { data: att } = await supabase.from('medical_record_attachments').insert({
+          patient_id: child.id, category: 'birth_certificate', file_url: path, file_name: certFile.name, verification_status: 'unverified',
+        }).select().maybeSingle()
+        if (att) await supabase.from('patients').update({ birth_certificate_attachment_id: att.id }).eq('id', child.id)
+      }
+      onComplete(child)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a Medsa Kids profile</div>
+        {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one child under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Same information as a regular Medsa profile - your child likely doesn't have an HKID yet, so a birth certificate works instead.</div>
+        <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'14px'}}>
+          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Child's full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} type="date" max={new Date().toISOString().slice(0,10)} placeholder="Date of birth" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        </div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Birth certificate (optional, can add later)</div>
+        <input type="file" accept="image/*,application/pdf" onChange={e=>setCertFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Creating…':'Create profile'}</Btn>
       </div>
     </div>
   )
@@ -5207,6 +5908,12 @@ export default function PatientApp({ liveData={} }) {
   // between renders. This was the actual cause of the sign-up gate crash.
   const [signedInPatient,setSignedInPatient]=useState(null)
   const [showGate,setShowGate]=useState(true)
+  const [switcherOpen,setSwitcherOpen]=useState(false)
+  const [creatingKid,setCreatingKid]=useState(null) // null | {parent, guardianRequired}
+  function switchToPatient(p) {
+    setSignedInPatient(p)
+    if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+  }
   const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
 
   // Don't trust liveData.patient as proof someone's really signed in - it
@@ -5259,6 +5966,26 @@ export default function PatientApp({ liveData={} }) {
       }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
       window.history.replaceState({}, '', window.location.pathname)
     } else if (params.get('auto_purchase_cancelled') === '1') {
+      setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [])
+
+  // Same verify-on-return pattern as the auto-purchase effect above, for
+  // Medsa Guardian - reuses autoPurchaseNotice as a generic top banner
+  // rather than adding a near-duplicate piece of state just for this.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('guardian_started') === '1' && sessionId) {
+      fetch('/api/patient/verify_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK' && data.isActive) setAutoPurchaseNotice({ ok: true, text: 'Medsa Guardian is now active - you can manage more than one profile under this login.' })
+        else setAutoPurchaseNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('guardian_cancelled') === '1') {
       setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
       window.history.replaceState({}, '', window.location.pathname)
     }
@@ -5361,6 +6088,12 @@ export default function PatientApp({ liveData={} }) {
     }} onSkipDemo={()=>setShowGate(false)}/>
   }
 
+  if (creatingKid) {
+    return <CreateKidsProfileFlow parentPatient={creatingKid.parent} guardianRequired={creatingKid.guardianRequired}
+      onBack={()=>setCreatingKid(null)}
+      onComplete={(child)=>{ setCreatingKid(null); switchToPatient(child) }}/>
+  }
+
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
   const liveTransactions = signedInPatient ? (realPatientData?.transactions||[]) : []
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
@@ -5397,6 +6130,11 @@ export default function PatientApp({ liveData={} }) {
             <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?C.green:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
           ))}
         </div>
+        {/* Instagram-style profile switcher entry point - tap your own
+            avatar to switch into a linked Medsa Kids profile or add one.
+            Only shown for a real signed-in account (switching makes no
+            sense in demo mode, which has no real patient row to link). */}
+        {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:C.green,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
         {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
@@ -5406,13 +6144,11 @@ export default function PatientApp({ liveData={} }) {
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
-        {screen==='family'&&<FamilyScreen isEn={isEn}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
-        }}/>}
-        {screen==='storage'&&<StorageScreen isEn={isEn} patient={patient} onSignOut={()=>{
+        }} onSignOut={()=>{
           setSignedInPatient(null); setShowGate(true)
           if (typeof window!=='undefined') window.localStorage.removeItem('medsa_signed_in_patient_id')
         }}/>}
@@ -5438,6 +6174,9 @@ export default function PatientApp({ liveData={} }) {
       <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
       <ExternalRequestModal request={pendingExternalRequest} records={liveRecords} onDone={()=>setPendingExternalRequest(null)}/>
       <IncomingCallOverlay call={incomingCall} isEn={isEn} patient={patient} onDismiss={()=>setIncomingCall(null)}/>
+      {signedInPatient&&<ProfileSwitcherModal open={switcherOpen} onClose={()=>setSwitcherOpen(false)} activePatient={signedInPatient}
+        onSwitch={switchToPatient}
+        onAddChild={(parent,guardianRequired)=>setCreatingKid({parent,guardianRequired})}/>}
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
