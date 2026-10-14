@@ -6374,6 +6374,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
                 <div style={{display:'flex',flexDirection:'column',gap:'4px',alignItems:'flex-end',flexShrink:0}}>
                   {m.coveredItems.length>0&&<Badge text="Eligible" type="ok"/>}
                   {m.verificationRequired&&<Badge text={m.hasVerifiedPolicyNumber?'Policy verified':'No verified policy'} type={m.hasVerifiedPolicyNumber?'ok':'full'}/>}
+                  {!m.isPartnered&&<Badge text="Not a Medsa partner" type="full"/>}
                 </div>
               </div>
               {/* Roster/API-resolved plans share one link per patient+insurer,
@@ -6386,6 +6387,7 @@ function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsum
               {m.notCovered&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>None of this visit's items matched this plan's registered categories - select it anyway if you know it covers this visit.</div>}
               {!m.notCovered&&m.uncoveredItems.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Not covered: {m.uncoveredItems.join(', ')}</div>}
               {m.verificationRequired&&!m.hasVerifiedPolicyNumber&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} requires a verified policy number - this link doesn't have one, so billing will be rejected. Use "check by their real policy number" instead of "add it."</div>}
+              {!m.isPartnered&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{'⚠'} {m.plan.company_name} isn't a fully signed Medsa partner - Medsa has no real coverage terms to bill against, so this will be rejected. Have the patient pay in full and claim reimbursement with {m.plan.company_name} directly.</div>}
             </Card>
           ))}
           {/* Optional - only matters if this visit actually needs
