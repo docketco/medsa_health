@@ -288,7 +288,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData }) {
+function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -578,7 +578,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       )}
 
       {/* ── QR Health Passport — hero element ── */}
-      <div onClick={()=>onNav('editprofile')} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'20px',cursor:'pointer'}}>
+      <div onClick={()=>onNav('editprofile')} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${themeAccent} 0%,${themeAccentMid} 100%)`,borderRadius:'16px',padding:'20px',cursor:'pointer'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px'}}>
           <div>
             <div style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{isEn?`Good morning, ${patient?.preferred_name || patient?.full_name?.split(',')[1]?.trim() || patient?.full_name?.split(' ')[0] || 'there'}`:`早晨，${patient?.preferred_name || patient?.full_name || ''}`}</div>
@@ -6096,6 +6096,23 @@ export default function PatientApp({ liveData={} }) {
     return () => clearInterval(interval)
   }, [patient?.id])
 
+  // Real request: once Medsa Bump is active, the app's own accent color
+  // (header, bottom nav) shifts to Bump's pink instead of the default
+  // green - a visible, ambient reminder of which mode you're in, same
+  // idea as Kids being yellow and Guardian being blue elsewhere. Scoped
+  // to the shared chrome (header/nav), not every green pixel on every
+  // screen - repainting literally everything risked looking broken
+  // rather than branded.
+  const [bumpActive,setBumpActive]=useState(false)
+  useEffect(() => {
+    if (!patient?.id) { setBumpActive(false); return }
+    supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1).maybeSingle()
+      .then(({data}) => setBumpActive(!!data))
+  }, [patient?.id])
+  const themeAccent = bumpActive ? '#ad1457' : C.green
+  const themeAccentMid = bumpActive ? '#c2185b' : C.greenMid
+  const themeAccentLight = bumpActive ? '#fce4ec' : C.greenLight
+
   if (checkingPersistedSignIn) return null
 
   if (showGate && !signedInPatient) {
@@ -6138,23 +6155,23 @@ export default function PatientApp({ liveData={} }) {
     <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
       {autoPurchaseNotice&&<div onClick={()=>setAutoPurchaseNotice(null)} style={{padding:'10px 16px',fontSize:'12px',lineHeight:1.5,textAlign:'center',cursor:'pointer',background:autoPurchaseNotice.ok?C.greenXLight:C.redLight,color:autoPurchaseNotice.ok?C.green:C.red}}>{autoPurchaseNotice.text}</div>}
-      <div style={{background:C.green,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
+      <div style={{background:themeAccent,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
         {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
         <div style={{flex:1}}/>
         <div style={{display:'flex',background:'rgba(255,255,255,0.12)',borderRadius:'20px',padding:'2px',flexShrink:0}}>
           {[['en','EN'],['zh-TW','繁'],['zh-CN','简']].map(([code,label])=>(
-            <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?C.green:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
+            <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?themeAccent:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
           ))}
         </div>
         {/* Instagram-style profile switcher entry point - tap your own
             avatar to switch into a linked Medsa Kids profile or add one.
             Only shown for a real signed-in account (switching makes no
             sense in demo mode, which has no real patient row to link). */}
-        {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:C.green,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
+        {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:themeAccent,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
@@ -6172,7 +6189,7 @@ export default function PatientApp({ liveData={} }) {
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 0 6px',position:'sticky',bottom:0}}>
         {navItems.map(item=>(
-          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?C.green:C.textMuted,fontSize:'10px'}}>
+          <div key={item.key} onClick={()=>setScreen(item.key)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',cursor:'pointer',color:screen===item.key?themeAccent:C.textMuted,fontSize:'10px'}}>
             <Icon name={item.icon} size={20}/>
             <span>{isEn?item.en:item.zh}</span>
           </div>
