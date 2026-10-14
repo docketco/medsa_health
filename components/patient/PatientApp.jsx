@@ -5267,28 +5267,28 @@ function MedsaBumpSection({ isEn, patient }) {
   return (
     <>
       <SecLabel>Medsa Bump</SecLabel>
-      <Card style={{padding:'16px',marginBottom:'20px'}}>
-        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'12px'}}>
+      <Card style={{padding:'16px',marginBottom:'20px',background:'#fce4ec',border:'1px solid #f8bbd0'}}>
+        <div style={{fontSize:'12px',color:'#ad1457',lineHeight:1.6,marginBottom:'12px'}}>
           {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months. One-time payment; a discount applies automatically if you've used Medsa Bump before.":'由懷孕至寶寶18個月大的孕產照護追蹤。一次性付款;如曾使用Medsa Bump,將自動享有折扣。'}
         </div>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
-        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
-        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px'}}/>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
-        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px'}}/>
+        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
+        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
+        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px',background:'#fff'}}/>
 
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
+        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
         <label style={{display:'block'}}>
-          <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
+          <div style={{textAlign:'center',border:'1px dashed #f8bbd0',borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px',background:'#fff'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
           <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadCheckup(f)}}/>
         </label>
         {checkupFiles.length>0&&<div style={{marginBottom:'12px'}}>
-          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:C.textSub,padding:'4px 0'}}>📄 {f.file_name}</div>)}
+          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:'#ad1457',padding:'4px 0'}}>📄 {f.file_name}</div>)}
         </div>}
 
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
-        <Btn variant="primary" style={{width:'100%'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+        <Btn style={{width:'100%',background:'#ad1457',color:'#fff'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </Card>
     </>
   )
@@ -5346,7 +5346,7 @@ function LoginFlow({ onBack, onComplete }) {
 // from whichever profile is currently active (itself, if it's the top-
 // level account, or its parent_patient_id if it's a Kids profile), so this
 // works correctly even mid-session as a different profile.
-function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild }) {
+function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild, onOpenSettings, onOpenEmergency }) {
   const [profiles,setProfiles]=useState([])
   const [managingAdult,setManagingAdult]=useState(null)
   const [loading,setLoading]=useState(true)
@@ -5423,6 +5423,23 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
           )
         })}
         {subscribeError&&<div style={{fontSize:'12px',color:C.red,margin:'8px 6px 0'}}>{subscribeError}</div>}
+
+        {/* Real gap reported live-testing: Account Settings (where Medsa
+            Bump lives) and the Emergency card were only reachable by
+            scrolling Home's own menu list - the profile icon only ever
+            switched between profiles, so it wasn't the one place to find
+            everything about your own account the way an Instagram-style
+            icon implies. Both now live right here too. */}
+        <div style={{borderTop:`0.5px solid ${C.border}`,margin:'14px 0 6px'}}/>
+        <div onClick={()=>{onOpenSettings&&onOpenSettings()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer'}}>
+          <div style={{width:40,height:40,borderRadius:'50%',background:C.border,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',flexShrink:0}}>⚙</div>
+          <div style={{fontSize:'14px',fontWeight:600}}>Account settings</div>
+        </div>
+        <div onClick={()=>{onOpenEmergency&&onOpenEmergency()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer'}}>
+          <div style={{width:40,height:40,borderRadius:'50%',background:C.amberLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',flexShrink:0}}>🚨</div>
+          <div style={{fontSize:'14px',fontWeight:600}}>Emergency card</div>
+        </div>
+
         <div style={{marginTop:'12px'}}>
           {canAddFree
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a child's Medsa Kids profile</Btn>
@@ -6176,7 +6193,9 @@ export default function PatientApp({ liveData={} }) {
       <IncomingCallOverlay call={incomingCall} isEn={isEn} patient={patient} onDismiss={()=>setIncomingCall(null)}/>
       {signedInPatient&&<ProfileSwitcherModal open={switcherOpen} onClose={()=>setSwitcherOpen(false)} activePatient={signedInPatient}
         onSwitch={switchToPatient}
-        onAddChild={(parent,guardianRequired)=>setCreatingKid({parent,guardianRequired})}/>}
+        onAddChild={(parent,guardianRequired)=>setCreatingKid({parent,guardianRequired})}
+        onOpenSettings={()=>{setScreen('editprofile');setSwitcherOpen(false)}}
+        onOpenEmergency={()=>{setEmergencyOpen(true);setSwitcherOpen(false)}}/>}
     </div>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
