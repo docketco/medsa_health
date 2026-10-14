@@ -56,8 +56,8 @@ export default async function handler(req, res) {
       },
       quantity: 1,
     }],
-    success_url: `${siteUrl}/?bump_started=1&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${siteUrl}/?bump_cancelled=1`,
+    success_url: `${siteUrl}/patient?bump_started=1&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${siteUrl}/patient?bump_cancelled=1`,
     metadata: {
       bump_patient_id: patientId,
       bump_predicted_due_date: predictedDueDate || '',

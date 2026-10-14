@@ -63,8 +63,8 @@ export default async function handler(req, res) {
       },
       quantity: 1,
     }],
-    success_url: `${siteUrl}/?guardian_started=1&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${siteUrl}/?guardian_cancelled=1`,
+    success_url: `${siteUrl}/patient?guardian_started=1&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${siteUrl}/patient?guardian_cancelled=1`,
     metadata: { guardian_patient_id: patientId },
     subscription_data: { metadata: { guardian_patient_id: patientId } },
   })
