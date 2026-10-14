@@ -2,10 +2,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Same pattern as insurer/verify_subscription_checkout.js - checks the real
 // Stripe session/subscription directly on return rather than trusting the
-// webhook, which is confirmed unreliable elsewhere in this app. Also the
-// route a RENEWAL check should eventually hit (not built yet - see the
-// switcher's own real-time expiry check, which is what actually matters
-// once a subscription lapses).
+// webhook, which is confirmed unreliable elsewhere in this app. This only
+// fires for a NEW Checkout Session (first signup, or re-subscribing after a
+// full lapse) - an automatic annual renewal never creates a new session, so
+// cron/guardian_expiry_reminders.js is what keeps expires_at current after
+// that, pulling the live subscription straight from Stripe daily.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -35,6 +36,7 @@ export default async function handler(req, res) {
     guardian_stripe_subscription_id: sub.id,
     guardian_subscription_active: isActive,
     guardian_subscription_expires_at: periodEnd,
+    guardian_last_reminder_days_threshold: null, // clean slate - a fresh/renewed period hasn't earned any reminder yet
   }).eq('id', patientId)
 
   return res.status(200).json({ status: 'OK', isActive })
