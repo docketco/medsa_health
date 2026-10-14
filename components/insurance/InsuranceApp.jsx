@@ -105,10 +105,12 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
           {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
+          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
+          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
@@ -2833,6 +2835,87 @@ function TeamsAndAgents({ company }) {
   )
 }
 
+// Real regression found while updating the QA checklist: shelving Teams &
+// Agents (brokerage/agent management, out of scope after the pivot) took
+// underwriter onboarding down with it, since both lived in the same
+// TeamsAndAgents component - but underwriters aren't brokerage management,
+// they're the insurer's own claims-decision staff, core to the flagged-case
+// review flow this app still actively uses. Standalone, so it doesn't drag
+// the rest of Teams/Agents back in with it.
+function UnderwritersManager({ company }) {
+  const [underwriters,setUnderwriters]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showAdd,setShowAdd]=useState(false)
+  const [form,setForm]=useState({ fullName:'', email:'' })
+  const [saving,setSaving]=useState(false)
+  const [notice,setNotice]=useState(null)
+  const [credentialNotice,setCredentialNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('insurance_underwriters')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setUnderwriters(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id, company.name])
+
+  async function handleAdd() {
+    if (!form.fullName.trim()||!form.email.trim()) return
+    setSaving(true); setNotice(null); setCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_underwriter', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...form, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setNotice(data.message||'Could not add underwriter.'); setSaving(false); return }
+      setCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setForm({ fullName:'', email:'' })
+      setShowAdd(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{background:C.beige,flex:1,padding:'16px'}}>
+      <div style={{background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.green,marginBottom:'4px'}}>Underwriters - review flagged plan applications</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>A different role from a sales agent - reviews cases in the Underwriter Portal, never sees them here.</div>
+        {!loading&&underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - flagged applications wait here until someone can review them.</div>}
+        {underwriters.map(u=>(
+          <div key={u.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{u.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+          </div>
+        ))}
+        {notice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{notice}</div>}
+        {credentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+          {credentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{credentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+        </div>}
+        {showAdd ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={form.fullName} onChange={e=>setForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAdd(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAdd} disabled={saving||!form.fullName.trim()||!form.email.trim()}>{saving?'Saving…':'Add underwriter'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAdd(true)}>+ Add an underwriter</Btn>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── ROOT ─────────────────────────────────────────────────────────────────────
 // company: {id, name, relationshipType}. This used to be entirely
 // hardcoded to "AIA" everywhere below (a demo shell, reachable only from
@@ -2852,7 +2935,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // was left at, landing partway down a page that looks blank/broken.
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',underwriters:'Underwriters'}
   const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
@@ -2903,6 +2986,7 @@ export default function InsuranceApp({ company, onLogout }) {
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
         {screen==='ads'&&<SponsoredListings company={company}/>}
+        {screen==='underwriters'&&<UnderwritersManager company={company}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{
