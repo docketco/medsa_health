@@ -664,9 +664,9 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
           {key:'records',icon:'records',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:themeAccentLight,badge:null},
-          {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:inquiryUnreadTotal>0?String(inquiryUnreadTotal):null},
-          {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
-          {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
+          {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:themeAccentLight,badge:inquiryUnreadTotal>0?String(inquiryUnreadTotal):null},
+          {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:themeAccentLight,badge:null},
+          {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:themeAccentLight,badge:'1'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
             <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'10px',color:themeAccent}}><Icon name={item.icon}/></div>
@@ -693,7 +693,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{padding:'0 16px'}}>
         {[
           {key:'doctors',icon:'doctors',bg:themeAccentLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
+          {key:'editprofile',icon:'alert',bg:themeAccentLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
             <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:themeAccent,flexShrink:0}}><Icon name={item.icon}/></div>
@@ -1578,7 +1578,7 @@ function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
       <style>{`@keyframes ringPulse{0%,100%{transform:scale(1);opacity:0.55}50%{transform:scale(1.18);opacity:0}}`}</style>
       <div style={{position:'relative',width:100,height:100,marginBottom:'20px',display:'flex',alignItems:'center',justifyContent:'center'}}>
         <div style={{position:'absolute',inset:0,borderRadius:'50%',background:__theme.accent,animation:'ringPulse 1.4s ease-out infinite'}}/>
-        <div style={{position:'relative',width:88,height:88,borderRadius:'50%',background:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700}}>{'◈'}</div>
+        <div style={{position:'relative',width:88,height:88,borderRadius:'50%',background:__theme.accentLight,color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700}}>{'◈'}</div>
       </div>
       <div style={{fontSize:'12px',opacity:0.75,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Video consultation':'視像診症'}</div>
       <div style={{fontSize:'22px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>{call.doctorName}</div>
