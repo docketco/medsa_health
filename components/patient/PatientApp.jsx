@@ -667,6 +667,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:themeAccentLight,badge:inquiryUnreadTotal>0?String(inquiryUnreadTotal):null},
           {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:themeAccentLight,badge:null},
           {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:themeAccentLight,badge:'1'},
+          // Only shown while switched into a child dependent's own profile -
+          // growth/feeding tracking (and the Blue-Book-style combined
+          // record below) doesn't make sense on the adult account or a
+          // non-child dependent.
+          ...(patient?.account_type==='kids' && (patient?.dependent_relationship==null||patient?.dependent_relationship==='child') ? [
+            {key:'kidsgrowth',icon:'growth',label:isEn?'Growth & feeding':'生長與餵養',sub:isEn?'Weight, height, milk log':'體重、身高、餵奶記錄',bg:themeAccentLight,badge:null},
+          ] : []),
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
             <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'10px',color:themeAccent}}><Icon name={item.icon}/></div>
@@ -4959,6 +4966,166 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   )
 }
 
+// Minimal inline line chart - no charting library, just points-on-a-grid.
+// Good enough to see a trend at a glance; not a WHO/HK percentile-band
+// overlay (that needs embedding the actual reference curves, a separate,
+// bigger ask if that precision turns out to matter).
+function GrowthLineChart({ points, color, unit }) {
+  if (points.length < 2) return <div style={{fontSize:'11px',color:C.textMuted,padding:'20px 0',textAlign:'center'}}>{points.length===0?'No entries yet':'Add one more entry to see a trend line'}</div>
+  const W=280, H=100, pad=8
+  const xs = points.map((_,i)=>i)
+  const ys = points.map(p=>p.y)
+  const minY = Math.min(...ys), maxY = Math.max(...ys)
+  const range = maxY - minY || 1
+  const sx = i => pad + (i/(xs.length-1))*(W-pad*2)
+  const sy = y => H-pad - ((y-minY)/range)*(H-pad*2)
+  const path = points.map((p,i)=>`${i===0?'M':'L'}${sx(i)},${sy(p.y)}`).join(' ')
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      {points.map((p,i)=><circle key={i} cx={sx(i)} cy={sy(p.y)} r="2.5" fill={color}/>)}
+      <text x={pad} y={10} fontSize="9" fill={C.textMuted}>{maxY}{unit}</text>
+      <text x={pad} y={H-2} fontSize="9" fill={C.textMuted}>{minY}{unit}</text>
+    </svg>
+  )
+}
+
+const FEEDING_TYPES = [
+  { value: 'breast', label: { en: 'Breast', zh: '母乳' } },
+  { value: 'formula', label: { en: 'Formula', zh: '配方奶' } },
+  { value: 'solid', label: { en: 'Solid food', zh: '固體食物' } },
+]
+
+// Growth + feeding tracking, framed as Medsa's digital equivalent of the
+// Hong Kong Maternal & Child Health Centre "Blue Book" - that booklet's
+// own three pillars are growth charts, feeding/development notes, and
+// vaccination records. Vaccinations already live in RecordsScreen (the
+// "History, vaccinations, share" tile) - this screen covers the other
+// two and links across rather than duplicating that part.
+function KidsGrowthScreen({ isEn, patient={}, onNav }) {
+  const __theme = useContext(ThemeContext)
+  const [growthLogs,setGrowthLogs]=useState([])
+  const [feedingLogs,setFeedingLogs]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [gForm,setGForm]=useState({ recordedAt: new Date().toISOString().slice(0,10), weightKg:'', heightCm:'', headCm:'' })
+  const [fForm,setFForm]=useState({ type:'breast', amountMl:'', durationMin:'', note:'' })
+  const [saving,setSaving]=useState(false)
+
+  async function load() {
+    if (!patient?.id) { setLoading(false); return }
+    setLoading(true)
+    const [{ data: g }, { data: f }] = await Promise.all([
+      supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
+      supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
+    ])
+    setGrowthLogs(g||[])
+    setFeedingLogs(f||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [patient?.id])
+
+  async function addGrowthLog() {
+    if (!patient?.id || !gForm.recordedAt) return
+    setSaving(true)
+    await supabase.from('kids_growth_logs').insert({
+      patient_id: patient.id, recorded_at: gForm.recordedAt,
+      weight_kg: gForm.weightKg?Number(gForm.weightKg):null,
+      height_cm: gForm.heightCm?Number(gForm.heightCm):null,
+      head_circumference_cm: gForm.headCm?Number(gForm.headCm):null,
+    })
+    setGForm({ recordedAt: new Date().toISOString().slice(0,10), weightKg:'', heightCm:'', headCm:'' })
+    await load()
+    setSaving(false)
+  }
+  async function deleteGrowthLog(id) { await supabase.from('kids_growth_logs').delete().eq('id', id); load() }
+
+  async function addFeedingLog() {
+    if (!patient?.id) return
+    setSaving(true)
+    await supabase.from('kids_feeding_logs').insert({
+      patient_id: patient.id, feeding_type: fForm.type,
+      amount_ml: fForm.amountMl?Number(fForm.amountMl):null,
+      duration_min: fForm.durationMin?Number(fForm.durationMin):null,
+      note: fForm.note||null,
+    })
+    setFForm({ type:'breast', amountMl:'', durationMin:'', note:'' })
+    await load()
+    setSaving(false)
+  }
+  async function deleteFeedingLog(id) { await supabase.from('kids_feeding_logs').delete().eq('id', id); load() }
+
+  const weightPoints = growthLogs.filter(g=>g.weight_kg!=null).map(g=>({x:g.recorded_at, y:g.weight_kg}))
+  const heightPoints = growthLogs.filter(g=>g.height_cm!=null).map(g=>({x:g.recorded_at, y:g.height_cm}))
+  const todayStr = new Date().toISOString().slice(0,10)
+  const todaysFeedings = feedingLogs.filter(f=>f.fed_at?.slice(0,10)===todayStr)
+  const todaysMl = todaysFeedings.filter(f=>f.amount_ml!=null).reduce((s,f)=>s+Number(f.amount_ml),0)
+
+  if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
+
+  return (
+    <div style={{padding:'0 16px 24px'}}>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
+      </div>
+
+      <SecLabel>{isEn?'Growth':'生長'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+          <input type="date" value={gForm.recordedAt} max={todayStr} onChange={e=>setGForm({...gForm,recordedAt:e.target.value})} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="number" value={gForm.weightKg} onChange={e=>setGForm({...gForm,weightKg:e.target.value})} placeholder={isEn?'Weight (kg)':'體重(kg)'} style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="number" value={gForm.heightCm} onChange={e=>setGForm({...gForm,heightCm:e.target.value})} placeholder={isEn?'Height (cm)':'身高(cm)'} style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="number" value={gForm.headCm} onChange={e=>setGForm({...gForm,headCm:e.target.value})} placeholder={isEn?'Head circ. (cm, optional)':'頭圍(cm,可選)'} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!gForm.weightKg&&!gForm.heightCm&&!gForm.headCm)} onClick={addGrowthLog}>{isEn?'Add entry':'新增記錄'}</Btn>
+
+        {growthLogs.length>0&&<>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'16px',marginBottom:'2px'}}>{isEn?'Weight over time':'體重趨勢'}</div>
+          <GrowthLineChart points={weightPoints} color={__theme.accent} unit="kg"/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'10px',marginBottom:'2px'}}>{isEn?'Height over time':'身高趨勢'}</div>
+          <GrowthLineChart points={heightPoints} color={C.blue} unit="cm"/>
+          <div style={{marginTop:'14px'}}>
+            {[...growthLogs].reverse().map(g=>(
+              <div key={g.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:80,flexShrink:0}}>{g.recorded_at}</span>
+                <span style={{flex:1}}>{g.weight_kg!=null?`${g.weight_kg}kg`:''}{g.height_cm!=null?`  ·  ${g.height_cm}cm`:''}{g.head_circumference_cm!=null?`  ·  ${isEn?'head':'頭圍'} ${g.head_circumference_cm}cm`:''}</span>
+                <span onClick={()=>deleteGrowthLog(g.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            ))}
+          </div>
+        </>}
+      </Card>
+
+      <SecLabel>{isEn?'Feeding (milk) log':'餵養(奶量)記錄'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          {FEEDING_TYPES.map(t=>(
+            <div key={t.value} onClick={()=>setFForm({...fForm,type:t.value})} style={{flex:1,textAlign:'center',padding:'9px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:fForm.type===t.value?__theme.accent:C.card,color:fForm.type===t.value?'#fff':C.text}}>{isEn?t.label.en:t.label.zh}</div>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          {fForm.type!=='solid'&&<input type="number" value={fForm.amountMl} onChange={e=>setFForm({...fForm,amountMl:e.target.value})} placeholder={isEn?'Amount (ml, optional)':'份量(ml,可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
+          {fForm.type==='breast'&&<input type="number" value={fForm.durationMin} onChange={e=>setFForm({...fForm,durationMin:e.target.value})} placeholder={isEn?'Minutes (optional)':'分鐘(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
+          <input value={fForm.note} onChange={e=>setFForm({...fForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving} onClick={addFeedingLog}>{isEn?'Log feeding':'記錄餵養'}</Btn>
+
+        <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'16px',marginBottom:'6px'}}>{isEn?`Today - ${todaysFeedings.length} feeding${todaysFeedings.length===1?'':'s'}${todaysMl?`, ${todaysMl}ml`:''}`:`今天 - ${todaysFeedings.length}次餵養${todaysMl?`, ${todaysMl}ml`:''}`}</div>
+        {feedingLogs.map(f=>{
+          const t = FEEDING_TYPES.find(t=>t.value===f.feeding_type)
+          return (
+            <div key={f.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(f.fed_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{flex:1}}>{t?(isEn?t.label.en:t.label.zh):f.feeding_type}{f.amount_ml!=null?` · ${f.amount_ml}ml`:''}{f.duration_min!=null?` · ${f.duration_min}min`:''}{f.note?` · ${f.note}`:''}</span>
+              <span onClick={()=>deleteFeedingLog(f.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          )
+        })}
+      </Card>
+    </div>
+  )
+}
+
 function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   const __theme = useContext(ThemeContext)
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
@@ -5207,12 +5374,27 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
 // starts right away on payment, during pregnancy rather than after birth -
 // predicted due date and how far along the patient is are collected up
 // front so there's something to track against immediately.
+// Your call - a flat "upload a check-up" pile made a specialist report
+// (an OB-GYN ultrasound, a referral from a cardiologist for a high-risk
+// pregnancy, etc.) indistinguishable from a routine check-up. Stored as a
+// distinct medical_record_attachments.category value per type - that
+// column already exists and is already used this way (birth_certificate,
+// dependent_relationship_doc), so this is just more values on the same
+// mechanism, not a schema change.
+const BUMP_DOC_TYPES = [
+  { value: 'bump_general_checkup', label: { en: 'General check-up', zh: '一般檢查' } },
+  { value: 'bump_scan', label: { en: 'Ultrasound / scan', zh: '超聲波/掃描' } },
+  { value: 'bump_specialist_report', label: { en: 'Specialist report / referral', zh: '專科報告/轉介' } },
+  { value: 'bump_lab_result', label: { en: 'Lab result', zh: '化驗結果' } },
+]
+
 function MedsaBumpSection({ isEn, patient }) {
   const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=active
   const [dueDate,setDueDate]=useState('')
   const [weeksNow,setWeeksNow]=useState('')
   const [discoveredAt,setDiscoveredAt]=useState('')
   const [checkupFiles,setCheckupFiles]=useState([])
+  const [docType,setDocType]=useState('bump_general_checkup')
   const [uploading,setUploading]=useState(false)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
@@ -5241,7 +5423,7 @@ function MedsaBumpSection({ isEn, patient }) {
     const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
     if (upErr) { setUploading(false); return }
     const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
-      patient_id: patient.id, category: 'bump_prenatal', file_url: path, file_name: file.name, verification_status: 'unverified',
+      patient_id: patient.id, category: docType, file_url: path, file_name: file.name, verification_status: 'unverified',
     }).select().maybeSingle()
     setUploading(false)
     if (newAtt) setCheckupFiles(prev => [...prev, newAtt])
@@ -5311,12 +5493,18 @@ function MedsaBumpSection({ isEn, patient }) {
         <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px',background:'#fff'}}/>
 
         <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
+        <select value={docType} onChange={e=>setDocType(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px',background:'#fff'}}>
+          {BUMP_DOC_TYPES.map(t=><option key={t.value} value={t.value}>{isEn?t.label.en:t.label.zh}</option>)}
+        </select>
         <label style={{display:'block'}}>
-          <div style={{textAlign:'center',border:'1px dashed rgba(255,255,255,0.5)',borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px',color:'#fff'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
+          <div style={{textAlign:'center',border:'1px dashed rgba(255,255,255,0.5)',borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px',color:'#fff'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload this document':'+ 上傳此文件')}</div>
           <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadCheckup(f)}}/>
         </label>
         {checkupFiles.length>0&&<div style={{marginBottom:'12px'}}>
-          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',padding:'4px 0'}}>📄 {f.file_name}</div>)}
+          {checkupFiles.map(f=>{
+            const t = BUMP_DOC_TYPES.find(t=>t.value===f.category)
+            return <div key={f.id} style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',padding:'4px 0'}}>📄 {f.file_name}{t?` — ${isEn?t.label.en:t.label.zh}`:''}</div>
+          })}
         </div>}
 
         {error&&<div style={{fontSize:'12px',color:'#ffcdd2',marginBottom:'8px'}}>{error}</div>}
@@ -6202,10 +6390,13 @@ export default function PatientApp({ liveData={} }) {
   // green than your own adult profile, so the switcher's current tab is
   // always visible at a glance without being person/feature-specific.
   const isDependentProfile = !!patient?.parent_patient_id
-  const themeAccent = bumpActive ? '#F48FB1' : isDependentProfile ? '#43A879' : C.green
-  const themeAccentMid = bumpActive ? '#F8BBD0' : isDependentProfile ? '#6FC89D' : C.greenMid
-  const themeAccentLight = bumpActive ? '#FCE4EC' : isDependentProfile ? '#E3F3EA' : C.greenLight
-  const themeAccentXLight = bumpActive ? '#FFF5F8' : isDependentProfile ? '#F3FAF6' : C.greenXLight
+  // Dependent-ness checked FIRST, not Bump - a dependent profile is never
+  // pregnant, so pink has no business showing there even if bumpActive
+  // somehow resolved true for that id. Only the main account can go pink.
+  const themeAccent = isDependentProfile ? '#43A879' : bumpActive ? '#F48FB1' : C.green
+  const themeAccentMid = isDependentProfile ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
+  const themeAccentLight = isDependentProfile ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
+  const themeAccentXLight = isDependentProfile ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
 
   // Real bug found live-testing: Bump is only ever started from inside
   // Account Settings, but Stripe's redirect back lands on a fresh page
@@ -6263,7 +6454,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群'}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養'}
   const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
     // Real gap reported live-testing: minHeight let this column grow
@@ -6305,6 +6496,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
+        {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
