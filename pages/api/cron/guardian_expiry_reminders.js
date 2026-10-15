@@ -19,6 +19,7 @@
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { sendEmail } from '../../../lib/email'
+import { subscriptionPeriodEnd } from '../../../lib/verifyStripeCheckout'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 const THRESHOLDS = [90, 60, 30, 7, 3] // days out, tightest last
@@ -48,7 +49,7 @@ export default async function handler(req, res) {
     try {
       const sub = await stripe.subscriptions.retrieve(p.guardian_stripe_subscription_id)
       isActive = sub.status === 'active' || sub.status === 'trialing'
-      expiresAt = sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString().slice(0,10) : expiresAt
+      expiresAt = subscriptionPeriodEnd(sub) || expiresAt
     } catch {
       continue // can't reach Stripe for this one - leave its stored state alone, try again tomorrow
     }

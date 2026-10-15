@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
-import { retrievePaidSession } from '../../../lib/verifyStripeCheckout'
+import { retrievePaidSession, subscriptionPeriodEnd } from '../../../lib/verifyStripeCheckout'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
   }
 
   const isActive = sub.status === 'active' || sub.status === 'trialing'
-  const periodEnd = sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString().slice(0,10) : null
+  const periodEnd = subscriptionPeriodEnd(sub)
 
   await supabase.from('patients').update({
     guardian_stripe_subscription_id: sub.id,
