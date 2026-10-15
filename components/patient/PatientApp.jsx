@@ -6142,11 +6142,27 @@ export default function PatientApp({ liveData={} }) {
   // to the shared chrome (header/nav), not every green pixel on every
   // screen - repainting literally everything risked looking broken
   // rather than branded.
-  const [bumpActive,setBumpActive]=useState(false)
+  // Real glitch found live-testing: the pink theme only ever became true
+  // once this Supabase check resolved, so every refresh painted green for
+  // a frame first, then flashed to pink. Seeding from the same localStorage
+  // cache the persisted-sign-in check already uses (keyed by patient id, so
+  // it survives before `patient` itself has loaded) means a returning
+  // Bump patient sees pink from the very first paint - this still verifies
+  // against the real row right after, it just doesn't start from a wrong
+  // guess.
+  const [bumpActive,setBumpActive]=useState(() => {
+    if (typeof window==='undefined') return false
+    const persistedId = window.localStorage.getItem('medsa_signed_in_patient_id')
+    return !!persistedId && window.localStorage.getItem(`medsa_bump_active_${persistedId}`) === '1'
+  })
   const checkBumpActive = useCallback(() => {
     if (!patient?.id) { setBumpActive(false); return }
     supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1).maybeSingle()
-      .then(({data}) => setBumpActive(!!data))
+      .then(({data}) => {
+        const active = !!data
+        setBumpActive(active)
+        if (typeof window!=='undefined') window.localStorage.setItem(`medsa_bump_active_${patient.id}`, active ? '1' : '0')
+      })
   }, [patient?.id])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
   const themeAccent = bumpActive ? '#F48FB1' : C.green
