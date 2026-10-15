@@ -105,12 +105,10 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
           {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
-          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
           {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
-          {key:'underwriters',icon:'◆',label:'Underwriters',sub:'Add the people who review flagged plan applications'},
         ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
