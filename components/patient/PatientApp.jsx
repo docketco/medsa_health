@@ -5372,12 +5372,15 @@ function LoginFlow({ onBack, onComplete }) {
 
 // ── PROFILE SWITCHER (Instagram-style) ──────────────────────────────────────
 // Clicking your own profile icon shows every profile switchable from this
-// login: yourself plus any Medsa Kids linked under you (patients.
-// parent_patient_id). Switching just re-points signedInPatient at a
+// login: yourself plus any dependent linked under you (patients.
+// parent_patient_id) - a child, parent, elderly relative, or anyone else
+// you're the caretaker of, all stored the same way (account_type still
+// says 'kids' under the hood; dependent_relationship is what actually
+// says who they are). Switching just re-points signedInPatient at a
 // different real row - everything downstream already keys off its id, no
 // separate "active profile" concept needed. The managing adult is derived
 // from whichever profile is currently active (itself, if it's the top-
-// level account, or its parent_patient_id if it's a Kids profile), so this
+// level account, or its parent_patient_id if it's a dependent), so this
 // works correctly even mid-session as a different profile.
 function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild, onOpenSettings, onOpenEmergency }) {
   const __theme = useContext(ThemeContext)
@@ -5443,14 +5446,20 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'14px'}}>Switch profile</div>
         {loading&&<div style={{fontSize:'12px',color:C.textMuted,padding:'12px'}}>Loading…</div>}
         {!loading&&profiles.map((p,idx)=>{
-          const isKid = p.account_type==='kids'
+          // Fixed colors, not __theme - this row is about whose profile it
+          // IS, not which theme happens to be active for whoever you're
+          // currently viewing. Any dependent (child, parent, elderly,
+          // disabled - not just kids) reads as the same light green,
+          // regardless of what they're specifically related as.
+          const isDependentRow = !!p.parent_patient_id
           const locked = isLocked(idx)
+          const relLabel = DEPENDENT_RELATIONSHIPS.find(r=>r.value===p.dependent_relationship)?.label || 'Dependent'
           return (
             <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?__theme.accentXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
-              <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':__theme.accentLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':__theme.accent,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isDependentRow?'#E3F3EA':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isDependentRow?'#43A879':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isKid?'Medsa Kids':'You'}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isDependentRow?relLabel:'You'}</div>
               </div>
               {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:__theme.accent,fontSize:'16px',flexShrink:0}}>✓</span>}
             </div>
@@ -5476,9 +5485,9 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
 
         <div style={{marginTop:'12px'}}>
           {canAddFree
-            ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a child's Medsa Kids profile</Btn>
+            ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a dependent profile</Btn>
             : guardianActive
-              ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another Medsa Kids profile</Btn>
+              ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another dependent profile</Btn>
               : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
         </div>
       </div>
@@ -5492,12 +5501,28 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
 // parent creating this is already signed in, and the child usually has no
 // HKID yet anyway (HK doesn't require one until around age 11). A birth
 // certificate upload is the real equivalent proof for this case instead.
+// Guardian was never meant to be "kids only" - your call: it's anyone
+// you're the caretaker of (a child, but just as much a parent, an elderly
+// relative, or a person with a disability). account_type stays 'kids' in
+// the DB either way (that's just the locking/avatar mechanism, untouched),
+// but the relationship picked here drives copy, the document label, and
+// is stored on dependent_relationship purely for display.
+const DEPENDENT_RELATIONSHIPS = [
+  { value: 'child', label: 'Child', docLabel: 'Birth certificate', docNoun: 'child' },
+  { value: 'parent', label: 'Parent', docLabel: 'ID or proof of relationship', docNoun: 'parent' },
+  { value: 'elderly', label: 'Elderly relative', docLabel: 'ID or proof of relationship', docNoun: 'relative' },
+  { value: 'disabled', label: 'Person with a disability', docLabel: 'ID or proof of relationship', docNoun: 'dependent' },
+  { value: 'other', label: 'Other dependent', docLabel: 'ID or proof of relationship', docNoun: 'dependent' },
+]
+
 function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
   const __theme = useContext(ThemeContext)
+  const [relationship,setRelationship]=useState('child')
   const [form,setForm]=useState({fullName:'',dob:''})
   const [certFile,setCertFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+  const rel = DEPENDENT_RELATIONSHIPS.find(r=>r.value===relationship) || DEPENDENT_RELATIONSHIPS[0]
 
   async function handleSubmit() {
     setSaving(true); setError(null)
@@ -5506,13 +5531,14 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
       const { data: child, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob,
         account_type: 'kids', parent_patient_id: parentPatient.id, registration_path: 'guardian_created',
+        dependent_relationship: relationship,
       }).select().maybeSingle()
       if (insErr) throw insErr
       if (certFile) {
-        const path = `${medsaId}/birth-cert-${Date.now()}-${certFile.name}`
+        const path = `${medsaId}/dependent-doc-${Date.now()}-${certFile.name}`
         await supabase.storage.from('id-verification').upload(path, certFile)
         const { data: att } = await supabase.from('medical_record_attachments').insert({
-          patient_id: child.id, category: 'birth_certificate', file_url: path, file_name: certFile.name, verification_status: 'unverified',
+          patient_id: child.id, category: relationship==='child' ? 'birth_certificate' : 'dependent_relationship_doc', file_url: path, file_name: certFile.name, verification_status: 'unverified',
         }).select().maybeSingle()
         if (att) await supabase.from('patients').update({ birth_certificate_attachment_id: att.id }).eq('id', child.id)
       }
@@ -5528,14 +5554,18 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
         <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a Medsa Kids profile</div>
-        {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one child under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Same information as a regular Medsa profile - your child likely doesn't have an HKID yet, so a birth certificate works instead.</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a dependent profile</div>
+        {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one dependent under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Medsa Guardian covers anyone you're the caretaker of - a child, a parent, an elderly relative, or someone with a disability.</div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Relationship</div>
+        <select value={relationship} onChange={e=>setRelationship(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px',background:'#fff'}}>
+          {DEPENDENT_RELATIONSHIPS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+        </select>
         <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'14px'}}>
-          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Child's full name" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder={`${rel.label}'s full name`} style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
           <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} type="date" max={new Date().toISOString().slice(0,10)} placeholder="Date of birth" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
         </div>
-        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Birth certificate (optional, can add later)</div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{rel.docLabel} (optional, can add later)</div>
         <input type="file" accept="image/*,application/pdf" onChange={e=>setCertFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
         <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Creating…':'Create profile'}</Btn>
@@ -6165,10 +6195,17 @@ export default function PatientApp({ liveData={} }) {
       })
   }, [patient?.id])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
-  const themeAccent = bumpActive ? '#F48FB1' : C.green
-  const themeAccentMid = bumpActive ? '#F8BBD0' : C.greenMid
-  const themeAccentLight = bumpActive ? '#FCE4EC' : C.greenLight
-  const themeAccentXLight = bumpActive ? '#FFF5F8' : C.greenXLight
+  // Your call: color should track age/relationship, not which paid add-on
+  // happens to be active - Bump is the one real exception since pregnancy
+  // isn't an age category. Whoever you've switched TO (any dependent -
+  // child, parent, elderly, disabled, not just "kids") reads as a lighter
+  // green than your own adult profile, so the switcher's current tab is
+  // always visible at a glance without being person/feature-specific.
+  const isDependentProfile = !!patient?.parent_patient_id
+  const themeAccent = bumpActive ? '#F48FB1' : isDependentProfile ? '#43A879' : C.green
+  const themeAccentMid = bumpActive ? '#F8BBD0' : isDependentProfile ? '#6FC89D' : C.greenMid
+  const themeAccentLight = bumpActive ? '#FCE4EC' : isDependentProfile ? '#E3F3EA' : C.greenLight
+  const themeAccentXLight = bumpActive ? '#FFF5F8' : isDependentProfile ? '#F3FAF6' : C.greenXLight
 
   // Real bug found live-testing: Bump is only ever started from inside
   // Account Settings, but Stripe's redirect back lands on a fresh page
@@ -6256,7 +6293,7 @@ export default function PatientApp({ liveData={} }) {
           ))}
         </div>
         {/* Instagram-style profile switcher entry point - tap your own
-            avatar to switch into a linked Medsa Kids profile or add one.
+            avatar to switch into a linked dependent profile or add one.
             Only shown for a real signed-in account (switching makes no
             sense in demo mode, which has no real patient row to link). */}
         {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:themeAccent,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
