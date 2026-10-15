@@ -288,7 +288,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid }) {
+function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid, themeAccentLight=C.greenLight, themeAccentXLight=C.greenXLight }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -597,13 +597,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
         {/* QR Code — large and centred, the hero */}
         <div style={{background:'#fff',borderRadius:'14px',padding:'20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'12px'}}>
           <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
-            <rect x="2" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="2" width="18" height="18" rx="2" fill={C.green}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="2" y="28" width="18" height="18" rx="2" fill={C.green}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="28" width="4" height="4" fill={C.green}/><rect x="34" y="28" width="4" height="4" fill={C.green}/>
-            <rect x="40" y="28" width="6" height="4" fill={C.green}/><rect x="28" y="34" width="6" height="4" fill={C.green}/>
-            <rect x="36" y="34" width="4" height="4" fill={C.green}/><rect x="28" y="40" width="4" height="6" fill={C.green}/>
-            <rect x="34" y="42" width="12" height="4" fill={C.green}/>
+            <rect x="2" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
+            <rect x="2" y="28" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
+            <rect x="28" y="28" width="4" height="4" fill={themeAccent}/><rect x="34" y="28" width="4" height="4" fill={themeAccent}/>
+            <rect x="40" y="28" width="6" height="4" fill={themeAccent}/><rect x="28" y="34" width="6" height="4" fill={themeAccent}/>
+            <rect x="36" y="34" width="4" height="4" fill={themeAccent}/><rect x="28" y="40" width="4" height="6" fill={themeAccent}/>
+            <rect x="34" y="42" width="12" height="4" fill={themeAccent}/>
           </svg>
           <div style={{textAlign:'center'}}>
             <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{isEn?'Show this to any Medsa-registered provider':'向任何Medsa註冊醫療人員出示'}</div>
@@ -631,7 +631,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
         {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
         <div style={{padding:'12px 14px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
-            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+            <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:themeAccent}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
           </div>
           <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{item.title}</div>
           {item.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.subtitle}</div>}
@@ -644,7 +644,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       reads as "only however many fit on screen," not "swipe for more." */}
   {carouselItems.length>1&&<div style={{display:'flex',justifyContent:'center',gap:'5px',marginTop:'8px'}}>
     {carouselItems.map((item,i)=>(
-      <div key={item.id} style={{width:6,height:6,borderRadius:'50%',background:i===carouselIndex?C.green:C.border}}/>
+      <div key={item.id} style={{width:6,height:6,borderRadius:'50%',background:i===carouselIndex?themeAccent:C.border}}/>
     ))}
   </div>}
 </div>}
@@ -652,13 +652,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <SecLabel>{isEn?'Your health':'您的健康'}</SecLabel>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         {[
-          {key:'records',icon:'records',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:C.greenLight,badge:null},
+          {key:'records',icon:'records',label:isEn?'Medical records':'醫療記錄',sub:isEn?'History, vaccinations, share':'病歷、疫苗、分享',bg:themeAccentLight,badge:null},
           {key:'insurance',icon:'insurance',label:isEn?'Insurance':'保險',sub:isEn?'Plans, claims, agents':'計劃、索賠、代理人',bg:C.blueLight,badge:inquiryUnreadTotal>0?String(inquiryUnreadTotal):null},
           {key:'prescriptions',icon:'prescriptions',label:isEn?'Prescriptions':'處方',sub:isEn?'Meds, drug info':'藥物、資訊',bg:C.brownLight,badge:null},
           {key:'calendar',icon:'calendar',label:isEn?'Calendar':'日曆',sub:isEn?'Appointments, alarms':'預約、提醒',bg:C.amberLight,badge:'1'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
-            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'10px',color:C.green}}><Icon name={item.icon}/></div>
+            <div style={{width:36,height:36,background:item.bg,borderRadius:'10px',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:'10px',color:themeAccent}}><Icon name={item.icon}/></div>
             <div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.label}</div>
             <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{item.sub}</div>
             {item.badge&&<span style={{position:'absolute',top:10,right:10,background:C.red,color:'#fff',fontSize:'10px',width:18,height:18,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center'}}>{item.badge}</span>}
@@ -669,7 +669,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           floating pill so it's not missed the way it was buried as just
           another row. */}
       <div style={{padding:'4px 16px 4px'}}>
-        <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${C.green} 0%, #3f6b4f 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(74,124,89,0.28)'}}>
+        <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${themeAccent} 0%, ${themeAccentMid} 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(0,0,0,0.18)'}}>
           <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',flexShrink:0}}><Icon name="community"/></div>
           <div style={{flex:1}}>
             <div style={{fontSize:'14px',fontWeight:700,color:'#fff'}}>{isEn?'Community':'社群'}</div>
@@ -681,11 +681,11 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
-          {key:'doctors',icon:'doctors',bg:C.greenLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
+          {key:'doctors',icon:'doctors',bg:themeAccentLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
           {key:'editprofile',icon:'alert',bg:C.amberLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
-            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:C.green,flexShrink:0}}><Icon name={item.icon}/></div>
+            <div style={{width:40,height:40,background:item.bg,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',color:themeAccent,flexShrink:0}}><Icon name={item.icon}/></div>
             <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
             <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
           </div>
@@ -693,7 +693,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       </div>
       <SecLabel>{isEn?'Message board':'訊息板'}</SecLabel>
       <Card>
-        <div style={{background:C.greenXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
+        <div style={{background:themeAccentXLight,padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◈ {isEn?'Alerts & updates':'警報與更新'}</div>
         {(() => {
           const realAlerts = []
           // Real upcoming appointment reminder - within the next 48 hours,
@@ -713,7 +713,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           const recentClaim = [...claims].filter(c=>['approved','settled'].includes(c.status))
             .sort((a,b)=>new Date(b.adjudicated_at||b.submitted_at)-new Date(a.adjudicated_at||a.submitted_at))[0]
           if (recentClaim) realAlerts.push({
-            dot:C.green,
+            dot:themeAccent,
             title: isEn?'Insurance claim approved':'保險索賠已批准',
             body: isEn?`Claim ${recentClaim.claim_ref} — HK$${recentClaim.insurer_covered_amount||recentClaim.amount} approved.`:`索賠 ${recentClaim.claim_ref} 已批准。`,
           })
@@ -727,12 +727,12 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
           </div>
         ))}
-        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {isEn?'Messages from your doctor':'醫生的訊息'}</div>
+        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages from your doctor':'醫生的訊息'}</div>
         {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
         {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
         {doctorThreadsLatestFirst.map((m,i)=>(
           <div key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'10px 14px',borderBottom:i<doctorThreadsLatestFirst.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer',background:m.urgent&&!m.read_by_patient?C.redLight:'transparent'}}>
-            <div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:(!m.read_by_patient?C.green:C.border),marginTop:'5px',flexShrink:0}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:(!m.read_by_patient?themeAccent:C.border),marginTop:'5px',flexShrink:0}}/>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
                 <span style={{fontSize:'12px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
@@ -752,10 +752,10 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             dot/preview/tap-to-open pattern as the doctor messages above,
             tapping jumps straight into that inquiry's conversation. */}
         {inquiryThreadsUnread.length>0&&<>
-          <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:C.green}}>◉ {isEn?'Messages about your applications':'關於您申請的訊息'}</div>
+          <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages about your applications':'關於您申請的訊息'}</div>
           {inquiryThreadsUnread.map((t,i)=>(
             <div key={t.inquiryId} onClick={()=>onOpenInquiry&&onOpenInquiry(t.inquiryId)} style={{padding:'10px 14px',borderBottom:i<inquiryThreadsUnread.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer'}}>
-              <div style={{width:8,height:8,borderRadius:'50%',background:C.green,marginTop:'5px',flexShrink:0}}/>
+              <div style={{width:8,height:8,borderRadius:'50%',background:themeAccent,marginTop:'5px',flexShrink:0}}/>
               <div style={{flex:1}}>
                 <div style={{fontSize:'12px',fontWeight:700}}>{t.planName||''}{t.companyName?` - ${t.companyName}`:''}</div>
                 <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{t.preview}</div>
@@ -776,9 +776,9 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       {openThread&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenThread(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
-            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:C.green,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
+            <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:themeAccent,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
             {openThread.map((m)=>(
-              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?C.greenXLight:(m.urgent?C.redLight:'#fff')}}>
+              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?themeAccentXLight:(m.urgent?C.redLight:'#fff')}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
                     <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(isEn?'You':'您'):m.doctor_name}</span>
@@ -5242,7 +5242,7 @@ function MedsaBumpSection({ isEn, patient }) {
   // it, not blend in. A bold gradient card with a real white title inside
   // (same shape as the Home screen's hero card) instead of a plain pale
   // card with a tiny grey heading above it.
-  const bumpGradient = 'linear-gradient(135deg,#ad1457 0%,#c2185b 100%)'
+  const bumpGradient = 'linear-gradient(135deg,#EC407A 0%,#F06292 100%)'
 
   if (activeBump===undefined) return (
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
@@ -5293,7 +5293,7 @@ function MedsaBumpSection({ isEn, patient }) {
         </div>}
 
         {error&&<div style={{fontSize:'12px',color:'#ffcdd2',marginBottom:'8px'}}>{error}</div>}
-        <Btn style={{width:'100%',background:'#fff',color:'#ad1457'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+        <Btn style={{width:'100%',background:'#fff',color:'#EC407A'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </div>
     </Card>
   )
@@ -6115,9 +6115,10 @@ export default function PatientApp({ liveData={} }) {
       .then(({data}) => setBumpActive(!!data))
   }, [patient?.id])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
-  const themeAccent = bumpActive ? '#ad1457' : C.green
-  const themeAccentMid = bumpActive ? '#c2185b' : C.greenMid
-  const themeAccentLight = bumpActive ? '#fce4ec' : C.greenLight
+  const themeAccent = bumpActive ? '#EC407A' : C.green
+  const themeAccentMid = bumpActive ? '#F06292' : C.greenMid
+  const themeAccentLight = bumpActive ? '#FCE4EC' : C.greenLight
+  const themeAccentXLight = bumpActive ? '#FFF5F8' : C.greenXLight
 
   // Real bug found live-testing: Bump is only ever started from inside
   // Account Settings, but Stripe's redirect back lands on a fresh page
@@ -6205,7 +6206,7 @@ export default function PatientApp({ liveData={} }) {
         {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:themeAccent,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
