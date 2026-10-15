@@ -5189,31 +5189,23 @@ function MedsaBumpSection({ isEn, patient }) {
   const [uploading,setUploading]=useState(false)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
-  const [verifying,setVerifying]=useState(false)
 
+  // Checkout verification on return (session_id from Stripe, webhook
+  // confirmed unreliable elsewhere in this app) now happens once at the
+  // PatientApp root, the moment the page loads back from Stripe - not
+  // here. This section only ever mounts once the patient navigates into
+  // Account Settings, which could be well after that redirect (React
+  // state resets to the Home screen on that fresh page load), so the old
+  // approach of verifying here meant a real payment could sit
+  // unconfirmed until they happened to click back into this exact
+  // screen. Simple mount-time load is enough now - by the time this
+  // renders, the root has already verified and written the real row.
   async function loadBump() {
     if (!patient?.id) { setActiveBump(null); return }
     const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
     setActiveBump(data||null)
   }
   useEffect(() => { loadBump() }, [patient?.id])
-
-  // Checkout verification on return - the webhook path is confirmed
-  // unreliable elsewhere in this app (see verify_video_consult_checkout.js's
-  // own comment), so this checks the real Stripe session directly instead
-  // of trusting a webhook that may never fire.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const sessionId = params.get('session_id')
-    if (params.get('bump_started')==='1' && sessionId) {
-      setVerifying(true)
-      fetch('/api/patient/verify_bump_checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }) })
-        .then(r=>r.json()).then(()=>{ loadBump(); setVerifying(false); window.history.replaceState({}, '', window.location.pathname) })
-    } else if (params.get('bump_cancelled')==='1') {
-      window.history.replaceState({}, '', window.location.pathname)
-    }
-  }, [])
 
   async function uploadCheckup(file) {
     if (!file || !patient?.id) return
@@ -5244,53 +5236,66 @@ function MedsaBumpSection({ isEn, patient }) {
     setStarting(false)
   }
 
-  if (activeBump===undefined || verifying) return (
-    <>
-      <SecLabel>Medsa Bump</SecLabel>
-      <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
-    </>
+  // Real feedback: "Medsa Bump" was a small grey label floating above the
+  // card, same treatment as every other section - but Bump is the one
+  // thing on this screen with its own brand color, so it should look like
+  // it, not blend in. A bold gradient card with a real white title inside
+  // (same shape as the Home screen's hero card) instead of a plain pale
+  // card with a tiny grey heading above it.
+  const bumpGradient = 'linear-gradient(135deg,#ad1457 0%,#c2185b 100%)'
+
+  if (activeBump===undefined) return (
+    <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
   )
 
   if (activeBump) return (
-    <>
-      <SecLabel>Medsa Bump</SecLabel>
-      <Card style={{padding:'16px',marginBottom:'20px',background:'#fce4ec',border:'1px solid #f8bbd0'}}>
-        <div style={{fontSize:'13px',fontWeight:700,color:'#ad1457',marginBottom:'4px'}}>{isEn?'Active':'已啟用'}</div>
-        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
-          {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
-          {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
-        </div>
-      </Card>
-    </>
+    <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
+      <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'2px'}}>Medsa Bump</div>
+      <div style={{fontSize:'13px',fontWeight:700,color:'#fff',opacity:0.95,marginBottom:'10px'}}>{isEn?'Active':'已啟用'}</div>
+      <div style={{fontSize:'12px',color:'rgba(255,255,255,0.85)',lineHeight:1.6}}>
+        {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
+        {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
+      </div>
+    </Card>
   )
 
   return (
-    <>
-      <SecLabel>Medsa Bump</SecLabel>
-      <Card style={{padding:'16px',marginBottom:'20px',background:'#fce4ec',border:'1px solid #f8bbd0'}}>
-        <div style={{fontSize:'12px',color:'#ad1457',lineHeight:1.6,marginBottom:'12px'}}>
-          {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months. One-time payment; a discount applies automatically if you've used Medsa Bump before.":'由懷孕至寶寶18個月大的孕產照護追蹤。一次性付款;如曾使用Medsa Bump,將自動享有折扣。'}
-        </div>
-        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
-        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
-        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
-        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
-        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
-        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:'1px solid #f8bbd0',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px',background:'#fff'}}/>
+    <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
+      <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'10px'}}>Medsa Bump</div>
+      <div style={{fontSize:'12px',color:'rgba(255,255,255,0.9)',lineHeight:1.6,marginBottom:'8px'}}>
+        {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months.":'由懷孕至寶寶18個月大的孕產照護追蹤。'}
+      </div>
+      {/* Real gap: the actual Stripe charge is the quoted price grossed up
+          to cover the card processing fee (see lib/paymentFees.js) - the
+          patient was never told this anywhere before reaching Stripe's own
+          checkout page, where a non-round total (e.g. HK$921.69 for a
+          quoted HK$888) looked like an unexplained discrepancy rather than
+          a disclosed fee. */}
+      <div style={{fontSize:'12px',color:'#fff',fontWeight:600,marginBottom:'2px'}}>{isEn?'HK$888 one-time':'一次性HK$888'}</div>
+      <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:'14px'}}>
+        {isEn?"HK$710.40 automatically if you've used Medsa Bump before. A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge.":'如曾使用Medsa Bump,將自動收取HK$710.40。付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。'}
+      </div>
+      <div style={{background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
+        <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'How many weeks pregnant are you now? (optional)':'現時懷孕多少週?(可選)'}</div>
+        <input type="number" value={weeksNow} onChange={e=>setWeeksNow(e.target.value)} placeholder={isEn?'e.g. 12':'例如:12'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'When did you find out you were pregnant? (optional)':'您何時發現懷孕?(可選)'}</div>
+        <input type="date" value={discoveredAt} onChange={e=>setDiscoveredAt(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'12px',background:'#fff'}}/>
 
-        <div style={{fontSize:'11px',color:'#ad1457',marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'Upload any existing check-ups (optional)':'上傳現有檢查報告(可選)'}</div>
         <label style={{display:'block'}}>
-          <div style={{textAlign:'center',border:'1px dashed #f8bbd0',borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px',background:'#fff'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
+          <div style={{textAlign:'center',border:'1px dashed rgba(255,255,255,0.5)',borderRadius:'8px',padding:'10px',cursor:uploading?'default':'pointer',fontSize:'12px',opacity:uploading?0.6:1,marginBottom:'8px',color:'#fff'}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a check-up or scan':'+ 上傳檢查報告或掃描')}</div>
           <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadCheckup(f)}}/>
         </label>
         {checkupFiles.length>0&&<div style={{marginBottom:'12px'}}>
-          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:'#ad1457',padding:'4px 0'}}>📄 {f.file_name}</div>)}
+          {checkupFiles.map(f=><div key={f.id} style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',padding:'4px 0'}}>📄 {f.file_name}</div>)}
         </div>}
 
-        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
-        <Btn style={{width:'100%',background:'#ad1457',color:'#fff'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
-      </Card>
-    </>
+        {error&&<div style={{fontSize:'12px',color:'#ffcdd2',marginBottom:'8px'}}>{error}</div>}
+        <Btn style={{width:'100%',background:'#fff',color:'#ad1457'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+      </div>
+    </Card>
   )
 }
 
@@ -6104,14 +6109,43 @@ export default function PatientApp({ liveData={} }) {
   // screen - repainting literally everything risked looking broken
   // rather than branded.
   const [bumpActive,setBumpActive]=useState(false)
-  useEffect(() => {
+  const checkBumpActive = useCallback(() => {
     if (!patient?.id) { setBumpActive(false); return }
     supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1).maybeSingle()
       .then(({data}) => setBumpActive(!!data))
   }, [patient?.id])
+  useEffect(() => { checkBumpActive() }, [checkBumpActive])
   const themeAccent = bumpActive ? '#ad1457' : C.green
   const themeAccentMid = bumpActive ? '#c2185b' : C.greenMid
   const themeAccentLight = bumpActive ? '#fce4ec' : C.greenLight
+
+  // Real bug found live-testing: Bump is only ever started from inside
+  // Account Settings, but Stripe's redirect back lands on a fresh page
+  // load - React state resets to the default Home screen, not back on
+  // Account Settings. Verification used to live entirely inside
+  // MedsaBumpSection, which never even mounts until the patient manually
+  // navigates back there - so a payment could sit unverified (header
+  // staying green, "still active" status unconfirmed) until they
+  // happened to click into Account Settings again. Same root-level
+  // verify-on-return pattern already used for Guardian/auto-purchase
+  // above fixes this: it runs the instant the page loads, regardless of
+  // which screen ends up showing.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sessionId = params.get('session_id')
+    if (params.get('bump_started') === '1' && sessionId) {
+      fetch('/api/patient/verify_bump_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ sessionId }),
+      }).then(r=>r.json()).then(data => {
+        if (data.status === 'OK') { setAutoPurchaseNotice({ ok: true, text: 'Payment confirmed - Medsa Bump is now active.' }); checkBumpActive() }
+        else setAutoPurchaseNotice({ ok: false, text: data.message || 'Could not verify this payment - contact Medsa with your payment confirmation.' })
+      }).catch(() => setAutoPurchaseNotice({ ok: false, text: 'Could not reach Medsa to verify this payment - contact Medsa with your payment confirmation.' }))
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (params.get('bump_cancelled') === '1') {
+      setAutoPurchaseNotice({ ok: false, text: 'Checkout was cancelled - nothing was charged.' })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }, [checkBumpActive])
 
   if (checkingPersistedSignIn) return null
 
