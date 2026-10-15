@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, isValidElement, cloneElement, Children } from 'react'
+import { useState, useEffect, useRef, useCallback, useContext, createContext, isValidElement, cloneElement, Children } from 'react'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
@@ -9,6 +9,13 @@ import C from '../shared/colours'
 import Icon from '../shared/Icon'
 import TermsAgreementModal from '../shared/TermsAgreementModal'
 import PlanDetailPage from './PlanDetailFlow'
+
+// Brand-color override while Medsa Bump is active - every screen in this
+// file normally reads C.green/greenMid/greenLight/greenXLight directly, so
+// this Context (provided once at the PatientApp root) lets every one of
+// them switch to the same baby-pink palette without prop-drilling through
+// 30+ separate components.
+const ThemeContext = createContext({ accent: C.green, accentMid: C.greenMid, accentLight: C.greenLight, accentXLight: C.greenXLight })
 
 // ── TRADITIONAL → SIMPLIFIED CHINESE CONVERSION ─────────────────────────────
 // Every Chinese string in this file is already written in Traditional
@@ -86,8 +93,9 @@ function deepSimplify(node) {
 }
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
+  const __theme = useContext(ThemeContext)
   const base={border:'none',borderRadius:'10px',padding:'10px 16px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
-  const V={primary:{background:C.green,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'},navy:{background:C.navy,color:'#fff'}}
+  const V={primary:{background:__theme.accent,color:'#fff'},secondary:{background:C.card,color:C.text,border:`0.5px solid ${C.border}`},danger:{background:C.red,color:'#fff'},amber:{background:C.amber,color:'#fff'},navy:{background:C.navy,color:'#fff'}}
   return <button style={{...base,...V[variant]}} onClick={onClick} disabled={disabled}>{children}</button>
 }
 function Card({ children, style:sx={}, onClick }) {
@@ -97,12 +105,14 @@ function SecLabel({ children }) {
   return <div style={{fontSize:'10px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.9px',color:C.textMuted,padding:'16px 16px 8px'}}>{children}</div>
 }
 function Toggle({ checked=false, onChange, disabled=false }) {
+  const __theme = useContext(ThemeContext)
   const [on,setOn]=useState(checked)
   useEffect(() => { setOn(checked) }, [checked])
-  return <div onClick={()=>{if(disabled)return;setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:disabled?'default':'pointer',opacity:disabled?0.6:1,position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+  return <div onClick={()=>{if(disabled)return;setOn(!on);onChange&&onChange(!on)}} style={{width:34,height:18,borderRadius:20,background:on?__theme.accent:C.border,cursor:disabled?'default':'pointer',opacity:disabled?0.6:1,position:'relative',transition:'background 0.2s',flexShrink:0}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
 }
 function Badge({ text, type }) {
-  const map={ok:[C.greenLight,C.green],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
+  const __theme = useContext(ThemeContext)
+  const map={ok:[__theme.accentLight,__theme.accent],due:[C.amberLight,C.amber],full:[C.redLight,C.red]}
   const [bg,fg]=map[type]||map.ok
   return <span style={{fontSize:'10px',background:bg,color:fg,padding:'3px 9px',borderRadius:'20px',fontWeight:500,whiteSpace:'nowrap'}}>{text}</span>
 }
@@ -111,6 +121,7 @@ function Badge({ text, type }) {
 // This is shown to PATIENTS only for setup/consent — not for showing to EMS.
 // EMS access the emergency card automatically via QR scan in the practitioner portal.
 function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], patient }) {
+  const __theme = useContext(ThemeContext)
   const p = patient
   const [step, setStep] = useState(consented ? 'view' : 'intro')
   if (!open) return null
@@ -132,10 +143,10 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
             <div style={{fontSize:'18px',fontWeight:700,color:C.text,marginBottom:'6px'}}>Emergency health card</div>
             <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>When activated, verified emergency personnel can instantly access your critical medical info by scanning your Medsa QR — even if you can't speak or respond.</div>
           </div>
-          <div style={{background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'16px',marginBottom:'16px'}}>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.green,marginBottom:'10px'}}>What emergency personnel will see:</div>
+          <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'16px',marginBottom:'16px'}}>
+            <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginBottom:'10px'}}>What emergency personnel will see:</div>
             {['Blood type','Critical conditions','Severe allergies','Current medications','Emergency contact'].map((item,i)=>(
-              <div key={i} style={{fontSize:'13px',color:C.text,padding:'4px 0',display:'flex',alignItems:'center',gap:'8px'}}><span style={{color:C.green,fontSize:'10px'}}>✓</span>{item}</div>
+              <div key={i} style={{fontSize:'13px',color:C.text,padding:'4px 0',display:'flex',alignItems:'center',gap:'8px'}}><span style={{color:__theme.accent,fontSize:'10px'}}>✓</span>{item}</div>
             ))}
           </div>
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.brown,lineHeight:1.6}}>
@@ -166,9 +177,9 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
             <div>
               <div style={{fontSize:'17px',fontWeight:700}}>Emergency card</div>
-              <div style={{fontSize:'12px',color:C.green,marginTop:'2px'}}>● Active · Auto-updating from records</div>
+              <div style={{fontSize:'12px',color:__theme.accent,marginTop:'2px'}}>● Active · Auto-updating from records</div>
             </div>
-            <span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px',fontWeight:600}}>Consented ✓</span>
+            <span style={{fontSize:'10px',background:__theme.accentLight,color:__theme.accent,padding:'3px 10px',borderRadius:'20px',fontWeight:600}}>Consented ✓</span>
           </div>
           <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
             <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
@@ -820,6 +831,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 // `content` text field (split on blank lines into paragraphs) for any
 // card created before content_blocks existed.
 function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
+  const __theme = useContext(ThemeContext)
   const blocks = item.content_blocks?.length > 0
     ? item.content_blocks
     : (item.content ? item.content.split(/\n\s*\n/).filter(Boolean).map(text=>({type:'paragraph',text})) : [])
@@ -830,13 +842,13 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
   return (
     <div style={{position:'fixed',inset:0,background:C.beige,zIndex:300,overflowY:'auto'}}>
       <div style={{position:'sticky',top:0,background:C.beige,padding:'14px 16px',zIndex:1}}>
-        <div onClick={onClose} style={{fontSize:'12px',color:C.green,cursor:'pointer',fontWeight:600}}>{isEn?'← Back':'← 返回'}</div>
+        <div onClick={onClose} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',fontWeight:600}}>{isEn?'← Back':'← 返回'}</div>
       </div>
       <div style={{maxWidth:520,margin:'0 auto',paddingBottom:'32px'}}>
         {item.image_url&&<img src={item.image_url} alt="" style={{width:'100%',height:220,objectFit:'cover',display:'block'}}/>}
         <div style={{padding:'0 16px'}}>
           <div style={{marginTop:'16px'}}>
-            <span style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:C.green}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+            <span style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:item.item_type==='ad'?C.amber:__theme.accent}}>{item.item_type==='ad'?(item.sponsor_name?`Sponsored · ${item.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
           </div>
           <div style={{fontSize:'22px',fontWeight:700,margin:'8px 0 4px',lineHeight:1.3}}>{item.title}</div>
           {item.subtitle&&<div style={{fontSize:'14px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{item.subtitle}</div>}
@@ -873,7 +885,7 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
             )
           })}
 
-          {item.link_url&&<a href={item.link_url} target="_blank" rel="noopener noreferrer" style={{display:'block',textAlign:'center',padding:'13px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'14px',fontWeight:600,textDecoration:'none',margin:'8px 0 28px'}}>{item.cta_label || (isEn?'Learn more':'了解更多')} ↗</a>}
+          {item.link_url&&<a href={item.link_url} target="_blank" rel="noopener noreferrer" style={{display:'block',textAlign:'center',padding:'13px',background:__theme.accent,color:'#fff',borderRadius:'10px',fontSize:'14px',fontWeight:600,textDecoration:'none',margin:'8px 0 28px'}}>{item.cta_label || (isEn?'Learn more':'了解更多')} ↗</a>}
 
           {others.length>0&&<>
             <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'10px'}}>{isEn?'More from Medsa':'更多內容'}</div>
@@ -954,6 +966,7 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
 }
 
 function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
+  const __theme = useContext(ThemeContext)
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
@@ -1263,19 +1276,19 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   }
   return (
     <div style={{background:C.beige,flex:1}}>
-      <div style={{background:C.greenXLight,borderBottom:`0.5px solid ${C.greenLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
-        <span style={{color:C.green}}>◇</span>
-        <span style={{fontSize:'12px',color:C.green}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
+      <div style={{background:__theme.accentXLight,borderBottom:`0.5px solid ${__theme.accentLight}`,padding:'10px 16px',display:'flex',gap:'8px',alignItems:'center'}}>
+        <span style={{color:__theme.accent}}>◇</span>
+        <span style={{fontSize:'12px',color:__theme.accent}}>{isEn?'You control exactly what each provider sees.':'您完全掌控每位醫療提供者可查看的內容。'}</span>
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,overflowX:'auto'}}>
         {[['all',isEn?'All records':'所有記錄'],['vax',isEn?'Vaccinations':'疫苗'],['plans',isEn?'Treatment plans':'療程計劃'],['sharing',isEn?'Sharing':'分享'],['upload',isEn?'Upload':'上傳']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?__theme.accent:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?__theme.accent:'transparent'}`,cursor:'pointer',whiteSpace:'nowrap'}}>{l}</div>
         ))}
       </div>
       {tab==='all'&&<>
         <SecLabel>{isEn?'Recent records':'最近記錄'}</SecLabel>
         {hasLiveData&&<div style={{padding:'0 16px 12px'}}>
-          {!bundleMode&&<div onClick={()=>setBundleMode(true)} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'\u2295'} {isEn?'Bundle records to share or export':'合併記錄以分享或匯出'}</div>}
+          {!bundleMode&&<div onClick={()=>setBundleMode(true)} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer'}}>{'\u2295'} {isEn?'Bundle records to share or export':'合併記錄以分享或匯出'}</div>}
           {bundleMode&&<Card style={{padding:'12px 14px'}}>
             <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
               <input value={bundleFilter} onChange={e=>setBundleFilter(e.target.value)} placeholder={isEn?'e.g. cancer - filter and select matching records':'例如癌症 - 篩選並選取相關記錄'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box'}}/>
@@ -1295,7 +1308,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           return {
           id: r.id,
           icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
-          bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:C.greenLight,
+          bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:__theme.accentLight,
           title: r.title,
           sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
           date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
@@ -1308,10 +1321,10 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         }}).map(r=>(
           <Card key={r.id} onClick={()=>bundleMode?toggleSelect(r.id):setExpanded(expanded===r.id?null:r.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(r.id)?C.green:C.border}`,background:selectedIds.has(r.id)?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(r.id)?'\u2713':''}</div>}
-              <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:C.green,flexShrink:0}}>{r.icon}</div>
+              {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(r.id)?__theme.accent:C.border}`,background:selectedIds.has(r.id)?__theme.accent:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(r.id)?'\u2713':''}</div>}
+              <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:__theme.accent,flexShrink:0}}>{r.icon}</div>
               <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{mt(r.title)}</div><div style={{fontSize:'12px',color:C.textSub}}>{mt(r.sub)}</div></div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?C.greenLight:C.brownLight,color:r.src==='Synced'?C.green:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(r.src)}</span></div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?__theme.accentLight:C.brownLight,color:r.src==='Synced'?__theme.accent:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(r.src)}</span></div>
             </div>
             {expanded===r.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
               {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{mt(l)}</span><span style={{fontWeight:500}}>{mt(v)}</span></div>)}
@@ -1369,7 +1382,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             <div style={{padding:'0 16px 14px'}}>
               {v.doses.map(([d,date],i)=>(
                 <div key={i} style={{display:'flex',gap:'10px',alignItems:'center',padding:'5px 0',borderTop:`0.5px solid ${C.border}`}}>
-                  <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:C.green,flexShrink:0}}/>
+                  <div style={{width:8,height:8,borderRadius:'50%',background:v.status==='full'?C.amber:__theme.accent,flexShrink:0}}/>
                   <div style={{flex:1,fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>{mt(d)}</strong></div>
                   <span style={{fontSize:'11px',color:C.textMuted}}>{date}</span>
                 </div>
@@ -1398,11 +1411,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                 <Badge text={badgeLabel} type={badgeType}/>
               </div>
               <div style={{display:'flex',gap:'16px',marginBottom:'6px'}}>
-                <div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Sessions remaining':'剩餘節數'}</div><div style={{fontSize:'15px',fontWeight:700,color:remaining>0?C.green:C.amber}}>{remaining} / {p.sessions_paid||0}</div></div>
+                <div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Sessions remaining':'剩餘節數'}</div><div style={{fontSize:'15px',fontWeight:700,color:remaining>0?__theme.accent:C.amber}}>{remaining} / {p.sessions_paid||0}</div></div>
                 {p.price_total!=null&&<div><div style={{fontSize:'10px',color:C.textMuted}}>{isEn?'Total paid':'總付款'}</div><div style={{fontSize:'13px',fontWeight:600}}>HK${(p.price_total||0).toFixed(2)}</div></div>}
               </div>
               {p.expiry_date&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{isEn?'Expires':'到期日'} {new Date(p.expiry_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
-              <div onClick={()=>handleDownloadPlanReceipt(p)} style={{fontSize:'11px',color:C.green,cursor:'pointer',marginTop:'4px'}}>{'⬇'} {isEn?'Download plan receipt (PDF)':'下載療程收據 (PDF)'}</div>
+              <div onClick={()=>handleDownloadPlanReceipt(p)} style={{fontSize:'11px',color:__theme.accent,cursor:'pointer',marginTop:'4px'}}>{'⬇'} {isEn?'Download plan receipt (PDF)':'下載療程收據 (PDF)'}</div>
             </Card>
           )
         })}
@@ -1426,7 +1439,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         <Card>
           {providers.map((p,i)=>(
             <div key={p.init} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',borderBottom:i<providers.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:600,flexShrink:0}}>{p.init}</div>
+              <div style={{width:36,height:36,borderRadius:'10px',background:__theme.accentLight,color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:600,flexShrink:0}}>{p.init}</div>
               <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{mt(p.name)}</div><div style={{fontSize:'11px',color:C.textSub}}>{mt(p.sub)}</div></div>
               <Toggle checked={p.on}/>
             </div>
@@ -1448,11 +1461,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         {uploadStage==='idle'&&<>
           <label style={{margin:'0 16px 10px',border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'28px 20px',textAlign:'center',background:C.cream,cursor:'pointer',display:'block'}}>
             <input type="file" accept=".pdf,.jpg,.jpeg,.png,.csv" style={{display:'none'}} onChange={e=>handlePickFile(e.target.files[0])}/>
-            <div style={{fontSize:'32px',color:C.green,marginBottom:'10px'}}>◈</div>
+            <div style={{fontSize:'32px',color:__theme.accent,marginBottom:'10px'}}>◈</div>
             <div style={{fontSize:'14px',fontWeight:500,marginBottom:'4px'}}>{isEn?'Tap to upload':'點擊上傳'}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>{isEn?'Non-Medsa hospitals, overseas providers, personal files':'非Medsa醫院、海外醫療機構或個人文件'}</div>
             <div style={{display:'flex',gap:'6px',justifyContent:'center',flexWrap:'wrap'}}>
-              {['PDF','JPG/PNG','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
+              {['PDF','JPG/PNG','CSV'].map(t=><span key={t} style={{fontSize:'10px',background:__theme.accentLight,color:__theme.accent,padding:'3px 10px',borderRadius:'20px'}}>{t}</span>)}
             </div>
           </label>
           <div style={{margin:'0 16px 10px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>{isEn?"You'll be asked which clinic this is from, so we can verify it against the real registry - same check used for out-of-network clinic access.":'系統會詢問此文件來自哪間診所，以便與真實登記冊核對——與非Medsa診所存取所用的核實方式相同。'}</div>
@@ -1471,7 +1484,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   <div style={{fontSize:'13px',fontWeight:600}}>{c.name}</div>
                   <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{c.contact_phone||(isEn?'No phone on file':'無電話記錄')}</div>
                   {match===false&&<div style={{fontSize:'10px',color:C.amber,marginTop:'2px'}}>{isEn?"Doesn't match what you typed - check this is the right clinic":'與您輸入的不符 - 請確認是否為正確診所'}</div>}
-                  {match===true&&<div style={{fontSize:'10px',color:C.green,marginTop:'2px'}}>{isEn?'✓ Phone matches':'✓ 電話相符'}</div>}
+                  {match===true&&<div style={{fontSize:'10px',color:__theme.accent,marginTop:'2px'}}>{isEn?'✓ Phone matches':'✓ 電話相符'}</div>}
                 </div>
               )
             })}
@@ -1485,7 +1498,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
         {uploadStage==='done'&&uploadOutcome&&<Card style={{padding:'16px',textAlign:'center'}}>
           <div style={{fontSize:'28px',marginBottom:'8px'}}>{uploadOutcome.status==='verified'?'✓':uploadOutcome.status==='pending'?'◇':'◈'}</div>
-          {uploadOutcome.status==='verified'&&<div style={{fontSize:'13px',color:C.green,fontWeight:600,marginBottom:'6px'}}>{isEn?`Uploaded - ${uploadOutcome.clinicName} is already verified`:`已上傳 - ${uploadOutcome.clinicName}已完成核實`}</div>}
+          {uploadOutcome.status==='verified'&&<div style={{fontSize:'13px',color:__theme.accent,fontWeight:600,marginBottom:'6px'}}>{isEn?`Uploaded - ${uploadOutcome.clinicName} is already verified`:`已上傳 - ${uploadOutcome.clinicName}已完成核實`}</div>}
           {uploadOutcome.status==='pending'&&<>
             <div style={{fontSize:'13px',color:C.amber,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - verification pending':'已上傳 - 核實中'}</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?`We've sent a verification request to ${uploadOutcome.clinicName}'s registered contact. Your document is saved now and will be marked verified once they confirm - this usually takes a few days.`:`已向${uploadOutcome.clinicName}的登記聯絡方式發送核實請求。您的文件已儲存，待對方確認後將標示為已核實 - 通常需時數天。`}</div>
@@ -1502,11 +1515,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         {myUploads.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No files uploaded yet.':'尚未上傳任何文件。'}</div>}
         {myUploads.map(u=>(
           <Card key={u.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',marginBottom:'8px'}}>
-            <div style={{width:36,height:36,borderRadius:'10px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.green,fontSize:'18px'}}>◈</div>
+            <div style={{width:36,height:36,borderRadius:'10px',background:__theme.accentLight,display:'flex',alignItems:'center',justifyContent:'center',color:__theme.accent,fontSize:'18px'}}>◈</div>
             <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:500}}>{u.file_name}</div>
               <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Uploaded':'已上傳'} {new Date(u.uploaded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
-              {u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?C.greenLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?C.green:u.verification_status==='pending'?C.amber:C.textMuted}}>
+              {u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?__theme.accentLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?__theme.accent:u.verification_status==='pending'?C.amber:C.textMuted}}>
                 {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Unverified':'未經核實')}
               </span>}
             </div>
@@ -1546,6 +1559,7 @@ function joinPatientVideoCall(patientDisplayName, roomId) {
 // same as a real phone call. Auto-dismisses after a ring timeout so it
 // doesn't sit there forever if the patient's away from their device.
 function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
+  const __theme = useContext(ThemeContext)
   useEffect(() => {
     if (!call) return
     const t = setTimeout(onDismiss, 45000)
@@ -1563,8 +1577,8 @@ function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
     <div style={{position:'fixed',inset:0,background:'rgba(10,20,15,0.92)',zIndex:500,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#fff',padding:'24px'}}>
       <style>{`@keyframes ringPulse{0%,100%{transform:scale(1);opacity:0.55}50%{transform:scale(1.18);opacity:0}}`}</style>
       <div style={{position:'relative',width:100,height:100,marginBottom:'20px',display:'flex',alignItems:'center',justifyContent:'center'}}>
-        <div style={{position:'absolute',inset:0,borderRadius:'50%',background:C.green,animation:'ringPulse 1.4s ease-out infinite'}}/>
-        <div style={{position:'relative',width:88,height:88,borderRadius:'50%',background:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700}}>{'◈'}</div>
+        <div style={{position:'absolute',inset:0,borderRadius:'50%',background:__theme.accent,animation:'ringPulse 1.4s ease-out infinite'}}/>
+        <div style={{position:'relative',width:88,height:88,borderRadius:'50%',background:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px',fontWeight:700}}>{'◈'}</div>
       </div>
       <div style={{fontSize:'12px',opacity:0.75,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'1px'}}>{isEn?'Video consultation':'視像診症'}</div>
       <div style={{fontSize:'22px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>{call.doctorName}</div>
@@ -1575,7 +1589,7 @@ function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
           <span style={{fontSize:'11px',opacity:0.7}}>{isEn?'Decline':'拒接'}</span>
         </div>
         <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:'8px'}}>
-          <button onClick={answer} style={{width:60,height:60,borderRadius:'50%',background:C.green,border:'none',color:'#fff',fontSize:'22px',cursor:'pointer'}}>{'✓'}</button>
+          <button onClick={answer} style={{width:60,height:60,borderRadius:'50%',background:__theme.accent,border:'none',color:'#fff',fontSize:'22px',cursor:'pointer'}}>{'✓'}</button>
           <span style={{fontSize:'11px',opacity:0.7}}>{isEn?'Answer':'接聽'}</span>
         </div>
       </div>
@@ -1584,6 +1598,7 @@ function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
 }
 
 function DoctorsScreen({ isEn, patient={} }) {
+  const __theme = useContext(ThemeContext)
   const [outstandingClaims,setOutstandingClaims]=useState([])
   const [claimsLoading,setClaimsLoading]=useState(true)
 
@@ -2064,13 +2079,13 @@ function DoctorsScreen({ isEn, patient={} }) {
 
   return (
     <div style={{background:C.beige,flex:1}}>
-      <div style={{background:C.green,padding:'0 16px 14px'}}>
+      <div style={{background:__theme.accent,padding:'0 16px 14px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:__theme.accent}}>◎</span>
           <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); setTab('search') } }} style={{width:'100%',background:'rgba(255,255,255,0.95)',border:'none',borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'14px',outline:'none'}} placeholder={isEn?'Search by name, specialty, clinic…':'按名稱、專科搜尋…'}/>
         </div>
         <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
-          <div onClick={requestLocation} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:userLocation?'#fff':'rgba(255,255,255,0.2)',color:userLocation?C.green:'#fff'}}>
+          <div onClick={requestLocation} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:userLocation?'#fff':'rgba(255,255,255,0.2)',color:userLocation?__theme.accent:'#fff'}}>
             {'\u25c9'} {userLocation?(isEn?'Sorted by distance':'按距離排序'):(isEn?'Use my location':'使用我的位置')}
           </div>
           <select value={filterSpecialty} onChange={e=>setFilterSpecialty(e.target.value)} style={{padding:'6px 10px',borderRadius:'20px',fontSize:'11px',border:'none',background:filterSpecialty?'#fff':'rgba(255,255,255,0.2)',color:filterSpecialty?C.text:'#fff'}}>
@@ -2095,7 +2110,7 @@ function DoctorsScreen({ isEn, patient={} }) {
             <option value="private">{isEn?'Private':'私立'}</option>
             <option value="subsidized">{isEn?'Subsidized':'資助'}</option>
           </select>
-          <div onClick={()=>setFilterPartnerOnly(!filterPartnerOnly)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:filterPartnerOnly?'#fff':'rgba(255,255,255,0.2)',color:filterPartnerOnly?C.green:'#fff'}}>
+          <div onClick={()=>setFilterPartnerOnly(!filterPartnerOnly)} style={{padding:'6px 12px',borderRadius:'20px',fontSize:'11px',fontWeight:500,cursor:'pointer',background:filterPartnerOnly?'#fff':'rgba(255,255,255,0.2)',color:filterPartnerOnly?__theme.accent:'#fff'}}>
             {isEn?'Online booking':'網上預約'}
           </div>
         </div>
@@ -2103,7 +2118,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       </div>
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`}}>
         {[['search',isEn?'Find doctors':'尋找醫生'],['book',isEn?'Book':'預約'],['payments',isEn?'Payments':'付款']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 8px',fontSize:'12px',fontWeight:500,color:tab===k?__theme.accent:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?__theme.accent:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
       {tab==='search'&&<>
@@ -2111,18 +2126,18 @@ function DoctorsScreen({ isEn, patient={} }) {
         {sortedDoctors.map((doc,i)=>(
           <Card key={i}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              <div style={{width:48,height:48,borderRadius:'12px',background:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:C.green,flexShrink:0}}>{doc.init}</div>
+              <div style={{width:48,height:48,borderRadius:'12px',background:__theme.accentLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',fontWeight:600,color:__theme.accent,flexShrink:0}}>{doc.init}</div>
               <div style={{flex:1}}>
                 {/* Headline is the doctor's name for a real, partnered practitioner -
                     or the clinic's name for any non-partnered listing, since
                     individual non-partnered doctor profiles aren't shown at all. */}
                 <div style={{fontSize:'14px',fontWeight:500}}>{!isEn && doc.nameTc ? doc.nameTc : doc.name}</div>
                 {doc.noNamedDoctor
-                  ? (doc.specialties?.length>0 && <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{doc.specialties.map(s=>dt(s)).join(', ')}</div>)
-                  : <div style={{fontSize:'12px',color:C.green,fontWeight:500}}>{dt(doc.spec)}</div>}
+                  ? (doc.specialties?.length>0 && <div style={{fontSize:'12px',color:__theme.accent,fontWeight:500}}>{doc.specialties.map(s=>dt(s)).join(', ')}</div>)
+                  : <div style={{fontSize:'12px',color:__theme.accent,fontWeight:500}}>{dt(doc.spec)}</div>}
                 {!doc.noNamedDoctor && <div style={{fontSize:'12px',color:C.textSub}}>{!isEn && doc.clinicTc ? doc.clinicTc : dt(doc.clinic)}{doc.district?` · ${doc.district}`:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>}
                 {doc.noNamedDoctor && <div style={{fontSize:'12px',color:C.textSub}}>{doc.district?doc.district:''}{doc.distanceKm!=null?` · ${doc.distanceKm.toFixed(1)}km`:''}</div>}
-                {doc.address&&<div onClick={(e)=>{e.stopPropagation(); const q = (doc.lat&&doc.lng) ? `${doc.lat},${doc.lng}` : encodeURIComponent(doc.address); window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank')}} style={{fontSize:'11px',color:C.green,marginTop:'2px',cursor:'pointer',textDecoration:'underline'}}>{!isEn && doc.addressTc ? doc.addressTc : doc.address}</div>}
+                {doc.address&&<div onClick={(e)=>{e.stopPropagation(); const q = (doc.lat&&doc.lng) ? `${doc.lat},${doc.lng}` : encodeURIComponent(doc.address); window.open(`https://www.google.com/maps/search/?api=1&query=${q}`,'_blank')}} style={{fontSize:'11px',color:__theme.accent,marginTop:'2px',cursor:'pointer',textDecoration:'underline'}}>{!isEn && doc.addressTc ? doc.addressTc : doc.address}</div>}
                 {(doc.feeMin||doc.languages||doc.registrationNumber)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>
                   {doc.feeMin&&`HK$${doc.feeMin}-${doc.feeMax||doc.feeMin}`}
                   {doc.languages&&doc.languages.length>0&&`${doc.feeMin?' · ':''}${doc.languages.join(', ')}`}
@@ -2161,7 +2176,7 @@ function DoctorsScreen({ isEn, patient={} }) {
       {tab==='book'&&activeDoctor&&<>
         <SecLabel>{isEn?'New appointment':'新預約'}</SecLabel>
         <Card style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}>
-          <div style={{width:28,height:28,borderRadius:'50%',background:C.greenLight,color:C.green,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
+          <div style={{width:28,height:28,borderRadius:'50%',background:__theme.accentLight,color:__theme.accent,fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>✓</div>
           <div><div style={{fontSize:'14px',fontWeight:500}}>{activeDoctor.name}</div><div style={{fontSize:'12px',color:C.textSub}}>{dt(activeDoctor.spec)} · {dt(activeDoctor.clinic)}</div></div>
         </Card>
 
@@ -2176,19 +2191,19 @@ function DoctorsScreen({ isEn, patient={} }) {
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Consultation type':'診症方式'}</div>
           <div style={{display:'flex',gap:'8px'}}>
             {[['in-person',isEn?'In-person':'親身診症'],['video',isEn?'Video call':'視像診症']].map(([k,l])=>(
-              <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?C.green:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
+              <div key={k} onClick={()=>setConsultType(k)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:consultType===k?__theme.accent:C.card,color:consultType===k?'#fff':C.text}}>{l}</div>
             ))}
           </div>
         </Card>}
 
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:__theme.accent,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>2</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Date & time':'日期與時間'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{display:'flex',gap:'8px',overflowX:'auto',marginBottom:'12px'}}>
               {DAYS.map(({label,date,fullDate})=>{
                 const isSel = fullDate.toDateString()===selDay.toDateString()
                 return (
-                <div key={fullDate.toISOString()} onClick={()=>setSelDay(fullDate)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?C.green:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?C.green:C.border}`}}>
+                <div key={fullDate.toISOString()} onClick={()=>setSelDay(fullDate)} style={{flexShrink:0,textAlign:'center',padding:'8px 14px',borderRadius:'10px',background:isSel?__theme.accent:C.card,color:isSel?'#fff':C.text,cursor:'pointer',border:`0.5px solid ${isSel?__theme.accent:C.border}`}}>
                   <div style={{fontSize:'10px',opacity:0.8}}>{label}</div><div style={{fontSize:'16px',fontWeight:600}}>{date}</div>
                 </div>
                 )
@@ -2203,21 +2218,21 @@ function DoctorsScreen({ isEn, patient={} }) {
             {!slotsLoading&&!slotsLoadError&&!dayClosed&&availableSlots.length===0&&<div style={{textAlign:'center',padding:'20px',fontSize:'12px',color:C.textMuted}}>{isEn?'No slots left for this day - try another date.':'此日已無可預約時段,請選擇其他日期。'}</div>}
             {!slotsLoading&&!dayClosed&&availableSlots.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'8px'}}>
               {availableSlots.map(time=>{const s=time===selTime;return(
-                <div key={time} onClick={()=>setSelTime(time)} style={{border:`0.5px solid ${s?C.green:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:s?C.green:C.card,color:s?'#fff':C.text}}>{time}</div>
+                <div key={time} onClick={()=>setSelTime(time)} style={{border:`0.5px solid ${s?__theme.accent:C.border}`,borderRadius:'8px',padding:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:s?__theme.accent:C.card,color:s?'#fff':C.text}}>{time}</div>
               )})}
             </div>}
           </div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Language':'語言'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:__theme.accent,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>3</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Language':'語言'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
             {['廣東話','English','普通話','日本語'].map(l=>(
-              <div key={l} onClick={()=>setSelLang(l)} style={{border:`0.5px solid ${selLang===l?C.green:C.border}`,borderRadius:'8px',padding:'10px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:selLang===l?C.green:C.card,color:selLang===l?'#fff':C.text}}>{l}</div>
+              <div key={l} onClick={()=>setSelLang(l)} style={{border:`0.5px solid ${selLang===l?__theme.accent:C.border}`,borderRadius:'8px',padding:'10px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:selLang===l?__theme.accent:C.card,color:selLang===l?'#fff':C.text}}>{l}</div>
             ))}
           </div></div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Intake form':'問診表'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:__theme.accent,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>4</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Intake form':'問診表'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Reason for visit':'求診原因'}</div>
             <input value={reasonForVisit} onChange={e=>setReasonForVisit(e.target.value)} placeholder={isEn?'e.g. Persistent cough':'例如：持續咳嗽'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}/>
@@ -2238,8 +2253,8 @@ function DoctorsScreen({ isEn, patient={} }) {
                   : `此次預約的查閱時段：${fmt(wStart)} → ${fmt(wEnd)}`
               })()}
             </div>
-            <div onClick={()=>setIntakeConsent(!intakeConsent)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:intakeConsent?C.greenXLight:C.card,border:`0.5px solid ${intakeConsent?C.green:C.border}`,borderRadius:'10px',cursor:'pointer'}}>
-              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${intakeConsent?C.green:C.border}`,background:intakeConsent?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{intakeConsent?'\u2713':''}</div>
+            <div onClick={()=>setIntakeConsent(!intakeConsent)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'12px',background:intakeConsent?__theme.accentXLight:C.card,border:`0.5px solid ${intakeConsent?__theme.accent:C.border}`,borderRadius:'10px',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${intakeConsent?__theme.accent:C.border}`,background:intakeConsent?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{intakeConsent?'\u2713':''}</div>
               <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
                 {isEn
                   ? 'I consent to a 48-hour data access window around this appointment: 12 hours before, the full day of the appointment, and 12 hours after. My treating doctor can only access my relevant records during this window - access ends automatically outside it.'
@@ -2250,20 +2265,20 @@ function DoctorsScreen({ isEn, patient={} }) {
           </div>
         </Card>
         <Card>
-          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm appointment':'確認預約'}</div></div>
+          <div style={{padding:'14px 16px',display:'flex',gap:'10px',alignItems:'center'}}><div style={{width:28,height:28,borderRadius:'50%',background:__theme.accent,color:'#fff',fontSize:'13px',fontWeight:600,display:'flex',alignItems:'center',justifyContent:'center'}}>5</div><div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Confirm appointment':'確認預約'}</div></div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
             {/* No fee/payment breakdown here - it was a fabricated fixed
                 HK$380/AIA-covers-$300/you-pay-$80 line shown to every
                 patient regardless of their real doctor's fee or their
                 actual insurer, if any. Billing happens for real at the
                 clinic after the visit, not here. */}
-            <div style={{background:C.greenXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
+            <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
               {[[isEn?'Doctor':'醫生',activeDoctor.name],[isEn?'Type':'診症方式',consultType==='video'?(isEn?'Video call':'視像診症'):(isEn?'In-person':'親身診症')],[isEn?'Date':'日期',`${selDay.toLocaleDateString('en-HK',{weekday:'short',day:'numeric',month:'short'})} · ${selTime}`],[isEn?'Language':'語言',selLang]].map(([l,v],i,arr)=>(
-                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:C.green,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
+                <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:'13px'}}><span style={{color:__theme.accent,fontWeight:500}}>{l}</span><span style={{fontWeight:i===arr.length-1?700:400}}>{v}</span></div>
               ))}
             </div>
             <div onClick={()=>setWhatsappReminder(!whatsappReminder)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'10px',marginBottom:'12px',cursor:'pointer'}}>
-              <div style={{width:34,height:18,borderRadius:20,background:whatsappReminder?C.green:C.border,position:'relative',flexShrink:0}}>
+              <div style={{width:34,height:18,borderRadius:20,background:whatsappReminder?__theme.accent:C.border,position:'relative',flexShrink:0}}>
                 <div style={{position:'absolute',top:2,left:whatsappReminder?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/>
               </div>
               <div style={{flex:1}}>
@@ -2311,7 +2326,7 @@ function DoctorsScreen({ isEn, patient={} }) {
         {[{title:'Ruttonjee Hospital — Feb 18',amount:'HK$1,200',status:'Paid',type:'ok'},{title:'Matilda International — May 3',amount:'HK$680',status:'Refund pending',type:'due'}].map((p,i)=>(
           <Card key={i} style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
             <div><div style={{fontSize:'13px',fontWeight:500}}>{p.title}</div></div>
-            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:C.green}}>{p.amount}</div><Badge text={p.status} type={p.type}/></div>
+            <div style={{textAlign:'right'}}><div style={{fontSize:'14px',fontWeight:600,color:__theme.accent}}>{p.amount}</div><Badge text={p.status} type={p.type}/></div>
           </Card>
         ))}
       </>}
@@ -2342,6 +2357,7 @@ function generateIntervalTimes(startTime, intervalHours) {
 // there is one, but manual add/remove always works regardless of mode -
 // the generated set is just a starting point, not a constraint.
 function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, defaultOn, defaultTimes, defaultStartTime, isEn }) {
+  const __theme = useContext(ThemeContext)
   const [on,setOn]=useState(defaultOn)
   const [times,setTimes]=useState(defaultTimes&&defaultTimes.length>0?defaultTimes:['08:00'])
   const [startTime,setStartTime]=useState(defaultStartTime||'08:00')
@@ -2384,20 +2400,20 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
       <div style={{display:'flex',gap:'12px',alignItems:'center',marginBottom:on?'12px':'0'}}>
         <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
         <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule}</div></div>
-        <div onClick={toggleAlarm} style={{width:34,height:18,borderRadius:20,background:on?C.green:C.border,cursor:saving?'wait':'pointer',position:'relative',transition:'background 0.2s',flexShrink:0,opacity:saving?0.6:1}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+        <div onClick={toggleAlarm} style={{width:34,height:18,borderRadius:20,background:on?__theme.accent:C.border,cursor:saving?'wait':'pointer',position:'relative',transition:'background 0.2s',flexShrink:0,opacity:saving?0.6:1}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
       </div>
       {on&&<div style={{paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
         {dosingMode==='interval'&&intervalHours>0&&<div style={{marginBottom:'10px'}}>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?`Prescribed every ${intervalHours}h - start from:`:`處方每${intervalHours}小時一次 - 開始時間：`}</div>
           <div style={{display:'flex',gap:'8px'}}>
             <input type="time" value={startTime} onChange={e=>setStartTime(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'6px 10px',fontSize:'13px',background:C.beige,outline:'none'}}/>
-            <button onClick={useIntervalRule} disabled={saving} style={{flex:1,padding:'6px 10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{isEn?`Use this - ${Math.max(1,Math.round(24/intervalHours))} reminders/day`:`使用 - 每日${Math.max(1,Math.round(24/intervalHours))}次提醒`}</button>
+            <button onClick={useIntervalRule} disabled={saving} style={{flex:1,padding:'6px 10px',background:__theme.accent,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{isEn?`Use this - ${Math.max(1,Math.round(24/intervalHours))} reminders/day`:`使用 - 每日${Math.max(1,Math.round(24/intervalHours))}次提醒`}</button>
           </div>
         </div>}
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Reminder times':'提醒時間'}</div>
         <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
           {times.map(tm=>(
-            <div key={tm} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'12px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',gap:'6px'}}>
+            <div key={tm} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'12px',background:__theme.accentLight,color:__theme.accent,display:'flex',alignItems:'center',gap:'6px'}}>
               {tm}<span onClick={()=>removeTime(tm)} style={{cursor:'pointer',fontWeight:700}}>×</span>
             </div>
           ))}
@@ -2413,6 +2429,7 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
 }
 
 function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload, onViewRecord }) {
+  const __theme = useContext(ThemeContext)
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
@@ -2535,16 +2552,16 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
             const isSelected = isSameDay(cellDate, selectedDate)
             const hasEvent = markedDays.has(d)
             return (
-              <div key={d} onClick={()=>setSelectedDate(cellDate)} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:isSelected?C.green:isToday?C.greenLight:'transparent',color:isSelected?'#fff':hasEvent?C.green:C.text,fontWeight:isSelected||isToday?600:400}}>
+              <div key={d} onClick={()=>setSelectedDate(cellDate)} style={{textAlign:'center',fontSize:'13px',padding:'6px 2px',borderRadius:'50%',cursor:'pointer',background:isSelected?__theme.accent:isToday?__theme.accentLight:'transparent',color:isSelected?'#fff':hasEvent?__theme.accent:C.text,fontWeight:isSelected||isToday?600:400}}>
                 {d}
-                {hasEvent&&!isSelected&&<div style={{width:4,height:4,borderRadius:'50%',background:C.green,margin:'2px auto 0'}}/>}
+                {hasEvent&&!isSelected&&<div style={{width:4,height:4,borderRadius:'50%',background:__theme.accent,margin:'2px auto 0'}}/>}
               </div>
             )
           })}
         </div>
       </div>
       <SecLabel>{isSameDay(selectedDate,today) ? (isEn?"Today's appointments":'今天的預約') : selectedDate.toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</SecLabel>
-      {cancelledMsg&&<div style={{margin:'0 16px 10px',background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.green}}>{'✓'} {cancelledMsg}</div>}
+      {cancelledMsg&&<div style={{margin:'0 16px 10px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accent}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:__theme.accent}}>{'✓'} {cancelledMsg}</div>}
       {(() => {
         // A real rundown of the selected day - not a global "upcoming"
         // feed. Includes completed and past appointments for that day
@@ -2569,11 +2586,11 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
           const isDone = appt.status==='completed'
           return(
             <Card key={i} onClick={()=>setActiveAppt(appt)} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',cursor:'pointer',opacity:isDone?0.65:1}}>
-              <div style={{width:40,height:40,borderRadius:'12px',background:isDone?C.card:C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:isDone?C.textMuted:C.green,flexShrink:0}}>{isDone?'✓':'◎'}</div>
+              <div style={{width:40,height:40,borderRadius:'12px',background:isDone?C.card:__theme.accentLight,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:isDone?C.textMuted:__theme.accent,flexShrink:0}}>{isDone?'✓':'◎'}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'14px',fontWeight:500,textDecoration:isDone?'line-through':'none',color:isDone?C.textMuted:C.text}}>{drName}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{appt.institutions?.name||'—'}</div>
-                <span style={{fontSize:'10px',background:isDone?C.card:appt.status==='confirmed'?C.greenLight:C.amberLight,color:isDone?C.textMuted:appt.status==='confirmed'?C.green:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
+                <span style={{fontSize:'10px',background:isDone?C.card:appt.status==='confirmed'?__theme.accentLight:C.amberLight,color:isDone?C.textMuted:appt.status==='confirmed'?__theme.accent:C.amber,padding:'1px 8px',borderRadius:'20px',fontWeight:500}}>{appt.status}</span>
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
                 <div style={{fontSize:'12px',fontWeight:600}}>{timeStr}</div>
@@ -2618,7 +2635,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
           {withoutAlarm.map(m=>(
             <div key={m.id} onClick={()=>addingReminderId?null:handleAddReminder(m)} style={{padding:'10px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',cursor:'pointer',display:'flex',justifyContent:'space-between'}}>
               <span>{m.medication_name} {m.dosage||''}</span>
-              <span style={{color:C.green,fontSize:'11px'}}>{addingReminderId===m.id?(isEn?'Adding...':'新增中...'):(isEn?'+ Add':'+ 新增')}</span>
+              <span style={{color:__theme.accent,fontSize:'11px'}}>{addingReminderId===m.id?(isEn?'Adding...':'新增中...'):(isEn?'+ Add':'+ 新增')}</span>
             </div>
           ))}
           <Btn style={{width:'100%',marginTop:'10px'}} onClick={()=>setAddReminderOpen(false)}>{isEn?'Close':'關閉'}</Btn>
@@ -2641,6 +2658,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
 // fresh signed URL each time, same pattern as "Your uploads" already
 // uses, never a permanent public link to a medical document.
 function InquiryMessageAttachment({ m }) {
+  const __theme = useContext(ThemeContext)
   const [opening,setOpening]=useState(false)
   async function openLinkedRecord() {
     setOpening(true)
@@ -2652,15 +2670,16 @@ function InquiryMessageAttachment({ m }) {
     setOpening(false)
   }
   if (m.attachment_record_id) {
-    return <span onClick={openLinkedRecord} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'📎'} {opening?'Opening…':(m.attachment_name||'Attachment')}</span>
+    return <span onClick={openLinkedRecord} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer'}}>{'📎'} {opening?'Opening…':(m.attachment_name||'Attachment')}</span>
   }
   if (m.attachment_url) {
-    return <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>
+    return <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:__theme.accent}}>{'📎'} {m.attachment_name||'Attachment'}</a>
   }
   return null
 }
 
 function PatientInquiryThread({ inquiry, patientName, patientId }) {
+  const __theme = useContext(ThemeContext)
   const [messages,setMessages]=useState([])
   const [loading,setLoading]=useState(true)
   const [body,setBody]=useState('')
@@ -2739,7 +2758,7 @@ function PatientInquiryThread({ inquiry, patientName, patientId }) {
       {!loading&&messages.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>No messages yet.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'10px',maxHeight:260,overflowY:'auto'}}>
         {messages.map(m=>(
-          <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
+          <div key={m.id} style={{alignSelf:m.sender_type==='patient'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='patient'?__theme.accentLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
             <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='patient'?'You':m.sender_type==='underwriter'?'Underwriter':'Agent')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
             {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
             <InquiryMessageAttachment m={m}/>
@@ -2753,7 +2772,7 @@ function PatientInquiryThread({ inquiry, patientName, patientId }) {
         {myFiles.map(f=>(
           <div key={f.id} onClick={()=>pickExistingFile(f)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
             <span>{f.file_name}</span>
-            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:f.verification_status==='verified'?C.greenLight:C.card,color:f.verification_status==='verified'?C.green:C.textMuted}}>{f.verification_status==='verified'?'Verified':'Unverified'}</span>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:f.verification_status==='verified'?__theme.accentLight:C.card,color:f.verification_status==='verified'?__theme.accent:C.textMuted}}>{f.verification_status==='verified'?'Verified':'Unverified'}</span>
           </div>
         ))}
       </div>}
@@ -2819,6 +2838,7 @@ function AlternativePlansPanel({ isEn, inquiryId, onViewPlan }) {
 }
 
 function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
+  const __theme = useContext(ThemeContext)
   const [open,setOpen]=useState(false)
   const [wardClass,setWardClass]=useState('')
   const [paymentFrequency,setPaymentFrequency]=useState('monthly')
@@ -2873,7 +2893,7 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
         </select>
       </div>
       {declarationAck
-        ? <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ {isEn?'Health declaration & terms reviewed and accepted.':'已審閱並接受健康聲明及條款。'}</div>
+        ? <div style={{fontSize:'11px',color:__theme.accent,fontWeight:600,marginBottom:'10px'}}>✓ {isEn?'Health declaration & terms reviewed and accepted.':'已審閱並接受健康聲明及條款。'}</div>
         : <Btn style={{width:'100%',marginBottom:'10px',fontSize:'12px'}} onClick={()=>setTermsModalOpen(true)}>{isEn?'Review & accept health declaration':'審閱並接受健康聲明'}</Btn>}
       <TermsAgreementModal open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn}
         planName={inquiry.insurance_plans?.plan_name} companyName={inquiry.insurance_plans?.company_name}
@@ -2891,6 +2911,7 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
 }
 
 function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, onConsumeDeepLink }) {
+  const __theme = useContext(ThemeContext)
   const [inquiries,setInquiries]=useState([])
   const [agentQuotes,setAgentQuotes]=useState([])
   const [loading,setLoading]=useState(true)
@@ -2999,7 +3020,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                   <div style={{fontSize:'14px',fontWeight:500}}>{q.plan_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{q.institutions?.name||''}{q.premium?` - HK$${q.premium}/mo`:''}</div>
                 </div>
-                <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {q.agents?.full_name||'—'}</span>
+                <span style={{fontSize:'11px',background:__theme.accentLight,color:__theme.accent,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {q.agents?.full_name||'—'}</span>
               </div>
               <div style={{fontSize:'12px',color:C.textMuted,marginTop:'8px'}}>{isEn?'A licensed agent has quoted this plan for you - not active yet, still a quote.':'持牌代理已為您報價此計劃 - 尚未生效,仍為報價階段。'}</div>
             </div>
@@ -3018,7 +3039,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
           const isPending = i.underwriter_status === 'pending'
           const isApprovedToBuy = !isDeclined && !isPending
           return (
-          <Card key={i.id} data-inquiry-id={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)} style={i.id===justLinkedId?{boxShadow:`0 0 0 2px ${C.green}`}:undefined}>
+          <Card key={i.id} data-inquiry-id={i.id} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)} style={i.id===justLinkedId?{boxShadow:`0 0 0 2px ${__theme.accent}`}:undefined}>
             <div style={{padding:'14px 16px'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                 <div>
@@ -3033,7 +3054,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                 </div>
                 {isAuto
                   ? <div style={{textAlign:'right',flexShrink:0}}>
-                      <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?C.greenLight:isDeclined?C.redLight:isPending?C.amberLight:C.greenLight,color:isPurchased?C.green:isDeclined?C.red:isPending?C.amber:C.green}}>
+                      <span style={{fontSize:'11px',fontWeight:500,padding:'4px 10px',borderRadius:'20px',whiteSpace:'nowrap',background:isPurchased?__theme.accentLight:isDeclined?C.redLight:isPending?C.amberLight:__theme.accentLight,color:isPurchased?__theme.accent:isDeclined?C.red:isPending?C.amber:__theme.accent}}>
                         {isPurchased?(isEn?'✓ Purchased':'✓ 已購買'):isDeclined?(isEn?'✕ Declined':'✕ 已拒絕'):isPending?(isEn?'⚠ Pending approval':'⚠ 待批核'):(isEn?'✓ Approved':'✓ 已批核')}
                       </span>
                       {/* Real gap found live-testing: a clean/approved case
@@ -3044,7 +3065,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                       {!isDeclined&&i.quoted_premium_hkd!=null&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>HK${i.quoted_premium_hkd}/mo</div>}
                     </div>
                   : (i.agents?.full_name
-                    ? <span style={{fontSize:'11px',background:C.greenLight,color:C.green,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
+                    ? <span style={{fontSize:'11px',background:__theme.accentLight,color:__theme.accent,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {i.agents.full_name}</span>
                     : <span style={{fontSize:'11px',background:C.amberLight,color:C.amber,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Waiting for an agent':'等待代理'}</span>)}
               </div>
               {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}>
@@ -3172,6 +3193,7 @@ function DocumentPrepTab({ isEn, patient={} }) {
 }
 
 function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
+  const __theme = useContext(ThemeContext)
   const [title,setTitle]=useState('')
   const [insurerName,setInsurerName]=useState('')
   const [selectedPresets,setSelectedPresets]=useState(new Set())
@@ -3237,7 +3259,7 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'What documents are needed?':'需要哪些文件?'}</div>
       <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
         {DOC_PREP_PRESETS.map(label=>(
-          <div key={label} onClick={()=>togglePreset(label)} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:selectedPresets.has(label)?C.green:C.beige,color:selectedPresets.has(label)?'#fff':C.textSub}}>{label}</div>
+          <div key={label} onClick={()=>togglePreset(label)} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:selectedPresets.has(label)?__theme.accent:C.beige,color:selectedPresets.has(label)?'#fff':C.textSub}}>{label}</div>
         ))}
       </div>
       {customItems.length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
@@ -3367,6 +3389,7 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
 //    clinics) - the same trust check the TPA portal itself runs, just
 //    initiated from the patient's side instead of the clinic's.
 function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null, heldPolicies=[] }) {
+  const __theme = useContext(ThemeContext)
   const hasLiveClaims = claims.length > 0
   const [claimSearch,setClaimSearch]=useState('')
   const [claimPlanFilter,setClaimPlanFilter]=useState('')
@@ -3595,7 +3618,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
                 <div style={{fontSize:'11px',color:C.textMuted}}>Submitted {date}</div>
               </div>
               <div style={{textAlign:'right'}}>
-                <div style={{fontSize:'14px',fontWeight:600,color:C.green}}>HK${covered.toLocaleString()}</div>
+                <div style={{fontSize:'14px',fontWeight:600,color:__theme.accent}}>HK${covered.toLocaleString()}</div>
                 <Badge text={c.status.charAt(0).toUpperCase()+c.status.slice(1)} type={statusType}/>
               </div>
             </div>
@@ -3645,7 +3668,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           <input value={visitAmount} onChange={e=>setVisitAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$':'索償金額(港幣)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           {visitSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{visitSubmitError}</div>}
           {visitSubmitSuccess
-            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
+            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:__theme.accent,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
             : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan||visitPastFilingDeadline} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
         </div>}
       </div>}
@@ -3658,7 +3681,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           A different gradient (green, not navy) keeps the two visually
           distinguishable as different flows without one outranking the
           other. */}
-      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.green} 0%,${C.greenMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
+      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</div>
         <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn
           ?'For a clinic not on Medsa - upload a receipt (and diagnosis letter, if it\'s a separate document).'
@@ -3679,7 +3702,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
             ? <div style={{fontSize:'12px',opacity:0.7,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
             : attachments.map(a=>(
               <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'0.5px solid rgba(255,255,255,0.25)',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.5)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
+                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.5)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
                 <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
               </div>
             ))}
@@ -3696,8 +3719,8 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0',background:'#fff',color:C.text}}/>
           {manualSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{manualSubmitError}</div>}
           {manualSubmitSuccess
-            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>
-            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.green}} disabled={manualSelectedIds.size===0||manualSubmitting} onClick={handleSubmitManualClaim}>{manualSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>}
+            ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:__theme.accent,fontWeight:600}}>✓ {isEn?`Submitted as ${manualSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${manualSubmitSuccess}。您的保險公司將自行核實。`}</div>
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:__theme.accent}} disabled={manualSelectedIds.size===0||manualSubmitting} onClick={handleSubmitManualClaim}>{manualSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit for insurer review':'提交予保險公司審核')}</Btn>}
         </div>
       </div>}
 
@@ -3787,6 +3810,7 @@ async function getOrCreateForumIdentity(patientId) {
 }
 
 function ForumScreen({ isEn, patient={} }) {
+  const __theme = useContext(ThemeContext)
   const [view,setView]=useState('list') // list | thread
   const [search,setSearch]=useState('')
   const [products,setProducts]=useState([])
@@ -3907,7 +3931,7 @@ function ForumScreen({ isEn, patient={} }) {
   if (view==='thread'&&activeProduct) return (
     <div>
       <div style={{padding:'16px',display:'flex',alignItems:'center',gap:'10px'}}>
-        <div onClick={()=>setView('list')} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{isEn?'← All discussions':'← 所有討論'}</div>
+        <div onClick={()=>setView('list')} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer'}}>{isEn?'← All discussions':'← 所有討論'}</div>
       </div>
       <div style={{padding:'0 16px 10px'}}>
         {activeProduct.image_url&&<img src={activeProduct.image_url} alt="" style={{width:'100%',height:140,objectFit:'cover',borderRadius:'12px',marginBottom:'12px'}}/>}
@@ -3985,8 +4009,8 @@ function ForumScreen({ isEn, patient={} }) {
           </Card>
         ))}
         {!loading&&search.trim()&&matches.every(p=>p.canonical_name.toLowerCase()!==search.toLowerCase().trim())&&(
-          <Card onClick={handleCreateProduct} style={{padding:'14px 16px',cursor:'pointer',border:`1px dashed ${C.green}`,background:'transparent'}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:C.green}}>{creating?(isEn?'Starting...':'建立中...'):`${isEn?'Start a new discussion for':'開始新討論：'} "${search.trim()}"`}</div>
+          <Card onClick={handleCreateProduct} style={{padding:'14px 16px',cursor:'pointer',border:`1px dashed ${__theme.accent}`,background:'transparent'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:__theme.accent}}>{creating?(isEn?'Starting...':'建立中...'):`${isEn?'Start a new discussion for':'開始新討論：'} "${search.trim()}"`}</div>
           </Card>
         )}
         {postError&&<div style={{fontSize:'12px',color:C.red,marginTop:'8px'}}>{postError}</div>}
@@ -3996,6 +4020,7 @@ function ForumScreen({ isEn, patient={} }) {
 }
 
 function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInquiryId=null, onConsumeInquiryDeepLink }) {
+  const __theme = useContext(ThemeContext)
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('plans')
   // Jumping straight to a specific inquiry's conversation from the home
@@ -4500,7 +4525,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                 patient whether their own plan bills the clinic directly or
                 requires them to pay in full and claim it back - the single
                 biggest thing that changes what happens at checkout. */}
-            <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:policy.insurance_plans?.billing_model==='reimbursement'?C.amber:C.green}}>
+            <div style={{fontSize:'11px',fontWeight:600,marginTop:'8px',color:policy.insurance_plans?.billing_model==='reimbursement'?C.amber:__theme.accent}}>
               {policy.insurance_plans?.billing_model==='reimbursement'
                 ? (isEn?'Reimbursement plan - you pay in full at the clinic, then claim it back':'自付墊款計劃 - 您需於診所全額付款,其後自行申請索償')
                 : (isEn?'Direct billing - your clinic bills this plan, you pay only the copay':'直接賬單計劃 - 診所直接向此計劃收費,您只需支付自付額')}
@@ -4622,7 +4647,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           offered, not just when there's no active policy, since a
           patient can hold more than one real policy. */}
       <div style={{margin:'10px 16px 0'}}>
-        {!showLinkForm&&<div onClick={()=>setShowLinkForm(true)} style={{background:C.card,border:`0.5px dashed ${C.border}`,borderRadius:'14px',padding:'14px 16px',textAlign:'center',fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>+ {isEn?'Already insured elsewhere? Add your policy':'已在其他地方投保?新增您的保單'}</div>}
+        {!showLinkForm&&<div onClick={()=>setShowLinkForm(true)} style={{background:C.card,border:`0.5px dashed ${C.border}`,borderRadius:'14px',padding:'14px 16px',textAlign:'center',fontSize:'12px',color:__theme.accent,fontWeight:600,cursor:'pointer'}}>+ {isEn?'Already insured elsewhere? Add your policy':'已在其他地方投保?新增您的保單'}</div>}
         {showLinkForm&&<Card style={{margin:0,padding:'16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?'Add a policy you already hold':'新增您已持有的保單'}</div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?'For an insurer not sold through Medsa (e.g. a TPA-claims-only plan) - this just records it so a Medsa clinic can process claims against it, nothing is purchased.':'適用於並非透過Medsa銷售的保險公司(例如僅處理索償的TPA計劃)- 此操作僅作記錄,以便Medsa診所可根據此保單處理索償,並非購買計劃。'}</div>
@@ -4640,7 +4665,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           {linkSelectedPlan&&<>
             <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div><div style={{fontSize:'12px',fontWeight:600}}>{linkSelectedPlan.plan_name}</div><div style={{fontSize:'11px',color:C.textMuted}}>{linkSelectedPlan.company_name}</div></div>
-              <span onClick={()=>setLinkSelectedPlan(null)} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{isEn?'Change':'更改'}</span>
+              <span onClick={()=>setLinkSelectedPlan(null)} style={{fontSize:'11px',color:__theme.accent,cursor:'pointer'}}>{isEn?'Change':'更改'}</span>
             </div>
             <input value={linkPolicyNumber} onChange={e=>setLinkPolicyNumber(e.target.value)} placeholder={isEn?'Your policy number (required)':'保單編號(必填)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px'}}/>
           </>}
@@ -4653,34 +4678,34 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       </div>
 
       {/* "Your coverage" - one consolidated answer, see loadCoverageSummary above */}
-      {(heldPolicies.length>0||lapsedPolicies.length>0||coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'12px 16px 0',background:'#fff',border:`1.5px solid ${C.green}`,borderRadius:'14px',padding:'14px'}}>
+      {(heldPolicies.length>0||lapsedPolicies.length>0||coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'12px 16px 0',background:'#fff',border:`1.5px solid ${__theme.accent}`,borderRadius:'14px',padding:'14px'}}>
         <div style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Your coverage':'您的保障'}</div>
         {heldPolicies.map(p=>(
-          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${__theme.accentXLight}`}}>
             <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
-            <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
+            <div style={{fontSize:'11px',color:__theme.accent,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
           </div>
         ))}
         {lapsedPolicies.map(p=>(
-          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.greenXLight}`}}>
+          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${__theme.accentXLight}`}}>
             <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
             <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
           </div>
         ))}
-        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.greenXLight}`:'none',cursor:'pointer'}}>
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${__theme.accentXLight}`:'none',cursor:'pointer'}}>
           <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
           <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
         </div>}
         {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
           <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
-          <span style={{color:C.green,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+          <span style={{color:__theme.accent,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
         </div>}
       </div>}
 
       {/* Tabs */}
       <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
         {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.green:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.green:'transparent'}`,cursor:'pointer'}}>{l}</div>
+          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?__theme.accent:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?__theme.accent:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
 
@@ -4696,8 +4721,8 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           </div>
         </div>
 
-        <div style={{margin:'10px 16px 0',background:C.greenXLight,border:`0.5px solid ${C.greenLight}`,borderRadius:'14px',padding:'14px 16px'}}>
-          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
+        <div style={{margin:'10px 16px 0',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'14px 16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:__theme.accent,marginBottom:'4px'}}>◈ {isEn?'Plan comparison, not advice':'方案比較,並非建議'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>{isEn?'Plans are filtered against your verified health records and shown with the criteria they meet. Medsa doesn’t rank plans or tell you which is "best" — that’s a decision for you or a licensed agent. Sponsored plans are clearly labelled and filtered the same way as any other plan.':'方案根據您已核實的健康記錄篩選,並列明其符合的條件。Medsa不會為方案排名,亦不會告知何者「最佳」——此決定應由您或持牌代理人作出。贊助方案會清楚標示,並與其他方案採用相同的篩選方式。'}</div>
         </div>
 
@@ -4724,7 +4749,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                   <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'Do any of these apply to you?':'以下是否適用於您?'}</div>
                   <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
                     {[...new Set(plans.flatMap(p=>p.criteria||[]))].slice(0,20).concat(['Smoker','Heavy alcohol use','High-risk occupation or hobby','Family history of a serious condition']).map(c=>(
-                      <span key={c} onClick={()=>setFindPlanConditions(prev=>prev.includes(c)?prev.filter(x=>x!==c):[...prev,c])} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:findPlanConditions.includes(c)?C.green:C.card,color:findPlanConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${findPlanConditions.includes(c)?C.green:C.border}`}}>{c}</span>
+                      <span key={c} onClick={()=>setFindPlanConditions(prev=>prev.includes(c)?prev.filter(x=>x!==c):[...prev,c])} style={{fontSize:'11px',padding:'5px 10px',borderRadius:'20px',cursor:'pointer',background:findPlanConditions.includes(c)?__theme.accent:C.card,color:findPlanConditions.includes(c)?'#fff':C.textSub,border:`0.5px solid ${findPlanConditions.includes(c)?__theme.accent:C.border}`}}>{c}</span>
                     ))}
                   </div>
                   <div style={{display:'flex',gap:'8px'}}>
@@ -4781,7 +4806,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}}>
-                  {plan.isMatched&&<span style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Matches your records':'符合您的記錄'}</span>}
+                  {plan.isMatched&&<span style={{fontSize:'10px',background:__theme.accentLight,color:__theme.accent,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Matches your records':'符合您的記錄'}</span>}
                   {plan.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'1px 7px',borderRadius:'20px',fontWeight:600}}>{isEn?'Sponsored':'贊助'}</span>}
                   <span style={{fontSize:'10px',background:C.card,color:C.textSub,padding:'1px 7px',borderRadius:'20px'}}>{pt(plan.type)}</span>
                 </div>
@@ -4825,7 +4850,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
         <div style={{padding:'0 16px 10px'}}>
           <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-            <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+            <span style={{position:'absolute',left:'10px',fontSize:'16px',color:__theme.accent}}>◎</span>
             <input value={planSearch} onChange={e=>setPlanSearch(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.cream,outline:'none',fontFamily:'inherit'}} placeholder={isEn?'Search e.g. dental, travel, critical illness…':'按關鍵字搜尋…'}/>
           </div>
         </div>
@@ -4865,7 +4890,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             {icon:'◇',title:'Separate from complaints',body:'Ratings are public and anonymous. Formal complaints are named, private, and go to the insurer and Medsa support.'},
           ].map((item,i,arr)=>(
             <div key={i} style={{display:'flex',gap:'12px',padding:'10px 0',borderBottom:i<arr.length-1?`0.5px solid ${C.border}`:'none'}}>
-              <span style={{fontSize:'18px',color:C.green,flexShrink:0}}>{item.icon}</span>
+              <span style={{fontSize:'18px',color:__theme.accent,flexShrink:0}}>{item.icon}</span>
               <div><div style={{fontSize:'13px',fontWeight:500,marginBottom:'3px'}}>{item.title}</div><div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{item.body}</div></div>
             </div>
           ))}
@@ -4880,14 +4905,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             {init:'李',name:'Agent B',company:'Prudential',rating:4.8,reviews:41,spec:'Family & travel plans',langs:['English','普通話'],avail:'Busy'},
           ].map((a,i)=>(
             <div key={i} style={{display:'flex',gap:'12px',alignItems:'center',padding:'10px 0',borderTop:i>0?`0.5px solid ${C.border}`:'none'}}>
-              <div style={{width:40,height:40,borderRadius:'10px',background:C.greenLight,color:C.green,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
+              <div style={{width:40,height:40,borderRadius:'10px',background:__theme.accentLight,color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:600,flexShrink:0}}>{a.init}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:'13px',fontWeight:500}}>{a.name}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{a.company} · {a.spec}</div>
                 <div style={{fontSize:'12px',color:'#d4a017'}}>{'★'.repeat(Math.round(a.rating))} <span style={{fontSize:'11px',color:C.textMuted}}>{a.rating} ({a.reviews})</span></div>
                 <div style={{display:'flex',gap:'4px',marginTop:'4px',flexWrap:'wrap'}}>
-                  {a.langs.map(l=><span key={l} style={{fontSize:'10px',background:C.greenLight,color:C.green,padding:'1px 7px',borderRadius:'20px'}}>{l}</span>)}
-                  <span style={{fontSize:'10px',background:a.avail==='Available'?C.greenLight:C.amberLight,color:a.avail==='Available'?C.green:C.amber,padding:'1px 7px',borderRadius:'20px'}}>{a.avail}</span>
+                  {a.langs.map(l=><span key={l} style={{fontSize:'10px',background:__theme.accentLight,color:__theme.accent,padding:'1px 7px',borderRadius:'20px'}}>{l}</span>)}
+                  <span style={{fontSize:'10px',background:a.avail==='Available'?__theme.accentLight:C.amberLight,color:a.avail==='Available'?__theme.accent:C.amber,padding:'1px 7px',borderRadius:'20px'}}>{a.avail}</span>
                 </div>
               </div>
             </div>
@@ -4905,7 +4930,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Which agent?</div>
             <div style={{display:'flex',flexDirection:'column',gap:'6px',marginBottom:'12px'}}>
               {worksWithAgents.map(a=>(
-                <div key={a.id} onClick={()=>setSelectedFeedbackAgentId(a.id)} style={{padding:'10px 12px',borderRadius:'8px',border:`1.5px solid ${selectedFeedbackAgentId===a.id?C.green:C.border}`,background:selectedFeedbackAgentId===a.id?C.greenXLight:C.cream,cursor:'pointer',fontSize:'13px',fontWeight:selectedFeedbackAgentId===a.id?600:400}}>{a.name}</div>
+                <div key={a.id} onClick={()=>setSelectedFeedbackAgentId(a.id)} style={{padding:'10px 12px',borderRadius:'8px',border:`1.5px solid ${selectedFeedbackAgentId===a.id?__theme.accent:C.border}`,background:selectedFeedbackAgentId===a.id?__theme.accentXLight:C.cream,cursor:'pointer',fontSize:'13px',fontWeight:selectedFeedbackAgentId===a.id?600:400}}>{a.name}</div>
               ))}
             </div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Your rating:</div>
@@ -4919,7 +4944,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           {feedbackSubmitted&&<>
             <div style={{textAlign:'center',padding:'16px 0'}}>
               <div style={{fontSize:'28px',marginBottom:'10px'}}>✓</div>
-              <div style={{fontSize:'14px',fontWeight:600,color:C.green,marginBottom:'6px'}}>Feedback submitted anonymously</div>
+              <div style={{fontSize:'14px',fontWeight:600,color:__theme.accent,marginBottom:'6px'}}>Feedback submitted anonymously</div>
               <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Thank you. Your feedback helps other patients make informed choices. It will appear on the agent's public profile once insurer integration is live.</div>
             </div>
           </>}
@@ -4935,6 +4960,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 }
 
 function PrescriptionsScreen({ isEn, medications=[], onNav }) {
+  const __theme = useContext(ThemeContext)
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
   const [drugSearch,setDrugSearch]=useState('')
   const [drugSearchResults,setDrugSearchResults]=useState([])
@@ -4968,15 +4994,15 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
         dr:m.prescribed_by||'—',
         refills:`${m.institution||''} · ${m.start_date?'Since '+new Date(m.start_date).toLocaleDateString('en-HK',{month:'short',year:'numeric'}):''}`.trim().replace(/^·\s*/,''),
         icon:['◉','◈','◇','◎','▣'][idx%5],
-        bg:[C.greenLight,C.brownLight,C.amberLight,C.blueLight,C.greenLight][idx%5],
+        bg:[__theme.accentLight,C.brownLight,C.amberLight,C.blueLight,__theme.accentLight][idx%5],
       })) : []).map((rx,i)=>(
         <Card key={i}>
           <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-            <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.green,flexShrink:0}}>{rx.icon}</div>
+            <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:__theme.accent,flexShrink:0}}>{rx.icon}</div>
             <div style={{flex:1}}>
               <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
               <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{rx.dose}</div>
-              <div style={{fontSize:'11px',color:C.green,marginTop:'4px'}}>{rx.dr}</div>
+              <div style={{fontSize:'11px',color:__theme.accent,marginTop:'4px'}}>{rx.dr}</div>
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{rx.refills}</div>
             </div>
           </div>
@@ -4990,7 +5016,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
       <SecLabel>{isEn?'Drug reference':'藥物參考'}</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
-          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:C.green}}>◎</span>
+          <span style={{position:'absolute',left:'10px',fontSize:'16px',color:__theme.accent}}>◎</span>
           <input value={drugSearch} onChange={e=>{setDrugSearch(e.target.value);searchDrugRef(e.target.value)}} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px 10px 34px',fontSize:'13px',background:C.beige,outline:'none'}} placeholder={isEn?'Search any drug name…':'搜尋任何藥物名稱…'}/>
         </div>
         <div style={{fontSize:'12px',color:C.textSub,marginTop:'10px'}}>{isEn?'Check dosage guidance, intake instructions, and precautions on file.':'查看已記錄的劑量指引、服用方法及注意事項。'}</div>
@@ -5017,6 +5043,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
 }
 
 function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
+  const __theme = useContext(ThemeContext)
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
   })
@@ -5153,7 +5180,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
         <Card key={a.id} style={{padding:'10px 14px',marginBottom:'6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div>
             <div style={{fontSize:'13px',fontWeight:600}}>{a.allergen}{a.severity?` — ${a.severity}`:''}</div>
-            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',background:a.reported_by==='patient_reported'?C.amberLight:C.greenLight,color:a.reported_by==='patient_reported'?C.amber:C.green,fontWeight:600}}>
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',background:a.reported_by==='patient_reported'?C.amberLight:__theme.accentLight,color:a.reported_by==='patient_reported'?C.amber:__theme.accent,fontWeight:600}}>
               {a.reported_by==='patient_reported'?(isEn?'Self-reported':'自行申報'):(isEn?'Clinically confirmed':'臨床確認')}
             </span>
           </div>
@@ -5242,7 +5269,7 @@ function MedsaBumpSection({ isEn, patient }) {
   // it, not blend in. A bold gradient card with a real white title inside
   // (same shape as the Home screen's hero card) instead of a plain pale
   // card with a tiny grey heading above it.
-  const bumpGradient = 'linear-gradient(135deg,#EC407A 0%,#F06292 100%)'
+  const bumpGradient = 'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)'
 
   if (activeBump===undefined) return (
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
@@ -5293,7 +5320,7 @@ function MedsaBumpSection({ isEn, patient }) {
         </div>}
 
         {error&&<div style={{fontSize:'12px',color:'#ffcdd2',marginBottom:'8px'}}>{error}</div>}
-        <Btn style={{width:'100%',background:'#fff',color:'#EC407A'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
+        <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </div>
     </Card>
   )
@@ -5306,6 +5333,7 @@ function MedsaBumpSection({ isEn, patient }) {
 // Path B: no institution record exists yet. Since there's no prior anchor,
 // this requires document + liveness verification instead.
 function LoginFlow({ onBack, onComplete }) {
+  const __theme = useContext(ThemeContext)
   const [hkid,setHkid]=useState('')
   const [phone,setPhone]=useState('')
   const [error,setError]=useState(null)
@@ -5330,7 +5358,7 @@ function LoginFlow({ onBack, onComplete }) {
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
-        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'16px'}}>{'\u2190'} Back</div>
+        <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'16px'}}>{'\u2190'} Back</div>
         <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Log back in</div>
         <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px',lineHeight:1.5}}>{'\u25c7'} This checks your HKID and phone against your claimed record - a real production version would use a proper password or SMS one-time code instead of this alone.</div>
         <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
@@ -5352,6 +5380,7 @@ function LoginFlow({ onBack, onComplete }) {
 // level account, or its parent_patient_id if it's a Kids profile), so this
 // works correctly even mid-session as a different profile.
 function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChild, onOpenSettings, onOpenEmergency }) {
+  const __theme = useContext(ThemeContext)
   const [profiles,setProfiles]=useState([])
   const [managingAdult,setManagingAdult]=useState(null)
   const [loading,setLoading]=useState(true)
@@ -5417,13 +5446,13 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
           const isKid = p.account_type==='kids'
           const locked = isLocked(idx)
           return (
-            <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?C.greenXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
-              <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+            <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?__theme.accentXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isKid?'#fef3e2':__theme.accentLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKid?'#b8860b':__theme.accent,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isKid?'Medsa Kids':'You'}</div>
               </div>
-              {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:C.green,fontSize:'16px',flexShrink:0}}>✓</span>}
+              {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:__theme.accent,fontSize:'16px',flexShrink:0}}>✓</span>}
             </div>
           )
         })}
@@ -5464,6 +5493,7 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
 // HKID yet anyway (HK doesn't require one until around age 11). A birth
 // certificate upload is the real equivalent proof for this case instead.
 function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
+  const __theme = useContext(ThemeContext)
   const [form,setForm]=useState({fullName:'',dob:''})
   const [certFile,setCertFile]=useState(null)
   const [saving,setSaving]=useState(false)
@@ -5497,7 +5527,7 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
-        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
         <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a Medsa Kids profile</div>
         {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one child under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Same information as a regular Medsa profile - your child likely doesn't have an HKID yet, so a birth certificate works instead.</div>
@@ -5547,6 +5577,7 @@ function SignUpGate({ onComplete, onSkipDemo }) {
 }
 
 function ClaimProfileFlow({ onBack, onComplete }) {
+  const __theme = useContext(ThemeContext)
   const [hkid,setHkid]=useState('')
   const [code,setCode]=useState('')
   const [error,setError]=useState(null)
@@ -5616,7 +5647,7 @@ function ClaimProfileFlow({ onBack, onComplete }) {
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
-        <div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
         <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Claim your profile</div>
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Enter your HKID and the claim code sent to the phone number your clinic has on file.</div>
         <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'12px',boxSizing:'border-box'}}/>
@@ -5629,6 +5660,7 @@ function ClaimProfileFlow({ onBack, onComplete }) {
 }
 
 function SelfRegisterFlow({ onBack, onComplete }) {
+  const __theme = useContext(ThemeContext)
   const [step,setStep]=useState('form') // form | id_upload | selfie | pending
   const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
   const [idFile,setIdFile]=useState(null)
@@ -5712,7 +5744,7 @@ function SelfRegisterFlow({ onBack, onComplete }) {
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
-        {step!=='pending'&&<div onClick={onBack} style={{fontSize:'13px',color:C.green,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
+        {step!=='pending'&&<div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
 
         {step==='form'&&<>
           <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Register with Medsa</div>
@@ -5770,6 +5802,7 @@ function SelfRegisterFlow({ onBack, onComplete }) {
 // clinic then enters it on a public, non-authenticated page to view (and
 // download) just that tier of information.
 function ExternalRequestModal({ request, records=[], onDone }) {
+  const __theme = useContext(ThemeContext)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [submitting, setSubmitting] = useState(false)
 
@@ -5803,7 +5836,7 @@ function ExternalRequestModal({ request, records=[], onDone }) {
         <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'18px',maxHeight:280,overflowY:'auto'}}>
           {records.map(r=>(
             <div key={r.id} onClick={()=>toggle(r.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
-              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${selectedIds.has(r.id)?C.green:C.border}`,background:selectedIds.has(r.id)?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{selectedIds.has(r.id)?'\u2713':''}</div>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${selectedIds.has(r.id)?__theme.accent:C.border}`,background:selectedIds.has(r.id)?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{selectedIds.has(r.id)?'\u2713':''}</div>
               <div style={{fontSize:'13px'}}>{r.title} - {r.date_of_record}</div>
             </div>
           ))}
@@ -5811,7 +5844,7 @@ function ExternalRequestModal({ request, records=[], onDone }) {
         </div>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={handleDecline} disabled={submitting} style={{flex:1,padding:'12px',background:C.card,border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer'}}>Decline</button>
-          <button onClick={handleSend} disabled={submitting||selectedIds.size===0} style={{flex:1,padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:selectedIds.size===0?0.5:1}}>{submitting?'Sending...':'Send'}</button>
+          <button onClick={handleSend} disabled={submitting||selectedIds.size===0} style={{flex:1,padding:'12px',background:__theme.accent,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:selectedIds.size===0?0.5:1}}>{submitting?'Sending...':'Send'}</button>
         </div>
       </div>
     </div>
@@ -5819,6 +5852,7 @@ function ExternalRequestModal({ request, records=[], onDone }) {
 }
 
 function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
+  const __theme = useContext(ThemeContext)
   const [tiers,setTiers]=useState({ allergies:true, conditions:true, medications:true, vaccinations:false, fullHistory:false })
   const [reason,setReason]=useState('')
   const [expiryMinutes,setExpiryMinutes]=useState(60)
@@ -5875,7 +5909,7 @@ function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>For a clinic that doesn't use Medsa. Choose what to share - a routine visit needs less than something like a vaccination.</div>
 
           {recordIds?.length>0 ? (
-            <div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'13px',color:C.green}}>Sharing {recordIds.length} selected record{recordIds.length>1?'s':''}.</div>
+            <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accent}`,borderRadius:'8px',padding:'12px 14px',marginBottom:'16px',fontSize:'13px',color:__theme.accent}}>Sharing {recordIds.length} selected record{recordIds.length>1?'s':''}.</div>
           ) : (
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'16px'}}>
             {[
@@ -5886,7 +5920,7 @@ function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
               {key:'fullHistory',label:'Full medical history'},
             ].map(item=>(
               <div key={item.key} onClick={()=>toggleTier(item.key)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:C.card,borderRadius:'8px',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${tiers[item.key]?C.green:C.border}`,background:tiers[item.key]?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{tiers[item.key]?'\u2713':''}</div>
+                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${tiers[item.key]?__theme.accent:C.border}`,background:tiers[item.key]?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{tiers[item.key]?'\u2713':''}</div>
                 <span style={{fontSize:'13px'}}>{item.label}</span>
               </div>
             ))}
@@ -5899,7 +5933,7 @@ function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Code expires after</div>
           <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
             {[[30,'30 min'],[60,'1 hour'],[240,'4 hours']].map(([mins,label])=>(
-              <div key={mins} onClick={()=>setExpiryMinutes(mins)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:expiryMinutes===mins?C.green:C.card,color:expiryMinutes===mins?'#fff':C.textSub}}>{label}</div>
+              <div key={mins} onClick={()=>setExpiryMinutes(mins)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:expiryMinutes===mins?__theme.accent:C.card,color:expiryMinutes===mins?'#fff':C.textSub}}>{label}</div>
             ))}
           </div>
 
@@ -5913,7 +5947,7 @@ function ShareForVisitModal({ open, onClose, patient, recordIds=null }) {
               alt="QR code to redeem this share code" width={200} height={200}
               style={{marginBottom:'14px',borderRadius:'8px'}}
             />
-            <div style={{fontSize:'32px',fontWeight:700,letterSpacing:'4px',color:C.green,marginBottom:'10px'}}>{generatedCode}</div>
+            <div style={{fontSize:'32px',fontWeight:700,letterSpacing:'4px',color:__theme.accent,marginBottom:'10px'}}>{generatedCode}</div>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Valid for {expiryMinutes>=60?`${expiryMinutes/60} hour(s)`:`${expiryMinutes} minutes`}. They'll enter it at medsa.health/share to view and download what you've chosen to share.</div>
             <Btn variant="primary" style={{width:'100%'}} onClick={handleClose}>Done</Btn>
           </div>
@@ -6115,8 +6149,8 @@ export default function PatientApp({ liveData={} }) {
       .then(({data}) => setBumpActive(!!data))
   }, [patient?.id])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
-  const themeAccent = bumpActive ? '#EC407A' : C.green
-  const themeAccentMid = bumpActive ? '#F06292' : C.greenMid
+  const themeAccent = bumpActive ? '#F48FB1' : C.green
+  const themeAccentMid = bumpActive ? '#F8BBD0' : C.greenMid
   const themeAccentLight = bumpActive ? '#FCE4EC' : C.greenLight
   const themeAccentXLight = bumpActive ? '#FFF5F8' : C.greenXLight
 
@@ -6187,9 +6221,15 @@ export default function PatientApp({ liveData={} }) {
     // height + overflow:hidden keeps this column locked to exactly the
     // viewport; only the inner content div (overflowY:auto, below)
     // scrolls internally, so the nav never leaves.
+    //
+    // ThemeContext.Provider here is what makes every other screen in the
+    // app (records, doctors, calendar, insurance, forum, profile switcher,
+    // etc.) switch from green to pink while Bump is active - they all read
+    // this via useContext(ThemeContext) instead of C.green directly.
+    <ThemeContext.Provider value={{accent:themeAccent, accentMid:themeAccentMid, accentLight:themeAccentLight, accentXLight:themeAccentXLight}}>
     <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden',maxWidth:'440px',margin:'0 auto',background:C.beige}}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
-      {autoPurchaseNotice&&<div onClick={()=>setAutoPurchaseNotice(null)} style={{padding:'10px 16px',fontSize:'12px',lineHeight:1.5,textAlign:'center',cursor:'pointer',background:autoPurchaseNotice.ok?C.greenXLight:C.redLight,color:autoPurchaseNotice.ok?C.green:C.red}}>{autoPurchaseNotice.text}</div>}
+      {autoPurchaseNotice&&<div onClick={()=>setAutoPurchaseNotice(null)} style={{padding:'10px 16px',fontSize:'12px',lineHeight:1.5,textAlign:'center',cursor:'pointer',background:autoPurchaseNotice.ok?themeAccentXLight:C.redLight,color:autoPurchaseNotice.ok?themeAccent:C.red}}>{autoPurchaseNotice.text}</div>}
       <div style={{background:themeAccent,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
         {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
@@ -6249,6 +6289,7 @@ export default function PatientApp({ liveData={} }) {
         onOpenSettings={()=>{setScreen('editprofile');setSwitcherOpen(false)}}
         onOpenEmergency={()=>{setEmergencyOpen(true);setSwitcherOpen(false)}}/>}
     </div>
+    </ThemeContext.Provider>
   )
   return lang==='zh-CN' ? deepSimplify(rootContent) : rootContent
 }
