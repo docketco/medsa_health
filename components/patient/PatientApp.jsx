@@ -5066,21 +5066,42 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [gForm,setGForm]=useState({ recordedAt: new Date().toISOString().slice(0,10), weightKg:'', heightCm:'', headCm:'' })
   const [fForm,setFForm]=useState({ type:'breast', amountMl:'', durationMin:'', note:'' })
   const [saving,setSaving]=useState(false)
+  const [mchcAppointments,setMchcAppointments]=useState([])
+  const [mchcForm,setMchcForm]=useState({ appointmentAt:'', note:'' })
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
     setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
+      supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).order('appointment_at',{ascending:true}),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
     setMilestoneChecks(m||[])
+    setMchcAppointments(mchc||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
+
+  // bb-02 - MCHC (Maternal and Child Health Centre) appointment reminders.
+  // MCHC booking is a separate HK government system with no integration
+  // here, so this is a parent-entered date + a visible reminder, same
+  // "upcoming within N" banner shape as the clinic appointment reminder on
+  // the Home screen's alert feed, just a longer window since MCHC visits
+  // are scheduled weeks out, not booked same-week.
+  async function addMchcAppointment() {
+    if (!patient?.id || !mchcForm.appointmentAt) return
+    setSaving(true)
+    await supabase.from('kids_mchc_appointments').insert({ patient_id: patient.id, appointment_at: new Date(mchcForm.appointmentAt).toISOString(), note: mchcForm.note||null })
+    setMchcForm({ appointmentAt:'', note:'' })
+    await load(); setSaving(false)
+  }
+  async function deleteMchcAppointment(id) { await supabase.from('kids_mchc_appointments').delete().eq('id', id); load() }
+  const nextMchcAppointment = mchcAppointments.find(a => new Date(a.appointment_at).getTime() > Date.now() - 24*60*60*1000)
+  const mchcAppointmentSoon = nextMchcAppointment && (new Date(nextMchcAppointment.appointment_at).getTime() - Date.now() < 7*24*60*60*1000)
 
   async function toggleMilestone(key) {
     const existing = milestoneChecks.find(m=>m.milestone_key===key)
@@ -5198,6 +5219,34 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           <Btn style={{flex:1}} disabled={settingSex} onClick={()=>setSex('female')}>{isEn?'Female':'女'}</Btn>
         </div>
       </div>}
+
+      {mchcAppointmentSoon&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12px',color:C.amber,fontWeight:700}}>{isEn?`Reminder: MCHC appointment ${new Date(nextMchcAppointment.appointment_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`:`提醒：母嬰健康院預約 ${new Date(nextMchcAppointment.appointment_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`}</div>
+        {nextMchcAppointment.note&&<div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{nextMchcAppointment.note}</div>}
+      </div>}
+
+      <SecLabel>{isEn?'MCHC appointments':'母嬰健康院預約'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Medsa doesn't book MCHC visits - enter a date here after booking with the centre and we'll remind you as it approaches.":'Medsa並不代為預約母嬰健康院 - 預約後在此輸入日期,我們會在預約臨近時提醒您。'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+          <input type="datetime-local" value={mchcForm.appointmentAt} onChange={e=>setMchcForm({...mchcForm,appointmentAt:e.target.value})} style={{flex:'1 1 170px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input value={mchcForm.note} onChange={e=>setMchcForm({...mchcForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!mchcForm.appointmentAt} onClick={addMchcAppointment}>{isEn?'Add appointment':'新增預約'}</Btn>
+        <div style={{marginTop:'12px'}}>
+          {mchcAppointments.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No MCHC appointments on file.':'暫無母嬰健康院預約記錄。'}</div>}
+          {mchcAppointments.map(a=>{
+            const past = new Date(a.appointment_at).getTime() < Date.now()
+            return (
+              <div key={a.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px',opacity:past?0.55:1}}>
+                <span style={{color:C.textMuted,width:130,flexShrink:0}}>{new Date(a.appointment_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{flex:1}}>{a.note||(isEn?'MCHC visit':'母嬰健康院就診')}</span>
+                <span onClick={()=>deleteMchcAppointment(a.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
 
       <SecLabel>{isEn?'Growth':'生長'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
