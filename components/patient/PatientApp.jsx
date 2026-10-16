@@ -5086,6 +5086,54 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load()
   }
 
+  const [exportingPdf,setExportingPdf]=useState(false)
+  // bb-04 - one PDF combining the two things a kindergarten/nursery
+  // enrollment form actually asks for: proof of immunization and a
+  // developmental summary. Vaccinations already exist generically in
+  // Records; this is the first place that reads them specifically for
+  // this child rather than the parent's own history.
+  async function downloadEnrollmentSummary() {
+    if (!patient?.id) return
+    setExportingPdf(true)
+    const { data: vacc } = await supabase.from('vaccinations').select('*').eq('patient_id', patient.id).order('date_given',{ascending:true})
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Kindergarten/Nursery Enrollment Summary`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Immunization record',
+      dateInstitution: `${patient.date_of_birth?`DOB ${new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · `:''}As of ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`,
+      details: (vacc||[]).length>0
+        ? vacc.map(v=>[`${v.vaccine_name}${v.dose_label?` (${v.dose_label})`:v.dose_number?` (dose ${v.dose_number})`:''}`, v.date_given ? new Date(v.date_given).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}) + (v.institution?` · ${v.institution}`:'') : (v.status||'—')])
+        : [['No vaccinations on file yet', '—']],
+      subtitle,
+    })
+
+    for (const band of MILESTONE_AGE_BANDS) {
+      const bandMilestones = MILESTONES.filter(m=>m.ageBand.en===band)
+      const achievedCount = bandMilestones.filter(m=>milestoneChecks.some(c=>c.milestone_key===m.key)).length
+      y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+        title: `Developmental milestones - ${band}`,
+        dateInstitution: `${achievedCount}/${bandMilestones.length} achieved (HK DoH/MCHC standard)`,
+        details: bandMilestones.map(m=>[m.domain.en, (milestoneChecks.some(c=>c.milestone_key===m.key)?'✓ ':'— ') + m.en]),
+        subtitle,
+      })
+    }
+    drawPdfFooter(doc, pageWidth, pageHeight)
+
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Kids-Enrollment-Summary-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingPdf(false)
+  }
+
   async function addGrowthLog() {
     if (!patient?.id || !gForm.recordedAt) return
     setSaving(true)
@@ -5215,6 +5263,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       <SecLabel>{isEn?'Developmental milestones':'發展里程碑'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Hong Kong DoH / MCHC standard milestones, Birth to Primary 1. Every child is different - this isn't a race, just a record.":'香港衛生署/母嬰健康院標準發展里程碑,出生至小學一年級。每個孩子發展步伐不同,這並非競賽,只是記錄。'}</div>
+        <div onClick={exportingPdf?undefined:downloadEnrollmentSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginBottom:'14px',cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export enrollment summary (immunizations + milestones) PDF':'⬇ 匯出入學摘要(疫苗+里程碑)PDF')}</div>
         {MILESTONE_AGE_BANDS.map(band=>{
           const bandMilestones = MILESTONES.filter(m=>m.ageBand.en===band)
           const bandLabel = bandMilestones[0].ageBand
