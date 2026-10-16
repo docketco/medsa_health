@@ -300,7 +300,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid, themeAccentLight=C.greenLight, themeAccentXLight=C.greenXLight }) {
+function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid, themeAccentLight=C.greenLight, themeAccentXLight=C.greenXLight, bumpActive=false }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -674,6 +674,12 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           // non-child dependent.
           ...(patient?.account_type==='kids' && (patient?.dependent_relationship==null||patient?.dependent_relationship==='child') ? [
             {key:'kidsgrowth',icon:'growth',label:isEn?'Growth & feeding':'生長與餵養',sub:isEn?'Weight, height, milk log':'體重、身高、餵奶記錄',bg:themeAccentLight,badge:null},
+          ] : []),
+          // Only shown while Bump is active on the main account - never
+          // makes sense on a dependent profile (never pregnant, same
+          // reasoning as the pink theme itself).
+          ...(bumpActive ? [
+            {key:'bumphealth',icon:'pulse',label:isEn?'Pregnancy health log':'孕期健康記錄',sub:isEn?'Blood pressure, glucose, kicks':'血壓、血糖、胎動',bg:themeAccentLight,badge:null},
           ] : []),
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
@@ -5294,6 +5300,151 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   )
 }
 
+const GLUCOSE_CONTEXTS = [
+  { value:'fasting', en:'Fasting', zh:'空腹' },
+  { value:'1hr_postprandial', en:'1hr after eating', zh:'餐後1小時' },
+  { value:'2hr_postprandial', en:'2hr after eating', zh:'餐後2小時' },
+]
+// High-risk maternal monitoring (bm-03) - gestational diabetes glucose
+// log with meal-tagging, pre-eclampsia BP tracking (flagged at the
+// 140/90 mmHg threshold given directly in the feature doc, not a
+// clinical cutoff sourced here), and kick-count sessions. No glucose
+// threshold is flagged - unlike the BP cutoff, no specific mg/dL number
+// was given, and gestational-diabetes cutoffs depend on which test a
+// patient's OBGYN actually used, so this logs and shows values without
+// guessing at a line to flag.
+function BumpHealthScreen({ isEn, bumpSubscriptionId }) {
+  const __theme = useContext(ThemeContext)
+  const [bpLogs,setBpLogs]=useState([])
+  const [glucoseLogs,setGlucoseLogs]=useState([])
+  const [kickLogs,setKickLogs]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [bpForm,setBpForm]=useState({systolic:'',diastolic:''})
+  const [glucoseForm,setGlucoseForm]=useState({value:'',context:'fasting'})
+  const [saving,setSaving]=useState(false)
+  const [kickSession,setKickSession]=useState(null) // {startedAt, count} while a count is in progress
+
+  async function load() {
+    if (!bumpSubscriptionId) { setLoading(false); return }
+    setLoading(true)
+    const [{data:bp},{data:g},{data:k}] = await Promise.all([
+      supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
+      supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
+      supabase.from('bump_kick_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(20),
+    ])
+    setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [bumpSubscriptionId])
+
+  async function addBp() {
+    if (!bumpSubscriptionId || !bpForm.systolic || !bpForm.diastolic) return
+    setSaving(true)
+    await supabase.from('bump_bp_logs').insert({ bump_subscription_id:bumpSubscriptionId, systolic:Number(bpForm.systolic), diastolic:Number(bpForm.diastolic) })
+    setBpForm({systolic:'',diastolic:''})
+    await load(); setSaving(false)
+  }
+  async function deleteBp(id) { await supabase.from('bump_bp_logs').delete().eq('id', id); load() }
+
+  async function addGlucose() {
+    if (!bumpSubscriptionId || !glucoseForm.value) return
+    setSaving(true)
+    await supabase.from('bump_glucose_logs').insert({ bump_subscription_id:bumpSubscriptionId, glucose_mg_dl:Number(glucoseForm.value), context:glucoseForm.context })
+    setGlucoseForm({value:'',context:'fasting'})
+    await load(); setSaving(false)
+  }
+  async function deleteGlucose(id) { await supabase.from('bump_glucose_logs').delete().eq('id', id); load() }
+
+  function startKickSession() { setKickSession({ startedAt:new Date(), count:0 }) }
+  function addKick() { setKickSession(prev => prev ? {...prev, count:prev.count+1} : prev) }
+  async function finishKickSession() {
+    if (!kickSession || !bumpSubscriptionId) return
+    await supabase.from('bump_kick_logs').insert({ bump_subscription_id:bumpSubscriptionId, started_at:kickSession.startedAt.toISOString(), ended_at:new Date().toISOString(), kick_count:kickSession.count })
+    setKickSession(null)
+    await load()
+  }
+  async function deleteKick(id) { await supabase.from('bump_kick_logs').delete().eq('id', id); load() }
+
+  if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
+
+  return (
+    <div style={{padding:'0 16px 24px'}}>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Pregnancy health log':'孕期健康記錄'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
+      </div>
+
+      <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input type="number" value={bpForm.systolic} onChange={e=>setBpForm({...bpForm,systolic:e.target.value})} placeholder={isEn?'Systolic':'收縮壓'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="number" value={bpForm.diastolic} onChange={e=>setBpForm({...bpForm,diastolic:e.target.value})} placeholder={isEn?'Diastolic':'舒張壓'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!bpForm.systolic||!bpForm.diastolic} onClick={addBp}>{isEn?'Add reading':'新增讀數'}</Btn>
+        <div style={{marginTop:'12px'}}>
+          {bpLogs.map(b=>{
+            const flagged = b.systolic>=140 || b.diastolic>=90
+            return (
+              <div key={b.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(b.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{flex:1,fontWeight:flagged?700:400,color:flagged?C.red:C.text}}>{b.systolic}/{b.diastolic} mmHg{flagged?(isEn?'  ⚠ at or above 140/90':'  ⚠ 達或超過140/90'):''}</span>
+                <span onClick={()=>deleteBp(b.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Blood glucose':'血糖'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input type="number" value={glucoseForm.value} onChange={e=>setGlucoseForm({...glucoseForm,value:e.target.value})} placeholder={isEn?'mg/dL':'mg/dL'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <select value={glucoseForm.context} onChange={e=>setGlucoseForm({...glucoseForm,context:e.target.value})} style={{flex:1.3,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}>
+            {GLUCOSE_CONTEXTS.map(c=><option key={c.value} value={c.value}>{isEn?c.en:c.zh}</option>)}
+          </select>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!glucoseForm.value} onClick={addGlucose}>{isEn?'Add reading':'新增讀數'}</Btn>
+        <div style={{marginTop:'12px'}}>
+          {glucoseLogs.map(g=>{
+            const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
+            return (
+              <div key={g.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(g.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{flex:1}}>{g.glucose_mg_dl} mg/dL{ctx?` · ${isEn?ctx.en:ctx.zh}`:''}</span>
+                <span onClick={()=>deleteGlucose(g.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Kick counts':'胎動次數'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        {!kickSession&&<Btn variant="primary" style={{width:'100%'}} onClick={startKickSession}>{isEn?'Start counting':'開始計算'}</Btn>}
+        {kickSession&&<>
+          <div style={{textAlign:'center',padding:'16px 0'}}>
+            <div style={{fontSize:'36px',fontWeight:700,color:__theme.accent}}>{kickSession.count}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>{isEn?`Started ${kickSession.startedAt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}`:`開始於${kickSession.startedAt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}`}</div>
+            <div style={{display:'flex',gap:'10px'}}>
+              <Btn variant="primary" style={{flex:2,fontSize:'16px',padding:'16px'}} onClick={addKick}>{isEn?'+ Kick':'+ 胎動'}</Btn>
+              <Btn style={{flex:1}} onClick={finishKickSession}>{isEn?'Done':'完成'}</Btn>
+            </div>
+          </div>
+        </>}
+        <div style={{marginTop:'12px'}}>
+          {kickLogs.map(k=>(
+            <div key={k.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(k.started_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{flex:1}}>{isEn?`${k.kick_count} kicks`:`${k.kick_count}次胎動`}{k.ended_at?` · ${Math.round((new Date(k.ended_at)-new Date(k.started_at))/60000)}min`:''}</span>
+              <span onClick={()=>deleteKick(k.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   const __theme = useContext(ThemeContext)
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
@@ -6662,12 +6813,14 @@ export default function PatientApp({ liveData={} }) {
     const persistedId = window.localStorage.getItem('medsa_signed_in_patient_id')
     return !!persistedId && window.localStorage.getItem(`medsa_bump_active_${persistedId}`) === '1'
   })
+  const [bumpSubscriptionId,setBumpSubscriptionId]=useState(null)
   const checkBumpActive = useCallback(() => {
-    if (!patient?.id) { setBumpActive(false); return }
+    if (!patient?.id) { setBumpActive(false); setBumpSubscriptionId(null); return }
     supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1).maybeSingle()
       .then(({data}) => {
         const active = !!data
         setBumpActive(active)
+        setBumpSubscriptionId(data?.id || null)
         if (typeof window!=='undefined') window.localStorage.setItem(`medsa_bump_active_${patient.id}`, active ? '1' : '0')
       })
   }, [patient?.id])
@@ -6745,7 +6898,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養'}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養',bumphealth:isEn?'Pregnancy health log':'孕期健康記錄'}
   const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
     // Real gap reported live-testing: minHeight let this column grow
@@ -6781,7 +6934,7 @@ export default function PatientApp({ liveData={} }) {
         {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:themeAccent,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight} bumpActive={bumpActive}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
@@ -6792,6 +6945,7 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
+        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} bumpSubscriptionId={bumpSubscriptionId}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
