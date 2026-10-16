@@ -5024,10 +5024,38 @@ const FEEDING_TYPES = [
 // vaccination records. Vaccinations already live in RecordsScreen (the
 // "History, vaccinations, share" tile) - this screen covers the other
 // two and links across rather than duplicating that part.
+// The real Hong Kong Department of Health (MCHC "Blue Book") milestone
+// table, as given directly - not sourced from memory or guessed, so none
+// of the WHO-growth-chart sourcing caution applies here. Domain labels
+// match the DoH's own three categories.
+const MILESTONES = [
+  { key:'m02-motor', ageBand:{en:'0–2 Months',zh:'0–2個月'}, domain:{en:'Gross / Fine Motor Skills',zh:'大肌肉/小肌肉動作'}, en:'Holds head up briefly when on tummy; opens hands.', zh:'俯臥時能短暫抬頭;會張開手掌。' },
+  { key:'m02-lang', ageBand:{en:'0–2 Months',zh:'0–2個月'}, domain:{en:'Hearing, Language & Vision',zh:'聽覺、語言與視覺'}, en:'Startles at loud noises; tracks objects with eyes; coos.', zh:'對大聲響有驚嚇反應;眼睛能追視物件;會發出咕咕聲。' },
+  { key:'m02-social', ageBand:{en:'0–2 Months',zh:'0–2個月'}, domain:{en:'Social & Self-Care',zh:'社交與自理'}, en:'Smiles at primary caregivers (social smile).', zh:'會對主要照顧者微笑(社交性微笑)。' },
+
+  { key:'m46-motor', ageBand:{en:'4–6 Months',zh:'4–6個月'}, domain:{en:'Gross / Fine Motor Skills',zh:'大肌肉/小肌肉動作'}, en:'Rolls over (front-to-back); reaches out and grasps objects with both hands.', zh:'會翻身(俯臥轉仰臥);會伸手並用雙手抓取物件。' },
+  { key:'m46-lang', ageBand:{en:'4–6 Months',zh:'4–6個月'}, domain:{en:'Hearing, Language & Vision',zh:'聽覺、語言與視覺'}, en:'Turns head toward sounds; babble sounds ("ba-ba", "ma-ma").', zh:'會轉頭尋找聲源;發出"爸爸"、"媽媽"等疊音。' },
+  { key:'m46-social', ageBand:{en:'4–6 Months',zh:'4–6個月'}, domain:{en:'Social & Self-Care',zh:'社交與自理'}, en:'Recognizes familiar faces; responds to own name.', zh:'認得熟悉的面孔;對自己的名字有反應。' },
+
+  { key:'m912-motor', ageBand:{en:'9–12 Months',zh:'9–12個月'}, domain:{en:'Gross / Fine Motor Skills',zh:'大肌肉/小肌肉動作'}, en:'Sits unsupported; pulls self up to stand; uses pincer grasp (thumb and index finger).', zh:'能獨立坐穩;會拉扶站立;會用拇指和食指捏取物件。' },
+  { key:'m912-lang', ageBand:{en:'9–12 Months',zh:'9–12個月'}, domain:{en:'Hearing, Language & Vision',zh:'聽覺、語言與視覺'}, en:'Understands simple words like "No" or "Bye-Bye"; says 1–2 simple words.', zh:'明白簡單字詞如"不"或"再見";會說1-2個簡單字詞。' },
+  { key:'m912-social', ageBand:{en:'9–12 Months',zh:'9–12個月'}, domain:{en:'Social & Self-Care',zh:'社交與自理'}, en:'Waves goodbye; plays simple games like Peek-a-boo.', zh:'會揮手說再見;會玩簡單遊戲如躲貓貓。' },
+
+  { key:'m1824-motor', ageBand:{en:'18–24 Months',zh:'18–24個月'}, domain:{en:'Gross / Fine Motor Skills',zh:'大肌肉/小肌肉動作'}, en:'Walks independently; kicks a ball; scribbles spontaneously.', zh:'能獨立行走;會踢球;會自發塗畫。' },
+  { key:'m1824-lang', ageBand:{en:'18–24 Months',zh:'18–24個月'}, domain:{en:'Hearing, Language & Vision',zh:'聽覺、語言與視覺'}, en:'Uses 10+ words; points to objects/body parts when named; combines 2 words.', zh:'會說10個以上字詞;被問及會指出物件/身體部位;能組合2個字詞。' },
+  { key:'m1824-social', ageBand:{en:'18–24 Months',zh:'18–24個月'}, domain:{en:'Social & Self-Care',zh:'社交與自理'}, en:'Uses a spoon/cup; imitates adult actions; shows independence.', zh:'會使用匙羹/杯子;會模仿大人動作;表現獨立性。' },
+
+  { key:'m35y-motor', ageBand:{en:'3–5 Years',zh:'3–5歲'}, domain:{en:'Gross / Fine Motor Skills',zh:'大肌肉/小肌肉動作'}, en:'Runs smoothly, hops, stands on one foot; holds a pencil with a tripod grip.', zh:'能順暢跑動、單腳跳、單腳站立;能以三指握筆。' },
+  { key:'m35y-lang', ageBand:{en:'3–5 Years',zh:'3–5歲'}, domain:{en:'Hearing, Language & Vision',zh:'聽覺、語言與視覺'}, en:'Speaks in full sentences; answers "Who/What/Where" questions clearly.', zh:'能說出完整句子;能清楚回答"誰/什麼/哪裡"等問題。' },
+  { key:'m35y-social', ageBand:{en:'3–5 Years',zh:'3–5歲'}, domain:{en:'Social & Self-Care',zh:'社交與自理'}, en:'Dresses self; engages in cooperative group play; toilet trained.', zh:'能自行穿衣;能參與群體合作遊戲;已完成大小便訓練。' },
+]
+const MILESTONE_AGE_BANDS = [...new Set(MILESTONES.map(m=>m.ageBand.en))]
+
 function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
   const [growthLogs,setGrowthLogs]=useState([])
   const [feedingLogs,setFeedingLogs]=useState([])
+  const [milestoneChecks,setMilestoneChecks]=useState([])
   const [loading,setLoading]=useState(true)
   const [gForm,setGForm]=useState({ recordedAt: new Date().toISOString().slice(0,10), weightKg:'', heightCm:'', headCm:'' })
   const [fForm,setFForm]=useState({ type:'breast', amountMl:'', durationMin:'', note:'' })
@@ -5036,15 +5064,27 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   async function load() {
     if (!patient?.id) { setLoading(false); return }
     setLoading(true)
-    const [{ data: g }, { data: f }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
+      supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
+    setMilestoneChecks(m||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
+
+  async function toggleMilestone(key) {
+    const existing = milestoneChecks.find(m=>m.milestone_key===key)
+    if (existing) {
+      await supabase.from('kids_milestone_checks').delete().eq('id', existing.id)
+    } else {
+      await supabase.from('kids_milestone_checks').insert({ patient_id: patient.id, milestone_key: key, achieved_at: new Date().toISOString().slice(0,10) })
+    }
+    await load()
+  }
 
   async function addGrowthLog() {
     if (!patient?.id || !gForm.recordedAt) return
@@ -5167,6 +5207,36 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
               <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(f.fed_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
               <span style={{flex:1}}>{t?(isEn?t.label.en:t.label.zh):f.feeding_type}{f.amount_ml!=null?` · ${f.amount_ml}ml`:''}{f.duration_min!=null?` · ${f.duration_min}min`:''}{f.note?` · ${f.note}`:''}</span>
               <span onClick={()=>deleteFeedingLog(f.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          )
+        })}
+      </Card>
+
+      <SecLabel>{isEn?'Developmental milestones':'發展里程碑'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Hong Kong DoH / MCHC standard milestones, Birth to Primary 1. Every child is different - this isn't a race, just a record.":'香港衛生署/母嬰健康院標準發展里程碑,出生至小學一年級。每個孩子發展步伐不同,這並非競賽,只是記錄。'}</div>
+        {MILESTONE_AGE_BANDS.map(band=>{
+          const bandMilestones = MILESTONES.filter(m=>m.ageBand.en===band)
+          const bandLabel = bandMilestones[0].ageBand
+          const checkedCount = bandMilestones.filter(m=>milestoneChecks.some(c=>c.milestone_key===m.key)).length
+          return (
+            <div key={band} style={{marginBottom:'14px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                <div style={{fontSize:'12px',fontWeight:700,color:__theme.accent}}>{isEn?bandLabel.en:bandLabel.zh}</div>
+                <div style={{fontSize:'10.5px',color:C.textMuted}}>{checkedCount}/{bandMilestones.length}</div>
+              </div>
+              {bandMilestones.map(m=>{
+                const checked = milestoneChecks.some(c=>c.milestone_key===m.key)
+                return (
+                  <div key={m.key} onClick={()=>toggleMilestone(m.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'6px 0',cursor:'pointer'}}>
+                    <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?__theme.accent:C.border}`,background:checked?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:'9.5px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.3px'}}>{isEn?m.domain.en:m.domain.zh}</div>
+                      <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?m.en:m.zh}</div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )
         })}
