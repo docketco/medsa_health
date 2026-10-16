@@ -5071,25 +5071,93 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [symptomLogs,setSymptomLogs]=useState([])
   const [symptomForm,setSymptomForm]=useState({ temperatureC:'', symptoms:'', medicationGiven:'' })
   const [exportingSymptomPdf,setExportingSymptomPdf]=useState(false)
+  const [diaperLogs,setDiaperLogs]=useState([])
+  const [exportingErPdf,setExportingErPdf]=useState(false)
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
     setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
       supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).order('appointment_at',{ascending:true}),
       supabase.from('kids_symptom_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:false}).limit(30),
+      supabase.from('kids_diaper_logs').select('*').eq('patient_id', patient.id).order('logged_at',{ascending:false}).limit(30),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
     setMilestoneChecks(m||[])
     setMchcAppointments(mchc||[])
     setSymptomLogs(sym||[])
+    setDiaperLogs(diaper||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
+
+  async function addDiaperLog(diaperType) {
+    if (!patient?.id) return
+    await supabase.from('kids_diaper_logs').insert({ patient_id: patient.id, diaper_type: diaperType })
+    load()
+  }
+  async function deleteDiaperLog(id) { await supabase.from('kids_diaper_logs').delete().eq('id', id); load() }
+
+  // kp-05 - pediatric ER prep package: the same export mechanism as kp-04,
+  // just a tighter 24-hour window and pulling in feeding + diaper output
+  // too, since that's what an ER/urgent-care intake actually asks a
+  // parent for ("when did they last eat/drink/wet a diaper") on top of
+  // the fever/medication picture kp-04 already covers.
+  async function downloadErPrepPackage() {
+    if (!patient?.id) return
+    setExportingErPdf(true)
+    const cutoff = Date.now() - 24*60*60*1000
+    const recentSymptoms = symptomLogs.filter(s => new Date(s.recorded_at).getTime() > cutoff)
+    const recentFeeds = feedingLogs.filter(f => new Date(f.fed_at).getTime() > cutoff)
+    const recentDiapers = diaperLogs.filter(d => new Date(d.logged_at).getTime() > cutoff)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · ER / Urgent Care Prep - Last 24 Hours`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Fever & medication (last 24h)', subtitle,
+      dateInstitution: `${patient.date_of_birth?`DOB ${new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · `:''}Generated ${new Date().toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`,
+      details: recentSymptoms.length>0
+        ? [...recentSymptoms].reverse().map(s=>[new Date(s.recorded_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}), [s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?`Gave: ${s.medication_given}`:null].filter(Boolean).join(' · ') || '—'])
+        : [['No entries in the last 24 hours', '—']],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Feeding (last 24h)', subtitle,
+      dateInstitution: `${recentFeeds.length} feeding${recentFeeds.length===1?'':'s'} logged`,
+      details: recentFeeds.length>0
+        ? [...recentFeeds].reverse().map(f=>{
+            const t = FEEDING_TYPES.find(t=>t.value===f.feeding_type)
+            return [new Date(f.fed_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}), `${t?t.label.en:f.feeding_type}${f.amount_ml!=null?` · ${f.amount_ml}ml`:''}`]
+          })
+        : [['No feedings logged', '—']],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Diaper output (last 24h)', subtitle,
+      dateInstitution: `${recentDiapers.length} change${recentDiapers.length===1?'':'s'} logged`,
+      details: recentDiapers.length>0
+        ? [...recentDiapers].reverse().map(d=>[new Date(d.logged_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}), d.diaper_type||'—'])
+        : [['No diaper changes logged', '—']],
+    })
+
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Kids-ER-Prep-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingErPdf(false)
+  }
 
   // kp-04 - fever/symptom log a parent keeps at home, with a one-click
   // "doctor packet" PDF export of the recent entries for a private
@@ -5311,6 +5379,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <textarea value={symptomForm.symptoms} onChange={e=>setSymptomForm({...symptomForm,symptoms:e.target.value})} rows={2} placeholder={isEn?'Symptoms (e.g. cough, runny nose, poor appetite)':'症狀(如咳嗽、流鼻水、食慾不振)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px',resize:'none',fontFamily:'inherit'}}/>
         <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!symptomForm.temperatureC&&!symptomForm.symptoms)} onClick={addSymptomLog}>{isEn?'Add entry':'新增記錄'}</Btn>
         <div onClick={exportingSymptomPdf?undefined:downloadDoctorPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'12px',cursor:exportingSymptomPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingSymptomPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export doctor packet PDF (last 14 days)':'⬇ 匯出醫生摘要PDF(過去14天)')}</div>
+        <div onClick={exportingErPdf?undefined:downloadErPrepPackage} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'6px',cursor:exportingErPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingErPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export ER / urgent care prep PDF (last 24 hours)':'⬇ 匯出急症室準備PDF(過去24小時)')}</div>
         <div style={{marginTop:'12px'}}>
           {symptomLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No symptom entries on file.':'暫無症狀記錄。'}</div>}
           {symptomLogs.map(s=>(
@@ -5318,6 +5387,26 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
               <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(s.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
               <span style={{flex:1}}>{[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?(isEn?`Gave: ${s.medication_given}`:`已給:${s.medication_given}`):null].filter(Boolean).join(' · ')}</span>
               <span onClick={()=>deleteSymptomLog(s.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Diaper log':'尿布記錄'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'A tap-to-log diaper tracker - mainly here to feed the ER prep export above with real output data.':'輕觸記錄尿布 - 主要為上方急症室準備PDF提供真實排尿排便數據。'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
+          <div onClick={()=>addDiaperLog('wet')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💧 Wet':'💧 濕'}</div>
+          <div onClick={()=>addDiaperLog('dirty')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💩 Dirty':'💩 大便'}</div>
+          <div onClick={()=>addDiaperLog('both')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'Both':'兩者'}</div>
+        </div>
+        <div>
+          {diaperLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No diaper changes logged yet.':'暫無尿布記錄。'}</div>}
+          {diaperLogs.slice(0,10).map(d=>(
+            <div key={d.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(d.logged_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{flex:1,textTransform:'capitalize'}}>{d.diaper_type}</span>
+              <span onClick={()=>deleteDiaperLog(d.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
         </div>
