@@ -5605,14 +5605,27 @@ const GLUCOSE_CONTEXTS = [
   { value:'1hr_postprandial', en:'1hr after eating', zh:'餐後1小時' },
   { value:'2hr_postprandial', en:'2hr after eating', zh:'餐後2小時' },
 ]
+// IADPSG (International Association of Diabetes and Pregnancy Study
+// Groups, 2010) consensus cutoffs for a 75g oral glucose tolerance test -
+// the one internationally standardized gestational-diabetes threshold
+// set, by far the most widely adopted (HK public/private OBGYN practice
+// commonly follows it too). Explicitly scoped to the 75g OGTT: an older
+// 100g 3-hour test (Carpenter-Coustan) uses different numbers entirely,
+// which is exactly why this was left unflagged until asked for - picking
+// the wrong protocol's cutoff would be worse than no flag at all.
+const GLUCOSE_IADPSG_MGDL = { fasting: 92, '1hr_postprandial': 180, '2hr_postprandial': 153 }
+function isGlucoseFlagged(contextValue, mgdl) {
+  const threshold = GLUCOSE_IADPSG_MGDL[contextValue]
+  return threshold != null && mgdl != null && mgdl >= threshold
+}
 // High-risk maternal monitoring (bm-03) - gestational diabetes glucose
 // log with meal-tagging, pre-eclampsia BP tracking (flagged at the
-// 140/90 mmHg threshold given directly in the feature doc, not a
-// clinical cutoff sourced here), and kick-count sessions. No glucose
-// threshold is flagged - unlike the BP cutoff, no specific mg/dL number
-// was given, and gestational-diabetes cutoffs depend on which test a
-// patient's OBGYN actually used, so this logs and shows values without
-// guessing at a line to flag.
+// 140/90 mmHg threshold given directly in the feature doc), and
+// kick-count sessions. Glucose is flagged against the IADPSG 75g-OGTT
+// consensus cutoffs above - added on your explicit go-ahead, since the
+// right cutoff depends on which test protocol was actually used and a
+// wrong guess here would be worse than the no-flag default this shipped
+// with originally.
 function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const __theme = useContext(ThemeContext)
   const [bumpRow,setBumpRow]=useState(null)
@@ -5691,10 +5704,13 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
 
     if (glucoseLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
       title: 'Blood glucose log', subtitle, accentColor: PINK,
-      dateInstitution: `${glucoseLogs.length} reading${glucoseLogs.length===1?'':'s'}`,
+      dateInstitution: `${glucoseLogs.length} reading${glucoseLogs.length===1?'':'s'} · flagged against IADPSG 75g-OGTT consensus cutoffs (fasting ≥92, 1hr ≥180, 2hr ≥153 mg/dL)`,
       details: [...glucoseLogs].reverse().map(g=>{
         const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
-        return [new Date(g.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${g.glucose_mg_dl} mg/dL${ctx?` (${ctx.en})`:''}`]
+        return [
+          new Date(g.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
+          `${g.glucose_mg_dl} mg/dL${ctx?` (${ctx.en})`:''}${isGlucoseFlagged(g.context,g.glucose_mg_dl)?'\n⚠ Flagged (IADPSG cutoff)':''}`,
+        ]
       }),
     })
 
@@ -5746,6 +5762,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     const lastBp = bpLogs[0]
     const flaggedBpCount = bpLogs.filter(b=>b.systolic>=140||b.diastolic>=90).length
     const lastGlucose = glucoseLogs[0]
+    const flaggedGlucoseCount = glucoseLogs.filter(g=>isGlucoseFlagged(g.context,g.glucose_mg_dl)).length
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
       title: 'Patient & pregnancy', subtitle, accentColor: PINK,
@@ -5770,10 +5787,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
       title: 'Monitoring summary', subtitle, accentColor: PINK,
-      dateInstitution: `${bpLogs.length} blood pressure reading${bpLogs.length===1?'':'s'} logged, ${flaggedBpCount} at or above 140/90 mmHg`,
+      dateInstitution: `${bpLogs.length} BP reading${bpLogs.length===1?'':'s'} (${flaggedBpCount} at/above 140/90), ${glucoseLogs.length} glucose reading${glucoseLogs.length===1?'':'s'} (${flaggedGlucoseCount} at/above IADPSG cutoff)`,
       details: [
         ...(lastBp ? [['Most recent BP', `${lastBp.systolic}/${lastBp.diastolic} mmHg (${new Date(lastBp.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})${(lastBp.systolic>=140||lastBp.diastolic>=90)?'\n⚠ Flagged (≥140/90)':''}`]] : []),
-        ...(lastGlucose ? [['Most recent glucose', `${lastGlucose.glucose_mg_dl} mg/dL (${new Date(lastGlucose.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})`]] : []),
+        ...(lastGlucose ? [['Most recent glucose', `${lastGlucose.glucose_mg_dl} mg/dL (${new Date(lastGlucose.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})${isGlucoseFlagged(lastGlucose.context,lastGlucose.glucose_mg_dl)?'\n⚠ Flagged (IADPSG cutoff)':''}`]] : []),
         ...(kickLogs.length>0 ? [['Kick-count sessions logged', String(kickLogs.length)]] : []),
         ['Full readings log', 'See the attached maternal health summary export for every logged reading'],
       ],
@@ -5860,6 +5877,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
 
       <SecLabel>{isEn?'Blood glucose':'血糖'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'10.5px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Readings at or above the IADPSG 75g-OGTT consensus cutoffs are flagged (fasting ≥92, 1hr ≥180, 2hr ≥153 mg/dL) - if your OBGYN used a different test, ask them directly rather than relying on this flag.':'達到或超過IADPSG 75克口服葡萄糖耐量測試共識標準的讀數會被標示(空腹≥92、餐後1小時≥180、餐後2小時≥153 mg/dL) - 若您的婦產科醫生採用不同測試,請直接向醫生查詢,毋須依賴此標示。'}</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           <input type="number" value={glucoseForm.value} onChange={e=>setGlucoseForm({...glucoseForm,value:e.target.value})} placeholder={isEn?'mg/dL':'mg/dL'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
           <select value={glucoseForm.context} onChange={e=>setGlucoseForm({...glucoseForm,context:e.target.value})} style={{flex:1.3,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',background:'#fff'}}>
@@ -5870,10 +5888,11 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div style={{marginTop:'12px'}}>
           {glucoseLogs.map(g=>{
             const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
+            const flagged = isGlucoseFlagged(g.context, g.glucose_mg_dl)
             return (
               <div key={g.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
                 <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(g.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
-                <span style={{flex:1}}>{g.glucose_mg_dl} mg/dL{ctx?` · ${isEn?ctx.en:ctx.zh}`:''}</span>
+                <span style={{flex:1,fontWeight:flagged?700:400,color:flagged?C.red:C.text}}>{g.glucose_mg_dl} mg/dL{ctx?` · ${isEn?ctx.en:ctx.zh}`:''}{flagged?(isEn?'  ⚠ at or above IADPSG cutoff':'  ⚠ 達或超過IADPSG標準'):''}</span>
                 <span onClick={()=>deleteGlucose(g.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
               </div>
             )
