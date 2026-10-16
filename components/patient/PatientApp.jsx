@@ -5098,19 +5098,22 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [scanningLabel,setScanningLabel]=useState(false)
   const [labelScanError,setLabelScanError]=useState('')
   const [labelScanFilled,setLabelScanFilled]=useState(false)
+  const [sleepLogs,setSleepLogs]=useState([])
+  const [sleepForm,setSleepForm]=useState({ startedAt:'', endedAt:'', sleepType:'nap' })
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
   async function load(isInitial=false) {
     if (!patient?.id) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
       supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).order('appointment_at',{ascending:true}),
       supabase.from('kids_symptom_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('kids_diaper_logs').select('*').eq('patient_id', patient.id).order('logged_at',{ascending:false}).limit(30),
+      supabase.from('kids_sleep_logs').select('*').eq('patient_id', patient.id).order('started_at',{ascending:false}).limit(30),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
@@ -5118,9 +5121,29 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setMchcAppointments(mchc||[])
     setSymptomLogs(sym||[])
     setDiaperLogs(diaper||[])
+    setSleepLogs(sleep||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [patient?.id])
+
+  // Sleep log - the clearest gap against every benchmarked baby tracker
+  // (BabyCenter, Ovia Parenting, etc.), which all log sleep alongside
+  // feeding/diaper as a core entry. Manual start/end entry, same pattern
+  // as the feeding log, rather than a live "currently sleeping" session -
+  // simpler and just as useful for the digest below.
+  async function addSleepLog() {
+    if (!patient?.id || !sleepForm.startedAt || !sleepForm.endedAt) return
+    setSaving(true)
+    await supabase.from('kids_sleep_logs').insert({
+      patient_id: patient.id,
+      started_at: new Date(sleepForm.startedAt).toISOString(),
+      ended_at: new Date(sleepForm.endedAt).toISOString(),
+      sleep_type: sleepForm.sleepType,
+    })
+    setSleepForm({ startedAt:'', endedAt:'', sleepType:'nap' })
+    await load(); setSaving(false)
+  }
+  async function deleteSleepLog(id) { await supabase.from('kids_sleep_logs').delete().eq('id', id); load() }
 
   async function addDiaperLog(diaperType) {
     if (!patient?.id) return
@@ -5396,6 +5419,13 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const todayStr = new Date().toISOString().slice(0,10)
   const todaysFeedings = feedingLogs.filter(f=>f.fed_at?.slice(0,10)===todayStr)
   const todaysMl = todaysFeedings.filter(f=>f.amount_ml!=null).reduce((s,f)=>s+Number(f.amount_ml),0)
+  // Daily digest - pulls together feeding/diaper/sleep/symptoms into one
+  // glance, since those are currently four separate cards with no at-a-
+  // glance view, unlike the dashboard every benchmarked baby tracker has.
+  const todaysDiapers = diaperLogs.filter(d=>d.logged_at?.slice(0,10)===todayStr)
+  const todaysSleep = sleepLogs.filter(s=>s.started_at?.slice(0,10)===todayStr || s.ended_at?.slice(0,10)===todayStr)
+  const todaysSleepMinutes = todaysSleep.reduce((sum,s)=>sum+Math.round((new Date(s.ended_at)-new Date(s.started_at))/60000), 0)
+  const todaysSymptomCount = symptomLogs.filter(s=>s.recorded_at?.slice(0,10)===todayStr).length
 
   if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
 
@@ -5405,6 +5435,28 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
       </div>
+
+      <SecLabel>{isEn?"Today at a glance":'今日概覽'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+          <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysFeedings.length}</div>
+            <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`feeding${todaysFeedings.length===1?'':'s'}${todaysMl?` · ${todaysMl}ml`:''}`:`次餵養${todaysMl?` · ${todaysMl}ml`:''}`}</div>
+          </div>
+          <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysDiapers.length}</div>
+            <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?'diaper changes':'次換尿布'}</div>
+          </div>
+          <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysSleepMinutes>0?`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`:'—'}</div>
+            <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`sleep, ${todaysSleep.length} session${todaysSleep.length===1?'':'s'}`:`睡眠, ${todaysSleep.length}次`}</div>
+          </div>
+          <div style={{background:todaysSymptomCount>0?C.amberLight:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
+            <div style={{fontSize:'17px',fontWeight:700,color:todaysSymptomCount>0?C.amber:__theme.accent}}>{todaysSymptomCount}</div>
+            <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`symptom entr${todaysSymptomCount===1?'y':'ies'}`:'次症狀記錄'}</div>
+          </div>
+        </div>
+      </Card>
 
       {!patient.sex&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
         <div style={{fontSize:'12px',color:C.amber,fontWeight:600,marginBottom:'8px'}}>{isEn?"Set this profile's sex to see the WHO growth percentile chart - the reference curves differ by sex.":'請設定此檔案的性別以查看WHO生長百分比圖 - 參考曲線因性別而異。'}</div>
@@ -5493,6 +5545,40 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
               <span onClick={()=>deleteDiaperLog(d.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Sleep log':'睡眠記錄'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Log a nap or night sleep after it happens.':'睡眠結束後記錄小睡或夜間睡眠。'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          {[{value:'nap',en:'Nap',zh:'小睡'},{value:'night',en:'Night sleep',zh:'夜間睡眠'}].map(t=>(
+            <div key={t.value} onClick={()=>setSleepForm({...sleepForm,sleepType:t.value})} style={{flex:1,textAlign:'center',padding:'9px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:sleepForm.sleepType===t.value?__theme.accent:C.card,color:sleepForm.sleepType===t.value?'#fff':C.text}}>{isEn?t.en:t.zh}</div>
+          ))}
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+          <div style={{flex:'1 1 150px'}}>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'3px'}}>{isEn?'Fell asleep':'入睡時間'}</div>
+            <input type="datetime-local" value={sleepForm.startedAt} max={sleepForm.endedAt||undefined} onChange={e=>setSleepForm({...sleepForm,startedAt:e.target.value})} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          </div>
+          <div style={{flex:'1 1 150px'}}>
+            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'3px'}}>{isEn?'Woke up':'起床時間'}</div>
+            <input type="datetime-local" value={sleepForm.endedAt} min={sleepForm.startedAt||undefined} onChange={e=>setSleepForm({...sleepForm,endedAt:e.target.value})} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          </div>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!sleepForm.startedAt||!sleepForm.endedAt} onClick={addSleepLog}>{isEn?'Log sleep':'記錄睡眠'}</Btn>
+        <div style={{marginTop:'12px'}}>
+          {sleepLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No sleep logged yet.':'暫無睡眠記錄。'}</div>}
+          {sleepLogs.map(s=>{
+            const minutes = Math.round((new Date(s.ended_at)-new Date(s.started_at))/60000)
+            return (
+              <div key={s.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(s.started_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
+                <span style={{flex:1}}>{s.sleep_type==='night'?(isEn?'Night sleep':'夜間睡眠'):(isEn?'Nap':'小睡')} · {minutes>=60?`${Math.floor(minutes/60)}h${minutes%60?` ${minutes%60}m`:''}`:`${minutes}m`}</span>
+                <span onClick={()=>deleteSleepLog(s.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            )
+          })}
         </div>
       </Card>
 
