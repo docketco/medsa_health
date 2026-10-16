@@ -692,6 +692,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           // reasoning as the pink theme itself).
           ...(bumpActive ? [
             {key:'bumphealth',icon:'pulse',label:isEn?'Pregnancy health log':'孕期健康記錄',sub:isEn?'Blood pressure, glucose, kicks':'血壓、血糖、胎動',bg:themeAccentLight,badge:null},
+            {key:'bumpcohort',icon:'family',label:isEn?'Birth club':'待產小組',sub:isEn?'Chat with your due-month cohort':'與同月預產家長交流',bg:themeAccentLight,badge:null},
           ] : []),
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',cursor:'pointer',position:'relative'}}>
@@ -6260,6 +6261,129 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   )
 }
 
+// bc-04 - due-date "birth club" cohorts, scoped down from the original
+// brief: a real discussion space grouped by predicted due-date month,
+// since the existing Community tab (forum_products/forum_posts) is a
+// product-review board keyed by product name, not a general discussion
+// space, and doesn't fit this. The "verified badge for a participating
+// lactation consultant or midwife" half of the brief is NOT built here -
+// that needs a real admin-side professional-verification workflow that
+// doesn't exist yet, and a "Verified" badge with no actual verification
+// behind it would be worse than no badge at all. Posts show a stable,
+// anonymous per-poster handle rather than the patient's real name, same
+// "anonymously" framing as the product Community tab.
+function BumpCohortScreen({ isEn, patient={} }) {
+  const __theme = useContext(ThemeContext)
+  const [cohortKey,setCohortKey]=useState(undefined) // undefined = loading, null = no due date on file
+  const [posts,setPosts]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [newPost,setNewPost]=useState('')
+  const [saving,setSaving]=useState(false)
+  const [openReplies,setOpenReplies]=useState({}) // postId -> replies array
+  const [replyDrafts,setReplyDrafts]=useState({})
+
+  function pseudonym(patientId) {
+    return (isEn?'Parent ·':'家長 ·') + (patientId||'').replace(/-/g,'').slice(-4).toUpperCase()
+  }
+
+  async function load(isInitial=false) {
+    if (isInitial) setLoading(true)
+    const { data: sub } = await supabase.from('bump_subscriptions').select('predicted_due_date').eq('patient_id',patient.id).is('graduated_at',null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    const key = sub?.predicted_due_date ? sub.predicted_due_date.slice(0,7) : null
+    setCohortKey(key)
+    if (key) {
+      const { data } = await supabase.from('bump_cohort_posts').select('*').eq('cohort_key',key).order('created_at',{ascending:false}).limit(50)
+      setPosts(data||[])
+    }
+    setLoading(false)
+  }
+  useEffect(() => { load(true) }, [patient?.id])
+
+  async function addPost() {
+    if (!newPost.trim() || !cohortKey) return
+    setSaving(true)
+    await supabase.from('bump_cohort_posts').insert({ cohort_key: cohortKey, patient_id: patient.id, body: newPost.trim() })
+    setNewPost('')
+    await load(); setSaving(false)
+  }
+  async function deletePost(id) { await supabase.from('bump_cohort_posts').delete().eq('id', id); load() }
+
+  async function toggleReplies(postId) {
+    if (openReplies[postId]) { setOpenReplies(prev => { const next={...prev}; delete next[postId]; return next }) ; return }
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+  }
+  async function addReply(postId) {
+    const text = (replyDrafts[postId]||'').trim()
+    if (!text) return
+    await supabase.from('bump_cohort_replies').insert({ post_id: postId, patient_id: patient.id, body: text })
+    setReplyDrafts(prev => ({ ...prev, [postId]: '' }))
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+  }
+  async function deleteReply(postId, id) {
+    await supabase.from('bump_cohort_replies').delete().eq('id', id)
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+  }
+
+  if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
+
+  if (!cohortKey) return (
+    <div style={{padding:'0 16px 24px'}}>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Birth club':'待產小組'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Set a predicted due date from Account Settings to join your birth-month cohort.":'請於帳戶設定中輸入預產期,以加入您的待產月份小組。'}</div>
+      </div>
+    </div>
+  )
+
+  const cohortLabel = new Date(cohortKey+'-01T00:00:00Z').toLocaleDateString(isEn?'en-HK':'zh-HK',{month:'long',year:'numeric',timeZone:'UTC'})
+
+  return (
+    <div style={{padding:'0 16px 24px'}}>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?`${cohortLabel} birth club`:`${cohortLabel}待產小組`}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?'Everyone due the same month as you, posting anonymously - no real names shown.':'與您同月預產的其他家長,匿名發帖 - 不會顯示真實姓名。'}</div>
+      </div>
+
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <textarea value={newPost} onChange={e=>setNewPost(e.target.value)} rows={3} placeholder={isEn?"Ask a question or share something with your cohort…":'向您的小組提問或分享…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',resize:'none',fontFamily:'inherit'}}/>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!newPost.trim()} onClick={addPost}>{isEn?'Post':'發帖'}</Btn>
+      </Card>
+
+      {posts.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No posts yet - be the first in your cohort.':'暫無發帖 - 成為小組第一位發帖者。'}</div>}
+      {posts.map(p=>(
+        <Card key={p.id} style={{padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
+            <span style={{fontSize:'11px',fontWeight:700,color:__theme.accent}}>{pseudonym(p.patient_id)}</span>
+            <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+            {p.patient_id===patient.id&&<span onClick={()=>deletePost(p.id)} style={{marginLeft:'auto',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>}
+          </div>
+          <div style={{fontSize:'13px',color:C.text,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{p.body}</div>
+          <div onClick={()=>toggleReplies(p.id)} style={{fontSize:'11px',fontWeight:600,color:__theme.accent,marginTop:'8px',cursor:'pointer'}}>{openReplies[p.id]?(isEn?'Hide replies':'隱藏回覆'):(isEn?'Reply / view replies':'回覆／查看回覆')}</div>
+          {openReplies[p.id]&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.border}`}}>
+            {openReplies[p.id].map(r=>(
+              <div key={r.id} style={{marginBottom:'8px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                  <span style={{fontSize:'10.5px',fontWeight:700,color:__theme.accent}}>{pseudonym(r.patient_id)}</span>
+                  <span style={{fontSize:'9.5px',color:C.textMuted}}>{new Date(r.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+                  {r.patient_id===patient.id&&<span onClick={()=>deleteReply(p.id,r.id)} style={{marginLeft:'auto',fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>✕</span>}
+                </div>
+                <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,marginTop:'2px',whiteSpace:'pre-wrap'}}>{r.body}</div>
+              </div>
+            ))}
+            <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
+              <input value={replyDrafts[p.id]||''} onChange={e=>setReplyDrafts(prev=>({...prev,[p.id]:e.target.value}))} placeholder={isEn?'Write a reply…':'輸入回覆…'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'7px 10px',fontSize:'12px'}}/>
+              <Btn style={{flexShrink:0,padding:'7px 14px',fontSize:'12px'}} disabled={!(replyDrafts[p.id]||'').trim()} onClick={()=>addReply(p.id)}>{isEn?'Send':'傳送'}</Btn>
+            </div>
+          </div>}
+        </Card>
+      ))}
+    </div>
+  )
+}
+
 function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   const __theme = useContext(ThemeContext)
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
@@ -7726,7 +7850,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養',bumphealth:isEn?'Pregnancy health log':'孕期健康記錄'}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養',bumphealth:isEn?'Pregnancy health log':'孕期健康記錄',bumpcohort:isEn?'Birth club':'待產小組'}
   const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
     // Real gap reported live-testing: minHeight let this column grow
@@ -7774,6 +7898,7 @@ export default function PatientApp({ liveData={} }) {
           if (data) setSignedInPatient(data)
         }}/>}
         {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={bumpSubscriptionId}/>}
+        {screen==='bumpcohort'&&<BumpCohortScreen isEn={isEn} patient={patient}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
