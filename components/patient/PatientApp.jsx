@@ -5618,6 +5618,22 @@ function isGlucoseFlagged(contextValue, mgdl) {
   const threshold = GLUCOSE_IADPSG_MGDL[contextValue]
   return threshold != null && mgdl != null && mgdl >= threshold
 }
+// "Fourth trimester" postpartum recovery topics - standard patient-
+// education checklist items (what a 6-week postpartum visit typically
+// covers), not a diagnosis or dosing instruction, so safe to author
+// directly. The last item is a plain prompt, not the real EPDS
+// screening instrument - see the note on bc-05 in the QA checklist for
+// why that stays blocked until a verified source is on hand.
+const POSTPARTUM_RECOVERY_ITEMS = [
+  { key:'incision_healing', en:"Incision/perineal healing checked by a provider", zh:'傷口/會陰癒合情況已由醫護檢查' },
+  { key:'bleeding_normal', en:'Postpartum bleeding (lochia) back to normal, nothing concerning', zh:'產後出血(惡露)已回復正常,無異常情況' },
+  { key:'pelvic_floor', en:'Pelvic floor exercises started', zh:'已開始盤底肌肉訓練' },
+  { key:'six_week_checkup', en:'6-week postpartum check-up completed', zh:'已完成產後6週檢查' },
+  { key:'contraception', en:'Contraception plan discussed', zh:'已討論避孕計劃' },
+  { key:'feeding_support', en:'Breastfeeding/feeding support arranged, if needed', zh:'如有需要,已安排餵哺支援' },
+  { key:'rest_support', en:'Sleep & rest support from family/helper discussed', zh:'已與家人/傭工討論睡眠及休息支援' },
+  { key:'mood_checkin', en:"Checked in on how you're feeling emotionally - if low mood, anxiety, or anything feels off lasts more than 2 weeks, contact your doctor", zh:'已檢視自己的情緒狀態 - 若情緒低落、焦慮或任何不適持續超過2週,請聯絡醫生' },
+]
 // High-risk maternal monitoring (bm-03) - gestational diabetes glucose
 // log with meal-tagging, pre-eclampsia BP tracking (flagged at the
 // 140/90 mmHg threshold given directly in the feature doc), and
@@ -5643,6 +5659,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [allergies,setAllergies]=useState([])
   const [conditions,setConditions]=useState([])
   const [medications,setMedications]=useState([])
+  const [recoveryChecks,setRecoveryChecks]=useState([])
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -5651,7 +5668,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -5660,13 +5677,29 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       patient?.id ? supabase.from('allergies').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
       patient?.id ? supabase.from('conditions').select('*').eq('patient_id',patient.id).eq('active',true) : Promise.resolve({data:[]}),
       patient?.id ? supabase.from('medications').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
+      supabase.from('bump_recovery_checklist').select('*').eq('bump_subscription_id',bumpSubscriptionId),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
+    setRecoveryChecks(recovery||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
+
+  // Postpartum "fourth trimester" recovery checklist - general patient-
+  // education topics (not a diagnosis or dosing instruction), safe to
+  // author directly, unlike the EPDS mental-health self-screen (bc-05)
+  // which stays blocked pending the real validated instrument text.
+  async function toggleRecoveryItem(key) {
+    const existing = recoveryChecks.find(r=>r.item_key===key)
+    if (existing) {
+      await supabase.from('bump_recovery_checklist').delete().eq('id', existing.id)
+    } else {
+      await supabase.from('bump_recovery_checklist').insert({ bump_subscription_id: bumpSubscriptionId, item_key: key })
+    }
+    load()
+  }
 
   // bm-01 - the "continuous maternal ledger" the feature doc describes:
   // one exportable PDF combining the pregnancy's own documents (already
@@ -5853,6 +5886,22 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
         <div onClick={exportingHandoff?undefined:downloadHandoffSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingHandoff?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingHandoff?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export handoff summary for a new doctor/hospital':'⬇ 匯出轉介摘要（供新醫生／醫院使用）')}</div>
       </div>
+
+      {bumpRow?.child_dob&&<>
+        <SecLabel>{isEn?'Postpartum recovery':'產後復原'}</SecLabel>
+        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"The topics a 6-week postpartum check-up usually covers - check off what's been addressed. The last one is a feelings check-in, not a clinical depression screen.":'一般產後6週檢查會涵蓋的項目 - 請勾選已處理的項目。最後一項為情緒自我檢視,並非臨床抑鬱症篩查。'}</div>
+          {POSTPARTUM_RECOVERY_ITEMS.map(item=>{
+            const checked = recoveryChecks.some(r=>r.item_key===item.key)
+            return (
+              <div key={item.key} onClick={()=>toggleRecoveryItem(item.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'6px 0',cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?__theme.accent:C.border}`,background:checked?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
+                <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?item.en:item.zh}</div>
+              </div>
+            )
+          })}
+        </Card>
+      </>}
 
       <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
@@ -6249,31 +6298,44 @@ function MedsaBumpSection({ isEn, patient }) {
   async function loadBump() {
     if (!patient?.id) { setActiveBump(null); return }
     const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
-    // Real-time check, same pattern as Guardian's lock re-check - runs
-    // every time this loads rather than needing a cron, since nothing
-    // else in this app currently has a reason to look at an old Bump row.
+    // Two separate timers, decoupled on your call: the CHILD graduates to
+    // their own Medsa Kids profile immediately once a birth is on file -
+    // matching how every benchmarked app (BabyCenter/Ovia/etc.) hands a
+    // baby's own feeding/diaper/growth tracking off right at birth, not
+    // months later. The Bump PASS itself stays open for 12 months
+    // postpartum for the MOTHER's own tools (BP monitoring, recovery
+    // checklist) - that's graduated_at below, unrelated to the child fork.
+    if (data?.child_dob && !data.child_graduated_at) { await graduateChildToKids(data); return }
     if (data?.child_dob) {
       const monthsSinceBirth = (Date.now() - new Date(data.child_dob)) / (1000*60*60*24*30.44)
-      if (monthsSinceBirth >= 12) { await graduateToKids(data); return }
+      if (monthsSinceBirth >= 12) { await closeBumpPass(data); return }
     }
     setActiveBump(data||null)
   }
   useEffect(() => { loadBump() }, [patient?.id])
 
-  // The 12-month "graduation" the checklist describes - forks the baby's
-  // own Medsa Kids profile and marks this Bump pass done. bump_subscriptions
-  // already had graduated_at/graduated_child_patient_id columns sitting
-  // unused before this - this is what finally sets them.
-  async function graduateToKids(bump) {
+  // Forks the baby's own Medsa Kids profile - now fires immediately once
+  // a birth is recorded, not waiting 12 months. Sets child_graduated_at
+  // only; graduated_at (the whole Bump pass closing) is separate, see
+  // closeBumpPass below.
+  async function graduateChildToKids(bump) {
     const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
     const { data: child } = await supabase.from('patients').insert({
       medsa_id: medsaId, full_name: bump.child_full_name || (isEn?'Baby':'寶寶'), date_of_birth: bump.child_dob,
       account_type: 'kids', parent_patient_id: patient.id, registration_path: 'bump_graduation', dependent_relationship: 'child',
     }).select().maybeSingle()
     if (child) {
-      await supabase.from('bump_subscriptions').update({ graduated_at: new Date().toISOString(), graduated_child_patient_id: child.id }).eq('id', bump.id)
+      await supabase.from('bump_subscriptions').update({ child_graduated_at: new Date().toISOString(), graduated_child_patient_id: child.id }).eq('id', bump.id)
       setGraduationNotice(child)
     }
+    await loadBump()
+  }
+
+  // Closes the Bump pass itself, 12 months after birth - the end of the
+  // postpartum window this pass tracks the mother's own recovery through.
+  // The child graduated separately, immediately at birth (see above).
+  async function closeBumpPass(bump) {
+    await supabase.from('bump_subscriptions').update({ graduated_at: new Date().toISOString() }).eq('id', bump.id)
     await loadBump()
   }
 
@@ -6325,7 +6387,7 @@ function MedsaBumpSection({ isEn, patient }) {
   const graduationBanner = graduationNotice && (
     <div style={{margin:'0 0 16px',padding:'14px 16px',background:'#FFF3CD',border:'0.5px solid #FEF3E2',borderRadius:'10px'}}>
       <div style={{fontSize:'13px',fontWeight:700,color:'#B8860B',marginBottom:'4px'}}>🎉 {isEn?`${graduationNotice.full_name} just graduated to Medsa Kids!`:`${graduationNotice.full_name}已轉入Medsa Kids!`}</div>
-      <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Their own profile (growth, feeding, records) is ready - switch to it from your profile icon. This Bump pass is now done; starting a new one is still available for a future pregnancy.":'他們的個人檔案(生長、餵養、記錄)已就緒 - 可從個人圖示切換。此Medsa Bump已完成,未來懷孕仍可重新開始。'}</div>
+      <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Their own profile (growth, feeding, records) is ready - switch to it from your profile icon. Your Bump pass stays open for your own postpartum recovery tracking for the next 12 months.":'他們的個人檔案(生長、餵養、記錄)已就緒 - 可從個人圖示切換。您的Medsa Bump將繼續用於追蹤您未來12個月的產後復原狀況。'}</div>
     </div>
   )
 
@@ -6374,8 +6436,8 @@ function MedsaBumpSection({ isEn, patient }) {
         <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={savingBirth||!birthForm.dob} onClick={recordBirth}>{savingBirth?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
       </div>}
       {activeBump.child_dob&&monthsOld!=null&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.2)',borderRadius:'10px',padding:'12px 14px'}}>
-        <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${monthsOld} month${monthsOld===1?'':'s'} old`:`${monthsOld}個月大`}</div>
-        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Automatically graduates to their own Medsa Kids profile at 12 months${monthsOld<12?` - ${12-monthsOld} to go`:''}.`:`將於12個月大時自動轉入Medsa Kids個人檔案${monthsOld<12?` - 還差${12-monthsOld}個月`:''}。`}</div>
+        <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${monthsOld} month${monthsOld===1?'':'s'} postpartum`:`產後${monthsOld}個月`}</div>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Their own Medsa Kids profile is already set up. This Bump pass stays open for your own recovery tracking until 12 months postpartum${monthsOld<12?` - ${12-monthsOld} to go`:''}.`:`寶寶的Medsa Kids個人檔案已設立。此Medsa Bump將持續追蹤您的產後復原狀況,直至產後12個月${monthsOld<12?` - 還差${12-monthsOld}個月`:''}。`}</div>
       </div>}
     </Card>
     </>)}
@@ -6385,7 +6447,7 @@ function MedsaBumpSection({ isEn, patient }) {
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
       <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'10px'}}>Medsa Bump</div>
       <div style={{fontSize:'12px',color:'rgba(255,255,255,0.9)',lineHeight:1.6,marginBottom:'8px'}}>
-        {isEn?"Maternal care tracking from pregnancy through your baby's first 18 months.":'由懷孕至寶寶18個月大的孕產照護追蹤。'}
+        {isEn?"Maternal care tracking through pregnancy and 12 months postpartum - your baby gets their own Medsa Kids profile right at birth.":'由懷孕期至產後12個月的孕產照護追蹤 - 寶寶出生後將立即擁有自己的Medsa Kids個人檔案。'}
       </div>
       {/* Real gap: the actual Stripe charge is the quoted price grossed up
           to cover the card processing fee (see lib/paymentFees.js) - the
