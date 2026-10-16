@@ -5068,23 +5068,76 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [saving,setSaving]=useState(false)
   const [mchcAppointments,setMchcAppointments]=useState([])
   const [mchcForm,setMchcForm]=useState({ appointmentAt:'', note:'' })
+  const [symptomLogs,setSymptomLogs]=useState([])
+  const [symptomForm,setSymptomForm]=useState({ temperatureC:'', symptoms:'', medicationGiven:'' })
+  const [exportingSymptomPdf,setExportingSymptomPdf]=useState(false)
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
     setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
       supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).order('appointment_at',{ascending:true}),
+      supabase.from('kids_symptom_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:false}).limit(30),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
     setMilestoneChecks(m||[])
     setMchcAppointments(mchc||[])
+    setSymptomLogs(sym||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
+
+  // kp-04 - fever/symptom log a parent keeps at home, with a one-click
+  // "doctor packet" PDF export of the recent entries for a private
+  // pediatric visit. "Recent" = last 14 days, same cutoff a doctor would
+  // actually want context on for an acute visit.
+  async function addSymptomLog() {
+    if (!patient?.id || (!symptomForm.temperatureC && !symptomForm.symptoms)) return
+    setSaving(true)
+    await supabase.from('kids_symptom_logs').insert({
+      patient_id: patient.id,
+      temperature_c: symptomForm.temperatureC?Number(symptomForm.temperatureC):null,
+      symptoms: symptomForm.symptoms||null,
+      medication_given: symptomForm.medicationGiven||null,
+    })
+    setSymptomForm({ temperatureC:'', symptoms:'', medicationGiven:'' })
+    await load(); setSaving(false)
+  }
+  async function deleteSymptomLog(id) { await supabase.from('kids_symptom_logs').delete().eq('id', id); load() }
+  async function downloadDoctorPacket() {
+    if (!patient?.id) return
+    setExportingSymptomPdf(true)
+    const recent = symptomLogs.filter(s => new Date(s.recorded_at).getTime() > Date.now() - 14*24*60*60*1000)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Doctor Packet - Symptom & Fever Log`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Symptom & fever log (last 14 days)', subtitle,
+      dateInstitution: `${patient.date_of_birth?`DOB ${new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · `:''}Generated ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`,
+      details: recent.length>0
+        ? [...recent].reverse().map(s=>[
+            new Date(s.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
+            [s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?`Gave: ${s.medication_given}`:null].filter(Boolean).join(' · ') || '—',
+          ])
+        : [['No entries in the last 14 days', '—']],
+    })
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Kids-Doctor-Packet-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingSymptomPdf(false)
+  }
 
   // bb-02 - MCHC (Maternal and Child Health Centre) appointment reminders.
   // MCHC booking is a separate HK government system with no integration
@@ -5245,6 +5298,28 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
               </div>
             )
           })}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Symptom & fever log':'症狀及發燒記錄'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Keep a quick log while your child is unwell, then export it as a doctor packet for the visit.":'孩子不適時快速記錄,就診前匯出為醫生摘要。'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+          <input type="number" step="0.1" value={symptomForm.temperatureC} onChange={e=>setSymptomForm({...symptomForm,temperatureC:e.target.value})} placeholder={isEn?'Temp (°C, optional)':'體溫(°C,可選)'} style={{flex:'1 1 110px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input value={symptomForm.medicationGiven} onChange={e=>setSymptomForm({...symptomForm,medicationGiven:e.target.value})} placeholder={isEn?'Medication given (optional)':'已給藥物(可選)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <textarea value={symptomForm.symptoms} onChange={e=>setSymptomForm({...symptomForm,symptoms:e.target.value})} rows={2} placeholder={isEn?'Symptoms (e.g. cough, runny nose, poor appetite)':'症狀(如咳嗽、流鼻水、食慾不振)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px',resize:'none',fontFamily:'inherit'}}/>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!symptomForm.temperatureC&&!symptomForm.symptoms)} onClick={addSymptomLog}>{isEn?'Add entry':'新增記錄'}</Btn>
+        <div onClick={exportingSymptomPdf?undefined:downloadDoctorPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'12px',cursor:exportingSymptomPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingSymptomPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export doctor packet PDF (last 14 days)':'⬇ 匯出醫生摘要PDF(過去14天)')}</div>
+        <div style={{marginTop:'12px'}}>
+          {symptomLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No symptom entries on file.':'暫無症狀記錄。'}</div>}
+          {symptomLogs.map(s=>(
+            <div key={s.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(s.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{flex:1}}>{[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?(isEn?`Gave: ${s.medication_given}`:`已給:${s.medication_given}`):null].filter(Boolean).join(' · ')}</span>
+              <span onClick={()=>deleteSymptomLog(s.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          ))}
         </div>
       </Card>
 
