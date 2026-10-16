@@ -318,6 +318,18 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   const [openCarouselItem,setOpenCarouselItem]=useState(null)
   const [carouselIndex,setCarouselIndex]=useState(0)
   const carouselScrollRef=useRef(null)
+  // The MCHC reminder (bb-02) only ever showed inside the Kids growth
+  // screen's own tab - easy to miss since you have to go looking for it.
+  // Fetched here too so it surfaces on Home like the clinic appointment
+  // reminder below does.
+  const [nextMchcAppt,setNextMchcAppt]=useState(null)
+  useEffect(() => {
+    if (!patient?.id) { setNextMchcAppt(null); return }
+    supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id)
+      .gt('appointment_at', new Date(Date.now() - 24*60*60*1000).toISOString())
+      .order('appointment_at', { ascending: true }).limit(1).maybeSingle()
+      .then(({ data }) => setNextMchcAppt(data || null))
+  }, [patient?.id])
   function handleCarouselScroll(e) {
     const el = e.target
     const cardWidth = el.firstChild ? el.firstChild.offsetWidth + 10 : 1
@@ -692,8 +704,10 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       </div>
       {/* Community bubble - pulled out of the list below into its own
           floating pill so it's not missed the way it was buried as just
-          another row. */}
-      <div style={{padding:'4px 16px 4px'}}>
+          another row. Not shown on a Kids profile - your call, a product-
+          review board for adult supplements/products isn't relevant on a
+          child's own profile. */}
+      {!(patient?.account_type==='kids' && (patient?.dependent_relationship==null||patient?.dependent_relationship==='child')) && <div style={{padding:'4px 16px 4px'}}>
         <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${themeAccent} 0%, ${themeAccentMid} 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(0,0,0,0.18)'}}>
           <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',flexShrink:0}}><Icon name="community"/></div>
           <div style={{flex:1}}>
@@ -702,7 +716,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           </div>
           <span style={{color:'#fff',fontSize:'18px'}}>›</span>
         </div>
-      </div>
+      </div>}
       <SecLabel>{isEn?'Find care & manage':'尋找醫療'}</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
@@ -730,8 +744,16 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           })
           if (soon) realAlerts.push({
             dot:'#d4a017',
-            title: isEn?`Reminder: Dr ${soon.doctor_name||'—'} — ${new Date(soon.scheduled_at).toLocaleString('en-HK',{weekday:'short',hour:'2-digit',minute:'2-digit'})}`:`提醒：${soon.doctor_name||'—'}醫生`,
+            title: isEn?`Reminder: Dr ${soon.doctor_name||'—'} — ${new Date(soon.scheduled_at).toLocaleString('en-HK',{weekday:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`提醒：${soon.doctor_name||'—'}醫生`,
             body: isEn?`${soon.department||'Clinic'} appointment.`:`${soon.department||'診所'}預約。`,
+          })
+          // MCHC reminder (bb-02) - same "upcoming within N days" shape as
+          // the clinic appointment reminder above, surfaced here too so
+          // it's not only visible from inside the Kids growth tab.
+          if (nextMchcAppt && new Date(nextMchcAppt.appointment_at).getTime() - Date.now() < 7*24*60*60*1000) realAlerts.push({
+            dot:C.amber,
+            title: isEn?`MCHC appointment — ${new Date(nextMchcAppt.appointment_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`母嬰健康院預約 — ${new Date(nextMchcAppt.appointment_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`,
+            body: nextMchcAppt.note || (isEn?'Maternal and Child Health Centre visit.':'母嬰健康院就診。'),
           })
           // Real recently-approved/settled claim, replacing a hardcoded
           // fake claim number and dollar amount.
@@ -948,8 +970,8 @@ function drawPdfFooter(doc, pageWidth, pageHeight) {
 // and a highlighted receipt line if paid) starting at y, returning the
 // y position just after it. Adds a page (with header/footer) if the
 // card wouldn't fit.
-function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstitution, details, receiptText, subtitle }) {
-  const GREEN = [0,98,65], GRAY = [120,120,120], INK = [26,26,26], BORDER = [224,222,216]
+function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstitution, details, receiptText, subtitle, accentColor }) {
+  const GREEN = accentColor || [0,98,65], GRAY = [120,120,120], INK = [26,26,26], BORDER = [224,222,216]
   const left = 16, right = pageWidth-16
   if (y > pageHeight - 40) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle); y = 40 }
   doc.setFontSize(13); doc.setFont(undefined,'bold'); doc.setTextColor(...GREEN)
@@ -5077,9 +5099,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [labelScanError,setLabelScanError]=useState('')
   const [labelScanFilled,setLabelScanFilled]=useState(false)
 
-  async function load() {
+  // Same flash fix as BumpHealthScreen - only the first load shows the
+  // full "Loading…" screen, not every reload after an add/delete.
+  async function load(isInitial=false) {
     if (!patient?.id) { setLoading(false); return }
-    setLoading(true)
+    if (isInitial) setLoading(true)
     const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
@@ -5096,7 +5120,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setDiaperLogs(diaper||[])
     setLoading(false)
   }
-  useEffect(() => { load() }, [patient?.id])
+  useEffect(() => { load(true) }, [patient?.id])
 
   async function addDiaperLog(diaperType) {
     if (!patient?.id) return
@@ -5113,6 +5137,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   async function downloadErPrepPackage() {
     if (!patient?.id) return
     setExportingErPdf(true)
+    const YELLOW = [232,164,0]
     const cutoff = Date.now() - 24*60*60*1000
     const recentSymptoms = symptomLogs.filter(s => new Date(s.recorded_at).getTime() > cutoff)
     const recentFeeds = feedingLogs.filter(f => new Date(f.fed_at).getTime() > cutoff)
@@ -5126,15 +5151,18 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     let y = 40
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Fever & medication (last 24h)', subtitle,
+      title: 'Fever & medication (last 24h)', subtitle, accentColor: YELLOW,
       dateInstitution: `${patient.date_of_birth?`DOB ${new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · `:''}Generated ${new Date().toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`,
       details: recentSymptoms.length>0
-        ? [...recentSymptoms].reverse().map(s=>[new Date(s.recorded_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}), [s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?`Gave: ${s.medication_given}`:null].filter(Boolean).join(' · ') || '—'])
+        ? [...recentSymptoms].reverse().map(s=>[
+            new Date(s.recorded_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}),
+            [[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms].filter(Boolean).join(' · ') || '—', s.medication_given].filter(Boolean).join('\n'),
+          ])
         : [['No entries in the last 24 hours', '—']],
     })
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Feeding (last 24h)', subtitle,
+      title: 'Feeding (last 24h)', subtitle, accentColor: YELLOW,
       dateInstitution: `${recentFeeds.length} feeding${recentFeeds.length===1?'':'s'} logged`,
       details: recentFeeds.length>0
         ? [...recentFeeds].reverse().map(f=>{
@@ -5145,7 +5173,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     })
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Diaper output (last 24h)', subtitle,
+      title: 'Diaper output (last 24h)', subtitle, accentColor: YELLOW,
       dateInstitution: `${recentDiapers.length} change${recentDiapers.length===1?'':'s'} logged`,
       details: recentDiapers.length>0
         ? [...recentDiapers].reverse().map(d=>[new Date(d.logged_at).toLocaleString('en-HK',{hour:'2-digit',minute:'2-digit'}), d.diaper_type||'—'])
@@ -5211,6 +5239,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   async function downloadDoctorPacket() {
     if (!patient?.id) return
     setExportingSymptomPdf(true)
+    const YELLOW = [232,164,0]
     const recent = symptomLogs.filter(s => new Date(s.recorded_at).getTime() > Date.now() - 14*24*60*60*1000)
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
@@ -5220,12 +5249,12 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     drawPdfHeader(doc, pageWidth, subtitle)
     let y = 40
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Symptom & fever log (last 14 days)', subtitle,
+      title: 'Symptom & fever log (last 14 days)', subtitle, accentColor: YELLOW,
       dateInstitution: `${patient.date_of_birth?`DOB ${new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · `:''}Generated ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`,
       details: recent.length>0
         ? [...recent].reverse().map(s=>[
             new Date(s.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
-            [s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?`Gave: ${s.medication_given}`:null].filter(Boolean).join(' · ') || '—',
+            [[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms].filter(Boolean).join(' · ') || '—', s.medication_given].filter(Boolean).join('\n'),
           ])
         : [['No entries in the last 14 days', '—']],
     })
@@ -5248,7 +5277,19 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   async function addMchcAppointment() {
     if (!patient?.id || !mchcForm.appointmentAt) return
     setSaving(true)
-    await supabase.from('kids_mchc_appointments').insert({ patient_id: patient.id, appointment_at: new Date(mchcForm.appointmentAt).toISOString(), note: mchcForm.note||null })
+    // mchcForm.appointmentAt is a <input type="datetime-local"> value
+    // ("YYYY-MM-DDTHH:MM") with no timezone of its own - `new Date(...)` on
+    // that string is interpreted in the DEVICE's local timezone, the exact
+    // root cause the appointment-booking time bug traced back to (see
+    // lib/hkTime.js). An MCHC visit is a Hong Kong wall-clock time
+    // regardless of what timezone the phone entering it happens to be set
+    // to, so this goes through hkWallTimeToUTC like every other
+    // date+time picked in this app.
+    const [datePart, timePart] = mchcForm.appointmentAt.split('T')
+    const [year, month, day] = datePart.split('-').map(Number)
+    const [hour, minute] = (timePart||'00:00').split(':').map(Number)
+    const appointmentAtUTC = hkWallTimeToUTC(year, month, day, hour, minute)
+    await supabase.from('kids_mchc_appointments').insert({ patient_id: patient.id, appointment_at: appointmentAtUTC.toISOString(), note: mchcForm.note||null })
     setMchcForm({ appointmentAt:'', note:'' })
     await load(); setSaving(false)
   }
@@ -5374,7 +5415,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       </div>}
 
       {mchcAppointmentSoon&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
-        <div style={{fontSize:'12px',color:C.amber,fontWeight:700}}>{isEn?`Reminder: MCHC appointment ${new Date(nextMchcAppointment.appointment_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`:`提醒：母嬰健康院預約 ${new Date(nextMchcAppointment.appointment_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}`}</div>
+        <div style={{fontSize:'12px',color:C.amber,fontWeight:700}}>{isEn?`Reminder: MCHC appointment ${new Date(nextMchcAppointment.appointment_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`提醒：母嬰健康院預約 ${new Date(nextMchcAppointment.appointment_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`}</div>
         {nextMchcAppointment.note&&<div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{nextMchcAppointment.note}</div>}
       </div>}
 
@@ -5392,7 +5433,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
             const past = new Date(a.appointment_at).getTime() < Date.now()
             return (
               <div key={a.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px',opacity:past?0.55:1}}>
-                <span style={{color:C.textMuted,width:130,flexShrink:0}}>{new Date(a.appointment_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{color:C.textMuted,width:130,flexShrink:0}}>{new Date(a.appointment_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
                 <span style={{flex:1}}>{a.note||(isEn?'MCHC visit':'母嬰健康院就診')}</span>
                 <span onClick={()=>deleteMchcAppointment(a.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
               </div>
@@ -5407,11 +5448,13 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
           <input type="number" step="0.1" value={symptomForm.temperatureC} onChange={e=>setSymptomForm({...symptomForm,temperatureC:e.target.value})} placeholder={isEn?'Temp (°C, optional)':'體溫(°C,可選)'} style={{flex:'1 1 110px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
           <input value={symptomForm.medicationGiven} onChange={e=>{setSymptomForm({...symptomForm,medicationGiven:e.target.value}); setLabelScanFilled(false)}} placeholder={isEn?'Medication given (optional)':'已給藥物(可選)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <label style={{display:'flex',alignItems:'center',justifyContent:'center',width:40,height:36,flexShrink:0,background:scanningLabel?C.border:__theme.accent,borderRadius:'8px',cursor:scanningLabel?'wait':'pointer',fontSize:'16px'}} title={isEn?'Scan medication label':'掃描藥物標籤'}>
+            <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={scanningLabel} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) scanMedicationLabel(f)}}/>
+            📷
+          </label>
         </div>
-        <label style={{display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'11.5px',fontWeight:600,color:__theme.accent,cursor:scanningLabel?'wait':'pointer',marginBottom:'10px'}}>
-          <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={scanningLabel} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) scanMedicationLabel(f)}}/>
-          {scanningLabel?(isEn?'Reading label…':'讀取標籤中…'):(isEn?'📷 Scan medication label':'📷 掃描藥物標籤')}
-        </label>
+        <div style={{fontSize:'10.5px',color:C.textMuted,marginBottom:'10px'}}>{isEn?'Tap 📷 above to photograph a label instead of typing it.':'點擊上方📷拍攝標籤代替手動輸入。'}</div>
+        {scanningLabel&&<div style={{fontSize:'11px',color:__theme.accent,marginBottom:'8px'}}>{isEn?'Reading label…':'讀取標籤中…'}</div>}
         {labelScanFilled&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Filled in from the label photo - review before saving.':'已從標籤相片填入 - 請核對後儲存。'}</div>}
         {labelScanError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{labelScanError}</div>}
         <textarea value={symptomForm.symptoms} onChange={e=>setSymptomForm({...symptomForm,symptoms:e.target.value})} rows={2} placeholder={isEn?'Symptoms (e.g. cough, runny nose, poor appetite)':'症狀(如咳嗽、流鼻水、食慾不振)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px',resize:'none',fontFamily:'inherit'}}/>
@@ -5422,8 +5465,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           {symptomLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No symptom entries on file.':'暫無症狀記錄。'}</div>}
           {symptomLogs.map(s=>(
             <div key={s.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(s.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
-              <span style={{flex:1}}>{[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms, s.medication_given?(isEn?`Gave: ${s.medication_given}`:`已給:${s.medication_given}`):null].filter(Boolean).join(' · ')}</span>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(s.recorded_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
+              <span style={{flex:1}}>
+                <div>{[s.temperature_c!=null?`${s.temperature_c}°C`:null, s.symptoms].filter(Boolean).join(' · ')||'—'}</div>
+                {s.medication_given&&<div style={{color:C.textSub,marginTop:'1px'}}>{s.medication_given}</div>}
+              </span>
               <span onClick={()=>deleteSymptomLog(s.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
@@ -5432,7 +5478,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
       <SecLabel>{isEn?'Diaper log':'尿布記錄'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'A tap-to-log diaper tracker - mainly here to feed the ER prep export above with real output data.':'輕觸記錄尿布 - 主要為上方急症室準備PDF提供真實排尿排便數據。'}</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Why this matters: a sudden drop in wet diapers (possible dehydration) or diarrhea is one of the first things an ER doctor or nurse asks about - tap here as it happens so you have an exact answer, not a guess, under stress.":'為何重要：排尿突然減少(可能脫水)或腹瀉,是急症室醫護最先詢問的事項之一 - 事發時輕觸記錄,緊急時刻就有確實答案,而非憑印象猜測。'}</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
           <div onClick={()=>addDiaperLog('wet')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💧 Wet':'💧 濕'}</div>
           <div onClick={()=>addDiaperLog('dirty')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💩 Dirty':'💩 大便'}</div>
@@ -5442,7 +5488,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           {diaperLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No diaper changes logged yet.':'暫無尿布記錄。'}</div>}
           {diaperLogs.slice(0,10).map(d=>(
             <div key={d.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(d.logged_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(d.logged_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
               <span style={{flex:1,textTransform:'capitalize'}}>{d.diaper_type}</span>
               <span onClick={()=>deleteDiaperLog(d.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
@@ -5500,17 +5546,20 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           {fForm.type!=='solid'&&<input type="number" value={fForm.amountMl} onChange={e=>setFForm({...fForm,amountMl:e.target.value})} placeholder={isEn?'Amount (ml, optional)':'份量(ml,可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
           {fForm.type==='breast'&&<input type="number" value={fForm.durationMin} onChange={e=>setFForm({...fForm,durationMin:e.target.value})} placeholder={isEn?'Minutes (optional)':'分鐘(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
-          <input value={fForm.note} onChange={e=>setFForm({...fForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
         </div>
+        <input value={fForm.note} onChange={e=>setFForm({...fForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px'}}/>
         <Btn variant="primary" style={{width:'100%'}} disabled={saving} onClick={addFeedingLog}>{isEn?'Log feeding':'記錄餵養'}</Btn>
 
         <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'16px',marginBottom:'6px'}}>{isEn?`Today - ${todaysFeedings.length} feeding${todaysFeedings.length===1?'':'s'}${todaysMl?`, ${todaysMl}ml`:''}`:`今天 - ${todaysFeedings.length}次餵養${todaysMl?`, ${todaysMl}ml`:''}`}</div>
         {feedingLogs.map(f=>{
           const t = FEEDING_TYPES.find(t=>t.value===f.feeding_type)
           return (
-            <div key={f.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(f.fed_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
-              <span style={{flex:1}}>{t?(isEn?t.label.en:t.label.zh):f.feeding_type}{f.amount_ml!=null?` · ${f.amount_ml}ml`:''}{f.duration_min!=null?` · ${f.duration_min}min`:''}{f.note?` · ${f.note}`:''}</span>
+            <div key={f.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(f.fed_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
+              <span style={{flex:1}}>
+                <div>{t?(isEn?t.label.en:t.label.zh):f.feeding_type}{f.amount_ml!=null?` · ${f.amount_ml}ml`:''}{f.duration_min!=null?` · ${f.duration_min}min`:''}</div>
+                {f.note&&<div style={{color:C.textSub,marginTop:'1px'}}>{f.note}</div>}
+              </span>
               <span onClick={()=>deleteFeedingLog(f.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           )
@@ -5582,9 +5631,13 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [conditions,setConditions]=useState([])
   const [medications,setMedications]=useState([])
 
-  async function load() {
+  // Only the very first load shows the full "Loading…" screen - every
+  // reload after adding/deleting an entry used to set loading=true again
+  // too, which unmounted the whole screen for a frame and looked like a
+  // flash/refresh glitch rather than a quiet background update.
+  async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
-    setLoading(true)
+    if (isInitial) setLoading(true)
     const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -5600,7 +5653,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setLoading(false)
   }
-  useEffect(() => { load() }, [bumpSubscriptionId])
+  useEffect(() => { load(true) }, [bumpSubscriptionId])
 
   // bm-01 - the "continuous maternal ledger" the feature doc describes:
   // one exportable PDF combining the pregnancy's own documents (already
@@ -5609,6 +5662,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function downloadMaternalSummary() {
     if (!bumpSubscriptionId) return
     setExportingPdf(true)
+    const PINK = [244,143,167]
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
@@ -5618,7 +5672,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     let y = 40
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Pregnancy', subtitle,
+      title: 'Pregnancy', subtitle, accentColor: PINK,
       dateInstitution: bumpRow?.started_at ? `Medsa Bump started ${new Date(bumpRow.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}` : '',
       details: [
         ...(bumpRow?.predicted_due_date ? [['Predicted due date', new Date(bumpRow.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
@@ -5627,13 +5681,16 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     })
 
     if (bpLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Blood pressure log', subtitle,
+      title: 'Blood pressure log', subtitle, accentColor: PINK,
       dateInstitution: `${bpLogs.length} reading${bpLogs.length===1?'':'s'} · readings at or above 140/90 mmHg are flagged`,
-      details: [...bpLogs].reverse().map(b=>[new Date(b.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${b.systolic}/${b.diastolic} mmHg${(b.systolic>=140||b.diastolic>=90)?'  ⚠ FLAGGED':''}`]),
+      details: [...bpLogs].reverse().map(b=>[
+        new Date(b.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}),
+        `${b.systolic}/${b.diastolic} mmHg${(b.systolic>=140||b.diastolic>=90)?'\n⚠ Flagged (≥140/90)':''}`,
+      ]),
     })
 
     if (glucoseLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Blood glucose log', subtitle,
+      title: 'Blood glucose log', subtitle, accentColor: PINK,
       dateInstitution: `${glucoseLogs.length} reading${glucoseLogs.length===1?'':'s'}`,
       details: [...glucoseLogs].reverse().map(g=>{
         const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
@@ -5642,13 +5699,13 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     })
 
     if (kickLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Kick-count sessions', subtitle,
+      title: 'Kick-count sessions', subtitle, accentColor: PINK,
       dateInstitution: `${kickLogs.length} session${kickLogs.length===1?'':'s'}`,
       details: [...kickLogs].reverse().map(k=>[new Date(k.started_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${k.kick_count} kicks${k.ended_at?` over ${Math.round((new Date(k.ended_at)-new Date(k.started_at))/60000)} min`:''}`]),
     })
 
     if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Uploaded documents', subtitle,
+      title: 'Uploaded documents', subtitle, accentColor: PINK,
       dateInstitution: `${documents.length} document${documents.length===1?'':'s'} - see Account Settings to view the actual files`,
       details: documents.map(d=>{
         const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
@@ -5675,6 +5732,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function downloadHandoffSummary() {
     if (!bumpSubscriptionId) return
     setExportingHandoff(true)
+    const PINK = [244,143,167]
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
@@ -5690,7 +5748,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     const lastGlucose = glucoseLogs[0]
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Patient & pregnancy', subtitle,
+      title: 'Patient & pregnancy', subtitle, accentColor: PINK,
       dateInstitution: `Summary generated ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - for handoff from a private OBGYN to a receiving hospital/clinic`,
       details: [
         ['Patient', `${patient.full_name||''} (${patient.medsa_id||''})`],
@@ -5701,7 +5759,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     })
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Allergies, conditions & medications', subtitle,
+      title: 'Allergies, conditions & medications', subtitle, accentColor: PINK,
       dateInstitution: 'As recorded on the patient\'s Medsa profile',
       details: [
         ['Known allergies', allergies.length>0 ? allergies.map(a=>a.allergen||a.name).filter(Boolean).join(', ') : 'None on file'],
@@ -5711,10 +5769,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     })
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Monitoring summary', subtitle,
+      title: 'Monitoring summary', subtitle, accentColor: PINK,
       dateInstitution: `${bpLogs.length} blood pressure reading${bpLogs.length===1?'':'s'} logged, ${flaggedBpCount} at or above 140/90 mmHg`,
       details: [
-        ...(lastBp ? [['Most recent BP', `${lastBp.systolic}/${lastBp.diastolic} mmHg (${new Date(lastBp.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})${(lastBp.systolic>=140||lastBp.diastolic>=90)?'  ⚠ FLAGGED':''}`]] : []),
+        ...(lastBp ? [['Most recent BP', `${lastBp.systolic}/${lastBp.diastolic} mmHg (${new Date(lastBp.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})${(lastBp.systolic>=140||lastBp.diastolic>=90)?'\n⚠ Flagged (≥140/90)':''}`]] : []),
         ...(lastGlucose ? [['Most recent glucose', `${lastGlucose.glucose_mg_dl} mg/dL (${new Date(lastGlucose.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})`]] : []),
         ...(kickLogs.length>0 ? [['Kick-count sessions logged', String(kickLogs.length)]] : []),
         ['Full readings log', 'See the attached maternal health summary export for every logged reading'],
@@ -5722,7 +5780,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     })
 
     if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Uploaded antenatal documents', subtitle,
+      title: 'Uploaded antenatal documents', subtitle, accentColor: PINK,
       dateInstitution: `${documents.length} document${documents.length===1?'':'s'} on file - see Account Settings to view the actual files`,
       details: documents.map(d=>{
         const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
@@ -7325,8 +7383,8 @@ export default function PatientApp({ liveData={} }) {
       {autoPurchaseNotice&&<div onClick={()=>setAutoPurchaseNotice(null)} style={{padding:'10px 16px',fontSize:'12px',lineHeight:1.5,textAlign:'center',cursor:'pointer',background:autoPurchaseNotice.ok?themeAccentXLight:C.redLight,color:autoPurchaseNotice.ok?themeAccent:C.red}}>{autoPurchaseNotice.text}</div>}
       <div style={{background:themeAccent,padding:'14px 16px',display:'flex',alignItems:'center',gap:'10px',position:'sticky',top:0,zIndex:10}}>
         {screen!=='home'&&<button onClick={()=>setScreen('home')} style={{background:'rgba(255,255,255,0.18)',border:'none',color:'#fff',width:32,height:32,borderRadius:'50%',cursor:'pointer',fontSize:'16px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>←</button>}
-        {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff'}}>{titles[screen]}</span>}
-        <div style={{flex:1}}/>
+        {screen==='home'?<MedsaLogo height={20}/>:<span style={{fontSize:'17px',fontWeight:500,color:'#fff',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',minWidth:0,flex:'0 1 auto'}}>{titles[screen]}</span>}
+        <div style={{flex:1,minWidth:0}}/>
         <div style={{display:'flex',background:'rgba(255,255,255,0.12)',borderRadius:'20px',padding:'2px',flexShrink:0}}>
           {[['en','EN'],['zh-TW','繁'],['zh-CN','简']].map(([code,label])=>(
             <button key={code} onClick={()=>setLang(code)} style={{background:lang===code?'rgba(255,255,255,0.9)':'transparent',color:lang===code?themeAccent:'#fff',border:'none',fontSize:'11px',fontWeight:600,padding:'4px 10px',borderRadius:'18px',cursor:'pointer'}}>{label}</button>
