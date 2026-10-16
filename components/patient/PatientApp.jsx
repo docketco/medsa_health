@@ -5479,6 +5479,10 @@ function MedsaBumpSection({ isEn, patient }) {
   const [uploading,setUploading]=useState(false)
   const [starting,setStarting]=useState(false)
   const [error,setError]=useState(null)
+  const [recordingBirth,setRecordingBirth]=useState(false)
+  const [birthForm,setBirthForm]=useState({dob:'',fullName:''})
+  const [savingBirth,setSavingBirth]=useState(false)
+  const [graduationNotice,setGraduationNotice]=useState(null) // holds the new Kids profile just created, if graduation just ran
 
   // Checkout verification on return (session_id from Stripe, webhook
   // confirmed unreliable elsewhere in this app) now happens once at the
@@ -5493,9 +5497,41 @@ function MedsaBumpSection({ isEn, patient }) {
   async function loadBump() {
     if (!patient?.id) { setActiveBump(null); return }
     const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+    // Real-time check, same pattern as Guardian's lock re-check - runs
+    // every time this loads rather than needing a cron, since nothing
+    // else in this app currently has a reason to look at an old Bump row.
+    if (data?.child_dob) {
+      const monthsSinceBirth = (Date.now() - new Date(data.child_dob)) / (1000*60*60*24*30.44)
+      if (monthsSinceBirth >= 12) { await graduateToKids(data); return }
+    }
     setActiveBump(data||null)
   }
   useEffect(() => { loadBump() }, [patient?.id])
+
+  // The 12-month "graduation" the checklist describes - forks the baby's
+  // own Medsa Kids profile and marks this Bump pass done. bump_subscriptions
+  // already had graduated_at/graduated_child_patient_id columns sitting
+  // unused before this - this is what finally sets them.
+  async function graduateToKids(bump) {
+    const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
+    const { data: child } = await supabase.from('patients').insert({
+      medsa_id: medsaId, full_name: bump.child_full_name || (isEn?'Baby':'寶寶'), date_of_birth: bump.child_dob,
+      account_type: 'kids', parent_patient_id: patient.id, registration_path: 'bump_graduation', dependent_relationship: 'child',
+    }).select().maybeSingle()
+    if (child) {
+      await supabase.from('bump_subscriptions').update({ graduated_at: new Date().toISOString(), graduated_child_patient_id: child.id }).eq('id', bump.id)
+      setGraduationNotice(child)
+    }
+    await loadBump()
+  }
+
+  async function recordBirth() {
+    if (!activeBump?.id || !birthForm.dob) return
+    setSavingBirth(true)
+    await supabase.from('bump_subscriptions').update({ child_dob: birthForm.dob, child_full_name: birthForm.fullName||null }).eq('id', activeBump.id)
+    setSavingBirth(false); setRecordingBirth(false)
+    await loadBump()
+  }
 
   async function uploadCheckup(file) {
     if (!file || !patient?.id) return
@@ -5534,6 +5570,13 @@ function MedsaBumpSection({ isEn, patient }) {
   // card with a tiny grey heading above it.
   const bumpGradient = 'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)'
 
+  const graduationBanner = graduationNotice && (
+    <div style={{margin:'0 0 16px',padding:'14px 16px',background:'#FFF3CD',border:'0.5px solid #FEF3E2',borderRadius:'10px'}}>
+      <div style={{fontSize:'13px',fontWeight:700,color:'#B8860B',marginBottom:'4px'}}>🎉 {isEn?`${graduationNotice.full_name} just graduated to Medsa Kids!`:`${graduationNotice.full_name}已轉入Medsa Kids!`}</div>
+      <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Their own profile (growth, feeding, records) is ready - switch to it from your profile icon. This Bump pass is now done; starting a new one is still available for a future pregnancy.":'他們的個人檔案(生長、餵養、記錄)已就緒 - 可從個人圖示切換。此Medsa Bump已完成,未來懷孕仍可重新開始。'}</div>
+    </div>
+  )
+
   if (activeBump===undefined) return (
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
   )
@@ -5546,25 +5589,47 @@ function MedsaBumpSection({ isEn, patient }) {
     const weeksUntilDue = activeBump.predicted_due_date ? Math.ceil((new Date(activeBump.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
     const gestationalWeek = weeksUntilDue!=null ? 40-weeksUntilDue : null
     const sizeComparison = gestationalWeek!=null ? weeklySizeComparison(gestationalWeek) : null
-    return (
+    const monthsOld = activeBump.child_dob ? Math.floor((Date.now() - new Date(activeBump.child_dob)) / (1000*60*60*24*30.44)) : null
+    return (<>
+    {graduationBanner}
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
       <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'2px'}}>Medsa Bump</div>
       <div style={{fontSize:'13px',fontWeight:700,color:'#fff',opacity:0.95,marginBottom:'10px'}}>{isEn?'Active':'已啟用'}</div>
       <div style={{fontSize:'12px',color:'rgba(255,255,255,0.85)',lineHeight:1.6}}>
         {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
-        {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
+        {!activeBump.child_dob&&activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
+        {activeBump.child_dob&&<><br/>{isEn?'Born':'出生於'} {new Date(activeBump.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{activeBump.child_full_name?` (${activeBump.child_full_name})`:''}</>}
       </div>
-      {sizeComparison&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.2)',borderRadius:'10px',padding:'12px 14px',display:'flex',alignItems:'center',gap:'10px'}}>
+
+      {!activeBump.child_dob&&sizeComparison&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.2)',borderRadius:'10px',padding:'12px 14px',display:'flex',alignItems:'center',gap:'10px'}}>
         <span style={{fontSize:'26px'}}>{sizeComparison.emoji}</span>
         <div>
           <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?`Week ${gestationalWeek}`:`第${gestationalWeek}週`}</div>
           <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`Your baby is about the size of ${sizeComparison.en}`:`您的寶寶現時大約是${sizeComparison.zh}的大小`}</div>
         </div>
       </div>}
-    </Card>
-  )}
 
-  return (
+      {/* Postpartum (4th trimester) state - the real gap found building
+          this: nothing ever actually recorded a birth, so child_dob sat
+          unused and the 12-month graduation this depends on could never
+          fire. This is that missing step. */}
+      {!activeBump.child_dob&&!recordingBirth&&<div onClick={()=>setRecordingBirth(true)} style={{marginTop:'14px',fontSize:'12px',color:'#fff',textDecoration:'underline',cursor:'pointer'}}>{isEn?'👶 Baby arrived? Record the birth':'👶 寶寶已出生?記錄出生資料'}</div>}
+      {!activeBump.child_dob&&recordingBirth&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?"Baby's date of birth":'寶寶出生日期'}</div>
+        <input type="date" value={birthForm.dob} max={new Date().toISOString().slice(0,10)} onChange={e=>setBirthForm({...birthForm,dob:e.target.value})} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?"Baby's full name (optional, can add later)":'寶寶全名(可選,可稍後補充)'}</div>
+        <input value={birthForm.fullName} onChange={e=>setBirthForm({...birthForm,fullName:e.target.value})} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={savingBirth||!birthForm.dob} onClick={recordBirth}>{savingBirth?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
+      </div>}
+      {activeBump.child_dob&&monthsOld!=null&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.2)',borderRadius:'10px',padding:'12px 14px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${monthsOld} month${monthsOld===1?'':'s'} old`:`${monthsOld}個月大`}</div>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Automatically graduates to their own Medsa Kids profile at 12 months${monthsOld<12?` - ${12-monthsOld} to go`:''}.`:`將於12個月大時自動轉入Medsa Kids個人檔案${monthsOld<12?` - 還差${12-monthsOld}個月`:''}。`}</div>
+      </div>}
+    </Card>
+    </>)}
+
+  return (<>
+    {graduationBanner}
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
       <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'10px'}}>Medsa Bump</div>
       <div style={{fontSize:'12px',color:'rgba(255,255,255,0.9)',lineHeight:1.6,marginBottom:'8px'}}>
@@ -5607,7 +5672,7 @@ function MedsaBumpSection({ isEn, patient }) {
         <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </div>
     </Card>
-  )
+  </>)
 }
 
 // ── SIGN-UP GATE — two paths into Medsa ──────────────────────────────────────
