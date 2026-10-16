@@ -5437,6 +5437,38 @@ const BUMP_DOC_TYPES = [
   { value: 'bump_lab_result', label: { en: 'Lab result', zh: '化驗結果' } },
 ]
 
+// Weekly "baby is about the size of a ___" card - pure fun content, no
+// clinical stakes (unlike the WHO growth charts, getting a comparison
+// slightly off has zero health consequence), same convention every major
+// pregnancy app uses. Text + an emoji instead of a real 3D/illustrated
+// asset - see the checklist note this came from: that gets most of the
+// engagement value without a licensed art pipeline Medsa doesn't have.
+const WEEKLY_SIZE_COMPARISONS = {
+  4:{emoji:'🌱',en:'a poppy seed',zh:'一顆罌粟籽'}, 5:{emoji:'🌱',en:'a sesame seed',zh:'一顆芝麻'},
+  6:{emoji:'🫘',en:'a lentil',zh:'一顆扁豆'}, 7:{emoji:'🫐',en:'a blueberry',zh:'一顆藍莓'},
+  8:{emoji:'🍓',en:'a raspberry',zh:'一顆紅莓'}, 9:{emoji:'🍇',en:'a grape',zh:'一顆葡萄'},
+  10:{emoji:'🍊',en:'a kumquat',zh:'一顆金橘'}, 11:{emoji:'🍇',en:'a fig',zh:'一顆無花果'},
+  12:{emoji:'🍋',en:'a lime',zh:'一顆青檬'}, 13:{emoji:'🍋',en:'a lemon',zh:'一顆檸檬'},
+  14:{emoji:'🍑',en:'a peach',zh:'一顆桃子'}, 15:{emoji:'🍎',en:'an apple',zh:'一顆蘋果'},
+  16:{emoji:'🥑',en:'an avocado',zh:'一顆牛油果'}, 17:{emoji:'🥔',en:'a turnip',zh:'一顆蕪菁'},
+  18:{emoji:'🫑',en:'a bell pepper',zh:'一個甜椒'}, 19:{emoji:'🍅',en:'a tomato',zh:'一顆番茄'},
+  20:{emoji:'🍌',en:'a banana',zh:'一條香蕉'}, 21:{emoji:'🥕',en:'a carrot',zh:'一條紅蘿蔔'},
+  22:{emoji:'🥭',en:'a papaya',zh:'一個木瓜'}, 23:{emoji:'🍈',en:'a grapefruit',zh:'一個葡萄柚'},
+  24:{emoji:'🌽',en:'an ear of corn',zh:'一條玉米'}, 25:{emoji:'🥦',en:'a head of cauliflower',zh:'一個椰菜花'},
+  26:{emoji:'🥬',en:'a head of lettuce',zh:'一個生菜'}, 27:{emoji:'🥥',en:'a rutabaga',zh:'一顆蕪菁甘藍'},
+  28:{emoji:'🍆',en:'an eggplant',zh:'一條茄子'}, 29:{emoji:'🎃',en:'a butternut squash',zh:'一個南瓜'},
+  30:{emoji:'🥬',en:'a cabbage',zh:'一個椰菜'}, 31:{emoji:'🥥',en:'a coconut',zh:'一個椰子'},
+  32:{emoji:'🥥',en:'a jicama',zh:'一個涼薯'}, 33:{emoji:'🍍',en:'a pineapple',zh:'一個菠蘿'},
+  34:{emoji:'🍈',en:'a cantaloupe',zh:'一個哈密瓜'}, 35:{emoji:'🍈',en:'a honeydew melon',zh:'一個蜜瓜'},
+  36:{emoji:'🥬',en:'a head of romaine lettuce',zh:'一個羅馬生菜'}, 37:{emoji:'🥬',en:'a bunch of swiss chard',zh:'一束瑞士菜'},
+  38:{emoji:'🥬',en:'a leek',zh:'一條韭蔥'}, 39:{emoji:'🍉',en:'a mini watermelon',zh:'一個小西瓜'},
+  40:{emoji:'🎃',en:'a small pumpkin',zh:'一個小南瓜'},
+}
+function weeklySizeComparison(gestationalWeek) {
+  const w = Math.max(4, Math.min(40, Math.round(gestationalWeek)))
+  return WEEKLY_SIZE_COMPARISONS[w]
+}
+
 function MedsaBumpSection({ isEn, patient }) {
   const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=active
   const [dueDate,setDueDate]=useState('')
@@ -5506,7 +5538,15 @@ function MedsaBumpSection({ isEn, patient }) {
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
   )
 
-  if (activeBump) return (
+  if (activeBump) {
+    // 40 weeks is the standard due-date convention - computed fresh from
+    // predicted_due_date rather than carried forward from gestational_
+    // weeks_at_signup, so it stays current regardless of how long ago
+    // Bump was actually started.
+    const weeksUntilDue = activeBump.predicted_due_date ? Math.ceil((new Date(activeBump.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
+    const gestationalWeek = weeksUntilDue!=null ? 40-weeksUntilDue : null
+    const sizeComparison = gestationalWeek!=null ? weeklySizeComparison(gestationalWeek) : null
+    return (
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
       <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'2px'}}>Medsa Bump</div>
       <div style={{fontSize:'13px',fontWeight:700,color:'#fff',opacity:0.95,marginBottom:'10px'}}>{isEn?'Active':'已啟用'}</div>
@@ -5514,8 +5554,15 @@ function MedsaBumpSection({ isEn, patient }) {
         {isEn?'Started':'開始於'} {new Date(activeBump.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}
         {activeBump.predicted_due_date&&<><br/>{isEn?'Predicted due date':'預產期'}: {new Date(activeBump.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</>}
       </div>
+      {sizeComparison&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.2)',borderRadius:'10px',padding:'12px 14px',display:'flex',alignItems:'center',gap:'10px'}}>
+        <span style={{fontSize:'26px'}}>{sizeComparison.emoji}</span>
+        <div>
+          <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?`Week ${gestationalWeek}`:`第${gestationalWeek}週`}</div>
+          <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`Your baby is about the size of ${sizeComparison.en}`:`您的寶寶現時大約是${sizeComparison.zh}的大小`}</div>
+        </div>
+      </div>}
     </Card>
-  )
+  )}
 
   return (
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
@@ -5697,7 +5744,7 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
           const relLabel = DEPENDENT_RELATIONSHIPS.find(r=>r.value===p.dependent_relationship)?.label || 'Dependent'
           return (
             <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?__theme.accentXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
-              <div style={{width:40,height:40,borderRadius:'50%',background:isKidRow?'#FEF3E2':isDependentRow?'#E3F3EA':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKidRow?'#B8860B':isDependentRow?'#43A879':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isKidRow?'#FFF3CD':isDependentRow?'#E3F3EA':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKidRow?'#E8A400':isDependentRow?'#43A879':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isDependentRow?relLabel:'You'}</div>
@@ -6453,10 +6500,10 @@ export default function PatientApp({ liveData={} }) {
   // Dependent-ness checked FIRST, not Bump - a dependent profile is never
   // pregnant, so pink has no business showing there even if bumpActive
   // somehow resolved true for that id. Only the main account can go pink.
-  const themeAccent = isKidDependent ? '#B8860B' : isOtherDependent ? '#43A879' : bumpActive ? '#F48FB1' : C.green
-  const themeAccentMid = isKidDependent ? '#D4A017' : isOtherDependent ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
-  const themeAccentLight = isKidDependent ? '#FEF3E2' : isOtherDependent ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
-  const themeAccentXLight = isKidDependent ? '#FFFAF0' : isOtherDependent ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
+  const themeAccent = isKidDependent ? '#E8A400' : isOtherDependent ? '#43A879' : bumpActive ? '#F48FB1' : C.green
+  const themeAccentMid = isKidDependent ? '#F5C242' : isOtherDependent ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
+  const themeAccentLight = isKidDependent ? '#FFF3CD' : isOtherDependent ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
+  const themeAccentXLight = isKidDependent ? '#FFFBF0' : isOtherDependent ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
 
   // Real bug found live-testing: Bump is only ever started from inside
   // Account Settings, but Stripe's redirect back lands on a fresh page
