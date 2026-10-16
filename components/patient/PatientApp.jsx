@@ -5797,6 +5797,8 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [epdsAnswers,setEpdsAnswers]=useState({})
   const [epdsSaving,setEpdsSaving]=useState(false)
   const [epdsResult,setEpdsResult]=useState(null)
+  const [activePolicy,setActivePolicy]=useState(null)
+  const [exportingAdmission,setExportingAdmission]=useState(false)
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -5805,7 +5807,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -5816,15 +5818,94 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       patient?.id ? supabase.from('medications').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
       supabase.from('bump_recovery_checklist').select('*').eq('bump_subscription_id',bumpSubscriptionId),
       supabase.from('bump_epds_screens').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('completed_at',{ascending:false}),
+      patient?.id ? supabase.from('agent_policies').select('*, insurance_plans(company_name)').eq('patient_id',patient.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1) : Promise.resolve({data:[]}),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setRecoveryChecks(recovery||[])
     setEpdsScreens(epds||[])
+    setActivePolicy((policies||[])[0]||null)
     setLoading(false)
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
+
+  // gop-01 - the "1-click pre-admission packet" from the GOP feature doc.
+  // "1-click" just means one export button compiling what's already on
+  // file, same mechanism as bm-01/bm-02 - NOT the auto-submit-to-insurer
+  // half of that idea (gop-02), which stays blocked on a real insurer/
+  // hospital partnership that doesn't exist. This is the concise, walk-
+  // into-L&D version: identity, blood type if on file, gestational age,
+  // allergies/conditions/meds, insurance reference if a policy is on
+  // file, and the antenatal documents - not the full BP/glucose log
+  // (that's what bm-01's full ledger is for).
+  async function downloadAdmissionPacket() {
+    if (!bumpSubscriptionId) return
+    setExportingAdmission(true)
+    const PINK = [244,143,167]
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Hospital Pre-Admission Packet`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+
+    const weeksUntilDue = bumpRow?.predicted_due_date ? Math.ceil((new Date(bumpRow.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
+    const gestationalWeek = weeksUntilDue!=null ? 40-weeksUntilDue : null
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Patient & pregnancy', subtitle, accentColor: PINK,
+      dateInstitution: `Generated ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - for hospital admission ahead of delivery`,
+      details: [
+        ['Patient', `${patient.full_name||''} (${patient.medsa_id||''})`],
+        ...(patient.date_of_birth ? [['Date of birth', new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+        ...(patient.blood_type ? [['Blood type', patient.blood_type]] : []),
+        ...(gestationalWeek!=null ? [['Gestational age', `${Math.max(0,gestationalWeek)} weeks (estimated as of today)`]] : []),
+        ...(bumpRow?.predicted_due_date ? [['Predicted due date', new Date(bumpRow.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+      ],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Allergies, conditions & medications', subtitle, accentColor: PINK,
+      dateInstitution: 'As recorded on the patient\'s Medsa profile',
+      details: [
+        ['Known allergies', allergies.length>0 ? allergies.map(a=>a.allergen||a.name).filter(Boolean).join(', ') : 'None on file'],
+        ['Active conditions', conditions.length>0 ? conditions.map(c=>c.condition_name).filter(Boolean).join(', ') : 'None on file'],
+        ['Current medications', medications.length>0 ? medications.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file'],
+      ],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Insurance', subtitle, accentColor: PINK,
+      dateInstitution: 'For admissions desk reference',
+      details: activePolicy
+        ? [
+            ['Insurer', activePolicy.insurance_plans?.company_name || 'Not named'],
+            ['Plan', activePolicy.plan_name || '—'],
+            ...(activePolicy.policy_number ? [['Policy number', activePolicy.policy_number]] : []),
+          ]
+        : [['Policy on file', 'None - self-pay, or bring insurance card/details at admission']],
+    })
+
+    if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Uploaded antenatal documents', subtitle, accentColor: PINK,
+      dateInstitution: `${documents.length} document${documents.length===1?'':'s'} on file - see Account Settings to view the actual files`,
+      details: documents.map(d=>{
+        const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
+        return [t?t.label.en:d.category, d.file_name]
+      }),
+    })
+
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Bump-Admission-Packet-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingAdmission(false)
+  }
 
   // bc-05 - the real EPDS, now unblocked with the verbatim text you
   // supplied (see EPDS_ITEMS above for the sourcing note). Scored exactly
@@ -6049,6 +6130,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
         <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
         <div onClick={exportingHandoff?undefined:downloadHandoffSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingHandoff?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingHandoff?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export handoff summary for a new doctor/hospital':'⬇ 匯出轉介摘要（供新醫生／醫院使用）')}</div>
+        <div onClick={exportingAdmission?undefined:downloadAdmissionPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingAdmission?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingAdmission?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export hospital pre-admission packet':'⬇ 匯出醫院入院前摘要')}</div>
       </div>
 
       <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
