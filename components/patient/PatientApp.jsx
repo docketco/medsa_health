@@ -5073,6 +5073,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [exportingSymptomPdf,setExportingSymptomPdf]=useState(false)
   const [diaperLogs,setDiaperLogs]=useState([])
   const [exportingErPdf,setExportingErPdf]=useState(false)
+  const [scanningLabel,setScanningLabel]=useState(false)
+  const [labelScanError,setLabelScanError]=useState('')
+  const [labelScanFilled,setLabelScanFilled]=useState(false)
 
   async function load() {
     if (!patient?.id) { setLoading(false); return }
@@ -5176,6 +5179,35 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load(); setSaving(false)
   }
   async function deleteSymptomLog(id) { await supabase.from('kids_symptom_logs').delete().eq('id', id); load() }
+
+  // kp-02 - AI OCR for a photographed medication label, so "medication
+  // given" doesn't have to be typed by hand. Only ever fills the text
+  // field for the parent to review/edit before saving - never written to
+  // the database directly, same posture as parse_plan_document.js.
+  async function scanMedicationLabel(file) {
+    if (!file) return
+    setScanningLabel(true); setLabelScanError(''); setLabelScanFilled(false)
+    try {
+      const imageBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/kids/parse_medication_label', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64, mediaType: file.type }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Could not read this label')
+      setSymptomForm(f => ({ ...f, medicationGiven: json.medicationText || f.medicationGiven }))
+      setLabelScanFilled(true)
+    } catch (e) {
+      setLabelScanError(e.message)
+    } finally {
+      setScanningLabel(false)
+    }
+  }
   async function downloadDoctorPacket() {
     if (!patient?.id) return
     setExportingSymptomPdf(true)
@@ -5374,8 +5406,14 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Keep a quick log while your child is unwell, then export it as a doctor packet for the visit.":'孩子不適時快速記錄,就診前匯出為醫生摘要。'}</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
           <input type="number" step="0.1" value={symptomForm.temperatureC} onChange={e=>setSymptomForm({...symptomForm,temperatureC:e.target.value})} placeholder={isEn?'Temp (°C, optional)':'體溫(°C,可選)'} style={{flex:'1 1 110px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          <input value={symptomForm.medicationGiven} onChange={e=>setSymptomForm({...symptomForm,medicationGiven:e.target.value})} placeholder={isEn?'Medication given (optional)':'已給藥物(可選)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input value={symptomForm.medicationGiven} onChange={e=>{setSymptomForm({...symptomForm,medicationGiven:e.target.value}); setLabelScanFilled(false)}} placeholder={isEn?'Medication given (optional)':'已給藥物(可選)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
         </div>
+        <label style={{display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'11.5px',fontWeight:600,color:__theme.accent,cursor:scanningLabel?'wait':'pointer',marginBottom:'10px'}}>
+          <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={scanningLabel} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) scanMedicationLabel(f)}}/>
+          {scanningLabel?(isEn?'Reading label…':'讀取標籤中…'):(isEn?'📷 Scan medication label':'📷 掃描藥物標籤')}
+        </label>
+        {labelScanFilled&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Filled in from the label photo - review before saving.':'已從標籤相片填入 - 請核對後儲存。'}</div>}
+        {labelScanError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{labelScanError}</div>}
         <textarea value={symptomForm.symptoms} onChange={e=>setSymptomForm({...symptomForm,symptoms:e.target.value})} rows={2} placeholder={isEn?'Symptoms (e.g. cough, runny nose, poor appetite)':'症狀(如咳嗽、流鼻水、食慾不振)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px',resize:'none',fontFamily:'inherit'}}/>
         <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!symptomForm.temperatureC&&!symptomForm.symptoms)} onClick={addSymptomLog}>{isEn?'Add entry':'新增記錄'}</Btn>
         <div onClick={exportingSymptomPdf?undefined:downloadDoctorPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'12px',cursor:exportingSymptomPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingSymptomPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export doctor packet PDF (last 14 days)':'⬇ 匯出醫生摘要PDF(過去14天)')}</div>
