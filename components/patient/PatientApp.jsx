@@ -4,6 +4,7 @@ import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumn
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
+import { ageDaysBetween, percentileBands, growthPercentile } from '../../lib/whoGrowth'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -4966,26 +4967,47 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   )
 }
 
-// Minimal inline line chart - no charting library, just points-on-a-grid.
-// Good enough to see a trend at a glance; not a WHO/HK percentile-band
-// overlay (that needs embedding the actual reference curves, a separate,
-// bigger ask if that precision turns out to matter).
-function GrowthLineChart({ points, color, unit }) {
-  if (points.length < 2) return <div style={{fontSize:'11px',color:C.textMuted,padding:'20px 0',textAlign:'center'}}>{points.length===0?'No entries yet':'Add one more entry to see a trend line'}</div>
-  const W=280, H=100, pad=8
-  const xs = points.map((_,i)=>i)
-  const ys = points.map(p=>p.y)
-  const minY = Math.min(...ys), maxY = Math.max(...ys)
-  const range = maxY - minY || 1
-  const sx = i => pad + (i/(xs.length-1))*(W-pad*2)
-  const sy = y => H-pad - ((y-minY)/range)*(H-pad*2)
-  const path = points.map((p,i)=>`${i===0?'M':'L'}${sx(i)},${sy(p.y)}`).join(' ')
+// Real WHO Child Growth Standards percentile curves (3rd/15th/50th/85th/97th)
+// as five thin reference lines - the familiar shape of an actual printed
+// growth chart, not a shaded band - with the child's own measurements as
+// the one accent-colored series on top. No preterm correction (see
+// lib/whoGrowth.js) - every percentile here assumes a full-term birth.
+function WhoGrowthChart({ logs, valueKey, indicator, sex, dobISO, unit, accentColor, isEn }) {
+  const points = logs.filter(g=>g[valueKey]!=null).map(g=>({ ageDays: ageDaysBetween(dobISO, g.recorded_at), value: g[valueKey] }))
+  if (!sex) return <div style={{fontSize:'11px',color:C.textMuted,padding:'16px 0',textAlign:'center'}}>{isEn?"Set this profile's sex (Account Settings) to see the WHO percentile chart.":'請在帳戶設定中設定性別以查看WHO生長百分比圖。'}</div>
+  if (points.length===0) return <div style={{fontSize:'11px',color:C.textMuted,padding:'16px 0',textAlign:'center'}}>{isEn?'No entries yet':'暫無記錄'}</div>
+
+  const todayAgeDays = ageDaysBetween(dobISO, new Date().toISOString().slice(0,10))
+  const maxAgeDays = Math.max(todayAgeDays, ...points.map(p=>p.ageDays), 30)
+  const bands = percentileBands(indicator, sex, maxAgeDays, 24)
+
+  const W=300, H=150, padL=4, padR=26, padT=10, padB=18
+  const allVals = [...bands.flatMap(b=>[b.p3,b.p97]), ...points.map(p=>p.value)]
+  const minV = Math.min(...allVals), maxV = Math.max(...allVals)
+  const vRange = (maxV-minV) || 1
+  const sx = ageDays => padL + (ageDays/maxAgeDays)*(W-padL-padR)
+  const sy = v => H-padB - ((v-minV)/vRange)*(H-padT-padB)
+
+  const bandLine = key => bands.map((b,i)=>`${i===0?'M':'L'}${sx(b.ageDays)},${sy(b[key])}`).join(' ')
+  const childPath = points.map((p,i)=>`${i===0?'M':'L'}${sx(p.ageDays)},${sy(p.value)}`).join(' ')
+  const monthGridlines = [0,6,12,24,36,48,60].filter(m=>m*30.44<=maxAgeDays)
+
   return (
-    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-      {points.map((p,i)=><circle key={i} cx={sx(i)} cy={sy(p.y)} r="2.5" fill={color}/>)}
-      <text x={pad} y={10} fontSize="9" fill={C.textMuted}>{maxY}{unit}</text>
-      <text x={pad} y={H-2} fontSize="9" fill={C.textMuted}>{minY}{unit}</text>
+    <svg width="100%" height={H+14} viewBox={`0 0 ${W} ${H+14}`} preserveAspectRatio="none">
+      {monthGridlines.map(m=>{
+        const x = sx(m*30.44)
+        return <g key={m}><line x1={x} y1={padT} x2={x} y2={H-padB} stroke={C.border} strokeWidth="1"/><text x={x} y={H+10} fontSize="8" fill={C.textMuted} textAnchor="middle">{m}mo</text></g>
+      })}
+      {['p3','p15','p50','p85','p97'].map(key=>(
+        <g key={key}>
+          <path d={bandLine(key)} fill="none" stroke={C.border} strokeWidth="1"/>
+          <text x={W-padR+3} y={sy(bands[bands.length-1][key])+3} fontSize="7.5" fill={C.textMuted}>{key.slice(1)}</text>
+        </g>
+      ))}
+      <path d={childPath} fill="none" stroke={accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      {points.map((p,i)=><circle key={i} cx={sx(p.ageDays)} cy={sy(p.value)} r="4" fill={accentColor} stroke="#fff" strokeWidth="2"/>)}
+      <text x={padL} y={padT-2} fontSize="8" fill={C.textMuted}>{Math.round(maxV*10)/10}{unit}</text>
+      <text x={padL} y={H-padB+8} fontSize="8" fill={C.textMuted}>{Math.round(minV*10)/10}{unit}</text>
     </svg>
   )
 }
@@ -5002,7 +5024,7 @@ const FEEDING_TYPES = [
 // vaccination records. Vaccinations already live in RecordsScreen (the
 // "History, vaccinations, share" tile) - this screen covers the other
 // two and links across rather than duplicating that part.
-function KidsGrowthScreen({ isEn, patient={}, onNav }) {
+function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
   const [growthLogs,setGrowthLogs]=useState([])
   const [feedingLogs,setFeedingLogs]=useState([])
@@ -5054,8 +5076,14 @@ function KidsGrowthScreen({ isEn, patient={}, onNav }) {
   }
   async function deleteFeedingLog(id) { await supabase.from('kids_feeding_logs').delete().eq('id', id); load() }
 
-  const weightPoints = growthLogs.filter(g=>g.weight_kg!=null).map(g=>({x:g.recorded_at, y:g.weight_kg}))
-  const heightPoints = growthLogs.filter(g=>g.height_cm!=null).map(g=>({x:g.recorded_at, y:g.height_cm}))
+  const [settingSex,setSettingSex]=useState(false)
+  async function setSex(sex) {
+    setSettingSex(true)
+    await supabase.from('patients').update({ sex }).eq('id', patient.id)
+    setSettingSex(false)
+    onPatientUpdated && onPatientUpdated()
+  }
+
   const todayStr = new Date().toISOString().slice(0,10)
   const todaysFeedings = feedingLogs.filter(f=>f.fed_at?.slice(0,10)===todayStr)
   const todaysMl = todaysFeedings.filter(f=>f.amount_ml!=null).reduce((s,f)=>s+Number(f.amount_ml),0)
@@ -5069,6 +5097,14 @@ function KidsGrowthScreen({ isEn, patient={}, onNav }) {
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
       </div>
 
+      {!patient.sex&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12px',color:C.amber,fontWeight:600,marginBottom:'8px'}}>{isEn?"Set this profile's sex to see the WHO growth percentile chart - the reference curves differ by sex.":'請設定此檔案的性別以查看WHO生長百分比圖 - 參考曲線因性別而異。'}</div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} disabled={settingSex} onClick={()=>setSex('male')}>{isEn?'Male':'男'}</Btn>
+          <Btn style={{flex:1}} disabled={settingSex} onClick={()=>setSex('female')}>{isEn?'Female':'女'}</Btn>
+        </div>
+      </div>}
+
       <SecLabel>{isEn?'Growth':'生長'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
@@ -5080,18 +5116,31 @@ function KidsGrowthScreen({ isEn, patient={}, onNav }) {
         <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!gForm.weightKg&&!gForm.heightCm&&!gForm.headCm)} onClick={addGrowthLog}>{isEn?'Add entry':'新增記錄'}</Btn>
 
         {growthLogs.length>0&&<>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'16px',marginBottom:'2px'}}>{isEn?'Weight over time':'體重趨勢'}</div>
-          <GrowthLineChart points={weightPoints} color={__theme.accent} unit="kg"/>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'10px',marginBottom:'2px'}}>{isEn?'Height over time':'身高趨勢'}</div>
-          <GrowthLineChart points={heightPoints} color={C.blue} unit="cm"/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'16px',marginBottom:'2px'}}>{isEn?'Weight-for-age (WHO percentiles)':'年齡體重(WHO百分比)'}</div>
+          <WhoGrowthChart logs={growthLogs} valueKey="weight_kg" indicator="wfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="kg" accentColor={__theme.accent} isEn={isEn}/>
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'10px',marginBottom:'2px'}}>{isEn?'Length/height-for-age (WHO percentiles)':'年齡身高(WHO百分比)'}</div>
+          <WhoGrowthChart logs={growthLogs} valueKey="height_cm" indicator="lhfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="cm" accentColor={C.blue} isEn={isEn}/>
+          <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Reference curves assume a full-term birth - no preterm correction applied.':'參考曲線假設足月出生,未作早產矯正。'}</div>
           <div style={{marginTop:'14px'}}>
-            {[...growthLogs].reverse().map(g=>(
-              <div key={g.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-                <span style={{color:C.textMuted,width:80,flexShrink:0}}>{g.recorded_at}</span>
-                <span style={{flex:1}}>{g.weight_kg!=null?`${g.weight_kg}kg`:''}{g.height_cm!=null?`  ·  ${g.height_cm}cm`:''}{g.head_circumference_cm!=null?`  ·  ${isEn?'head':'頭圍'} ${g.head_circumference_cm}cm`:''}</span>
-                <span onClick={()=>deleteGrowthLog(g.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
-              </div>
-            ))}
+            {[...growthLogs].reverse().map(g=>{
+              const ageDays = patient.date_of_birth ? ageDaysBetween(patient.date_of_birth, g.recorded_at) : null
+              const wResult = (patient.sex && ageDays!=null && g.weight_kg!=null) ? growthPercentile('wfa', g.weight_kg, patient.sex, ageDays) : null
+              const hResult = (patient.sex && ageDays!=null && g.height_cm!=null) ? growthPercentile('lhfa', g.height_cm, patient.sex, ageDays) : null
+              return (
+                <div key={g.id} style={{padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+                    <span style={{color:C.textMuted,width:80,flexShrink:0}}>{g.recorded_at}</span>
+                    <span style={{flex:1}}>{g.weight_kg!=null?`${g.weight_kg}kg`:''}{g.height_cm!=null?`  ·  ${g.height_cm}cm`:''}{g.head_circumference_cm!=null?`  ·  ${isEn?'head':'頭圍'} ${g.head_circumference_cm}cm`:''}</span>
+                    <span onClick={()=>deleteGrowthLog(g.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+                  </div>
+                  {(wResult||hResult)&&<div style={{marginLeft:90,fontSize:'10.5px',color:__theme.accent,marginTop:'2px'}}>
+                    {wResult&&(isEn?`Weight: ${Math.round(wResult.percentile)}th percentile`:`體重:第${Math.round(wResult.percentile)}百分位`)}
+                    {wResult&&hResult?'  ·  ':''}
+                    {hResult&&(isEn?`Height: ${Math.round(hResult.percentile)}th percentile`:`身高:第${Math.round(hResult.percentile)}百分位`)}
+                  </div>}
+                </div>
+              )
+            })}
           </div>
         </>}
       </Card>
@@ -5706,7 +5755,7 @@ const DEPENDENT_RELATIONSHIPS = [
 function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
   const __theme = useContext(ThemeContext)
   const [relationship,setRelationship]=useState('child')
-  const [form,setForm]=useState({fullName:'',dob:''})
+  const [form,setForm]=useState({fullName:'',dob:'',sex:''})
   const [certFile,setCertFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
@@ -5717,7 +5766,7 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
     try {
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       const { data: child, error: insErr } = await supabase.from('patients').insert({
-        medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob,
+        medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob, sex: form.sex||null,
         account_type: 'kids', parent_patient_id: parentPatient.id, registration_path: 'guardian_created',
         dependent_relationship: relationship,
       }).select().maybeSingle()
@@ -5752,11 +5801,16 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
         <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'14px'}}>
           <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder={`${rel.label}'s full name`} style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
           <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} type="date" max={new Date().toISOString().slice(0,10)} placeholder="Date of birth" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          <select value={form.sex} onChange={e=>setForm({...form,sex:e.target.value})} style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',background:'#fff'}}>
+            <option value="">{relationship==='child'?'Sex (needed for WHO growth charts)':'Sex (optional)'}</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
         </div>
         <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{rel.docLabel} (optional, can add later)</div>
         <input type="file" accept="image/*,application/pdf" onChange={e=>setCertFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob}>{saving?'Creating…':'Create profile'}</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob||(relationship==='child'&&!form.sex)}>{saving?'Creating…':'Create profile'}</Btn>
       </div>
     </div>
   )
@@ -6496,7 +6550,11 @@ export default function PatientApp({ liveData={} }) {
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
-        {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
+        {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen} onPatientUpdated={async()=>{
+          if (!signedInPatient?.id) return
+          const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
+          if (data) setSignedInPatient(data)
+        }}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
