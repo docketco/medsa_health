@@ -5685,15 +5685,19 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
         {!loading&&profiles.map((p,idx)=>{
           // Fixed colors, not __theme - this row is about whose profile it
           // IS, not which theme happens to be active for whoever you're
-          // currently viewing. Any dependent (child, parent, elderly,
-          // disabled - not just kids) reads as the same light green,
-          // regardless of what they're specifically related as.
+          // currently viewing. A kid dependent reads as yellow (a kid
+          // always follows a parent, so no separate "dependent" signal is
+          // needed - yellow alone is different enough from green); any
+          // OTHER dependent (parent, elderly, disabled) reads as light
+          // green specifically to flag "not the main profile," since
+          // those don't carry an obviously-a-kid visual cue otherwise.
           const isDependentRow = !!p.parent_patient_id
+          const isKidRow = isDependentRow && (p.dependent_relationship==null || p.dependent_relationship==='child')
           const locked = isLocked(idx)
           const relLabel = DEPENDENT_RELATIONSHIPS.find(r=>r.value===p.dependent_relationship)?.label || 'Dependent'
           return (
             <div key={p.id} onClick={()=>{ if (locked) { handleSubscribeGuardian(); return } onSwitch(p);onClose()}} style={{display:'flex',alignItems:'center',gap:'12px',padding:'10px 6px',cursor:'pointer',background:p.id===activePatient.id?__theme.accentXLight:'transparent',borderRadius:'10px',opacity:locked?0.55:1}}>
-              <div style={{width:40,height:40,borderRadius:'50%',background:isDependentRow?'#E3F3EA':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isDependentRow?'#43A879':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
+              <div style={{width:40,height:40,borderRadius:'50%',background:isKidRow?'#FEF3E2':isDependentRow?'#E3F3EA':C.greenLight,display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'15px',color:isKidRow?'#B8860B':isDependentRow?'#43A879':C.green,flexShrink:0}}>{(p.preferred_name||p.full_name||'?')[0]}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isDependentRow?relLabel:'You'}</div>
@@ -6437,20 +6441,22 @@ export default function PatientApp({ liveData={} }) {
       })
   }, [patient?.id])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
-  // Your call: color should track age/relationship, not which paid add-on
-  // happens to be active - Bump is the one real exception since pregnancy
-  // isn't an age category. Whoever you've switched TO (any dependent -
-  // child, parent, elderly, disabled, not just "kids") reads as a lighter
-  // green than your own adult profile, so the switcher's current tab is
-  // always visible at a glance without being person/feature-specific.
+  // Your call, refined: a kid always follows a parent anyway, so there's
+  // no need to separately signal "this is a dependent" for them - yellow
+  // on its own is different enough from green. Light green is reserved
+  // for a NON-kid dependent (parent, elderly relative, person with a
+  // disability) specifically to flag "not the main profile," since those
+  // don't have the same obviously-a-kid visual cue a yellow theme gives.
   const isDependentProfile = !!patient?.parent_patient_id
+  const isKidDependent = isDependentProfile && (patient?.dependent_relationship==null || patient?.dependent_relationship==='child')
+  const isOtherDependent = isDependentProfile && !isKidDependent
   // Dependent-ness checked FIRST, not Bump - a dependent profile is never
   // pregnant, so pink has no business showing there even if bumpActive
   // somehow resolved true for that id. Only the main account can go pink.
-  const themeAccent = isDependentProfile ? '#43A879' : bumpActive ? '#F48FB1' : C.green
-  const themeAccentMid = isDependentProfile ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
-  const themeAccentLight = isDependentProfile ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
-  const themeAccentXLight = isDependentProfile ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
+  const themeAccent = isKidDependent ? '#B8860B' : isOtherDependent ? '#43A879' : bumpActive ? '#F48FB1' : C.green
+  const themeAccentMid = isKidDependent ? '#D4A017' : isOtherDependent ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
+  const themeAccentLight = isKidDependent ? '#FEF3E2' : isOtherDependent ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
+  const themeAccentXLight = isKidDependent ? '#FFFAF0' : isOtherDependent ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
 
   // Real bug found live-testing: Bump is only ever started from inside
   // Account Settings, but Stripe's redirect back lands on a fresh page
