@@ -5720,6 +5720,53 @@ const POSTPARTUM_RECOVERY_ITEMS = [
   { key:'rest_support', en:'Sleep & rest support from family/helper discussed', zh:'已與家人/傭工討論睡眠及休息支援' },
   { key:'mood_checkin', en:"Checked in on how you're feeling emotionally - if low mood, anxiety, or anything feels off lasts more than 2 weeks, contact your doctor", zh:'已檢視自己的情緒狀態 - 若情緒低落、焦慮或任何不適持續超過2週,請聯絡醫生' },
 ]
+// bc-05 - the real Edinburgh Postnatal Depression Scale (EPDS), transcribed
+// verbatim from the text the user supplied (a Perinatal Services BC
+// distribution copy; original: Cox JL, Holden JM, Sagovsky R. "Detection of
+// postnatal depression: development of the 10-item Edinburgh Postnatal
+// Depression Scale." Br J Psychiatry. 1987;150:782-786. (c) The Royal College
+// of Psychiatrists, reprinted with permission). Each option's point value is
+// exactly as printed next to it - no re-deriving ascending/descending order,
+// since getting that backwards on a self-harm item would be a real-harm bug,
+// not a cosmetic one. For use 28-32 weeks antenatal and 6-8 weeks postpartum,
+// per the instrument's own header - not gated to postpartum like the
+// recovery checklist above. English only for now: a Chinese translation
+// exists (the source page points to perinatalservicesbc.ca for one) but
+// isn't in hand here, and this is exactly the kind of wording where an
+// unverified machine translation of a validated instrument could shift
+// what's actually being asked - not guessing it.
+const EPDS_ITEMS = [
+  { key:1, en:'I have been able to laugh and see the funny side of things', options:[
+    {points:0, en:'As much as I always could'}, {points:1, en:'Not quite so much now'}, {points:2, en:'Definitely not so much now'}, {points:3, en:'Not at all'},
+  ]},
+  { key:2, en:'I have looked forward with enjoyment to things', options:[
+    {points:0, en:'As much as I ever did'}, {points:1, en:'Rather less than I used to'}, {points:2, en:'Definitely less than I used to'}, {points:3, en:'Hardly at all'},
+  ]},
+  { key:3, en:'I have blamed myself unnecessarily when things went wrong', options:[
+    {points:3, en:'Yes, most of the time'}, {points:2, en:'Yes, some of the time'}, {points:1, en:'Not very often'}, {points:0, en:'No, never'},
+  ]},
+  { key:4, en:'I have been anxious or worried for no good reason', options:[
+    {points:0, en:'No, not at all'}, {points:1, en:'Hardly ever'}, {points:2, en:'Yes, sometimes'}, {points:3, en:'Yes, very often'},
+  ]},
+  { key:5, en:'I have felt scared or panicky for no very good reason', options:[
+    {points:3, en:'Yes, quite a lot'}, {points:2, en:'Yes, sometimes'}, {points:1, en:'No, not much'}, {points:0, en:'No, not at all'},
+  ]},
+  { key:6, en:'Things have been getting on top of me', options:[
+    {points:3, en:"Yes, most of the time I haven't been able to cope"}, {points:2, en:"Yes, sometimes I haven't been coping as well as usual"}, {points:1, en:'No, most of the time I have coped quite well'}, {points:0, en:'No, I have been coping as well as ever'},
+  ]},
+  { key:7, en:'I have been so unhappy that I have had difficulty sleeping', options:[
+    {points:3, en:'Yes, most of the time'}, {points:2, en:'Yes, sometimes'}, {points:1, en:'Not very often'}, {points:0, en:'No, not at all'},
+  ]},
+  { key:8, en:'I have felt sad or miserable', options:[
+    {points:3, en:'Yes, most of the time'}, {points:2, en:'Yes, quite often'}, {points:1, en:'Not very often'}, {points:0, en:'No, not at all'},
+  ]},
+  { key:9, en:'I have been so unhappy that I have been crying', options:[
+    {points:3, en:'Yes, most of the time'}, {points:2, en:'Yes, quite often'}, {points:1, en:'Only occasionally'}, {points:0, en:'No, never'},
+  ]},
+  { key:10, en:'The thought of harming myself has occurred to me', options:[
+    {points:3, en:'Yes, quite often'}, {points:2, en:'Sometimes'}, {points:1, en:'Hardly ever'}, {points:0, en:'Never'},
+  ]},
+]
 // High-risk maternal monitoring (bm-03) - gestational diabetes glucose
 // log with meal-tagging, pre-eclampsia BP tracking (flagged at the
 // 140/90 mmHg threshold given directly in the feature doc), and
@@ -5746,6 +5793,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [conditions,setConditions]=useState([])
   const [medications,setMedications]=useState([])
   const [recoveryChecks,setRecoveryChecks]=useState([])
+  const [epdsScreens,setEpdsScreens]=useState([])
+  const [epdsAnswers,setEpdsAnswers]=useState({})
+  const [epdsSaving,setEpdsSaving]=useState(false)
+  const [epdsResult,setEpdsResult]=useState(null)
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -5754,7 +5805,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -5764,14 +5815,41 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       patient?.id ? supabase.from('conditions').select('*').eq('patient_id',patient.id).eq('active',true) : Promise.resolve({data:[]}),
       patient?.id ? supabase.from('medications').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
       supabase.from('bump_recovery_checklist').select('*').eq('bump_subscription_id',bumpSubscriptionId),
+      supabase.from('bump_epds_screens').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('completed_at',{ascending:false}),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setRecoveryChecks(recovery||[])
+    setEpdsScreens(epds||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
+
+  // bc-05 - the real EPDS, now unblocked with the verbatim text you
+  // supplied (see EPDS_ITEMS above for the sourcing note). Scored exactly
+  // as printed on each option, summed across all 10 items (0-30). No
+  // numeric "likely depression" cutoff is asserted here - the instrument
+  // text you gave me doesn't print one, it only says to discuss answers
+  // with a health care provider, so that's exactly what this does too.
+  // Item 10 (self-harm) always gets an immediate safety callout on any
+  // non-zero answer, regardless of total score - standard practice for
+  // this instrument, and not something to wait on a total-score
+  // threshold for.
+  async function submitEpds() {
+    if (EPDS_ITEMS.some(item => epdsAnswers[item.key]==null)) return
+    setEpdsSaving(true)
+    const responses = EPDS_ITEMS.map(item => epdsAnswers[item.key])
+    const totalScore = responses.reduce((s,v)=>s+v, 0)
+    const item10Flagged = epdsAnswers[10] > 0
+    await supabase.from('bump_epds_screens').insert({
+      bump_subscription_id: bumpSubscriptionId, responses, total_score: totalScore, item10_flagged: item10Flagged,
+    })
+    setEpdsResult({ totalScore, item10Flagged })
+    setEpdsAnswers({})
+    await load(); setEpdsSaving(false)
+  }
+  async function deleteEpdsScreen(id) { await supabase.from('bump_epds_screens').delete().eq('id', id); load() }
 
   // Postpartum "fourth trimester" recovery checklist - general patient-
   // education topics (not a diagnosis or dosing instruction), safe to
@@ -5972,6 +6050,44 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
         <div onClick={exportingHandoff?undefined:downloadHandoffSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingHandoff?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingHandoff?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export handoff summary for a new doctor/hospital':'⬇ 匯出轉介摘要（供新醫生／醫院使用）')}</div>
       </div>
+
+      <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
+
+        {epdsResult&&<div style={{margin:'0 0 14px',padding:'12px 14px',background:epdsResult.item10Flagged?C.redLight:__theme.accentXLight,border:`0.5px solid ${epdsResult.item10Flagged?C.red:__theme.accentLight}`,borderRadius:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:700,color:epdsResult.item10Flagged?C.red:__theme.accent}}>{isEn?`Score: ${epdsResult.totalScore} / 30`:`分數：${epdsResult.totalScore} / 30`}</div>
+          <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'4px',lineHeight:1.6}}>{isEn?'Talk about your answers to these questions with your health care provider.':'請與您的醫護人員討論您的答案。'}</div>
+          {epdsResult.item10Flagged&&<div style={{fontSize:'12px',color:C.red,fontWeight:600,marginTop:'8px',lineHeight:1.6}}>{isEn?"You answered that thoughts of harming yourself have occurred to you. Please talk to someone now - contact your OBGYN, midwife, or GP today, or if you're in immediate danger, call 999 or go to your nearest A&E.":'您回答曾出現傷害自己的想法。請立即向人求助 - 今天聯絡您的婦產科醫生、助產士或家庭醫生,若有即時危險,請致電999或前往最近的急症室。'}</div>}
+        </div>}
+
+        {!epdsResult&&<>
+          {EPDS_ITEMS.map(item=>(
+            <div key={item.key} style={{marginBottom:'14px'}}>
+              <div style={{fontSize:'12.5px',fontWeight:600,color:C.text,marginBottom:'6px'}}>{item.key}. {item.en}</div>
+              {item.options.map((opt,i)=>(
+                <div key={i} onClick={()=>setEpdsAnswers({...epdsAnswers,[item.key]:opt.points})} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
+                  <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${epdsAnswers[item.key]===opt.points?__theme.accent:C.border}`,background:epdsAnswers[item.key]===opt.points?__theme.accent:'#fff',flexShrink:0}}/>
+                  <div style={{fontSize:'12.5px',color:C.text}}>{opt.en}</div>
+                </div>
+              ))}
+            </div>
+          ))}
+          <Btn variant="primary" style={{width:'100%'}} disabled={epdsSaving||EPDS_ITEMS.some(item=>epdsAnswers[item.key]==null)} onClick={submitEpds}>{epdsSaving?(isEn?'Saving…':'儲存中…'):(isEn?'See my score':'查看分數')}</Btn>
+        </>}
+        {epdsResult&&<Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>setEpdsResult(null)}>{isEn?'Take it again':'重新進行'}</Btn>}
+
+        {epdsScreens.length>0&&<div style={{marginTop:'16px'}}>
+          <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Past check-ins':'過往記錄'}</div>
+          {epdsScreens.map(e=>(
+            <div key={e.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(e.completed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</span>
+              <span style={{flex:1,fontWeight:e.item10_flagged?700:400,color:e.item10_flagged?C.red:C.text}}>{e.total_score} / 30{e.item10_flagged?(isEn?' ⚠ self-harm item flagged':' ⚠ 已標示傷害自己項目'):''}</span>
+              <span onClick={()=>deleteEpdsScreen(e.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          ))}
+        </div>}
+      </Card>
 
       {bumpRow?.child_dob&&<>
         <SecLabel>{isEn?'Postpartum recovery':'產後復原'}</SecLabel>
