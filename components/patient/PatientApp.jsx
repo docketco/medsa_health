@@ -5313,29 +5313,99 @@ const GLUCOSE_CONTEXTS = [
 // was given, and gestational-diabetes cutoffs depend on which test a
 // patient's OBGYN actually used, so this logs and shows values without
 // guessing at a line to flag.
-function BumpHealthScreen({ isEn, bumpSubscriptionId }) {
+function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const __theme = useContext(ThemeContext)
+  const [bumpRow,setBumpRow]=useState(null)
   const [bpLogs,setBpLogs]=useState([])
   const [glucoseLogs,setGlucoseLogs]=useState([])
   const [kickLogs,setKickLogs]=useState([])
+  const [documents,setDocuments]=useState([])
   const [loading,setLoading]=useState(true)
   const [bpForm,setBpForm]=useState({systolic:'',diastolic:''})
   const [glucoseForm,setGlucoseForm]=useState({value:'',context:'fasting'})
   const [saving,setSaving]=useState(false)
   const [kickSession,setKickSession]=useState(null) // {startedAt, count} while a count is in progress
+  const [exportingPdf,setExportingPdf]=useState(false)
 
   async function load() {
     if (!bumpSubscriptionId) { setLoading(false); return }
     setLoading(true)
-    const [{data:bp},{data:g},{data:k}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs}] = await Promise.all([
+      supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_kick_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(20),
+      patient?.id ? supabase.from('medical_record_attachments').select('*').eq('patient_id',patient.id).in('category', BUMP_DOC_TYPES.map(t=>t.value)).order('uploaded_at',{ascending:false}) : Promise.resolve({data:[]}),
     ])
-    setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[])
+    setBumpRow(sub||null)
+    setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [bumpSubscriptionId])
+
+  // bm-01 - the "continuous maternal ledger" the feature doc describes:
+  // one exportable PDF combining the pregnancy's own documents (already
+  // uploaded under Account Settings) with everything logged on this
+  // screen, for handing to an OBGYN or a public HA hospital at a visit.
+  async function downloadMaternalSummary() {
+    if (!bumpSubscriptionId) return
+    setExportingPdf(true)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Maternal Health Summary`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Pregnancy', subtitle,
+      dateInstitution: bumpRow?.started_at ? `Medsa Bump started ${new Date(bumpRow.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}` : '',
+      details: [
+        ...(bumpRow?.predicted_due_date ? [['Predicted due date', new Date(bumpRow.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+        ...(bumpRow?.discovered_pregnant_at ? [['Discovered pregnant', new Date(bumpRow.discovered_pregnant_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+      ],
+    })
+
+    if (bpLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Blood pressure log', subtitle,
+      dateInstitution: `${bpLogs.length} reading${bpLogs.length===1?'':'s'} · readings at or above 140/90 mmHg are flagged`,
+      details: [...bpLogs].reverse().map(b=>[new Date(b.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${b.systolic}/${b.diastolic} mmHg${(b.systolic>=140||b.diastolic>=90)?'  ⚠ FLAGGED':''}`]),
+    })
+
+    if (glucoseLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Blood glucose log', subtitle,
+      dateInstitution: `${glucoseLogs.length} reading${glucoseLogs.length===1?'':'s'}`,
+      details: [...glucoseLogs].reverse().map(g=>{
+        const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
+        return [new Date(g.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${g.glucose_mg_dl} mg/dL${ctx?` (${ctx.en})`:''}`]
+      }),
+    })
+
+    if (kickLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Kick-count sessions', subtitle,
+      dateInstitution: `${kickLogs.length} session${kickLogs.length===1?'':'s'}`,
+      details: [...kickLogs].reverse().map(k=>[new Date(k.started_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${k.kick_count} kicks${k.ended_at?` over ${Math.round((new Date(k.ended_at)-new Date(k.started_at))/60000)} min`:''}`]),
+    })
+
+    if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Uploaded documents', subtitle,
+      dateInstitution: `${documents.length} document${documents.length===1?'':'s'} - see Account Settings to view the actual files`,
+      details: documents.map(d=>{
+        const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
+        return [t?t.label.en:d.category, d.file_name]
+      }),
+    })
+
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Bump-Maternal-Summary-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingPdf(false)
+  }
 
   async function addBp() {
     if (!bumpSubscriptionId || !bpForm.systolic || !bpForm.diastolic) return
@@ -5371,7 +5441,8 @@ function BumpHealthScreen({ isEn, bumpSubscriptionId }) {
     <div style={{padding:'0 16px 24px'}}>
       <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
         <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Pregnancy health log':'孕期健康記錄'}</div>
-        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
+        <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
       </div>
 
       <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
@@ -6945,7 +7016,7 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
-        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} bumpSubscriptionId={bumpSubscriptionId}/>}
+        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={bumpSubscriptionId}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
