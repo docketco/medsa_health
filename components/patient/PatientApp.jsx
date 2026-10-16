@@ -5326,19 +5326,27 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [saving,setSaving]=useState(false)
   const [kickSession,setKickSession]=useState(null) // {startedAt, count} while a count is in progress
   const [exportingPdf,setExportingPdf]=useState(false)
+  const [exportingHandoff,setExportingHandoff]=useState(false)
+  const [allergies,setAllergies]=useState([])
+  const [conditions,setConditions]=useState([])
+  const [medications,setMedications]=useState([])
 
   async function load() {
     if (!bumpSubscriptionId) { setLoading(false); return }
     setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_kick_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(20),
       patient?.id ? supabase.from('medical_record_attachments').select('*').eq('patient_id',patient.id).in('category', BUMP_DOC_TYPES.map(t=>t.value)).order('uploaded_at',{ascending:false}) : Promise.resolve({data:[]}),
+      patient?.id ? supabase.from('allergies').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
+      patient?.id ? supabase.from('conditions').select('*').eq('patient_id',patient.id).eq('active',true) : Promise.resolve({data:[]}),
+      patient?.id ? supabase.from('medications').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
+    setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [bumpSubscriptionId])
@@ -5407,6 +5415,80 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     setExportingPdf(false)
   }
 
+  // bm-02 - private↔public handoff formatting: a mother seeing a private
+  // OBGYN who delivers at a public HA hospital needs a short, standardized
+  // intake summary a doctor meeting her for the first time can actually use
+  // - not the full chronological ledger bm-01 exports. Allergies/active
+  // conditions/current medications come from the same tables every other
+  // part of the app already uses, not anything Bump-specific.
+  async function downloadHandoffSummary() {
+    if (!bumpSubscriptionId) return
+    setExportingHandoff(true)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Antenatal Handoff Summary`
+    drawPdfHeader(doc, pageWidth, subtitle)
+    let y = 40
+
+    const weeksUntilDue = bumpRow?.predicted_due_date ? Math.ceil((new Date(bumpRow.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
+    const gestationalWeek = weeksUntilDue!=null ? 40-weeksUntilDue : null
+    const lastBp = bpLogs[0]
+    const flaggedBpCount = bpLogs.filter(b=>b.systolic>=140||b.diastolic>=90).length
+    const lastGlucose = glucoseLogs[0]
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Patient & pregnancy', subtitle,
+      dateInstitution: `Summary generated ${new Date().toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - for handoff from a private OBGYN to a receiving hospital/clinic`,
+      details: [
+        ['Patient', `${patient.full_name||''} (${patient.medsa_id||''})`],
+        ...(patient.date_of_birth ? [['Date of birth', new Date(patient.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+        ...(gestationalWeek!=null ? [['Gestational age', `${Math.max(0,gestationalWeek)} weeks (estimated as of today)`]] : []),
+        ...(bumpRow?.predicted_due_date ? [['Predicted due date', new Date(bumpRow.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+      ],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Allergies, conditions & medications', subtitle,
+      dateInstitution: 'As recorded on the patient\'s Medsa profile',
+      details: [
+        ['Known allergies', allergies.length>0 ? allergies.map(a=>a.allergen||a.name).filter(Boolean).join(', ') : 'None on file'],
+        ['Active conditions', conditions.length>0 ? conditions.map(c=>c.condition_name).filter(Boolean).join(', ') : 'None on file'],
+        ['Current medications', medications.length>0 ? medications.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file'],
+      ],
+    })
+
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Monitoring summary', subtitle,
+      dateInstitution: `${bpLogs.length} blood pressure reading${bpLogs.length===1?'':'s'} logged, ${flaggedBpCount} at or above 140/90 mmHg`,
+      details: [
+        ...(lastBp ? [['Most recent BP', `${lastBp.systolic}/${lastBp.diastolic} mmHg (${new Date(lastBp.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})${(lastBp.systolic>=140||lastBp.diastolic>=90)?'  ⚠ FLAGGED':''}`]] : []),
+        ...(lastGlucose ? [['Most recent glucose', `${lastGlucose.glucose_mg_dl} mg/dL (${new Date(lastGlucose.recorded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})`]] : []),
+        ...(kickLogs.length>0 ? [['Kick-count sessions logged', String(kickLogs.length)]] : []),
+        ['Full readings log', 'See the attached maternal health summary export for every logged reading'],
+      ],
+    })
+
+    if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Uploaded antenatal documents', subtitle,
+      dateInstitution: `${documents.length} document${documents.length===1?'':'s'} on file - see Account Settings to view the actual files`,
+      details: documents.map(d=>{
+        const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
+        return [t?t.label.en:d.category, d.file_name]
+      }),
+    })
+
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Bump-Handoff-Summary-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingHandoff(false)
+  }
+
   async function addBp() {
     if (!bumpSubscriptionId || !bpForm.systolic || !bpForm.diastolic) return
     setSaving(true)
@@ -5443,6 +5525,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Pregnancy health log':'孕期健康記錄'}</div>
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
         <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
+        <div onClick={exportingHandoff?undefined:downloadHandoffSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingHandoff?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingHandoff?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export handoff summary for a new doctor/hospital':'⬇ 匯出轉介摘要（供新醫生／醫院使用）')}</div>
       </div>
 
       <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
