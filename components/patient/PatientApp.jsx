@@ -948,8 +948,8 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
 // header, no visual hierarchy at all (literally just "Label: value" on
 // every line). One real design, reused by both, instead of two different
 // bare-text layouts.
-function drawPdfHeader(doc, pageWidth, subtitle) {
-  const GREEN = [0,98,65]
+function drawPdfHeader(doc, pageWidth, subtitle, accentColor) {
+  const GREEN = accentColor || [0,98,65]
   doc.setFillColor(...GREEN)
   doc.rect(0, 0, pageWidth, 28, 'F')
   doc.setTextColor(255,255,255)
@@ -958,6 +958,15 @@ function drawPdfHeader(doc, pageWidth, subtitle) {
   doc.setFontSize(9); doc.setFont(undefined,'normal')
   doc.text(subtitle, 16, 21)
   doc.setTextColor(20,20,20)
+}
+// A medication counts as "current" only while its own prescribed window
+// still holds - an explicit active:false, or an end_date already in the
+// past, means the course is over and it shouldn't keep appearing under
+// "Active prescriptions" or in a doctor/admission handoff packet forever.
+function isMedicationActive(m) {
+  if (m.active === false) return false
+  if (m.end_date && new Date(m.end_date) < new Date()) return false
+  return true
 }
 function drawPdfFooter(doc, pageWidth, pageHeight) {
   const BORDER = [222,220,214], GRAY = [130,130,130]
@@ -974,7 +983,7 @@ function drawPdfFooter(doc, pageWidth, pageHeight) {
 function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstitution, details, receiptText, subtitle, accentColor }) {
   const GREEN = accentColor || [0,98,65], GRAY = [120,120,120], INK = [26,26,26], BORDER = [224,222,216]
   const left = 16, right = pageWidth-16
-  if (y > pageHeight - 40) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle); y = 40 }
+  if (y > pageHeight - 40) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle, accentColor); y = 40 }
   doc.setFontSize(13); doc.setFont(undefined,'bold'); doc.setTextColor(...GREEN)
   doc.text(title || 'Consultation', left, y); y += 6
   doc.setFontSize(9.5); doc.setFont(undefined,'normal'); doc.setTextColor(...GRAY)
@@ -982,7 +991,7 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
   doc.setDrawColor(...BORDER); doc.setLineWidth(0.3)
   doc.line(left, y, right, y); y += 7
   for (const [label, value] of details) {
-    if (y > pageHeight - 30) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle); y = 40 }
+    if (y > pageHeight - 30) { drawPdfFooter(doc, pageWidth, pageHeight); doc.addPage(); drawPdfHeader(doc, pageWidth, subtitle, accentColor); y = 40 }
     doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(...GRAY)
     doc.text(label.toUpperCase(), left, y); y += 4.5
     doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(...INK)
@@ -5250,7 +5259,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · ER / Urgent Care Prep - Last 24 Hours`
-    drawPdfHeader(doc, pageWidth, subtitle)
+    drawPdfHeader(doc, pageWidth, subtitle, YELLOW)
     let y = 40
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
@@ -5349,7 +5358,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Doctor Packet - Symptom & Fever Log`
-    drawPdfHeader(doc, pageWidth, subtitle)
+    drawPdfHeader(doc, pageWidth, subtitle, YELLOW)
     let y = 40
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
       title: 'Symptom & fever log (last 14 days)', subtitle, accentColor: YELLOW,
@@ -5979,7 +5988,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Hospital Pre-Admission Packet`
-    drawPdfHeader(doc, pageWidth, subtitle)
+    drawPdfHeader(doc, pageWidth, subtitle, PINK)
     let y = 40
 
     const weeksUntilDue = bumpRow?.predicted_due_date ? Math.ceil((new Date(bumpRow.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
@@ -6003,7 +6012,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       details: [
         ['Known allergies', allergies.length>0 ? allergies.map(a=>a.allergen||a.name).filter(Boolean).join(', ') : 'None on file'],
         ['Active conditions', conditions.length>0 ? conditions.map(c=>c.condition_name).filter(Boolean).join(', ') : 'None on file'],
-        ['Current medications', medications.length>0 ? medications.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file'],
+        ['Current medications', (() => { const live = medications.filter(isMedicationActive); return live.length>0 ? live.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file' })()],
       ],
     })
 
@@ -6090,7 +6099,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Maternal Health Summary`
-    drawPdfHeader(doc, pageWidth, subtitle)
+    drawPdfHeader(doc, pageWidth, subtitle, PINK)
     let y = 40
 
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
@@ -6163,7 +6172,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Antenatal Handoff Summary`
-    drawPdfHeader(doc, pageWidth, subtitle)
+    drawPdfHeader(doc, pageWidth, subtitle, PINK)
     let y = 40
 
     const weeksUntilDue = bumpRow?.predicted_due_date ? Math.ceil((new Date(bumpRow.predicted_due_date) - new Date()) / (7*24*60*60*1000)) : null
@@ -6190,7 +6199,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       details: [
         ['Known allergies', allergies.length>0 ? allergies.map(a=>a.allergen||a.name).filter(Boolean).join(', ') : 'None on file'],
         ['Active conditions', conditions.length>0 ? conditions.map(c=>c.condition_name).filter(Boolean).join(', ') : 'None on file'],
-        ['Current medications', medications.length>0 ? medications.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file'],
+        ['Current medications', (() => { const live = medications.filter(isMedicationActive); return live.length>0 ? live.map(m=>m.name||m.medication_name).filter(Boolean).join(', ') : 'None on file' })()],
       ],
     })
 
@@ -6558,11 +6567,17 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   // This replaces the old request/approve/deny flow (which charged a
   // standalone HK$150) with a direct hand-off to Find Care, where a real
   // appointment gets booked against the doctor's actual schedule.
-  const hasLiveMeds = medications.length > 0
+  // Real bug found live-testing: this list never checked end_date/active,
+  // so a medication kept showing as "Active" forever after its prescribed
+  // course actually ended. isMedicationActive is the same check now used
+  // in the Bump admission/handoff PDF exports, so "active medications"
+  // means the same thing everywhere in the app.
+  const liveMedications = medications.filter(isMedicationActive)
+  const hasLiveMeds = liveMedications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
       <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
-      {(hasLiveMeds ? medications.map((m,idx)=>({
+      {(hasLiveMeds ? liveMedications.map((m,idx)=>({
         raw:m,
         name:`${m.medication_name} ${m.dosage||''}`.trim(),
         dose:m.frequency||'As prescribed',
@@ -7742,8 +7757,16 @@ export default function PatientApp({ liveData={} }) {
   const [showGate,setShowGate]=useState(true)
   const [switcherOpen,setSwitcherOpen]=useState(false)
   const [creatingKid,setCreatingKid]=useState(null) // null | {parent, guardianRequired}
+  // Real bug found live-testing: switching profile (parent <-> a Kids/
+  // dependent profile) while on a screen specific to the OLD profile
+  // (e.g. the Bump pregnancy log) left `screen` untouched - the app kept
+  // rendering that same screen key under the new profile, just re-themed
+  // to its color, since nothing here validates a screen key against the
+  // profile actually signed in. Always landing on Home after a switch
+  // sidesteps that rather than trying to maintain a per-profile allow-list.
   function switchToPatient(p) {
     setSignedInPatient(p)
+    setScreen('home')
     if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
   }
   const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
