@@ -5151,7 +5151,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [labelScanError,setLabelScanError]=useState('')
   const [labelScanFilled,setLabelScanFilled]=useState(false)
   const [sleepLogs,setSleepLogs]=useState([])
-  const [sleepForm,setSleepForm]=useState({ startedAt:'', endedAt:'', sleepType:'nap' })
+  const [sleepForm,setSleepForm]=useState({ sleepType:'nap' })
+  const [sleepSession,setSleepSession]=useState(null) // {startedAt, sleepType} while a sleep is in progress
+  const [sleepTick,setSleepTick]=useState(0) // forces a re-render every 30s so the live elapsed time moves
   const [immunizationChecks,setImmunizationChecks]=useState([])
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
@@ -5198,22 +5200,30 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
   // Sleep log - the clearest gap against every benchmarked baby tracker
   // (BabyCenter, Ovia Parenting, etc.), which all log sleep alongside
-  // feeding/diaper as a core entry. Manual start/end entry, same pattern
-  // as the feeding log, rather than a live "currently sleeping" session -
-  // simpler and just as useful for the digest below.
-  async function addSleepLog() {
-    if (!patient?.id || !sleepForm.startedAt || !sleepForm.endedAt) return
+  // feeding/diaper as a core entry. A live start/stop session, same
+  // pattern as the kick counter (bump_kick_logs) - a parent starting this
+  // the moment the baby falls asleep doesn't have to remember or re-enter
+  // a time later, and the duration is computed automatically rather than
+  // typed in.
+  function startSleepSession() { setSleepSession({ startedAt:new Date(), sleepType:sleepForm.sleepType }) }
+  async function finishSleepSession() {
+    if (!sleepSession || !patient?.id) return
     setSaving(true)
     await supabase.from('kids_sleep_logs').insert({
       patient_id: patient.id,
-      started_at: new Date(sleepForm.startedAt).toISOString(),
-      ended_at: new Date(sleepForm.endedAt).toISOString(),
-      sleep_type: sleepForm.sleepType,
+      started_at: sleepSession.startedAt.toISOString(),
+      ended_at: new Date().toISOString(),
+      sleep_type: sleepSession.sleepType,
     })
-    setSleepForm({ startedAt:'', endedAt:'', sleepType:'nap' })
+    setSleepSession(null)
     await load(); setSaving(false)
   }
   async function deleteSleepLog(id) { await supabase.from('kids_sleep_logs').delete().eq('id', id); load() }
+  useEffect(() => {
+    if (!sleepSession) return
+    const interval = setInterval(() => setSleepTick(t=>t+1), 30000)
+    return () => clearInterval(interval)
+  }, [sleepSession])
 
   async function addDiaperLog(diaperType) {
     if (!patient?.id) return
@@ -5625,23 +5635,20 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
       <SecLabel>{isEn?'Sleep log':'睡眠記錄'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Log a nap or night sleep after it happens.':'睡眠結束後記錄小睡或夜間睡眠。'}</div>
-        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-          {[{value:'nap',en:'Nap',zh:'小睡'},{value:'night',en:'Night sleep',zh:'夜間睡眠'}].map(t=>(
-            <div key={t.value} onClick={()=>setSleepForm({...sleepForm,sleepType:t.value})} style={{flex:1,textAlign:'center',padding:'9px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:sleepForm.sleepType===t.value?__theme.accent:C.card,color:sleepForm.sleepType===t.value?'#fff':C.text}}>{isEn?t.en:t.zh}</div>
-          ))}
-        </div>
-        <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
-          <div style={{flex:'1 1 150px'}}>
-            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'3px'}}>{isEn?'Fell asleep':'入睡時間'}</div>
-            <input type="datetime-local" value={sleepForm.startedAt} max={sleepForm.endedAt||undefined} onChange={e=>setSleepForm({...sleepForm,startedAt:e.target.value})} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        {!sleepSession&&<>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Start when baby falls asleep, stop when they wake - the duration is calculated for you.':'寶寶入睡時按開始,醒來時按停止 - 系統會自動計算睡眠時長。'}</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            {[{value:'nap',en:'Nap',zh:'小睡'},{value:'night',en:'Night sleep',zh:'夜間睡眠'}].map(t=>(
+              <div key={t.value} onClick={()=>setSleepForm({...sleepForm,sleepType:t.value})} style={{flex:1,textAlign:'center',padding:'9px',borderRadius:'8px',fontSize:'12px',fontWeight:500,cursor:'pointer',background:sleepForm.sleepType===t.value?__theme.accent:C.card,color:sleepForm.sleepType===t.value?'#fff':C.text}}>{isEn?t.en:t.zh}</div>
+            ))}
           </div>
-          <div style={{flex:'1 1 150px'}}>
-            <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'3px'}}>{isEn?'Woke up':'起床時間'}</div>
-            <input type="datetime-local" value={sleepForm.endedAt} min={sleepForm.startedAt||undefined} onChange={e=>setSleepForm({...sleepForm,endedAt:e.target.value})} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          </div>
-        </div>
-        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!sleepForm.startedAt||!sleepForm.endedAt} onClick={addSleepLog}>{isEn?'Log sleep':'記錄睡眠'}</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={startSleepSession}>{isEn?'Start sleep':'開始睡眠'}</Btn>
+        </>}
+        {sleepSession&&<div style={{textAlign:'center',padding:'16px 0'}}>
+          <div style={{fontSize:'30px',fontWeight:700,color:__theme.accent}}>{Math.round((Date.now()-sleepSession.startedAt)/60000)}<span style={{fontSize:'14px',fontWeight:500}}>{isEn?' min':'分鐘'}</span></div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>{isEn?`${sleepSession.sleepType==='nap'?'Nap':'Night sleep'} started ${sleepSession.startedAt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}`:`${sleepSession.sleepType==='nap'?'小睡':'夜間睡眠'}開始於${sleepSession.startedAt.toLocaleTimeString('en-HK',{hour:'2-digit',minute:'2-digit'})}`}</div>
+          <Btn variant="primary" style={{width:'100%'}} disabled={saving} onClick={finishSleepSession}>{isEn?'Wake up / stop':'醒來 / 停止'}</Btn>
+        </div>}
         <div style={{marginTop:'12px'}}>
           {sleepLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No sleep logged yet.':'暫無睡眠記錄。'}</div>}
           {sleepLogs.map(s=>{
@@ -5729,7 +5736,8 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
       <SecLabel>{isEn?'HKCIP immunisation schedule':'HKCIP疫苗接種時間表'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Hong Kong Childhood Immunisation Programme, as recommended by the Scientific Committee on Vaccine Preventable Diseases, Centre for Health Protection, Department of Health (as of 9 Oct 2024). Check off each dose once given - this is a separate checklist from the vaccinations already recorded in Medical records.':'香港兒童免疫接種計劃,由衞生防護中心疫苗可預防疾病科學委員會建議(截至2024年10月9日)。每劑接種後請勾選 - 此清單與醫療記錄中已記錄的疫苗分開獨立。'}</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Hong Kong Childhood Immunisation Programme, as recommended by the Scientific Committee on Vaccine Preventable Diseases, Centre for Health Protection, Department of Health (as of 9 Oct 2024). Check off each dose once given.':'香港兒童免疫接種計劃,由衞生防護中心疫苗可預防疾病科學委員會建議(截至2024年10月9日)。每劑接種後請勾選。'}</div>
+        <div style={{fontSize:'11px',color:C.amber,fontWeight:600,marginBottom:'12px',lineHeight:1.5,padding:'8px 10px',background:C.amberLight,borderRadius:'8px'}}>{isEn?"This checklist is for your own tracking and prepping only - it is not the official record. Ask your doctor or clinic to upload the official immunisation record to Medical records.":'此清單僅供您個人追蹤及準備之用,並非官方記錄。請要求醫生或診所將官方疫苗接種記錄上載至醫療記錄。'}</div>
         {HKCIP_SCHEDULE.map(band=>{
           const checkedCount = band.doses.filter(d=>immunizationChecks.some(c=>c.dose_key===d.key)).length
           return (
@@ -6833,6 +6841,8 @@ function MedsaBumpSection({ isEn, patient }) {
   const [recordingBirth,setRecordingBirth]=useState(false)
   const [birthForm,setBirthForm]=useState({dob:'',fullName:''})
   const [savingBirth,setSavingBirth]=useState(false)
+  const [birthDobError,setBirthDobError]=useState(false)
+  const twoYearsAgoStr = (() => { const d=new Date(); d.setFullYear(d.getFullYear()-2); return d.toISOString().slice(0,10) })()
   const [graduationNotice,setGraduationNotice]=useState(null) // holds the new Kids profile just created, if graduation just ran
 
   // Checkout verification on return (session_id from Stripe, webhook
@@ -6889,12 +6899,25 @@ function MedsaBumpSection({ isEn, patient }) {
     await loadBump()
   }
 
-  async function recordBirth() {
+  // Real bug found live-testing: the date input had a `max` (no future
+  // birthdays) but no floor, so a mistyped/short year (e.g. "0006" instead
+  // of "2026") sailed straight through as a valid date. Downstream,
+  // monthsSinceBirth treats that as ~2000 years postpartum and instantly
+  // fires the 12-month pass closure - silently locking the parent out of
+  // Bump with no error shown. Guarding here, not just the input's `min`,
+  // since this field is also reachable without the picker.
+  function recordBirth() {
     if (!activeBump?.id || !birthForm.dob) return
-    setSavingBirth(true)
-    await supabase.from('bump_subscriptions').update({ child_dob: birthForm.dob, child_full_name: birthForm.fullName||null }).eq('id', activeBump.id)
-    setSavingBirth(false); setRecordingBirth(false)
-    await loadBump()
+    const dob = new Date(birthForm.dob)
+    const twoYearsAgo = new Date(); twoYearsAgo.setFullYear(twoYearsAgo.getFullYear()-2)
+    if (dob < twoYearsAgo || dob > new Date()) { setBirthDobError(true); return }
+    setBirthDobError(false)
+    return (async () => {
+      setSavingBirth(true)
+      await supabase.from('bump_subscriptions').update({ child_dob: birthForm.dob, child_full_name: birthForm.fullName||null }).eq('id', activeBump.id)
+      setSavingBirth(false); setRecordingBirth(false)
+      await loadBump()
+    })()
   }
 
   async function uploadCheckup(file) {
@@ -6980,7 +7003,8 @@ function MedsaBumpSection({ isEn, patient }) {
       {!activeBump.child_dob&&!recordingBirth&&<div onClick={()=>setRecordingBirth(true)} style={{marginTop:'14px',fontSize:'12px',color:'#fff',textDecoration:'underline',cursor:'pointer'}}>{isEn?'👶 Baby arrived? Record the birth':'👶 寶寶已出生?記錄出生資料'}</div>}
       {!activeBump.child_dob&&recordingBirth&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
         <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?"Baby's date of birth":'寶寶出生日期'}</div>
-        <input type="date" value={birthForm.dob} max={new Date().toISOString().slice(0,10)} onChange={e=>setBirthForm({...birthForm,dob:e.target.value})} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        <input type="date" value={birthForm.dob} min={twoYearsAgoStr} max={new Date().toISOString().slice(0,10)} onChange={e=>{setBirthForm({...birthForm,dob:e.target.value}); setBirthDobError(false)}} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
+        {birthDobError&&<div style={{fontSize:'11px',color:'#fff',background:'rgba(200,0,0,0.3)',borderRadius:'6px',padding:'7px 10px',marginBottom:'10px'}}>{isEn?"That doesn't look like a valid birth date - please check the year.":'出生日期看來不正確 - 請檢查年份。'}</div>}
         <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?"Baby's full name (optional, can add later)":'寶寶全名(可選,可稍後補充)'}</div>
         <input value={birthForm.fullName} onChange={e=>setBirthForm({...birthForm,fullName:e.target.value})} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
         <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={savingBirth||!birthForm.dob} onClick={recordBirth}>{savingBirth?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
