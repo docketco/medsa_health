@@ -5155,6 +5155,7 @@ const HKCIP_SCHEDULE = [
 
 function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
+  const [kidsTab,setKidsTab]=useState('growth')
   const [growthLogs,setGrowthLogs]=useState([])
   const [feedingLogs,setFeedingLogs]=useState([])
   const [milestoneChecks,setMilestoneChecks]=useState([])
@@ -5578,6 +5579,17 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{isEn?'See the HKCIP schedule below.':'請參閱下方HKCIP疫苗接種時間表。'}</div>
       </div>}
 
+      {/* Same sub-tab treatment as the Bump pregnancy log - this screen had
+          grown into eight stacked sections on one long scroll. The digest
+          and alert banners above stay outside the tabs since they're an
+          at-a-glance overview, not one section's job. */}
+      <div style={{display:'flex',gap:'6px',margin:'0 0 16px',padding:'4px',background:C.card,borderRadius:'10px'}}>
+        {[{value:'growth',en:'Growth',zh:'生長'},{value:'daily',en:'Feeding & care',zh:'餵養與照護'},{value:'health',en:'Health',zh:'健康'},{value:'milestones',en:'Immunisations & milestones',zh:'疫苗與里程碑'}].map(t=>(
+          <div key={t.value} onClick={()=>setKidsTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:'8px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:kidsTab===t.value?__theme.accent:'transparent',color:kidsTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
+        ))}
+      </div>
+
+      {kidsTab==='health'&&<>
       <SecLabel>{isEn?'MCHC appointments':'母嬰健康院預約'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Medsa doesn't book MCHC visits - enter a date here after booking with the centre and we'll remind you as it approaches.":'Medsa並不代為預約母嬰健康院 - 預約後在此輸入日期,我們會在預約臨近時提醒您。'}</div>
@@ -5634,7 +5646,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           ))}
         </div>
       </Card>
+      </>}
 
+      {kidsTab==='daily'&&<>
       <SecLabel>{isEn?'Diaper log':'尿布記錄'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Why this matters: a sudden drop in wet diapers (possible dehydration) or diarrhea is one of the first things an ER doctor or nurse asks about - tap here as it happens so you have an exact answer, not a guess, under stress.":'為何重要：排尿突然減少(可能脫水)或腹瀉,是急症室醫護最先詢問的事項之一 - 事發時輕觸記錄,緊急時刻就有確實答案,而非憑印象猜測。'}</div>
@@ -5685,7 +5699,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           })}
         </div>
       </Card>
+      </>}
 
+      {kidsTab==='growth'&&<>
       <SecLabel>{isEn?'Growth':'生長'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
@@ -5725,7 +5741,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           </div>
         </>}
       </Card>
+      </>}
 
+      {kidsTab==='daily'&&<>
       <SecLabel>{isEn?'Feeding (milk) log':'餵養(奶量)記錄'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
@@ -5755,7 +5773,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           )
         })}
       </Card>
+      </>}
 
+      {kidsTab==='milestones'&&<>
       <SecLabel>{isEn?'HKCIP immunisation schedule':'HKCIP疫苗接種時間表'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Hong Kong Childhood Immunisation Programme, as recommended by the Scientific Committee on Vaccine Preventable Diseases, Centre for Health Protection, Department of Health (as of 9 Oct 2024). Check off each dose once given.':'香港兒童免疫接種計劃,由衞生防護中心疫苗可預防疾病科學委員會建議(截至2024年10月9日)。每劑接種後請勾選。'}</div>
@@ -5814,6 +5834,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           )
         })}
       </Card>
+      </>}
     </div>
   )
 }
