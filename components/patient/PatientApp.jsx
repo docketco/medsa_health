@@ -6462,6 +6462,14 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
 // behind it would be worse than no badge at all. Posts show a stable,
 // anonymous per-poster handle rather than the patient's real name, same
 // "anonymously" framing as the product Community tab.
+// Report reasons kept short and generic on purpose - this is a flag for a
+// human to review, not a classifier input, so "why" only needs to be
+// specific enough to triage, not exhaustive.
+const COHORT_REPORT_REASONS = [
+  { value:'harmful', en:'Harmful or abusive', zh:'有害或冒犯內容' },
+  { value:'spam', en:'Spam or advertising', zh:'垃圾訊息或廣告' },
+  { value:'other', en:'Other', zh:'其他' },
+]
 function BumpCohortScreen({ isEn, patient={} }) {
   const __theme = useContext(ThemeContext)
   const [cohortKey,setCohortKey]=useState(undefined) // undefined = loading, null = no due date on file
@@ -6471,6 +6479,13 @@ function BumpCohortScreen({ isEn, patient={} }) {
   const [saving,setSaving]=useState(false)
   const [openReplies,setOpenReplies]=useState({}) // postId -> replies array
   const [replyDrafts,setReplyDrafts]=useState({})
+  // Reporting (bc-04 follow-up) - no moderation queue/admin review screen
+  // exists for this yet, so this is deliberately self-moderating rather
+  // than a report that silently goes nowhere: once 3 different people
+  // report the same post/reply, it's hidden from the cohort for everyone,
+  // not just the reporter. reportingTarget holds {kind:'post'|'reply',
+  // postId, replyId} while the reason picker for one post/reply is open.
+  const [reportingTarget,setReportingTarget]=useState(null)
 
   function pseudonym(patientId) {
     return (isEn?'Parent ·':'家長 ·') + (patientId||'').replace(/-/g,'').slice(-4).toUpperCase()
@@ -6482,7 +6497,7 @@ function BumpCohortScreen({ isEn, patient={} }) {
     const key = sub?.predicted_due_date ? sub.predicted_due_date.slice(0,7) : null
     setCohortKey(key)
     if (key) {
-      const { data } = await supabase.from('bump_cohort_posts').select('*').eq('cohort_key',key).order('created_at',{ascending:false}).limit(50)
+      const { data } = await supabase.from('bump_cohort_posts').select('*').eq('cohort_key',key).is('hidden_at',null).order('created_at',{ascending:false}).limit(50)
       setPosts(data||[])
     }
     setLoading(false)
@@ -6500,7 +6515,7 @@ function BumpCohortScreen({ isEn, patient={} }) {
 
   async function toggleReplies(postId) {
     if (openReplies[postId]) { setOpenReplies(prev => { const next={...prev}; delete next[postId]; return next }) ; return }
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
     setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
   }
   async function addReply(postId) {
@@ -6508,13 +6523,37 @@ function BumpCohortScreen({ isEn, patient={} }) {
     if (!text) return
     await supabase.from('bump_cohort_replies').insert({ post_id: postId, patient_id: patient.id, body: text })
     setReplyDrafts(prev => ({ ...prev, [postId]: '' }))
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
     setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
   }
   async function deleteReply(postId, id) {
     await supabase.from('bump_cohort_replies').delete().eq('id', id)
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).order('created_at',{ascending:true})
+    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
     setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+  }
+
+  // Reports from 3 distinct people auto-hide the post/reply for everyone -
+  // see reportingTarget's comment above for why. The unique index on
+  // (post_id/reply_id, reporter_patient_id) stops one person inflating
+  // their own report into the threshold, so a duplicate insert is expected
+  // and just ignored rather than surfaced as an error.
+  async function submitReport(reason) {
+    const target = reportingTarget
+    if (!target) return
+    const row = target.kind==='post'
+      ? { post_id: target.postId, reporter_patient_id: patient.id, reason }
+      : { reply_id: target.replyId, reporter_patient_id: patient.id, reason }
+    await supabase.from('bump_cohort_reports').insert(row)
+    const { count } = target.kind==='post'
+      ? await supabase.from('bump_cohort_reports').select('id',{count:'exact',head:true}).eq('post_id',target.postId)
+      : await supabase.from('bump_cohort_reports').select('id',{count:'exact',head:true}).eq('reply_id',target.replyId)
+    if ((count||0) >= 3) {
+      if (target.kind==='post') await supabase.from('bump_cohort_posts').update({hidden_at:new Date().toISOString()}).eq('id',target.postId)
+      else await supabase.from('bump_cohort_replies').update({hidden_at:new Date().toISOString()}).eq('id',target.replyId)
+    }
+    setReportingTarget(null)
+    if (target.kind==='post') setPosts(prev => prev.filter(p=>p.id!==target.postId))
+    else setOpenReplies(prev => ({ ...prev, [target.postId]: (prev[target.postId]||[]).filter(r=>r.id!==target.replyId) }))
   }
 
   if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
@@ -6548,9 +6587,18 @@ function BumpCohortScreen({ isEn, patient={} }) {
           <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
             <span style={{fontSize:'11px',fontWeight:700,color:__theme.accent}}>{pseudonym(p.patient_id)}</span>
             <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            {p.patient_id===patient.id&&<span onClick={()=>deletePost(p.id)} style={{marginLeft:'auto',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>}
+            {p.patient_id===patient.id
+              ? <span onClick={()=>deletePost(p.id)} style={{marginLeft:'auto',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>
+              : <span onClick={()=>setReportingTarget({kind:'post',postId:p.id})} style={{marginLeft:'auto',fontSize:'10.5px',color:C.textMuted,cursor:'pointer'}}>{isEn?'⚑ Report':'⚑ 舉報'}</span>}
           </div>
           <div style={{fontSize:'13px',color:C.text,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{p.body}</div>
+          {reportingTarget?.kind==='post'&&reportingTarget.postId===p.id&&<div style={{marginTop:'8px',padding:'10px',background:C.beige,borderRadius:'8px'}}>
+            <div style={{fontSize:'11px',fontWeight:600,color:C.text,marginBottom:'6px'}}>{isEn?'Why are you reporting this post?':'您為何舉報此貼文?'}</div>
+            {COHORT_REPORT_REASONS.map(r=>(
+              <div key={r.value} onClick={()=>submitReport(r.value)} style={{fontSize:'12px',color:__theme.accent,padding:'5px 0',cursor:'pointer'}}>{isEn?r.en:r.zh}</div>
+            ))}
+            <div onClick={()=>setReportingTarget(null)} style={{fontSize:'11px',color:C.textMuted,marginTop:'4px',cursor:'pointer'}}>{isEn?'Cancel':'取消'}</div>
+          </div>}
           <div onClick={()=>toggleReplies(p.id)} style={{fontSize:'11px',fontWeight:600,color:__theme.accent,marginTop:'8px',cursor:'pointer'}}>{openReplies[p.id]?(isEn?'Hide replies':'隱藏回覆'):(isEn?'Reply / view replies':'回覆／查看回覆')}</div>
           {openReplies[p.id]&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:`0.5px solid ${C.border}`}}>
             {openReplies[p.id].map(r=>(
@@ -6558,9 +6606,18 @@ function BumpCohortScreen({ isEn, patient={} }) {
                 <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                   <span style={{fontSize:'10.5px',fontWeight:700,color:__theme.accent}}>{pseudonym(r.patient_id)}</span>
                   <span style={{fontSize:'9.5px',color:C.textMuted}}>{new Date(r.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-                  {r.patient_id===patient.id&&<span onClick={()=>deleteReply(p.id,r.id)} style={{marginLeft:'auto',fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>✕</span>}
+                  {r.patient_id===patient.id
+                    ? <span onClick={()=>deleteReply(p.id,r.id)} style={{marginLeft:'auto',fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>✕</span>
+                    : <span onClick={()=>setReportingTarget({kind:'reply',postId:p.id,replyId:r.id})} style={{marginLeft:'auto',fontSize:'10px',color:C.textMuted,cursor:'pointer'}}>{isEn?'⚑ Report':'⚑ 舉報'}</span>}
                 </div>
                 <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,marginTop:'2px',whiteSpace:'pre-wrap'}}>{r.body}</div>
+                {reportingTarget?.kind==='reply'&&reportingTarget.replyId===r.id&&<div style={{marginTop:'6px',padding:'8px',background:C.beige,borderRadius:'8px'}}>
+                  <div style={{fontSize:'10.5px',fontWeight:600,color:C.text,marginBottom:'5px'}}>{isEn?'Why are you reporting this reply?':'您為何舉報此回覆?'}</div>
+                  {COHORT_REPORT_REASONS.map(rr=>(
+                    <div key={rr.value} onClick={()=>submitReport(rr.value)} style={{fontSize:'11.5px',color:__theme.accent,padding:'4px 0',cursor:'pointer'}}>{isEn?rr.en:rr.zh}</div>
+                  ))}
+                  <div onClick={()=>setReportingTarget(null)} style={{fontSize:'10.5px',color:C.textMuted,marginTop:'3px',cursor:'pointer'}}>{isEn?'Cancel':'取消'}</div>
+                </div>}
               </div>
             ))}
             <div style={{display:'flex',gap:'6px',marginTop:'6px'}}>
