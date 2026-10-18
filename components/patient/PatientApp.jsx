@@ -5551,7 +5551,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?'diaper changes':'次換尿布'}</div>
           </div>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysSleepMinutes>0?`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`:'—'}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysSleepMinutes<=0?'—':todaysSleepMinutes<60?`${todaysSleepMinutes}m`:`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`sleep, ${todaysSleep.length} session${todaysSleep.length===1?'':'s'}`:`睡眠, ${todaysSleep.length}次`}</div>
           </div>
           <div style={{background:todaysSymptomCount>0?C.amberLight:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
