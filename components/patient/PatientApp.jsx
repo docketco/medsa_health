@@ -5080,6 +5080,57 @@ const MILESTONES = [
 ]
 const MILESTONE_AGE_BANDS = [...new Set(MILESTONES.map(m=>m.ageBand.en))]
 
+// bb-01 - the real Hong Kong Childhood Immunisation Programme (HKCIP)
+// schedule, transcribed verbatim from the user's own copy: "Updated
+// schedule of the Hong Kong Childhood Immunisation Programme (HKCIP)
+// recommended by the Scientific Committee on Vaccine Preventable
+// Diseases of the Centre for Health Protection, Department of Health
+// (as of 9 October 2024)". ageMonths is only set for the clean,
+// birthday-math bands (Newborn through 18 months) - the Primary 1/5/6
+// bands depend on Hong Kong school-year placement rules, not a fixed
+// age in months, so those are left without a computed "due" date rather
+// than guessing at school-year cutoff logic.
+const HKCIP_SCHEDULE = [
+  { ageMonths:0, ageLabel:{en:'Newborn',zh:'出生時'}, doses:[
+    { key:'bcg', vaccine:{en:'B.C.G. Vaccine',zh:'卡介苗'}, dose:{en:'',zh:''} },
+    { key:'hepb1', vaccine:{en:'Hepatitis B Vaccine',zh:'乙型肝炎疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+  ]},
+  { ageMonths:1, ageLabel:{en:'1 month',zh:'1個月'}, doses:[
+    { key:'hepb2', vaccine:{en:'Hepatitis B Vaccine',zh:'乙型肝炎疫苗'}, dose:{en:'Second dose',zh:'第二劑'} },
+  ]},
+  { ageMonths:2, ageLabel:{en:'2 months',zh:'2個月'}, doses:[
+    { key:'dtapipv1', vaccine:{en:'DTaP-IPV Vaccine',zh:'白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+    { key:'pcv15-1', vaccine:{en:'15-valent Pneumococcal Conjugate Vaccine (PCV15)',zh:'15價肺炎球菌結合疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+  ]},
+  { ageMonths:4, ageLabel:{en:'4 months',zh:'4個月'}, doses:[
+    { key:'dtapipv2', vaccine:{en:'DTaP-IPV Vaccine',zh:'白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'Second dose',zh:'第二劑'} },
+    { key:'pcv15-2', vaccine:{en:'15-valent Pneumococcal Conjugate Vaccine (PCV15)',zh:'15價肺炎球菌結合疫苗'}, dose:{en:'Second dose',zh:'第二劑'} },
+  ]},
+  { ageMonths:6, ageLabel:{en:'6 months',zh:'6個月'}, doses:[
+    { key:'dtapipv3', vaccine:{en:'DTaP-IPV Vaccine',zh:'白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'Third dose',zh:'第三劑'} },
+    { key:'hepb3', vaccine:{en:'Hepatitis B Vaccine',zh:'乙型肝炎疫苗'}, dose:{en:'Third dose',zh:'第三劑'} },
+  ]},
+  { ageMonths:12, ageLabel:{en:'12 months',zh:'12個月'}, doses:[
+    { key:'mmr1', vaccine:{en:'MMR Vaccine (Measles, Mumps & Rubella)',zh:'麻疹、腮腺炎及德國麻疹混合疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+    { key:'pcv15-booster', vaccine:{en:'15-valent Pneumococcal Conjugate Vaccine (PCV15)',zh:'15價肺炎球菌結合疫苗'}, dose:{en:'Booster dose',zh:'加強劑'} },
+    { key:'varicella1', vaccine:{en:'Varicella Vaccine',zh:'水痘疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+  ]},
+  { ageMonths:18, ageLabel:{en:'18 months',zh:'18個月'}, doses:[
+    { key:'dtapipv-booster', vaccine:{en:'DTaP-IPV Vaccine',zh:'白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'Booster dose',zh:'加強劑'} },
+    { key:'mmrv2', vaccine:{en:'MMRV Vaccine (Measles, Mumps, Rubella & Varicella)',zh:'麻疹、腮腺炎、德國麻疹及水痘混合疫苗'}, dose:{en:'Second dose - children born on or after 1.7.2018, given at MCHC. Children born 1.1.2013-30.6.2018 instead receive this in Primary 1 via the School Immunisation Team.',zh:'第二劑 - 2018年7月1日或以後出生的兒童於母嬰健康院接種。2013年1月1日至2018年6月30日出生的兒童則於小學一年級由學校免疫注射小組接種。'} },
+  ]},
+  { ageMonths:null, ageLabel:{en:'Primary 1',zh:'小學一年級'}, doses:[
+    { key:'dtapipv-p1', vaccine:{en:'DTaP-IPV Vaccine',zh:'白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'Booster dose',zh:'加強劑'} },
+  ]},
+  { ageMonths:null, ageLabel:{en:'Primary 5',zh:'小學五年級'}, doses:[
+    { key:'hpv1', vaccine:{en:'9-valent Human Papillomavirus (HPV) Vaccine',zh:'9價人類乳頭瘤病毒疫苗'}, dose:{en:'First dose',zh:'第一劑'} },
+  ]},
+  { ageMonths:null, ageLabel:{en:'Primary 6',zh:'小學六年級'}, doses:[
+    { key:'dtipv-p6', vaccine:{en:'Diphtheria (reduced dose), Tetanus, acellular Pertussis (reduced dose) & Inactivated Poliovirus Vaccine',zh:'低劇量白喉、破傷風、無細胞百日咳及不活化小兒麻痺混合疫苗'}, dose:{en:'Booster dose',zh:'加強劑'} },
+    { key:'hpv2', vaccine:{en:'9-valent HPV Vaccine',zh:'9價人類乳頭瘤病毒疫苗'}, dose:{en:'Second dose',zh:'第二劑'} },
+  ]},
+]
+
 function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
   const [growthLogs,setGrowthLogs]=useState([])
@@ -5101,13 +5152,14 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [labelScanFilled,setLabelScanFilled]=useState(false)
   const [sleepLogs,setSleepLogs]=useState([])
   const [sleepForm,setSleepForm]=useState({ startedAt:'', endedAt:'', sleepType:'nap' })
+  const [immunizationChecks,setImmunizationChecks]=useState([])
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
   async function load(isInitial=false) {
     if (!patient?.id) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }, { data: imm }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
@@ -5115,6 +5167,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       supabase.from('kids_symptom_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('kids_diaper_logs').select('*').eq('patient_id', patient.id).order('logged_at',{ascending:false}).limit(30),
       supabase.from('kids_sleep_logs').select('*').eq('patient_id', patient.id).order('started_at',{ascending:false}).limit(30),
+      supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
@@ -5123,9 +5176,25 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setSymptomLogs(sym||[])
     setDiaperLogs(diaper||[])
     setSleepLogs(sleep||[])
+    setImmunizationChecks(imm||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [patient?.id])
+
+  // bb-01 - the real HKCIP schedule you supplied, as a manual checklist
+  // (not auto-matched against the generic vaccinations table - see the
+  // migration note for why).
+  async function toggleImmunizationDose(key) {
+    const existing = immunizationChecks.find(c=>c.dose_key===key)
+    if (existing) {
+      await supabase.from('kids_immunization_checks').delete().eq('id', existing.id)
+    } else {
+      await supabase.from('kids_immunization_checks').insert({ patient_id: patient.id, dose_key: key })
+    }
+    load()
+  }
+  const ageInMonths = patient.date_of_birth ? (Date.now() - new Date(patient.date_of_birth)) / (1000*60*60*24*30.44) : null
+  const dueImmunizationBand = ageInMonths!=null ? HKCIP_SCHEDULE.find(band => band.ageMonths!=null && ageInMonths >= band.ageMonths && band.doses.some(d=>!immunizationChecks.some(c=>c.dose_key===d.key))) : null
 
   // Sleep log - the clearest gap against every benchmarked baby tracker
   // (BabyCenter, Ovia Parenting, etc.), which all log sleep alongside
@@ -5472,6 +5541,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         {nextMchcAppointment.note&&<div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{nextMchcAppointment.note}</div>}
       </div>}
 
+      {dueImmunizationBand&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12px',color:C.amber,fontWeight:700}}>{isEn?`Immunisation due: ${dueImmunizationBand.ageLabel.en}`:`疫苗接種提醒：${dueImmunizationBand.ageLabel.zh}`}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{isEn?'See the HKCIP schedule below.':'請參閱下方HKCIP疫苗接種時間表。'}</div>
+      </div>}
+
       <SecLabel>{isEn?'MCHC appointments':'母嬰健康院預約'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Medsa doesn't book MCHC visits - enter a date here after booking with the centre and we'll remind you as it approaches.":'Medsa並不代為預約母嬰健康院 - 預約後在此輸入日期,我們會在預約臨近時提醒您。'}</div>
@@ -5648,6 +5722,33 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
                 {f.note&&<div style={{color:C.textSub,marginTop:'1px'}}>{f.note}</div>}
               </span>
               <span onClick={()=>deleteFeedingLog(f.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+            </div>
+          )
+        })}
+      </Card>
+
+      <SecLabel>{isEn?'HKCIP immunisation schedule':'HKCIP疫苗接種時間表'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Hong Kong Childhood Immunisation Programme, as recommended by the Scientific Committee on Vaccine Preventable Diseases, Centre for Health Protection, Department of Health (as of 9 Oct 2024). Check off each dose once given - this is a separate checklist from the vaccinations already recorded in Medical records.':'香港兒童免疫接種計劃,由衞生防護中心疫苗可預防疾病科學委員會建議(截至2024年10月9日)。每劑接種後請勾選 - 此清單與醫療記錄中已記錄的疫苗分開獨立。'}</div>
+        {HKCIP_SCHEDULE.map(band=>{
+          const checkedCount = band.doses.filter(d=>immunizationChecks.some(c=>c.dose_key===d.key)).length
+          return (
+            <div key={band.ageLabel.en} style={{marginBottom:'14px'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+                <div style={{fontSize:'12px',fontWeight:700,color:__theme.accent}}>{isEn?band.ageLabel.en:band.ageLabel.zh}</div>
+                <div style={{fontSize:'10.5px',color:C.textMuted}}>{checkedCount}/{band.doses.length}</div>
+              </div>
+              {band.doses.map(d=>{
+                const checked = immunizationChecks.some(c=>c.dose_key===d.key)
+                return (
+                  <div key={d.key} onClick={()=>toggleImmunizationDose(d.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'6px 0',cursor:'pointer'}}>
+                    <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?__theme.accent:C.border}`,background:checked?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?d.vaccine.en:d.vaccine.zh}{(isEn?d.dose.en:d.dose.zh)?` - ${isEn?d.dose.en:d.dose.zh}`:''}</div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )
         })}
