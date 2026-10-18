@@ -960,13 +960,26 @@ function drawPdfHeader(doc, pageWidth, subtitle, accentColor) {
   doc.setTextColor(20,20,20)
 }
 // A medication counts as "current" only while its own prescribed window
-// still holds - an explicit active:false, or an end_date already in the
-// past, means the course is over and it shouldn't keep appearing under
-// "Active prescriptions" or in a doctor/admission handoff packet forever.
+// still holds - an explicit active:false, or its course having actually
+// ended, means it shouldn't keep appearing under "Active prescriptions"
+// or in a doctor/admission handoff packet forever.
+// Real bug found live-testing: every medication row in this app's own
+// data has end_date = null - whatever logs a medication only ever
+// writes start_date + duration_days, never end_date itself - so a check
+// against end_date alone never actually excluded anything; months-old
+// courses kept showing as active. The real end has to be computed from
+// start_date + duration_days when there's no explicit end_date. A
+// medication with neither (no end_date, no duration_days - e.g. an
+// inhaler taken indefinitely) has no window to expire, so it stays
+// active until the doctor/patient explicitly closes it out.
 function isMedicationActive(m) {
   if (m.active === false) return false
-  if (m.end_date && new Date(m.end_date) < new Date()) return false
-  return true
+  const explicitEnd = m.end_date ? new Date(m.end_date) : null
+  const computedEnd = (!explicitEnd && m.start_date && m.duration_days != null && m.duration_days > 0)
+    ? new Date(new Date(m.start_date).getTime() + m.duration_days*24*60*60*1000)
+    : null
+  const effectiveEnd = explicitEnd || computedEnd
+  return !(effectiveEnd && effectiveEnd < new Date())
 }
 function drawPdfFooter(doc, pageWidth, pageHeight) {
   const BORDER = [222,220,214], GRAY = [130,130,130]
@@ -5896,6 +5909,7 @@ const EPDS_ITEMS = [
 // with originally.
 function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const __theme = useContext(ThemeContext)
+  const [bumpTab,setBumpTab]=useState('monitoring')
   const [bumpRow,setBumpRow]=useState(null)
   const [bpLogs,setBpLogs]=useState([])
   const [glucoseLogs,setGlucoseLogs]=useState([])
@@ -6273,6 +6287,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
         <div onClick={exportingAdmission?undefined:downloadAdmissionPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingAdmission?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingAdmission?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export hospital pre-admission packet':'⬇ 匯出醫院入院前摘要')}</div>
       </div>
 
+      {/* This screen had grown into one long scroll through every section
+          at once - split into sub-tabs instead of adding a second nav
+          level on top of it. The export links and identity card above
+          stay outside the tabs since they apply regardless of which
+          section you're looking at. */}
+      <div style={{display:'flex',gap:'6px',margin:'0 0 16px',padding:'4px',background:C.card,borderRadius:'10px'}}>
+        {[{value:'monitoring',en:'Monitoring',zh:'監測'},{value:'growth',en:'Growth & scans',zh:'生長與超聲波'},{value:'postpartum',en:'Postpartum',zh:'產後'}].map(t=>(
+          <div key={t.value} onClick={()=>setBumpTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:bumpTab===t.value?__theme.accent:'transparent',color:bumpTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
+        ))}
+      </div>
+
+      {bumpTab==='postpartum'&&<>
       <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
@@ -6326,7 +6352,9 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
           })}
         </Card>
       </>}
+      </>}
 
+      {bumpTab==='monitoring'&&<>
       <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
@@ -6396,7 +6424,9 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
           ))}
         </div>
       </Card>
+      </>}
 
+      {bumpTab==='growth'&&<>
       <SecLabel>{isEn?'Fetal growth (ultrasound)':'胎兒生長（超聲波）'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"After an ultrasound scan, enter the estimated fetal weight your doctor's report gives you, to keep one running record across your pregnancy.":'超聲波檢查後,輸入醫生報告上的估計胎兒體重,以保留整個孕期的連續記錄。'}</div>
@@ -6416,6 +6446,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
           ))}
         </div>
       </Card>
+      </>}
     </div>
   )
 }
@@ -7764,10 +7795,20 @@ export default function PatientApp({ liveData={} }) {
   // to its color, since nothing here validates a screen key against the
   // profile actually signed in. Always landing on Home after a switch
   // sidesteps that rather than trying to maintain a per-profile allow-list.
+  // Real bug found live-testing: switching back to the main (Bump)
+  // account from a Kids/dependent profile still painted green for a
+  // frame before flipping to pink, the same "theme resolves after an
+  // async check" glitch bumpActive's own initial useState already works
+  // around for a fresh page load - that seeding only ever runs once, on
+  // mount, so it never covers switching patients mid-session. Reading
+  // the same per-patient cache here covers that second path too.
   function switchToPatient(p) {
     setSignedInPatient(p)
     setScreen('home')
-    if (typeof window!=='undefined') window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+    if (typeof window!=='undefined') {
+      window.localStorage.setItem('medsa_signed_in_patient_id', p.id)
+      setBumpActive(window.localStorage.getItem(`medsa_bump_active_${p.id}`) === '1')
+    }
   }
   const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
 
