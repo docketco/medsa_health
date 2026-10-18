@@ -5,7 +5,6 @@ import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../.
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import { ageDaysBetween, percentileBands, growthPercentile } from '../../lib/whoGrowth'
-import { computeEFWGrams } from '../../lib/hadlockEfw'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -5903,7 +5902,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [activePolicy,setActivePolicy]=useState(null)
   const [exportingAdmission,setExportingAdmission]=useState(false)
   const [biometryLogs,setBiometryLogs]=useState([])
-  const [biometryForm,setBiometryForm]=useState({ scanDate:'', bpd:'', hc:'', ac:'', fl:'', manualEfw:'' })
+  const [biometryForm,setBiometryForm]=useState({ scanDate:'', efw:'' })
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -5937,39 +5936,22 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
 
-  // bc-03 (partial) - estimated fetal weight from the patient's own
-  // ultrasound report, using the real Hadlock formulas (see
-  // lib/hadlockEfw.js for the sourcing note). No percentile-against-
-  // gestational-age comparison yet - that half still needs the real
-  // INTERGROWTH-21st tables, which are blocked the same way every other
-  // PDF link has been this session.
+  // bc-03 (simplified, on your call) - just logs the estimated fetal
+  // weight a patient's own ultrasound report already states, tracked
+  // over time like every other Bump log. Dropped the Hadlock-formula
+  // calculator (computing EFW from raw BPD/HC/AC/FL) - most patients'
+  // own ultrasound machine already computes and prints this, so
+  // recomputing it in Medsa solved a problem few patients actually have.
   async function addBiometry() {
-    if (!bumpSubscriptionId || !biometryForm.scanDate) return
-    const measurements = {
-      bpd: biometryForm.bpd?Number(biometryForm.bpd):null,
-      hc: biometryForm.hc?Number(biometryForm.hc):null,
-      ac: biometryForm.ac?Number(biometryForm.ac):null,
-      fl: biometryForm.fl?Number(biometryForm.fl):null,
-    }
-    const computed = computeEFWGrams(measurements)
-    const manualEfw = biometryForm.manualEfw?Number(biometryForm.manualEfw):null
-    if (!computed && !manualEfw) return
+    if (!bumpSubscriptionId || !biometryForm.scanDate || !biometryForm.efw) return
     setSaving(true)
     await supabase.from('bump_fetal_biometry').insert({
-      bump_subscription_id: bumpSubscriptionId, scan_date: biometryForm.scanDate,
-      bpd_cm: measurements.bpd, hc_cm: measurements.hc, ac_cm: measurements.ac, fl_cm: measurements.fl,
-      efw_grams: computed ? computed.grams : manualEfw,
-      efw_source: computed ? 'computed' : 'manual',
-      hadlock_model: computed ? computed.model : null,
+      bump_subscription_id: bumpSubscriptionId, scan_date: biometryForm.scanDate, efw_grams: Number(biometryForm.efw),
     })
-    setBiometryForm({ scanDate:'', bpd:'', hc:'', ac:'', fl:'', manualEfw:'' })
+    setBiometryForm({ scanDate:'', efw:'' })
     await load(); setSaving(false)
   }
   async function deleteBiometry(id) { await supabase.from('bump_fetal_biometry').delete().eq('id', id); load() }
-  const biometryPreview = computeEFWGrams({
-    bpd: biometryForm.bpd?Number(biometryForm.bpd):null, hc: biometryForm.hc?Number(biometryForm.hc):null,
-    ac: biometryForm.ac?Number(biometryForm.ac):null, fl: biometryForm.fl?Number(biometryForm.fl):null,
-  })
 
   // gop-01 - the "1-click pre-admission packet" from the GOP feature doc.
   // "1-click" just means one export button compiling what's already on
@@ -6400,24 +6382,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
 
       <SecLabel>{isEn?'Fetal growth (ultrasound)':'胎兒生長（超聲波）'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"After an ultrasound scan, your doctor's report will give measurements like BPD, HC, AC, FL (in cm) - enter whichever ones are on your report and we'll estimate baby's weight using the Hadlock formula (the same one ultrasound machines use). If your report already states an estimated weight, you can enter that directly instead. No percentile comparison yet - just the estimate itself, same as the number on your report.":'超聲波檢查後,醫生報告會列出BPD、HC、AC、FL等measurements(cm)- 請輸入報告上有的數值,我們將使用Hadlock公式(與超聲波機採用相同公式)估算寶寶體重。如報告已列明估計體重,您亦可直接輸入。暫未提供百分位比較 - 僅提供估算數值,與報告上的數字相同。'}</div>
-        <input type="date" value={biometryForm.scanDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setBiometryForm({...biometryForm,scanDate:e.target.value})} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px'}}/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"After an ultrasound scan, enter the estimated fetal weight your doctor's report gives you, to keep one running record across your pregnancy.":'超聲波檢查後,輸入醫生報告上的估計胎兒體重,以保留整個孕期的連續記錄。'}</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
-          <input type="number" step="0.1" value={biometryForm.bpd} onChange={e=>setBiometryForm({...biometryForm,bpd:e.target.value})} placeholder={isEn?'BPD (cm)':'BPD (cm)'} style={{flex:'1 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          <input type="number" step="0.1" value={biometryForm.hc} onChange={e=>setBiometryForm({...biometryForm,hc:e.target.value})} placeholder={isEn?'HC (cm)':'HC (cm)'} style={{flex:'1 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          <input type="number" step="0.1" value={biometryForm.ac} onChange={e=>setBiometryForm({...biometryForm,ac:e.target.value})} placeholder={isEn?'AC (cm)':'AC (cm)'} style={{flex:'1 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          <input type="number" step="0.1" value={biometryForm.fl} onChange={e=>setBiometryForm({...biometryForm,fl:e.target.value})} placeholder={isEn?'FL (cm)':'FL (cm)'} style={{flex:'1 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="date" value={biometryForm.scanDate} max={new Date().toISOString().slice(0,10)} onChange={e=>setBiometryForm({...biometryForm,scanDate:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input type="number" value={biometryForm.efw} onChange={e=>setBiometryForm({...biometryForm,efw:e.target.value})} placeholder={isEn?'Estimated weight (g)':'估計體重 (克)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
         </div>
-        {biometryPreview&&<div style={{fontSize:'11.5px',color:__theme.accent,fontWeight:600,marginBottom:'10px'}}>{isEn?`≈ ${biometryPreview.grams}g (${biometryPreview.model})`:`≈ ${biometryPreview.grams}克 (${biometryPreview.model})`}</div>}
-        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'Or, if your report already gives an estimated weight:':'或輸入報告上已列明的估計體重：'}</div>
-        <input type="number" value={biometryForm.manualEfw} onChange={e=>setBiometryForm({...biometryForm,manualEfw:e.target.value})} placeholder={isEn?'Estimated weight (g, optional)':'估計體重 (克,可選)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px'}}/>
-        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!biometryForm.scanDate||(!biometryPreview&&!biometryForm.manualEfw)} onClick={addBiometry}>{isEn?'Add scan':'新增記錄'}</Btn>
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||!biometryForm.scanDate||!biometryForm.efw} onClick={addBiometry}>{isEn?'Add scan':'新增記錄'}</Btn>
         <div style={{marginTop:'12px'}}>
           {biometryLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No scans logged yet.':'暫無超聲波記錄。'}</div>}
           {biometryLogs.map(b=>(
             <div key={b.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
               <span style={{color:C.textMuted,width:90,flexShrink:0}}>{new Date(b.scan_date).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-              <span style={{flex:1}}>{b.efw_grams}g{b.hadlock_model?` · ${b.hadlock_model}`:(isEn?' · entered directly':' · 直接輸入')}</span>
+              <span style={{flex:1}}>{b.efw_grams}g</span>
               <span onClick={()=>deleteBiometry(b.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
