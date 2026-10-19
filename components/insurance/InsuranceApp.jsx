@@ -91,18 +91,25 @@ function InsuranceDashboard({ onNav, company }) {
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.65,letterSpacing:'1px',textTransform:'uppercase'}}>{company?.name||'Insurance'} — Partner dashboard</div>
         <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Welcome back</div>
-        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'Registered insurer':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
+        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.medsaId?`Insurer · ${company.medsaId}`:'Insurer'}</div>
       </div>
       <SecLabel>Performance</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
         <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
         <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>
+        <StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
+        {/* Fully identical for every insurer now, per your call - the
+            relationship_type field still exists in the data (contract
+            status for medsa-admin's own tracking) but no longer changes
+            anything a signed-in insurer actually sees. */}
         {[
           {key:'plans',icon:'▣',label:'Your plans',sub:'View your registered plans - Medsa handles adding/editing'},
-          {key:'ads',icon:'⬡',label:company?.relationshipType==='unpartnered'?'Promote a plan':'Sponsored listings',sub:company?.relationshipType==='unpartnered'?'Sponsor an individual plan in patient search, priced per month':'Promote plans in AI recommendations'},
+          {key:'verify',icon:'✓',label:'Verify',sub:'Tell Medsa how to confirm a policyholder against your own records'},
+          {key:'claims',icon:'◇',label:'Claims',sub:'Claims synced back from your own system'},
+          {key:'ads',icon:'⬡',label:'Promote your plans',sub:'Sponsor a plan in patient search and AI recommendations'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
@@ -111,18 +118,10 @@ function InsuranceDashboard({ onNav, company }) {
           </div>
         ))}
       </div>
-      {company?.relationshipType==='unpartnered' ? (
-        <div style={{margin:'0 16px 16px',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'14px',padding:'16px'}}>
-          <div style={{fontSize:'13px',color:'#fff',fontWeight:600,marginBottom:'6px'}}>⬡ Want your full catalog on Medsa?</div>
-          <div style={{fontSize:'12px',color:'rgba(255,255,255,0.8)',lineHeight:1.6,marginBottom:'12px'}}>You can already promote an individual registered plan into patient search under "Promote a plan" above. A full Medsa Partnership goes further - all your plans listed and sold on Medsa, plus agent/team management.</div>
-          <a href="/insurer-signup" style={{display:'block',textAlign:'center',background:'#fff',color:C.navy,borderRadius:'8px',padding:'10px',fontSize:'13px',fontWeight:600,textDecoration:'none'}}>Apply for a Partnership</a>
-        </div>
-      ) : (
-        <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px'}}>
-          <div style={{fontSize:'12px',color:C.brown,fontWeight:600,marginBottom:'4px'}}>How Medsa partner listings work</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Medsa doesn't process or adjudicate claims - a patient pays in full and submits a reimbursement claim with you directly.</div>
-        </div>
-      )}
+      <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'12px',color:C.brown,fontWeight:600,marginBottom:'4px'}}>How Medsa works with insurers</div>
+        <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Medsa never computes or decides a claim itself - Verify lets you tell Medsa how to confirm a policyholder, and Claims shows what's synced back from your own system.</div>
+      </div>
     </div>
   )
 }
@@ -2902,7 +2901,6 @@ export default function InsuranceApp({ company, onLogout }) {
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
   const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',underwriters:'Underwriters'}
-  const isPartnered = company?.relationshipType!=='unpartnered'
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
   // is - swapped for shapes that at least gesture at the real meaning
@@ -2929,7 +2927,16 @@ export default function InsuranceApp({ company, onLogout }) {
   // shape for both tiers: Overview, Plans/Coverage (registration - real
   // benefit info, not claims terms), and Sponsored/Promote (a real
   // revenue feature orthogonal to claims, untouched).
-  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'ads',icon:'✦',label:isPartnered?'Sponsored':'Promote'}]
+  // Restored, per your correction: "never deciding" means Medsa doesn't
+  // compute the real adjudication math itself (that stays off -
+  // lib/insuranceAdapter.js's ADJUDICATION_ENABLED) - it never meant
+  // tearing out the screens that verify a fact (a policy number against
+  // the insurer's own records) or display synced claim status, neither
+  // of which is Medsa deciding anything. Underwriters stays off - that
+  // one genuinely is a decision (whether to accept a new applicant),
+  // confirmed earlier as carrier work, never a TPA's - a different,
+  // separate call from today's.
+  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2958,13 +2965,9 @@ export default function InsuranceApp({ company, onLogout }) {
             existed. CoverageRulesManager is left defined above, not
             deleted, in case a cut-down intake ever makes sense again. */}
         {screen==='plans'&&<PlanManager company={company} readOnly/>}
-        {/* Verify, Claims log, and claim-detail are unreachable for every
-            insurer now - no nav button ever sets `screen` to any of
-            these keys. Left as dead branches (not deleted) rather than
-            torn out, same as the components they render. */}
-        {false&&screen==='verify'&&<PolicyVerificationManager company={company}/>}
-        {false&&screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
-        {false&&screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
+        {screen==='verify'&&<PolicyVerificationManager company={company}/>}
+        {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
+        {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
