@@ -6278,9 +6278,14 @@ const EPDS_ITEMS = [
 // right cutoff depends on which test protocol was actually used and a
 // wrong guess here would be worse than the no-flag default this shipped
 // with originally.
-function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
+function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab }) {
   const __theme = useContext(ThemeContext)
-  const [bumpTab,setBumpTab]=useState('monitoring')
+  // Real gap this closes: opening the OTHER (postpartum) pass via the
+  // "Also finishing postpartum recovery" banner always landed on
+  // Monitoring by default - the confinement guide/EPDS/recovery
+  // checklist live on the Postpartum tab, so they were there, just not
+  // where the patient tapping that banner would think to look first.
+  const [bumpTab,setBumpTab]=useState(initialTab||'monitoring')
   const [bumpRow,setBumpRow]=useState(null)
   const [bpLogs,setBpLogs]=useState([])
   const [glucoseLogs,setGlucoseLogs]=useState([])
@@ -8910,7 +8915,7 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
-        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={viewBumpOverrideId||bumpSubscriptionId}/>}
+        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={viewBumpOverrideId||bumpSubscriptionId} initialTab={viewBumpOverrideId?'postpartum':undefined}/>}
         {screen==='bumpcohort'&&<BumpCohortScreen isEn={isEn} patient={patient}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
