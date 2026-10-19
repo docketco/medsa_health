@@ -591,12 +591,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           visible just from opening the app. Shown right here whenever
           there's a current pregnancy on file. ── */}
       {bumpSizeComparison&&(
-        <div style={{margin:'14px 16px 0',background:'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)',borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
+        <div onClick={()=>onNav&&onNav('bumphealth')} style={{margin:'14px 16px 0',background:'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)',borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
           <span style={{fontSize:'26px'}}>{bumpSizeComparison.emoji}</span>
           <div style={{flex:1}}>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?`Week ${bumpDisplayWeek}`:`第${bumpDisplayWeek}週`}</div>
             <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`Your baby is about the size of ${bumpSizeComparison.en}`:`您的寶寶現時大約是${bumpSizeComparison.zh}的大小`}</div>
           </div>
+          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
         </div>
       )}
 
@@ -4691,6 +4692,18 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       {/* Active plan banner - real data from agent_policies */}
       {policyLoading&&<div style={{margin:'16px 16px 0',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading your plan...':'載入您的計劃中...'}</div>}
       {!policyLoading&&!activePolicy&&<div style={{margin:'16px 16px 0',background:C.card,borderRadius:'16px',padding:'20px',textAlign:'center',fontSize:'13px',color:C.textMuted}}>No active plan on file yet. Inquire about a plan below to get started.</div>}
+
+      {/* Tabs - moved above the policy detail cards below per your call:
+          "policy on file" shouldn't sit above every tab regardless of
+          which one's selected, it belongs inside its own Your coverage
+          tab alongside the summary that already lived there. */}
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginBottom:'4px',overflowX:'auto'}}>
+        {[['coverage',isEn?'Your coverage':'您的保障'],['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'72px',padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.navy:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.navy:'transparent'}`,cursor:'pointer'}}>{l}</div>
+        ))}
+      </div>
+
+      {tab==='coverage'&&<>
       {/* Real gap this closes: "too long" was still true after the first
           compacting pass - each card repeated its own "Policy on file"
           label, and 16px of top margin per card added up fast with
@@ -4723,11 +4736,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         const expanded = expandedPolicyId===policy.id
         const logoUrl = policy.insurance_plans?.logo_url || companyLogos[policy.insurance_plans?.company_name]
         return (
-        <div key={policy.id} style={{flexShrink:0,width:'240px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
+        <div key={policy.id} style={{flexShrink:0,width:'240px',background:'#fff',borderLeft:`3px solid ${C.navy}`,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
             {logoUrl
               ? <img src={logoUrl} alt="" style={{width:'22px',height:'22px',objectFit:'contain',borderRadius:'5px',flexShrink:0,background:'#fff',border:`0.5px solid ${C.border}`}}/>
-              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:C.beige,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700,color:C.textMuted}}>{(policy.insurance_plans?.company_name||'?')[0]}</div>}
+              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:C.navyLight,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700,color:C.navy}}>{(policy.insurance_plans?.company_name||'?')[0]}</div>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:'13px',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
             </div>
@@ -4891,47 +4904,23 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         </Card>}
       </div>
 
-      {/* Tabs */}
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px',overflowX:'auto'}}>
-        {[['coverage',isEn?'Your coverage':'您的保障'],['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'72px',padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.navy:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.navy:'transparent'}`,cursor:'pointer'}}>{l}</div>
-        ))}
-      </div>
-
-      {/* ── YOUR COVERAGE ── one consolidated answer, see loadCoverageSummary
-          above. Redesigned per your feedback: was a white bordered card
-          floating above the tabs, in the theme-accent color (pink/yellow
-          whenever viewing as a Bump/Kids profile) - inconsistent with
-          every other info card on this screen, which uses the navy-tinted
-          style below regardless of which profile mode you're in, since
-          coverage itself isn't a Bump/Kids-specific concept. */}
-      {tab==='coverage'&&<div style={{padding:'16px 16px 0'}}>
-        {(heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0)
-          ? <div style={{background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold.':'暫無保障記錄 - 可瀏覽比較計劃,或新增您已持有的保單。'}</div>
-          : <div style={{background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
-            <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'8px'}}>◈ {isEn?'Where you stand':'目前狀況'}</div>
-            {heldPolicies.map(p=>(
-              <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
-                <div style={{fontSize:'13px',fontWeight:600,color:C.text}}>{p.plan_name}</div>
-                <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
-              </div>
-            ))}
-            {lapsedPolicies.map(p=>(
-              <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
-                <div style={{fontSize:'13px',fontWeight:600,color:C.text}}>{p.plan_name}</div>
-                <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
-              </div>
-            ))}
-            {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.border}`:'none',cursor:'pointer'}}>
-              <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
-              <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
-            </div>}
-            {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
-              <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
-              <span style={{color:C.navy,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
-            </div>}
-          </div>}
+      {/* Pending-review/unread quick links - the only part of the old
+          "Where you stand" summary that wasn't already redundant with the
+          detailed policy cards just above (those already show each
+          policy's own status in full). No coverage and nothing pending -
+          a real empty state instead of nothing at all. */}
+      {heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0&&<div style={{margin:'0 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold above.':'暫無保障記錄 - 可瀏覽比較計劃,或於上方新增您已持有的保單。'}</div>}
+      {(coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'0 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'6px 16px'}}>
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.border}`:'none',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+        </div>}
+        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
+          <span style={{color:C.navy,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+        </div>}
       </div>}
+      </>}
 
       {/* ── PLANS & COMPARISON ── */}
       {tab==='plans'&&<>
