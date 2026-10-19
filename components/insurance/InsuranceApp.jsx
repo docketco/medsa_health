@@ -91,19 +91,18 @@ function InsuranceDashboard({ onNav, company }) {
       <div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'20px',color:'#fff'}}>
         <div style={{fontSize:'11px',opacity:0.65,letterSpacing:'1px',textTransform:'uppercase'}}>{company?.name||'Insurance'} — Partner dashboard</div>
         <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Welcome back</div>
-        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'TPA claims service':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
+        <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'Registered insurer':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
       </div>
       <SecLabel>Performance</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:company?.relationshipType==='unpartnered'?'1fr 1fr':'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
         <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
         <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>
-        <StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>
+        {company?.relationshipType!=='unpartnered'&&<StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>}
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
         {(company?.relationshipType==='unpartnered' ? [
-          {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' deductible/copay so claims calculate correctly'},
-          {key:'claims',icon:'◇',label:'Claims log',sub:'Claims Medsa has processed for you'},
+          {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' name, logo, and categories'},
           {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
@@ -1056,6 +1055,52 @@ const EMPTY_FORM = {
   pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
   policy_document_path:'', billing_model:'direct', logo_url:'',
 }
+
+// ── Plain category picker, no adjudication fields (Parking Lot: the
+// partnered/unpartnered split has no remaining job on the registration
+// side, since Medsa isn't the TPA either way - claims/adjudication moves
+// to a future plugin layer. An unpartnered insurer's job here is just
+// registering a plan and handing Medsa real benefit info: name, logo,
+// which categories it covers. No copay/deductible/category-limit/
+// pre-auth fields - those were never something to type into a
+// registration screen in the first place.) Lifted out of
+// AdjudicationFieldsSection's "Covered categories" block (same
+// COVERAGE_RULE_CATEGORIES list, same custom-category add) rather than
+// touching that shared component, which Plan Manager (partnered
+// insurers) still uses untouched.
+function BasicCategoriesSection({ form, setForm }) {
+  const [customCategory,setCustomCategory]=useState('')
+  function toggleCategory(cat) {
+    setForm(f => ({ ...f, covered_categories: f.covered_categories.includes(cat) ? f.covered_categories.filter(c=>c!==cat) : [...f.covered_categories, cat] }))
+  }
+  function addCustomCategory() {
+    const val = customCategory.trim()
+    if (!val || form.covered_categories.includes(val)) return
+    setForm(f => ({ ...f, covered_categories: [...f.covered_categories, val] }))
+    setCustomCategory('')
+  }
+  return (
+    <>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Covered categories</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
+        {COVERAGE_RULE_CATEGORIES.map(cat=>(
+          <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+        <input value={customCategory} onChange={e=>setCustomCategory(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(e.preventDefault(),addCustomCategory())} placeholder="Other category (type your own)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}}/>
+        <button onClick={addCustomCategory} disabled={!customCategory.trim()} style={{padding:'0 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add</button>
+      </div>
+      {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).length>0&&<div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'14px'}}>
+        {form.covered_categories.filter(c=>!COVERAGE_RULE_CATEGORIES.includes(c)).map(cat=>(
+          <div key={cat} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.green,color:'#fff',display:'flex',alignItems:'center',gap:'6px'}}>
+            {cat}<span onClick={()=>toggleCategory(cat)} style={{cursor:'pointer',fontWeight:700}}>×</span>
+          </div>
+        ))}
+      </div>}
+    </>
+  )
+}
 function CoverageRulesManager({ company }) {
   const [plans,setPlans]=useState([])
   const [search,setSearch]=useState('')
@@ -1080,58 +1125,31 @@ function CoverageRulesManager({ company }) {
   }
   function startEdit(plan) {
     setEditingId(plan.id)
-    const category_limits = {}
-    for (const cat of (plan.covered_categories||[])) {
-      const stored = (plan.category_limits||{})[cat] || {}
-      category_limits[cat] = {
-        annual_limit_hkd: stored.annual_limit_hkd!=null ? String(stored.annual_limit_hkd) : '',
-        per_visit_limit_hkd: stored.per_visit_limit_hkd!=null ? String(stored.per_visit_limit_hkd) : '',
-        requires_preauth: !!stored.requires_preauth, requires_referral: !!stored.requires_referral,
-      }
-    }
     setForm({
-      plan_name: plan.plan_name||'', copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
-      annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
-      covered_categories: plan.covered_categories||[],
-      overall_annual_limit_hkd: plan.overall_annual_limit_hkd!=null ? String(plan.overall_annual_limit_hkd) : '',
-      room_board_daily_limit_hkd: plan.room_board_daily_limit_hkd!=null ? String(plan.room_board_daily_limit_hkd) : '',
-      network_type: plan.network_type||'', waiting_period_days: plan.waiting_period_days!=null ? String(plan.waiting_period_days) : '',
-      pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
-      preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
-      category_limits, policy_document_path: plan.policy_document_path||'',
-      billing_model: plan.billing_model||'direct', logo_url: plan.logo_url||'',
+      ...EMPTY_FORM,
+      plan_name: plan.plan_name||'', covered_categories: plan.covered_categories||[],
+      policy_document_path: plan.policy_document_path||'', logo_url: plan.logo_url||'',
     })
     setCreating(true)
   }
 
+  // Deliberately NOT writing copay_rate/annual_deductible_hkd/
+  // overall_annual_limit_hkd/room_board_daily_limit_hkd/network_type/
+  // waiting_period_days/pre_existing_condition_policy/preauth_threshold_hkd/
+  // category_limits/billing_model here anymore - this registration no
+  // longer feeds any adjudication, so there's nothing for those fields to
+  // do. They stay as real columns (still used by partnered insurers' Plan
+  // Manager) and just go untouched/null for every self-serve plan from
+  // here on; existing self-serve plans keep whatever was saved before,
+  // it simply stops mattering.
   async function handleSubmit() {
     if (!form.plan_name.trim()) return
     setSaving(true)
-    const category_limits = {}
-    for (const cat of form.covered_categories) {
-      const cl = form.category_limits[cat]
-      if (!cl) continue
-      category_limits[cat] = {
-        annual_limit_hkd: cl.annual_limit_hkd!=='' ? parseFloat(cl.annual_limit_hkd) : null,
-        per_visit_limit_hkd: cl.per_visit_limit_hkd!=='' ? parseFloat(cl.per_visit_limit_hkd) : null,
-        requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
-      }
-    }
     const payload = {
       plan_name: form.plan_name.trim(),
-      copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
-      annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
       covered_categories: form.covered_categories,
-      overall_annual_limit_hkd: form.overall_annual_limit_hkd!=='' ? parseFloat(form.overall_annual_limit_hkd) : null,
-      room_board_daily_limit_hkd: form.room_board_daily_limit_hkd!=='' ? parseFloat(form.room_board_daily_limit_hkd) : null,
-      network_type: form.network_type || null,
-      waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
-      pre_existing_condition_policy: form.pre_existing_condition_policy || null,
-      preauth_threshold_hkd: form.preauth_threshold_hkd!=='' ? parseFloat(form.preauth_threshold_hkd) : null,
-      category_limits,
       policy_document_path: form.policy_document_path || null,
       policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
-      billing_model: form.billing_model || 'direct',
       logo_url: form.logo_url || null,
     }
     if (editingId) {
@@ -1155,7 +1173,7 @@ function CoverageRulesManager({ company }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <div style={{margin:'16px 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
-        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Register your plans' coverage rules so a claim from any Medsa-network clinic (or the direct API) calculates the right deductible/copay for your policyholders. This isn't a marketplace listing - your plans aren't shown to patients or sold by agents, they're only used to process real claims.</div>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Register your plans so Medsa has the real name, logo, and categories they cover - this is benefit info, not a claims system. Medsa doesn't process or adjudicate claims for an insurer without a full platform partnership; your own existing claims process stays exactly as it is. Combine this with "Promote a plan" to get an individual registered plan into patient search.</div>
       </div>
       {!creating&&<div style={{padding:'0 16px 16px'}}><Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Register a plan</Btn></div>}
       {creating&&(
@@ -1173,10 +1191,7 @@ function CoverageRulesManager({ company }) {
             <LogoField value={form.logo_url} onChange={v=>setForm(f=>({...f,logo_url:v}))} uploadPath={`insurers/${company.id}/plans/${editingId||'new'}`} fallbackUrl={company.logo_url} fallbackLabel="Using your company logo by default"/>
           </div>
 
-          {/* Shared with Plan Manager (UX audit item 5) - the exact same
-              claims-adjudication fields, so a partnered insurer's plan and
-              an unpartnered one's calculate claims with the same accuracy. */}
-          <AdjudicationFieldsSection form={form} setForm={setForm}/>
+          <BasicCategoriesSection form={form} setForm={setForm}/>
 
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setCreating(false);setEditingId(null)}}>Cancel</Btn>
@@ -1196,15 +1211,7 @@ function CoverageRulesManager({ company }) {
             <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
             <span onClick={()=>startEdit(p)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',flexShrink:0}}>Edit</span>
           </div>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay defaults to 10%'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible defaults to HK$500'}
-          </div>
-          <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set - claims won\'t match against this plan'}</div>
-          {(p.overall_annual_limit_hkd||p.network_type||p.waiting_period_days!=null)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>
-            {p.overall_annual_limit_hkd&&`HK$${Number(p.overall_annual_limit_hkd).toLocaleString()} annual max`}
-            {p.network_type&&`${p.overall_annual_limit_hkd?' · ':''}${NETWORK_TYPES.find(n=>n[0]===p.network_type)?.[1]||p.network_type}`}
-            {p.waiting_period_days!=null&&`${(p.overall_annual_limit_hkd||p.network_type)?' · ':''}${p.waiting_period_days}d waiting period`}
-          </div>}
+          <div style={{fontSize:'11px',color:C.textMuted}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No categories set yet'}</div>
           {p.policy_document_path&&<div style={{fontSize:'11px',color:C.blue,marginTop:'4px',cursor:'pointer'}} onClick={async()=>{const {data}=await supabase.storage.from('policy-contracts').createSignedUrl(p.policy_document_path,300);if(data?.signedUrl)window.open(data.signedUrl,'_blank')}}>📄 View uploaded policy document</div>}
         </Card>
       ))}
@@ -2953,8 +2960,13 @@ export default function InsuranceApp({ company, onLogout }) {
   // the components (TeamsAndAgents/PreauthRequestsManager/PaymentsManager)
   // are left defined further up this file, not deleted, in case a real
   // TPA-style deal ever actually calls for them.
+  // Parking Lot: for an unpartnered insurer, Medsa isn't the TPA - there's
+  // no claims relationship to Verify a policy against or a Claims log to
+  // show, since nothing here ever gets adjudicated. Dropped from this
+  // tier's nav entirely rather than left empty - a real partnership (the
+  // Apply link above) is what actually unlocks them.
   const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'}]
-    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
+    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2977,8 +2989,8 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
-        {screen==='verify'&&<PolicyVerificationManager company={company}/>}
-        {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
+        {screen==='verify'&&isPartnered&&<PolicyVerificationManager company={company}/>}
+        {screen==='claims'&&isPartnered&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
