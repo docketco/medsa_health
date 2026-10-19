@@ -6751,6 +6751,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       </div>
 
       {bumpTab==='postpartum'&&<>
+      {/* Real gap found from your feedback: tapping into Postpartum on
+          the CURRENT pass (still pregnant, no child_dob yet) shows only
+          EPDS below - the recovery checklist and confinement guide are
+          gated on THIS pass's own child_dob, so they're invisible here
+          even though a real postpartum pass exists. The switch banner
+          above the tabs covers this, but it's easy to miss once you've
+          already tapped into this tab - this is the same thing, said
+          again right where the content is actually missing. */}
+      {!bumpRow?.child_dob&&otherBumpPass?.child_dob&&<div onClick={()=>onSwitchBumpSubscription&&onSwitchBumpSubscription(otherBumpPass.id)} style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',cursor:onSwitchBumpSubscription?'pointer':'default',display:'flex',alignItems:'center',gap:'10px'}}>
+        <div style={{flex:1,fontSize:'12px',color:C.amber,lineHeight:1.5}}>{isEn?`The recovery checklist and confinement guide are under ${otherBumpPass.child_full_name||'your other baby'}'s own postpartum pass, not this pregnancy's. Tap to switch.`:`復原清單及坐月指南屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。請點按切換。`}</div>
+        {onSwitchBumpSubscription&&<span style={{color:C.amber,fontSize:'18px'}}>›</span>}
+      </div>}
       <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
