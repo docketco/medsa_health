@@ -34,7 +34,14 @@ export default async function handler(req, res) {
     amount_paid_hkd: (session.amount_total || 0) / 100,
     is_loyalty_discount: session.metadata?.bump_is_loyalty_discount === 'true',
   })
-  if (insErr) return res.status(200).json({ status: 'ERROR', message: insErr.message })
+  // The select-then-insert above isn't atomic - two calls landing within
+  // the same window (e.g. a double effect-fire on return from Stripe) can
+  // both pass the select before either insert commits. A real duplicate
+  // got created this exact way. The DB now has a unique index on
+  // stripe_checkout_session_id backing this up - a 23505 here means the
+  // other call already won, so treat it the same as alreadyApplied rather
+  // than surfacing a spurious error.
+  if (insErr && insErr.code !== '23505') return res.status(200).json({ status: 'ERROR', message: insErr.message })
 
-  return res.status(200).json({ status: 'OK' })
+  return res.status(200).json({ status: 'OK', alreadyApplied: insErr?.code === '23505' })
 }
