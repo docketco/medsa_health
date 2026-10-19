@@ -3215,6 +3215,10 @@ function DocumentPrepTab({ isEn, patient={} }) {
       .eq('id', bundleId).select().maybeSingle()
     if (data) setBundles(prev => prev.map(b=>b.id===bundleId?data:b))
   }
+  async function deleteBundle(bundleId) {
+    await supabase.from('document_prep_bundles').delete().eq('id', bundleId)
+    setBundles(prev => prev.filter(b=>b.id!==bundleId))
+  }
 
   if (openBundle) return <DocumentPrepBundleDetail isEn={isEn} patient={patient} bundle={openBundle} onBack={()=>setOpenBundleId(null)} onItemsChange={newItems=>updateBundleItems(openBundle.id, newItems)}/>
 
@@ -3232,13 +3236,14 @@ function DocumentPrepTab({ isEn, patient={} }) {
       {!loading&&bundles.map(b=>{
         const { done, total } = completeness(b)
         return (
-          <Card key={b.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setOpenBundleId(b.id)}>
+          <Card key={b.id} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div>
+              <div style={{flex:1,cursor:'pointer'}} onClick={()=>setOpenBundleId(b.id)}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{b.title}</div>
                 <div style={{fontSize:'11px',color:C.textSub}}>{b.insurer_name||(isEn?'No insurer named':'未指定保險公司')}</div>
               </div>
               <Badge text={b.status==='ready'?(isEn?'Ready':'已就緒'):`${done}/${total}`} type={b.status==='ready'?'ok':'due'}/>
+              <span onClick={()=>deleteBundle(b.id)} style={{marginLeft:'10px',fontSize:'13px',color:C.textMuted,cursor:'pointer'}}>✕</span>
             </div>
           </Card>
         )
@@ -3261,6 +3266,8 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
   const [sourceFormFile,setSourceFormFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+  const [suggesting,setSuggesting]=useState(false)
+  const [suggestError,setSuggestError]=useState(null)
 
   function togglePreset(label) {
     setSelectedPresets(prev => { const next = new Set(prev); next.has(label)?next.delete(label):next.add(label); return next })
@@ -3270,6 +3277,38 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
     if (!v || customItems.includes(v)) return
     setCustomItems(prev => [...prev, v])
     setCustomItem('')
+  }
+
+  // Real request: the patient already uploads the insurer's own form here
+  // (sourceFormFile) - have Claude read it and propose what it actually
+  // asks for, same propose-don't-auto-apply pattern as parse_plan_
+  // document.js and parse_medication_label.js. Proposed items just land
+  // in customItems (editable/removable like anything typed by hand) -
+  // nothing is created until the patient taps Create.
+  async function suggestItemsFromForm() {
+    if (!sourceFormFile) return
+    setSuggesting(true); setSuggestError(null)
+    try {
+      const isPdf = sourceFormFile.type === 'application/pdf'
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(sourceFormFile)
+      })
+      const res = await fetch('/api/patient/suggest_doc_prep_items', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileBase64: base64, mediaType: sourceFormFile.type, isPdf }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setSuggestError(data.error || (isEn?'Could not read this document.':'無法讀取此文件。')); setSuggesting(false); return }
+      const newOnes = (data.items||[]).filter(label => !selectedPresets.has(label) && !customItems.includes(label))
+      setCustomItems(prev => [...prev, ...newOnes])
+      if (newOnes.length===0) setSuggestError(isEn?"Didn't find anything new to add - check the preset chips above or add items manually.":'沒有找到新項目 - 請查看上方預設選項或自行新增。')
+    } catch {
+      setSuggestError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
+    }
+    setSuggesting(false)
   }
 
   async function handleCreate() {
@@ -3312,8 +3351,10 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
         <div style={{textAlign:'left',border:`1px dashed ${C.border}`,borderRadius:'8px',padding:'10px 12px',cursor:'pointer',fontSize:'12px',color:sourceFormFile?C.text:C.textMuted,marginBottom:'14px'}}>
           {sourceFormFile ? `📄 ${sourceFormFile.name}` : (isEn?'+ Attach the form/letter you received, if any':'+ 附上收到的表格或信件(如有)')}
         </div>
-        <input type="file" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(f) setSourceFormFile(f)}}/>
+        <input type="file" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(f) {setSourceFormFile(f); setSuggestError(null)}}}/>
       </label>
+      {sourceFormFile&&<div onClick={suggesting?undefined:suggestItemsFromForm} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:suggesting?'wait':'pointer',marginTop:'-8px',marginBottom:'14px'}}>{suggesting?(isEn?'Reading form…':'讀取表格中…'):(isEn?'✨ Suggest items from this form':'✨ 從此表格建議項目')}</div>}
+      {suggestError&&<div style={{fontSize:'11px',color:C.red,marginTop:'-8px',marginBottom:'14px'}}>{suggestError}</div>}
 
       <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'What documents are needed?':'需要哪些文件?'}</div>
       <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'10px'}}>
@@ -3346,6 +3387,7 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
   const [attachments,setAttachments]=useState([])
   const [pickerForIdx,setPickerForIdx]=useState(null)
   const [uploading,setUploading]=useState(false)
+  const [exporting,setExporting]=useState(false)
 
   async function loadAttachments() {
     if (!patient?.id) return
@@ -3383,6 +3425,42 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  // Real gap found live-testing: a "Ready" bundle had no next step at all -
+  // same shape as every other PDF export in this app (a cover sheet
+  // listing what's here, not the files themselves - this app has never
+  // packaged the real attached files into one download, same as the
+  // Bump/Kids "Uploaded documents" card). Points the reader at Medsa
+  // Records for the actual files, same pattern as those cards.
+  async function downloadBundleExport() {
+    setExporting(true)
+    const NAVY = [26,42,74]
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Document Bundle`
+    drawPdfHeader(doc, pageWidth, subtitle, NAVY)
+    let y = 40
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: bundle.title, subtitle, accentColor: NAVY,
+      dateInstitution: bundle.insurer_name ? `For ${bundle.insurer_name}` : 'No insurer named',
+      details: items.map(it => [it.label, it.attachment_id ? (attachments.find(a=>a.id===it.attachment_id)?.file_name || 'Attached') : 'Missing - not yet attached']),
+    })
+    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Where to find the actual files', subtitle, accentColor: NAVY,
+      dateInstitution: 'This page is a checklist, not the documents themselves',
+      details: [['Attached files', 'See Medsa Records to view or download each one']],
+    })
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Document-Bundle-${bundle.title.replace(/[^a-z0-9]+/gi,'-')}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExporting(false)
+  }
+
   const items = bundle.items||[]
   const done = items.filter(i=>i.attachment_id).length
 
@@ -3395,6 +3473,7 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
         <div style={{fontSize:'17px',fontWeight:700}}>{bundle.title}</div>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{bundle.insurer_name||(isEn?'No insurer named':'未指定保險公司')} · {done}/{items.length} {isEn?'attached':'已附上'}</div>
         {bundle.source_form_attachment_id&&<span onClick={()=>viewAttachment(bundle.source_form_attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {isEn?"View the insurer's form you uploaded":'查看已上傳的保險公司表格'} →</span>}
+        {bundle.status==='ready'&&<div onClick={exporting?undefined:downloadBundleExport} style={{marginTop:'8px',fontSize:'12px',fontWeight:600,color:C.navy,cursor:exporting?'wait':'pointer',textDecoration:'underline'}}>{exporting?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export bundle checklist PDF':'⬇ 匯出文件組合清單PDF')}</div>}
       </div>
 
       {items.map((item,idx)=>(
@@ -6953,7 +7032,9 @@ function weeklySizeComparison(gestationalWeek) {
 }
 
 function MedsaBumpSection({ isEn, patient }) {
-  const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=active
+  const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=the CURRENT PREGNANCY row (child_dob not yet set)
+  const [openPostpartumBump,setOpenPostpartumBump]=useState(null) // a separate, still-open (<12mo) postpartum row from an EARLIER child - can coexist with activeBump if pregnant again before the last one closed
+  const [startingNewPregnancy,setStartingNewPregnancy]=useState(false) // shows the intake form even while openPostpartumBump is still open
   const [dueDate,setDueDate]=useState('')
   const [weeksNow,setWeeksNow]=useState('')
   const [discoveredAt,setDiscoveredAt]=useState('')
@@ -6979,22 +7060,43 @@ function MedsaBumpSection({ isEn, patient }) {
   // unconfirmed until they happened to click back into this exact
   // screen. Simple mount-time load is enough now - by the time this
   // renders, the root has already verified and written the real row.
+  // Real gap found live-testing: this used to fetch only the single most
+  // recent non-graduated row, so a patient still within the 12-month
+  // postpartum window of one baby had NO way to even start tracking a new
+  // pregnancy - the intake form only ever rendered when there was zero
+  // open Bump row at all. Pregnant again before that window closes is a
+  // real, unremarkable case, not an edge case to ignore. Now fetches every
+  // open row and splits them: at most one can ever lack a child_dob (the
+  // CURRENT pregnancy, if any - you can't be newly pregnant while still
+  // pregnant), and separately, a still-open postpartum row from an earlier
+  // birth can coexist with it until its own 12 months run out.
   async function loadBump() {
-    if (!patient?.id) { setActiveBump(null); return }
-    const { data } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
-    // Two separate timers, decoupled on your call: the CHILD graduates to
-    // their own Medsa Kids profile immediately once a birth is on file -
-    // matching how every benchmarked app (BabyCenter/Ovia/etc.) hands a
-    // baby's own feeding/diaper/growth tracking off right at birth, not
-    // months later. The Bump PASS itself stays open for 12 months
-    // postpartum for the MOTHER's own tools (BP monitoring, recovery
-    // checklist) - that's graduated_at below, unrelated to the child fork.
-    if (data?.child_dob && !data.child_graduated_at) { await graduateChildToKids(data); return }
-    if (data?.child_dob) {
-      const monthsSinceBirth = (Date.now() - new Date(data.child_dob)) / (1000*60*60*24*30.44)
-      if (monthsSinceBirth >= 12) { await closeBumpPass(data); return }
+    if (!patient?.id) { setActiveBump(null); setOpenPostpartumBump(null); return }
+    const { data: rows } = await supabase.from('bump_subscriptions').select('*').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false})
+    for (const row of (rows||[])) {
+      if (row.child_dob && !row.child_graduated_at) { await graduateChildToKids(row); return }
     }
-    setActiveBump(data||null)
+    let stillOpen = []
+    for (const row of (rows||[])) {
+      if (row.child_dob) {
+        const monthsSinceBirth = (Date.now() - new Date(row.child_dob)) / (1000*60*60*24*30.44)
+        if (monthsSinceBirth >= 12) { await closeBumpPass(row); return }
+      }
+      stillOpen.push(row)
+    }
+    const pregnancyRow = stillOpen.find(r => !r.child_dob) || null
+    const postpartumRow = stillOpen.find(r => r.child_dob) || null
+    // activeBump keeps its original single-row meaning (whatever the main
+    // card should show: the current pregnancy if there is one, else a
+    // still-open postpartum pass, exactly as before). openPostpartumBump
+    // is only ever set in the one case that's actually new - a fresh
+    // pregnancy started before the PREVIOUS one's 12-month postpartum
+    // window closed - so the existing postpartum pass doesn't just
+    // silently disappear from view once a new pregnancy takes over the
+    // main card.
+    setActiveBump(pregnancyRow || postpartumRow || null)
+    setOpenPostpartumBump(pregnancyRow && postpartumRow ? postpartumRow : null)
+    if (pregnancyRow) setStartingNewPregnancy(false)
   }
   useEffect(() => { loadBump() }, [patient?.id])
 
@@ -7092,7 +7194,7 @@ function MedsaBumpSection({ isEn, patient }) {
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
   )
 
-  if (activeBump) {
+  if (activeBump && !startingNewPregnancy) {
     // 40 weeks is the standard due-date convention - computed fresh from
     // predicted_due_date rather than carried forward from gestational_
     // weeks_at_signup, so it stays current regardless of how long ago
@@ -7120,6 +7222,17 @@ function MedsaBumpSection({ isEn, patient }) {
         </div>
       </div>}
 
+      {/* Pregnant again before the PREVIOUS baby's own 12-month postpartum
+          window closed - openPostpartumBump is only ever set in exactly
+          this case (see loadBump). That earlier pass keeps running its
+          own recovery checklist/EPDS on its own timer, untouched by this
+          new pregnancy - this is just making sure it doesn't go invisible
+          the moment a new pregnancy takes over the main card. */}
+      {openPostpartumBump&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',fontWeight:600,color:'#fff'}}>{isEn?"Also finishing postpartum recovery from your last pregnancy":'同時完成上一胎的產後復原'}</div>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Born ${new Date(openPostpartumBump.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?` (${openPostpartumBump.child_full_name})`:''} - that recovery checklist and EPDS stay available on their own 12-month timer, independent of this pregnancy.`:`出生於${new Date(openPostpartumBump.child_dob).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?`(${openPostpartumBump.child_full_name})`:''} - 其產後復原清單及EPDS將按其獨立的產後12個月繼續提供,不受此次懷孕影響。`}</div>
+      </div>}
+
       {/* Postpartum (4th trimester) state - the real gap found building
           this: nothing ever actually recorded a birth, so child_dob sat
           unused and the 12-month graduation this depends on could never
@@ -7137,13 +7250,23 @@ function MedsaBumpSection({ isEn, patient }) {
         <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`${monthsOld} month${monthsOld===1?'':'s'} postpartum`:`產後${monthsOld}個月`}</div>
         <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Their own Medsa Kids profile is already set up. This Bump pass stays open for your own recovery tracking until 12 months postpartum${monthsOld<12?` - ${12-monthsOld} to go`:''}.`:`寶寶的Medsa Kids個人檔案已設立。此Medsa Bump將持續追蹤您的產後復原狀況,直至產後12個月${monthsOld<12?` - 還差${12-monthsOld}個月`:''}。`}</div>
       </div>}
+      {/* Real gap found live-testing: this card used to be the ONLY thing
+          shown once postpartum - there was no way to even start tracking
+          a new pregnancy while still inside the previous one's 12-month
+          window, even though getting pregnant again in that window is
+          entirely normal. This reveals the same intake form used for a
+          first pregnancy (see openPostpartumBump above for how the old
+          pass's own recovery tools keep running once a new one exists). */}
+      {activeBump.child_dob&&<div onClick={()=>setStartingNewPregnancy(true)} style={{marginTop:'14px',fontSize:'12px',color:'#fff',textDecoration:'underline',cursor:'pointer'}}>{isEn?'🤰 Pregnant again? Start tracking a new pregnancy':'🤰 再次懷孕?開始追蹤新孕期'}</div>}
     </Card>
     </>)}
 
   return (<>
     {graduationBanner}
+    {startingNewPregnancy&&<div onClick={()=>setStartingNewPregnancy(false)} style={{margin:'0 0 12px',fontSize:'12px',color:'#F48FB1',textDecoration:'underline',cursor:'pointer'}}>{isEn?'← Back':'← 返回'}</div>}
     <Card style={{padding:'20px',marginBottom:'20px',background:bumpGradient,border:'none'}}>
       <div style={{fontSize:'19px',fontWeight:700,color:'#fff',marginBottom:'10px'}}>Medsa Bump</div>
+      {startingNewPregnancy&&activeBump&&<div style={{fontSize:'11.5px',color:'#fff',background:'rgba(255,255,255,0.2)',borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',lineHeight:1.5}}>{isEn?"Starting a new pregnancy pass - your current postpartum recovery tracking stays open separately, on its own 12-month timer.":'開始新的孕期追蹤 - 您目前的產後復原追蹤將按其獨立的12個月繼續進行,不受影響。'}</div>}
       <div style={{fontSize:'12px',color:'rgba(255,255,255,0.9)',lineHeight:1.6,marginBottom:'8px'}}>
         {isEn?"Maternal care tracking through pregnancy and 12 months postpartum - your baby gets their own Medsa Kids profile right at birth.":'由懷孕期至產後12個月的孕產照護追蹤 - 寶寶出生後將立即擁有自己的Medsa Kids個人檔案。'}
       </div>
@@ -8074,13 +8197,19 @@ export default function PatientApp({ liveData={} }) {
     return !!persistedId && window.localStorage.getItem(`medsa_bump_active_${persistedId}`) === '1'
   })
   const [bumpSubscriptionId,setBumpSubscriptionId]=useState(null)
+  // Same priority as MedsaBumpSection.loadBump: if a current pregnancy row
+  // exists, that's the one BumpHealthScreen's Monitoring/Growth tabs
+  // should bind to, even when an earlier postpartum pass (pregnant again
+  // before its 12-month window closed) is also still open.
   const checkBumpActive = useCallback(() => {
     if (!patient?.id) { setBumpActive(false); setBumpSubscriptionId(null); return }
-    supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1).maybeSingle()
+    supabase.from('bump_subscriptions').select('id, child_dob').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false})
       .then(({data}) => {
-        const active = !!data
+        const rows = data || []
+        const chosen = rows.find(r => !r.child_dob) || rows[0] || null
+        const active = !!chosen
         setBumpActive(active)
-        setBumpSubscriptionId(data?.id || null)
+        setBumpSubscriptionId(chosen?.id || null)
         if (typeof window!=='undefined') window.localStorage.setItem(`medsa_bump_active_${patient.id}`, active ? '1' : '0')
       })
   }, [patient?.id])
