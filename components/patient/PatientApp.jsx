@@ -7241,7 +7241,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   )
 }
 
-function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
+function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHealth }) {
   const __theme = useContext(ThemeContext)
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
@@ -7407,7 +7407,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
         </div>
       </Card>
 
-      <MedsaBumpSection isEn={isEn} patient={patient}/>
+      <MedsaBumpSection isEn={isEn} patient={patient} onViewBumpHealth={onViewBumpHealth}/>
 
       <SecLabel>{isEn?'My allergies':'我的過敏'}</SecLabel>
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
@@ -7513,7 +7513,7 @@ function weeklySizeComparison(gestationalWeek) {
   return WEEKLY_SIZE_COMPARISONS[w]
 }
 
-function MedsaBumpSection({ isEn, patient }) {
+function MedsaBumpSection({ isEn, patient, onViewBumpHealth }) {
   const [activeBump,setActiveBump]=useState(undefined) // undefined=loading, null=none, object=the CURRENT PREGNANCY row (child_dob not yet set)
   const [openPostpartumBump,setOpenPostpartumBump]=useState(null) // a separate, still-open (<12mo) postpartum row from an EARLIER child - can coexist with activeBump if pregnant again before the last one closed
   const [startingNewPregnancy,setStartingNewPregnancy]=useState(false) // shows the intake form even while openPostpartumBump is still open
@@ -7742,9 +7742,19 @@ function MedsaBumpSection({ isEn, patient }) {
           own recovery checklist/EPDS on its own timer, untouched by this
           new pregnancy - this is just making sure it doesn't go invisible
           the moment a new pregnancy takes over the main card. */}
-      {openPostpartumBump&&<div style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px'}}>
-        <div style={{fontSize:'12px',fontWeight:600,color:'#fff'}}>{isEn?"Also finishing postpartum recovery from your last pregnancy":'同時完成上一胎的產後復原'}</div>
-        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Born ${new Date(openPostpartumBump.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?` (${openPostpartumBump.child_full_name})`:''} - that recovery checklist and EPDS stay available on their own 12-month timer, independent of this pregnancy.`:`出生於${new Date(openPostpartumBump.child_dob).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?`(${openPostpartumBump.child_full_name})`:''} - 其產後復原清單及EPDS將按其獨立的產後12個月繼續提供,不受此次懷孕影響。`}</div>
+      {/* Real bug found live-testing: this claimed the earlier pass's
+          recovery checklist/EPDS/confinement guide "stay available," but
+          there was no actual way to reach them - BumpHealthScreen only
+          ever bound to whichever ONE bump pass checkBumpActive resolves
+          to (always the current pregnancy over a concurrent postpartum
+          one). Now clickable, opening that specific pass's own health
+          log via onViewBumpHealth's override. */}
+      {openPostpartumBump&&<div onClick={()=>onViewBumpHealth&&onViewBumpHealth(openPostpartumBump.id)} style={{marginTop:'14px',background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'12px 14px',cursor:onViewBumpHealth?'pointer':'default'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:'12px',fontWeight:600,color:'#fff'}}>{isEn?"Also finishing postpartum recovery from your last pregnancy":'同時完成上一胎的產後復原'}</div>
+          {onViewBumpHealth&&<span style={{color:'#fff',fontSize:'16px'}}>›</span>}
+        </div>
+        <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?`Born ${new Date(openPostpartumBump.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?` (${openPostpartumBump.child_full_name})`:''} - tap to open that recovery checklist, EPDS, and confinement guide, running on their own 12-month timer independent of this pregnancy.`:`出生於${new Date(openPostpartumBump.child_dob).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}${openPostpartumBump.child_full_name?`(${openPostpartumBump.child_full_name})`:''} - 點按以開啟其產後復原清單、EPDS及坐月指南,按其獨立的產後12個月繼續提供,不受此次懷孕影響。`}</div>
       </div>}
 
       {/* Postpartum (4th trimester) state - the real gap found building
@@ -8733,6 +8743,19 @@ export default function PatientApp({ liveData={} }) {
     return cached===null ? null : cached==='1'
   })
   const [bumpSubscriptionId,setBumpSubscriptionId]=useState(null)
+  // Real bug reported live-testing: pregnant again before the previous
+  // baby's 12-month postpartum window closed, the "Also finishing
+  // postpartum recovery..." banner in Account Settings claimed that
+  // pass's recovery checklist/EPDS/confinement guide "stay available,"
+  // but there was no way to actually reach them - BumpHealthScreen only
+  // ever bound to the single root bumpSubscriptionId, which
+  // checkBumpActive always resolves to the CURRENT pregnancy (no
+  // child_dob) over a concurrent postpartum pass. This override lets a
+  // specific pass's health log open regardless of which one
+  // bumpSubscriptionId currently points at; cleared whenever leaving
+  // that screen so the normal nav entries keep showing the active one.
+  const [viewBumpOverrideId,setViewBumpOverrideId]=useState(null)
+  useEffect(() => { if (screen!=='bumphealth') setViewBumpOverrideId(null) }, [screen])
   // Same priority as MedsaBumpSection.loadBump: if a current pregnancy row
   // exists, that's the one BumpHealthScreen's Monitoring/Growth tabs
   // should bind to, even when an earlier postpartum pass (pregnant again
@@ -8887,14 +8910,14 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
-        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={bumpSubscriptionId}/>}
+        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={viewBumpOverrideId||bumpSubscriptionId}/>}
         {screen==='bumpcohort'&&<BumpCohortScreen isEn={isEn} patient={patient}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
-        }} onSignOut={()=>{
+        }} onViewBumpHealth={(id)=>{setViewBumpOverrideId(id||null); setScreen('bumphealth')}} onSignOut={()=>{
           setSignedInPatient(null); setShowGate(true)
           if (typeof window!=='undefined') window.localStorage.removeItem('medsa_signed_in_patient_id')
         }}/>}

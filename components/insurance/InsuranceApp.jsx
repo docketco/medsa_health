@@ -101,7 +101,7 @@ function InsuranceDashboard({ onNav, company }) {
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
         {[
-          {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
+          {key:'plans',icon:'▣',label:'Your plans',sub:'View your registered plans - Medsa handles adding/editing'},
           {key:'ads',icon:'⬡',label:company?.relationshipType==='unpartnered'?'Promote a plan':'Sponsored listings',sub:company?.relationshipType==='unpartnered'?'Sponsor an individual plan in patient search, priced per month':'Promote plans in AI recommendations'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
@@ -369,7 +369,13 @@ const PLAN_MANAGER_EMPTY_FORM = {
   commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
   self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
 }
-function PlanManager({ company }) {
+// readOnly: the insurer portal passes this - per your call, going back
+// to the original (pre-refinement) decision, adding/editing a plan is a
+// Medsa job now, not insurer self-serve. medsa-admin's own Plans tab
+// (AdminPlansTab below, picks a company first) renders this same
+// component without readOnly, so there's exactly one real form, not two
+// to keep in sync.
+export function PlanManager({ company, readOnly=false }) {
   const [plans,setPlans]=useState([])
   const [search,setSearch]=useState('')
   const [loading,setLoading]=useState(true)
@@ -610,11 +616,14 @@ function PlanManager({ company }) {
   return (
     <div style={{background:C.beige,flex:1}}>
       <CompanyLogoUploader company={company}/>
-      {!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
+      {readOnly&&<div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Medsa adds and edits your plan listings - contact your Medsa account manager with new plans or changes to existing ones. This is a read-only view of what's currently registered.</div>
+      </div>}
+      {!readOnly&&!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
         <Btn variant="navy" style={{flex:1}} onClick={startCreate}>+ Add new plan</Btn>
         <Btn style={{flex:1}} onClick={()=>setBulkPlanOpen(o=>!o)}>{bulkPlanOpen?'Hide bulk import':'⭱ Bulk import plans (CSV)'}</Btn>
       </div>}
-      {!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
+      {!readOnly&&!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
         <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Bulk import your whole plan catalog</div>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>
           CSV columns: plan_name (required), plan_type, key_benefits, covered_categories, covered_conditions, insurer_flags (each semicolon-separated, e.g. "Dental;Optical"), pre_existing_condition_policy, waiting_period_days, copay_rate_pct, annual_deductible_hkd, commission_rate_pct, requires_agent (true/false), auto_buy_on_clean (true/false), additional_terms.<br/>
@@ -630,7 +639,7 @@ function PlanManager({ company }) {
           {bulkPlanResult.errors.length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkPlanResult.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}
         </div>}
       </Card>}
-      {creating&&(
+      {!readOnly&&creating&&(
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
@@ -758,7 +767,7 @@ function PlanManager({ company }) {
             <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
               {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
               {p.self_serve_checkout_enabled&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Self-serve</span>}
-              <span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>
+              {!readOnly&&<span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>}
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
@@ -2948,7 +2957,7 @@ export default function InsuranceApp({ company, onLogout }) {
             Coverage Rules) made it look like a real distinction still
             existed. CoverageRulesManager is left defined above, not
             deleted, in case a cut-down intake ever makes sense again. */}
-        {screen==='plans'&&<PlanManager company={company}/>}
+        {screen==='plans'&&<PlanManager company={company} readOnly/>}
         {/* Verify, Claims log, and claim-detail are unreachable for every
             insurer now - no nav button ever sets `screen` to any of
             these keys. Left as dead branches (not deleted) rather than
