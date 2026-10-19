@@ -1,15 +1,15 @@
 // pages/api/insurer/signup.js
 // ─────────────────────────────────────────────────────────────────────────────
-// Self-serve insurer signup - the two relationship tiers get genuinely
-// different treatment here, not just a label:
-//   - unpartnered: TPA-claims-only, no plan/client management. Low-stakes
-//     enough to activate immediately with a temp password, same as
-//     create_tpa_clinic.js does for out-of-network clinics.
-//   - partnered: gets patient/client profile access and lists real plans -
-//     real relationship, real contract. This only records the application
-//     as 'pending' and issues no credentials; Medsa admin reaches out and
-//     approves it (see /api/admin/approve_insurer.js) once a real
-//     relationship is actually in place.
+// Self-serve insurer signup - one tier, one outcome. Plan
+// registration/editing is Medsa-admin-only regardless of who signs up
+// (see medsa-admin's Plans tab), so there's no bigger-access tier left
+// that would justify gating activation behind manual review - every
+// signup activates immediately with a temp password, same as
+// create_tpa_clinic.js does for out-of-network clinics.
+// (A company can still land as status='pending' via medsa-admin's own
+// "Onboard a company" flow, when Medsa wants a real signed contract in
+// place first - that path is separate and untouched by this route; see
+// /api/admin/approve_insurer.js for how those get activated.)
 // Runs with the service-role key because insurance_companies' password
 // column must never be set by a route the browser can call directly.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,12 +21,9 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { companyName, contactName, contactEmail, contactPhone, relationshipType } = req.body || {}
+  const { companyName, contactName, contactEmail, contactPhone } = req.body || {}
   if (!companyName?.trim() || !contactEmail?.trim()) {
     return res.status(400).json({ status: 'ERROR', message: 'companyName and contactEmail are required.' })
-  }
-  if (!['partnered', 'unpartnered'].includes(relationshipType)) {
-    return res.status(400).json({ status: 'ERROR', message: 'relationshipType must be partnered or unpartnered.' })
   }
 
   const { data: existing } = await supabase.from('insurance_companies')
@@ -44,20 +41,13 @@ export default async function handler(req, res) {
     .insert({ name: companyName.trim(), institution_type: 'insurer' }).select().maybeSingle()
   if (instErr) return res.status(500).json({ status: 'ERROR', message: instErr.message })
 
-  const isUnpartnered = relationshipType === 'unpartnered'
   const { data: company, error: insErr } = await supabase.from('insurance_companies').insert({
     name: companyName.trim(), contact_name: contactName?.trim() || null,
     contact_email: contactEmail.trim(), contact_phone: contactPhone?.trim() || null,
-    relationship_type: relationshipType, self_serve: true,
-    status: isUnpartnered ? 'active' : 'pending',
-    onboarded_by: isUnpartnered ? 'self-serve' : 'self-serve (pending approval)',
+    self_serve: true, status: 'active', onboarded_by: 'self-serve',
     institution_ref_id: institutionRow.id,
   }).select().maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
-
-  if (!isUnpartnered) {
-    return res.status(200).json({ status: 'PENDING', companyName: company.name })
-  }
 
   const tempPassword = `Temp${Math.floor(1000 + Math.random() * 9000)}!`
   const { error: pwErr } = await supabase.rpc('set_insurance_company_password', { p_company_id: company.id, p_new_password: tempPassword })

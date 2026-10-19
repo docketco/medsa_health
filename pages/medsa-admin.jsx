@@ -763,9 +763,12 @@ function PartnersTab() {
     }
   }
 
-  // Self-serve partnered applications (see /insurer-signup) land as
-  // status='pending' with no password set yet - approving here is what
-  // actually issues their first login, via the same server-side
+  // Self-serve signup (see /insurer-signup) now activates every company
+  // immediately - it never lands here as 'pending' any more, that split
+  // was the old two-tier behavior. A company only reaches 'pending' now
+  // via this page's own "Onboard a company" flow, when Medsa wants a
+  // signed contract in place first. Approving here is what actually
+  // issues their first login, via the same server-side
   // set_insurance_company_password flow create_tpa_clinic.js uses.
   async function approveInsurer(company) {
     setApprovingId(company.id)
@@ -838,7 +841,7 @@ function PartnersTab() {
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{c.contact_name}{c.contact_email?` · ${c.contact_email}`:''}</div>
-              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{c.relationship_type==='unpartnered'?'TPA-only':'Partnered'}{c.self_serve?' · self-serve':''}</div>
+              {c.self_serve&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Self-serve</div>}
             </div>
             <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
               <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:c.status==='active'?C.greenLight:c.status==='pending'?C.amberLight:C.card,color:c.status==='active'?C.green:c.status==='pending'?C.amber:C.textMuted,fontWeight:600}}>{c.status}</span>
@@ -1660,7 +1663,7 @@ function AdminPlansTab() {
   const [selected, setSelected] = useState(null)
 
   useEffect(() => {
-    supabase.from('insurance_companies').select('id, name, logo_url, relationship_type, status').order('name').then(({data}) => {
+    supabase.from('insurance_companies').select('id, name, logo_url, status').order('name').then(({data}) => {
       setCompanies(data||[])
       setLoading(false)
     })
@@ -1688,7 +1691,7 @@ function AdminPlansTab() {
           {c.logo_url&&<img src={c.logo_url} alt="" style={{width:32,height:32,borderRadius:'8px',objectFit:'contain'}}/>}
           <div style={{flex:1}}>
             <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
-            <div style={{fontSize:'11px',color:C.textMuted}}>{c.relationship_type==='partnered'?'Partnered':'Registered insurer'}{c.status?` · ${c.status}`:''}</div>
+            {c.status&&<div style={{fontSize:'11px',color:C.textMuted}}>{c.status}</div>}
           </div>
           <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
         </div>
