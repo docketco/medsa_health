@@ -330,6 +330,30 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       .order('appointment_at', { ascending: true }).limit(1).maybeSingle()
       .then(({ data }) => setNextMchcAppt(data || null))
   }, [patient?.id])
+  // Real request: the weekly size-comparison card was buried inside
+  // Account Settings → Medsa Bump, so opening the app never actually
+  // showed it - same fetch-your-own-data pattern as nextMchcAppt above,
+  // only queried while bumpActive (currently pregnant OR postpartum;
+  // the predicted_due_date/child_dob check below narrows to "currently
+  // pregnant" specifically, since that's the only state this card means
+  // anything for).
+  const [bumpDueDate,setBumpDueDate]=useState(null)
+  useEffect(() => {
+    if (!patient?.id || !bumpActive) { setBumpDueDate(null); return }
+    supabase.from('bump_subscriptions').select('predicted_due_date').eq('patient_id', patient.id)
+      .is('graduated_at', null).is('child_dob', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
+      .then(({ data }) => setBumpDueDate(data?.predicted_due_date || null))
+  }, [patient?.id, bumpActive])
+  const bumpWeeksUntilDue = bumpDueDate ? Math.ceil((new Date(bumpDueDate) - new Date()) / (7*24*60*60*1000)) : null
+  const bumpGestationalWeek = bumpWeeksUntilDue!=null ? 40-bumpWeeksUntilDue : null
+  // Clamped the same way weeklySizeComparison clamps internally - a due
+  // date far enough out to compute a negative or >40 "week" used to show
+  // a mismatched label (e.g. "Week -2") next to a comparison that was
+  // silently clamped to week 4's poppy seed. Showing the same clamped
+  // number as the comparison keeps the label honest instead of just
+  // picking a prettier font size.
+  const bumpDisplayWeek = bumpGestationalWeek!=null ? Math.max(4, Math.min(40, Math.round(bumpGestationalWeek))) : null
+  const bumpSizeComparison = bumpDisplayWeek!=null ? weeklySizeComparison(bumpDisplayWeek) : null
   function handleCarouselScroll(e) {
     const el = e.target
     const cardWidth = el.firstChild ? el.firstChild.offsetWidth + 10 : 1
@@ -561,6 +585,20 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           {manualRefreshing?(isEn?'Refreshing…':'刷新中…'):(isEn?'Refresh':'刷新')}
         </div>
       </div>
+
+      {/* ── Weekly pregnancy size-comparison card - real request: this
+          used to be buried inside Account Settings → Medsa Bump, never
+          visible just from opening the app. Shown right here whenever
+          there's a current pregnancy on file. ── */}
+      {bumpSizeComparison&&(
+        <div style={{margin:'14px 16px 0',background:'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)',borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px'}}>
+          <span style={{fontSize:'26px'}}>{bumpSizeComparison.emoji}</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?`Week ${bumpDisplayWeek}`:`第${bumpDisplayWeek}週`}</div>
+            <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`Your baby is about the size of ${bumpSizeComparison.en}`:`您的寶寶現時大約是${bumpSizeComparison.zh}的大小`}</div>
+          </div>
+        </div>
+      )}
 
       {/* ── Urgent doctor messages — most prominent alert on the home screen ── */}
       {urgentMessages.length>0&&(
@@ -3425,34 +3463,72 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
-  // Real gap found live-testing: a "Ready" bundle had no next step at all -
-  // same shape as every other PDF export in this app (a cover sheet
-  // listing what's here, not the files themselves - this app has never
-  // packaged the real attached files into one download, same as the
-  // Bump/Kids "Uploaded documents" card). Points the reader at Medsa
-  // Records for the actual files, same pattern as those cards.
+  // Real request: you don't want a checklist pointing at Records, you
+  // want the actual attached files combined into one PDF, ready to send -
+  // same idea as a GP's referral pack. Builds a cover sheet with jsPDF
+  // (same look as every other export here), then uses pdf-lib to glue
+  // on each attached file: a real PDF has its pages copied in directly,
+  // an image becomes its own page. Available any time, not gated to
+  // "Ready" - whatever's attached goes in, and the cover sheet lists
+  // what's still missing so the export itself says what's incomplete
+  // rather than silently pretending it's everything.
   async function downloadBundleExport() {
     setExporting(true)
     const NAVY = [26,42,74]
-    const { jsPDF } = await import('jspdf')
+    const [{ jsPDF }, { PDFDocument }] = await Promise.all([import('jspdf'), import('pdf-lib')])
     const doc = new jsPDF()
     const pageWidth = doc.internal.pageSize.getWidth()
     const pageHeight = doc.internal.pageSize.getHeight()
     const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Document Bundle`
     drawPdfHeader(doc, pageWidth, subtitle, NAVY)
     let y = 40
+    const missing = items.filter(it=>!it.attachment_id)
     y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
       title: bundle.title, subtitle, accentColor: NAVY,
       dateInstitution: bundle.insurer_name ? `For ${bundle.insurer_name}` : 'No insurer named',
-      details: items.map(it => [it.label, it.attachment_id ? (attachments.find(a=>a.id===it.attachment_id)?.file_name || 'Attached') : 'Missing - not yet attached']),
+      details: items.map(it => [it.label, it.attachment_id ? (attachments.find(a=>a.id===it.attachment_id)?.file_name || 'Attached') : 'MISSING - not yet attached, not included below']),
     })
-    y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Where to find the actual files', subtitle, accentColor: NAVY,
-      dateInstitution: 'This page is a checklist, not the documents themselves',
-      details: [['Attached files', 'See Medsa Records to view or download each one']],
+    if (missing.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Still missing', subtitle, accentColor: NAVY,
+      dateInstitution: 'This export only includes what was attached when it was generated',
+      details: missing.map(it => [it.label, 'Not attached yet']),
     })
     drawPdfFooter(doc, pageWidth, pageHeight)
-    const blob = doc.output('blob')
+
+    const merged = await PDFDocument.load(doc.output('arraybuffer'))
+    const skipped = []
+    for (const it of items) {
+      if (!it.attachment_id) continue
+      const att = attachments.find(a=>a.id===it.attachment_id)
+      const { data: full } = await supabase.from('medical_record_attachments').select('file_url').eq('id', it.attachment_id).maybeSingle()
+      if (!full?.file_url) { skipped.push(it.label); continue }
+      const { data: signed } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(full.file_url, 300)
+      if (!signed?.signedUrl) { skipped.push(it.label); continue }
+      try {
+        const bytes = await (await fetch(signed.signedUrl)).arrayBuffer()
+        const ext = (att?.file_name||'').toLowerCase().split('.').pop()
+        if (ext === 'pdf') {
+          const src = await PDFDocument.load(bytes)
+          const pages = await merged.copyPages(src, src.getPageIndices())
+          pages.forEach(p => merged.addPage(p))
+        } else if (['jpg','jpeg','png'].includes(ext)) {
+          const img = ext === 'png' ? await merged.embedPng(bytes) : await merged.embedJpg(bytes)
+          const page = merged.addPage([img.width, img.height])
+          page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
+        } else {
+          skipped.push(it.label)
+        }
+      } catch {
+        skipped.push(it.label)
+      }
+    }
+    if (skipped.length>0) {
+      alert(isEn
+        ? `Combined everything else - couldn't include: ${skipped.join(', ')} (not a PDF or image). Open those separately in Medsa Records.`
+        : `已合併其餘文件 - 無法合併:${skipped.join('、')}(非PDF或圖片格式)。請在醫療記錄中另行查看。`)
+    }
+    const mergedBytes = await merged.save()
+    const blob = new Blob([mergedBytes], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url; a.download = `Medsa-Document-Bundle-${bundle.title.replace(/[^a-z0-9]+/gi,'-')}.pdf`
@@ -3473,7 +3549,7 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
         <div style={{fontSize:'17px',fontWeight:700}}>{bundle.title}</div>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{bundle.insurer_name||(isEn?'No insurer named':'未指定保險公司')} · {done}/{items.length} {isEn?'attached':'已附上'}</div>
         {bundle.source_form_attachment_id&&<span onClick={()=>viewAttachment(bundle.source_form_attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {isEn?"View the insurer's form you uploaded":'查看已上傳的保險公司表格'} →</span>}
-        {bundle.status==='ready'&&<div onClick={exporting?undefined:downloadBundleExport} style={{marginTop:'8px',fontSize:'12px',fontWeight:600,color:C.navy,cursor:exporting?'wait':'pointer',textDecoration:'underline'}}>{exporting?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export bundle checklist PDF':'⬇ 匯出文件組合清單PDF')}</div>}
+        {done>0&&<div onClick={exporting?undefined:downloadBundleExport} style={{marginTop:'8px',fontSize:'12px',fontWeight:600,color:C.navy,cursor:exporting?'wait':'pointer',textDecoration:'underline'}}>{exporting?(isEn?'Combining…':'合併中…'):(isEn?`⬇ Export combined PDF${done<items.length?` (${done}/${items.length} attached)`:''}`:`⬇ 匯出合併PDF${done<items.length?`(已附上${done}/${items.length})`:''}`)}</div>}
       </div>
 
       {items.map((item,idx)=>(
@@ -7059,6 +7135,7 @@ function MedsaBumpSection({ isEn, patient }) {
   const [birthDobError,setBirthDobError]=useState(false)
   const twoYearsAgoStr = (() => { const d=new Date(); d.setFullYear(d.getFullYear()-2); return d.toISOString().slice(0,10) })()
   const [graduationNotice,setGraduationNotice]=useState(null) // holds the new Kids profile just created, if graduation just ran
+  const [showWhatsIncluded,setShowWhatsIncluded]=useState(false)
 
   // Checkout verification on return (session_id from Stripe, webhook
   // confirmed unreliable elsewhere in this app) now happens once at the
@@ -7200,6 +7277,37 @@ function MedsaBumpSection({ isEn, patient }) {
     </div>
   )
 
+  // Real gap found live-testing: nowhere in the app actually laid out
+  // what Medsa Bump includes beyond the one-line pitch above the intake
+  // form - no in-app page describing the feature set or the full price
+  // breakdown. This is an in-app info panel, not a link out to anything
+  // external, and lists only what's actually built (no marketing copy
+  // for something that doesn't exist yet).
+  const whatsIncludedLink = (
+    <div onClick={()=>setShowWhatsIncluded(true)} style={{fontSize:'11.5px',color:'#fff',textDecoration:'underline',cursor:'pointer',marginBottom:'10px'}}>{isEn?"ⓘ What's included in Medsa Bump?":'ⓘ Medsa Bump包含什麼?'}</div>
+  )
+  const whatsIncludedModal = showWhatsIncluded && (
+    <div onClick={()=>setShowWhatsIncluded(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',width:'100%',maxWidth:380,maxHeight:'80vh',overflowY:'auto',padding:'20px'}}>
+        <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px',color:'#F48FB1'}}>Medsa Bump</div>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'14px'}}>{isEn?'HK$888 one-time · HK$710.40 if you\'ve used it before (20% loyalty discount) · a card processing fee is added at Stripe checkout':'一次性HK$888 · 曾使用過則為HK$710.40(20%忠誠折扣) · Stripe付款時會加收信用卡手續費'}</div>
+        {[
+          { h: isEn?'Pregnancy':'孕期', items: isEn?['Due date, weeks pregnant, discovery date on file','Weekly "baby is the size of ___" card','Blood pressure log, flagged at/above 140/90 mmHg','Blood glucose log, flagged against real IADPSG cutoffs','Kick-count sessions (live start/stop timer)','Fetal growth (EFW) log from your own scan reports','Upload check-up documents as you go']:['記錄預產期、現時懷孕週數、發現懷孕日期','每週「寶寶有多大」卡片','血壓記錄,達140/90 mmHg或以上會標示','血糖記錄,按真實IADPSG標準標示','胎動次數記錄(即時開始/停止計時)','根據您的超聲波報告記錄胎兒體重','隨時上傳檢查文件'] },
+          { h: isEn?'Birth & postpartum':'分娩與產後', items: isEn?['Baby gets their own Medsa Kids profile the moment you record the birth','Your own Bump pass stays open for 12 months postpartum','Postpartum recovery checklist (6-week check-up topics)','EPDS mental health self-screen, with an immediate safety callout if needed','Pregnant again before that window closes? Start a new pass without losing the old one']:['記錄出生後,寶寶立即擁有自己的Medsa Kids檔案','您的Bump將持續追蹤產後12個月','產後復原清單(6週檢查項目)','EPDS情緒健康自我檢視,如有需要會即時顯示安全提示','若在此期間再次懷孕,可開始新的追蹤而不失去舊有記錄'] },
+          { h: isEn?'Community & documents':'社群與文件', items: isEn?['Birth Club - anonymous due-month peer group','Export: maternal health summary PDF','Export: antenatal handoff summary for a new doctor/hospital','Export: hospital pre-admission packet']:['待產小組 - 匿名同月預產家長群組','匯出:孕產健康摘要PDF','匯出:供新醫生/醫院使用的轉介摘要','匯出:醫院入院前摘要'] },
+        ].map(section => (
+          <div key={section.h} style={{marginBottom:'14px'}}>
+            <div style={{fontSize:'12px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{section.h}</div>
+            {section.items.map(li => (
+              <div key={li} style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,paddingLeft:'14px',position:'relative',marginBottom:'3px'}}><span style={{position:'absolute',left:0}}>·</span>{li}</div>
+            ))}
+          </div>
+        ))}
+        <Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>setShowWhatsIncluded(false)}>{isEn?'Close':'關閉'}</Btn>
+      </div>
+    </div>
+  )
+
   if (activeBump===undefined) return (
     <Card style={{padding:'16px',marginBottom:'20px'}}><div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div></Card>
   )
@@ -7268,7 +7376,9 @@ function MedsaBumpSection({ isEn, patient }) {
           first pregnancy (see openPostpartumBump above for how the old
           pass's own recovery tools keep running once a new one exists). */}
       {activeBump.child_dob&&<div onClick={()=>setStartingNewPregnancy(true)} style={{marginTop:'14px',fontSize:'12px',color:'#fff',textDecoration:'underline',cursor:'pointer'}}>{isEn?'🤰 Pregnant again? Start tracking a new pregnancy':'🤰 再次懷孕?開始追蹤新孕期'}</div>}
+      <div onClick={()=>setShowWhatsIncluded(true)} style={{marginTop:'10px',fontSize:'11.5px',color:'rgba(255,255,255,0.85)',textDecoration:'underline',cursor:'pointer'}}>{isEn?"ⓘ What's included":'ⓘ 包含內容'}</div>
     </Card>
+    {whatsIncludedModal}
     </>)}
 
   return (<>
@@ -7287,9 +7397,10 @@ function MedsaBumpSection({ isEn, patient }) {
           quoted HK$888) looked like an unexplained discrepancy rather than
           a disclosed fee. */}
       <div style={{fontSize:'12px',color:'#fff',fontWeight:600,marginBottom:'2px'}}>{isEn?'HK$888 one-time':'一次性HK$888'}</div>
-      <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:'14px'}}>
+      <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:'10px'}}>
         {isEn?"HK$710.40 automatically if you've used Medsa Bump before. A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge.":'如曾使用Medsa Bump,將自動收取HK$710.40。付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。'}
       </div>
+      {whatsIncludedLink}
       <div style={{background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
         <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginBottom:'4px'}}>{isEn?'Predicted due date':'預產期'}</div>
         <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'10px',background:'#fff'}}/>
@@ -7317,6 +7428,7 @@ function MedsaBumpSection({ isEn, patient }) {
         <Btn style={{width:'100%',background:'#fff',color:'#F48FB1'}} disabled={starting} onClick={handleStart}>{starting?(isEn?'Starting…':'啟動中…'):(isEn?'Start Medsa Bump':'開始 Medsa Bump')}</Btn>
       </div>
     </Card>
+    {whatsIncludedModal}
   </>)
 }
 
