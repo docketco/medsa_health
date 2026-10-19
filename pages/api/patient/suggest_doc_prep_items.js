@@ -9,14 +9,16 @@
 // before creating the bundle - nothing here writes to the database, and
 // nothing is trusted as the final checklist without the patient seeing it
 // first. Requires ANTHROPIC_API_KEY; without it this returns a clear 503
-// instead of silently doing nothing. Same free-tier monthly cap as the
-// ingredient scanner (your call: same treatment for both AI-vision
-// scans) - unlimited for an active Bump/Guardian subscriber.
+// instead of silently doing nothing. Subscriber-only (Bump/Guardian),
+// same as the ingredient scanner - your own call, after noting this is
+// usually a one-off a person can just do themselves; the repeat/heavy
+// use (managing several people's health, chronic-illness care) is
+// exactly what the subscription is for.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
-import { checkAndConsumeQuota } from '../../../lib/aiScanQuota'
+import { isActiveSubscriber } from '../../../lib/aiScanQuota'
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } }
 
@@ -33,9 +35,8 @@ export default async function handler(req, res) {
   if (!patientId) return res.status(400).json({ error: 'patientId is required' })
   const safeMediaType = isPdf ? 'application/pdf' : (['image/jpeg', 'image/png', 'image/webp'].includes(mediaType) ? mediaType : 'image/jpeg')
 
-  const quota = await checkAndConsumeQuota(supabase, patientId, 'doc_prep_suggest')
-  if (!quota.allowed) {
-    return res.status(429).json({ error: `You've used your ${quota.cap} free suggestions this month - upgrade to Medsa Bump or Guardian for unlimited, or try again next month.` })
+  if (!(await isActiveSubscriber(supabase, patientId))) {
+    return res.status(402).json({ error: 'AI document suggestions are a Medsa Bump/Guardian subscriber feature - subscribe from Account Settings to use it, or add your checklist items manually.' })
   }
 
   try {

@@ -6192,6 +6192,27 @@ function isGlucoseFlagged(contextValue, mgdl) {
 // directly. The last item is a plain prompt, not the real EPDS
 // screening instrument - see the note on bc-05 in the QA checklist for
 // why that stays blocked until a verified source is on hand.
+// bc-08 - Chinese postpartum confinement (坐月/月子) guide, transcribed
+// from the sourced material you supplied (a 4-stage TCM recovery
+// progression cross-checked against modern postpartum nutrition
+// science - fourthtrimester.mom, juliaskitchen.ca, and others, as
+// cited). This is cultural practice, framed separately from the
+// evidence-based medical recovery checklist above (bc-05) - not a
+// replacement for it, and not medical advice. The avoid-list carries
+// the real cautions (rice wine, cold/raw foods) you asked this item
+// to wait on.
+const CONFINEMENT_PHASES = [
+  { week: isEn=>isEn?'Week 1 - Cleansing (排除)':'第1週 - 排除', en:'Clear lochia, reduce water retention, ease digestion. For a C-section, heavy herbs/rich meats are typically delayed the first 24-48hrs.', foods:'Pork liver, fish soup, red date tea, Sheng Hua Tang (herbal tonic).' },
+  { week: isEn=>isEn?'Week 2 - Stabilization (收縮)':'第2週 - 收縮', en:'Strengthen the lower back/kidneys, tighten joints, support cellular repair.', foods:'Pork kidneys, sesame oil chicken, Du Zhong (eucommia bark) soup, Ba Zhen Tang.' },
+  { week: isEn=>isEn?'Week 3 - Rebuilding (進補)':'第3週 - 進補', en:'Active nourishment, boosting breastmilk supply, rebuilding Qi and blood.', foods:'Pig trotter with peanut or black vinegar soup, black chicken, papaya fish soup, Gui Pi Tang.' },
+  { week: isEn=>isEn?'Week 4+ - Integration (調理)':'第4週起 - 調理', en:'Full systemic strengthening and balancing energy before returning to regular life.', foods:'Shi Quan Da Bu Tang (all-inclusive tonic soup), braised meats, balanced grain-protein-veggie bowls.' },
+]
+const CONFINEMENT_AVOID = [
+  'Cold & raw foods (salads, raw fruit/veg, ice water, cold desserts) - believed in TCM to stagnate circulation/digestion.',
+  'Excessively spicy, sour, or heavily processed foods.',
+  'High-mercury fish; limit caffeine and alcohol (small amounts of rice wine fully cooked into dishes is the traditional exception, not raw).',
+  'Where modern medicine differs from strict tradition: a "no water, only herbal tea" rule is discouraged - stay properly hydrated with warm water or safe fluids.',
+]
 const POSTPARTUM_RECOVERY_ITEMS = [
   { key:'incision_healing', en:"Incision/perineal healing checked by a provider", zh:'傷口/會陰癒合情況已由醫護檢查' },
   { key:'bleeding_normal', en:'Postpartum bleeding (lochia) back to normal, nothing concerning', zh:'產後出血(惡露)已回復正常,無異常情況' },
@@ -6750,6 +6771,22 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
               </div>
             )
           })}
+        </Card>
+
+        <SecLabel>{isEn?'Confinement (坐月/月子) guide':'坐月/月子指南'}</SecLabel>
+        <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+          {isEn?"Cultural practice, not medical advice - separate from the evidence-based checklist above, not a replacement for it.":'此為文化習俗,並非醫療建議 - 與上方循證復原清單分開,並非取代之。'}
+        </div>
+        {CONFINEMENT_PHASES.map(phase=>(
+          <Card key={phase.week(true)} style={{padding:'12px 14px',marginBottom:'8px'}}>
+            <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{phase.week(isEn)}</div>
+            <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,marginBottom:'6px'}}>{phase.en}</div>
+            <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}><strong>{isEn?'Foods: ':'食物:'}</strong>{phase.foods}</div>
+          </Card>
+        ))}
+        <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',fontWeight:700,color:C.red,marginBottom:'6px'}}>{isEn?'To limit or avoid':'需限制或避免'}</div>
+          {CONFINEMENT_AVOID.map((a,i)=><div key={i} style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,padding:'3px 0'}}>• {a}</div>)}
         </Card>
       </>}
       </>}
@@ -8668,10 +8705,26 @@ export default function PatientApp({ liveData={} }) {
   // Bump patient sees pink from the very first paint - this still verifies
   // against the real row right after, it just doesn't start from a wrong
   // guess.
+  // "Still happening after a hard refresh" turned out to be a second,
+  // independent path to the same symptom: the cache above only helps a
+  // BROWSER that has already run checkBumpActive once before (so it has
+  // something to read). Any time that's not true - a fresh browser
+  // profile, cleared site data, incognito, a different device, or
+  // genuinely the first sign-in ever - there's nothing cached, so this
+  // used to start at `false` (green) and only became `true` once the
+  // real Supabase check resolved, reproducing the exact same flash
+  // through a path the SSR fix never touched. `null` now means
+  // "genuinely don't know yet" instead of silently guessing `false` -
+  // the render guard below holds off painting any themed chrome at all
+  // until this resolves one way or the other, same as it already does
+  // for the persisted-sign-in check. A brief blank beat is normal
+  // loading; a colored flash that corrects itself looks like a bug.
   const [bumpActive,setBumpActive]=useState(() => {
-    if (typeof window==='undefined') return false
+    if (typeof window==='undefined') return null
     const persistedId = window.localStorage.getItem('medsa_signed_in_patient_id')
-    return !!persistedId && window.localStorage.getItem(`medsa_bump_active_${persistedId}`) === '1'
+    if (!persistedId) return null
+    const cached = window.localStorage.getItem(`medsa_bump_active_${persistedId}`)
+    return cached===null ? null : cached==='1'
   })
   const [bumpSubscriptionId,setBumpSubscriptionId]=useState(null)
   // Same priority as MedsaBumpSection.loadBump: if a current pregnancy row
@@ -8679,6 +8732,20 @@ export default function PatientApp({ liveData={} }) {
   // should bind to, even when an earlier postpartum pass (pregnant again
   // before its 12-month window closed) is also still open.
   const checkBumpActive = useCallback(() => {
+    // Real bug this closes: hooks all run every render regardless of the
+    // later `if (checkingPersistedSignIn) return null` guard below, so
+    // this fired on the very first render too - back when `patient` was
+    // still the empty placeholder (no `.id` yet, before the persisted-
+    // sign-in check resolves) - and its `!patient?.id` branch resolved
+    // bumpActive to a confirmed `false` immediately. That's exactly the
+    // green-before-pink flash again, just reached by a different route:
+    // once the REAL signed-in patient loaded a moment later, bumpActive
+    // was already "confirmed false," so the blank-render guard no longer
+    // held it back, and green painted until the real (now correctly-
+    // keyed) check caught up. Skipping entirely until we know who's
+    // really signed in means bumpActive only ever resolves once, to the
+    // right answer.
+    if (checkingPersistedSignIn) return
     if (!patient?.id) { setBumpActive(false); setBumpSubscriptionId(null); return }
     supabase.from('bump_subscriptions').select('id, child_dob').eq('patient_id', patient.id).is('graduated_at', null).order('created_at',{ascending:false})
       .then(({data}) => {
@@ -8689,7 +8756,7 @@ export default function PatientApp({ liveData={} }) {
         setBumpSubscriptionId(chosen?.id || null)
         if (typeof window!=='undefined') window.localStorage.setItem(`medsa_bump_active_${patient.id}`, active ? '1' : '0')
       })
-  }, [patient?.id])
+  }, [patient?.id, checkingPersistedSignIn])
   useEffect(() => { checkBumpActive() }, [checkBumpActive])
   // Your call, refined: a kid always follows a parent anyway, so there's
   // no need to separately signal "this is a dependent" for them - yellow
@@ -8736,7 +8803,7 @@ export default function PatientApp({ liveData={} }) {
     }
   }, [checkBumpActive])
 
-  if (checkingPersistedSignIn) return null
+  if (checkingPersistedSignIn || bumpActive===null) return null
 
   if (showGate && !signedInPatient) {
     return <SignUpGate onComplete={(p)=>{
