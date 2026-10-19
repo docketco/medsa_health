@@ -1,6 +1,21 @@
 import { useEffect, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { supabase } from '../lib/supabase'
-import PatientApp from '../components/patient/PatientApp'
+
+// Real root cause of the green-then-pink flash on refresh, found after an
+// earlier fix (caching bumpActive in localStorage) didn't actually stop
+// it: this page has no getServerSideProps/getStaticProps, so Next.js still
+// pre-renders it once (statically, at build time) on the server, where
+// `window` doesn't exist - that pre-rendered HTML always bakes in the
+// default green theme, since the localStorage read that would return pink
+// can only ever run client-side. Every refresh serves that static green
+// HTML first, then React hydrates and corrects it - a flash no amount of
+// client-side caching can prevent, since it happens before any client JS
+// has run at all. `ssr:false` skips that pre-render entirely, so the very
+// first paint of this component already happens client-side, with
+// `window` available - bumpActive's cached read in PatientApp runs before
+// anything is painted, so there's nothing to flash.
+const PatientApp = dynamic(() => import('../components/patient/PatientApp'), { ssr: false })
 
 const FALLBACK = {
   patient: { full_name:'Wong Mei-ling, Lisa', preferred_name:'Lisa', medsa_id:'MDS-84921-HK', date_of_birth:'1988-03-14', blood_type:'O+', emergency_card_active:true, emergency_contact_name:'Wong Tai', emergency_contact_rel:'Mother', emergency_contact_phone:'+852 9xxx xxxx', storage_tier:'essential' },
