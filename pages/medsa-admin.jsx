@@ -16,6 +16,7 @@ import C from '../components/shared/colours'
 import { REFERRAL_FEE_ENABLED } from '../lib/featureFlags'
 import Icon from '../components/shared/Icon'
 import { SecLabel } from '../components/shared/UI'
+import { PlanManager } from '../components/insurance/InsuranceApp'
 
 export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
@@ -35,7 +36,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -43,6 +44,7 @@ export default function MedsaAdminPage() {
         ))}
       </div>
       {tab==='carousel' && <CarouselTab/>}
+      {tab==='plans' && <AdminPlansTab/>}
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
@@ -1639,6 +1641,56 @@ function HealthColumnTab() {
             <button onClick={()=>toggleActive(item)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{item.active?'Deactivate':'Reactivate'}</button>
             <button onClick={()=>handleDelete(item)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Delete</button>
           </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Your call, going back to the original (pre-refinement) decision:
+// adding/editing a plan is a Medsa job, not insurer self-serve - the
+// insurer portal's own Plans screen is now read-only (see PlanManager's
+// readOnly prop). This picks a company, then renders the exact same
+// PlanManager form the insurer portal used to let insurers fill in
+// themselves - one real form, reused, not a second one to keep in sync.
+function AdminPlansTab() {
+  const [companies, setCompanies] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(null)
+
+  useEffect(() => {
+    supabase.from('insurance_companies').select('id, name, logo_url, relationship_type, status').order('name').then(({data}) => {
+      setCompanies(data||[])
+      setLoading(false)
+    })
+  }, [])
+
+  if (selected) {
+    return (
+      <div>
+        <button onClick={()=>setSelected(null)} style={{marginBottom:'12px',padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>← Back to insurers</button>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'12px'}}>{selected.name}</div>
+        <PlanManager company={selected}/>
+      </div>
+    )
+  }
+
+  const filtered = companies.filter(c => !search.trim() || c.name.toLowerCase().includes(search.trim().toLowerCase()))
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick an insurer to add or edit their plan listings - this is the same form the insurer portal's Plans screen shows, just read-only there now.</div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search insurers…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No insurers found.</div>}
+      {!loading&&filtered.map(c=>(
+        <div key={c.id} onClick={()=>setSelected(c)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'8px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
+          {c.logo_url&&<img src={c.logo_url} alt="" style={{width:32,height:32,borderRadius:'8px',objectFit:'contain'}}/>}
+          <div style={{flex:1}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>{c.relationship_type==='partnered'?'Partnered':'Registered insurer'}{c.status?` · ${c.status}`:''}</div>
+          </div>
+          <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
         </div>
       ))}
     </div>
