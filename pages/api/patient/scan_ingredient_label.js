@@ -14,6 +14,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import { checkAndConsumeQuota } from '../../../lib/aiScanQuota'
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } }
 
@@ -37,6 +38,11 @@ export default async function handler(req, res) {
   if (!fileBase64) return res.status(400).json({ error: 'fileBase64 is required' })
   if (!patientId) return res.status(400).json({ error: 'patientId is required' })
   const safeMediaType = ['image/jpeg', 'image/png', 'image/webp'].includes(mediaType) ? mediaType : 'image/jpeg'
+
+  const quota = await checkAndConsumeQuota(supabase, patientId, 'ingredient_scan')
+  if (!quota.allowed) {
+    return res.status(429).json({ error: `You've used your ${quota.cap} free scans this month - upgrade to Medsa Bump or Guardian for unlimited scans, or try again next month.` })
+  }
 
   const [{ data: allergies }, { data: conditions }] = await Promise.all([
     supabase.from('allergies').select('allergen, severity').eq('patient_id', patientId),
