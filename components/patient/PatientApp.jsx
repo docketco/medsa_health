@@ -4696,10 +4696,15 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       {/* Tabs - moved above the policy detail cards below per your call:
           "policy on file" shouldn't sit above every tab regardless of
           which one's selected, it belongs inside its own Your coverage
-          tab alongside the summary that already lived there. */}
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginBottom:'4px',overflowX:'auto'}}>
-        {[['coverage',isEn?'Your coverage':'您的保障'],['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'72px',padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.navy:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.navy:'transparent'}`,cursor:'pointer'}}>{l}</div>
+          tab alongside the summary that already lived there. Restyled
+          per your feedback ("so office like, not interactive enough")
+          to the same icon + filled-pill treatment as the Bump/Kids
+          sub-tabs, instead of plain underlined text. */}
+      <div style={{display:'flex',gap:'6px',margin:'0 16px 14px',padding:'4px',background:C.card,borderRadius:'12px',overflowX:'auto'}}>
+        {[['coverage','🛡️',isEn?'Coverage':'保障'],['plans','🔍',isEn?'Plans':'計劃'],['inquiries','💬',isEn?'Inquiries':'查詢'],['claims','📋',isEn?'Claims':'索賠'],['documents','📁',isEn?'Documents':'文件'],['agents','⭐',isEn?'Agents':'代理']].map(([k,icon,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'58px',textAlign:'center',padding:'8px 4px',borderRadius:'9px',fontSize:'10.5px',fontWeight:600,cursor:'pointer',background:tab===k?C.navy:'transparent',color:tab===k?'#fff':C.textSub,transition:'background .12s,color .12s'}}>
+            <div style={{fontSize:'15px',marginBottom:'2px'}}>{icon}</div>{l}
+          </div>
         ))}
       </div>
 
@@ -4721,12 +4726,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         </div>)}
       </div>}
       {!policyLoading&&heldPolicies.length>0&&<SecLabel>{isEn?'Policy on file':'已存檔保單'}</SecLabel>}
-      {/* Horizontally scrollable row of cards - a patient holding several
-          policies used to see them stacked full-width, one per row, which
-          got long fast. Each card is now a fixed-width tile carrying the
-          insurer's own logo (CompanyLogoUploader in the insurer portal),
-          swiped through instead of scrolled past. */}
-      {!policyLoading&&heldPolicies.length>0&&<div style={{display:'flex',gap:'10px',overflowX:'auto',padding:'0 16px 8px',WebkitOverflowScrolling:'touch'}}>
+      {/* Was a horizontally-scrolling row of fixed-width tiles - made sense
+          when this sat in a cramped strip above every tab, but inside its
+          own dedicated Your coverage tab there's no reason to hide a
+          policy off to the side. Full-width stacked cards instead. */}
+      {!policyLoading&&heldPolicies.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'10px',padding:'0 16px 8px'}}>
       {/* A policy linked via "I already have insurance" below (self-serve,
           out-of-network) has no premium/renewal_date - it was never sold
           through Medsa, just recorded so claims can process. The full
@@ -4736,11 +4740,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         const expanded = expandedPolicyId===policy.id
         const logoUrl = policy.insurance_plans?.logo_url || companyLogos[policy.insurance_plans?.company_name]
         return (
-        <div key={policy.id} style={{flexShrink:0,width:'240px',background:'#fff',borderLeft:`3px solid ${C.navy}`,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
+        <div key={policy.id} style={{width:'100%',boxSizing:'border-box',background:'#fff',borderLeft:`3px solid ${__theme.accent}`,border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
             {logoUrl
               ? <img src={logoUrl} alt="" style={{width:'22px',height:'22px',objectFit:'contain',borderRadius:'5px',flexShrink:0,background:'#fff',border:`0.5px solid ${C.border}`}}/>
-              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:C.navyLight,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700,color:C.navy}}>{(policy.insurance_plans?.company_name||'?')[0]}</div>}
+              : <div style={{width:'22px',height:'22px',borderRadius:'5px',background:__theme.accentXLight,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',fontWeight:700,color:__theme.accent}}>{(policy.insurance_plans?.company_name||'?')[0]}</div>}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:'13px',fontWeight:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{policy.plan_name}</div>
             </div>
@@ -4785,7 +4789,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           : (isEn?'Active':'生效中')
         const logoUrl = activePolicy.insurance_plans?.logo_url || companyLogos[activePolicy.insurance_plans?.company_name]
         return (
-        <div key={policy.id} style={{flexShrink:0,width:'240px',background:`linear-gradient(135deg,#1e3a5f 0%,${C.blue} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
+        <div key={policy.id} style={{width:'100%',boxSizing:'border-box',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'12px',overflow:'hidden',color:'#fff'}}>
           <div onClick={()=>setExpandedPolicyId(expanded?null:policy.id)} style={{padding:'10px 14px',display:'flex',alignItems:'center',gap:'10px',cursor:'pointer'}}>
             {logoUrl
               ? <img src={logoUrl} alt="" style={{width:'22px',height:'22px',objectFit:'contain',borderRadius:'5px',flexShrink:0,background:'#fff'}}/>
@@ -4847,7 +4851,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             {viewError&&<div style={{fontSize:'11px',color:'#ffb3b3',marginBottom:'10px'}}>{viewError}</div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1,background:'rgba(255,255,255,0.15)',color:'#fff',border:'0.5px solid rgba(255,255,255,0.3)',fontSize:'12px'}} onClick={()=>handleViewContract(policy)}>{isEn?'View contract':'查看合約'}</Btn>
-              <Btn variant="primary" style={{flex:1,background:'#fff',color:C.navy,fontSize:'12px'}} onClick={()=>handleSignContract(policy)}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
+              <Btn variant="primary" style={{flex:1,background:'#fff',color:__theme.accent,fontSize:'12px'}} onClick={()=>handleSignContract(policy)}>{isEn?"I've reviewed and signed":'我已檢閱並簽署'}</Btn>
             </div>
           </div>}
 
@@ -4860,7 +4864,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
             <div style={{flex:1}}/>
             {daysLeft<=45&&(policy.patient_requested_renewal_at
               ?<div style={{fontSize:'11px',background:'rgba(255,255,255,0.2)',padding:'6px 12px',borderRadius:'20px'}}>✓ {isEn?'Renewal requested':'已請求續保'}</div>
-              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:C.navy}} onClick={()=>handleRequestRenewal(policy)}>{isEn?'Request renewal':'請求續保'}</Btn>)}
+              :<Btn variant="primary" style={{fontSize:'11px',padding:'8px 14px',background:'#fff',color:__theme.accent}} onClick={()=>handleRequestRenewal(policy)}>{isEn?'Request renewal':'請求續保'}</Btn>)}
           </div>}
           {!inProgress&&renderCancelAction(policy, true)}
           </div>}
@@ -4909,15 +4913,15 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           detailed policy cards just above (those already show each
           policy's own status in full). No coverage and nothing pending -
           a real empty state instead of nothing at all. */}
-      {heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0&&<div style={{margin:'0 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold above.':'暫無保障記錄 - 可瀏覽比較計劃,或於上方新增您已持有的保單。'}</div>}
-      {(coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'0 16px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'6px 16px'}}>
-        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.border}`:'none',cursor:'pointer'}}>
+      {heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0&&<div style={{margin:'0 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold above.':'暫無保障記錄 - 可瀏覽比較計劃,或於上方新增您已持有的保單。'}</div>}
+      {(coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'0 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'6px 16px'}}>
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${__theme.accentLight}`:'none',cursor:'pointer'}}>
           <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
           <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
         </div>}
         {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',cursor:'pointer'}}>
           <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
-          <span style={{color:C.navy,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+          <span style={{color:__theme.accent,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
         </div>}
       </div>}
       </>}
