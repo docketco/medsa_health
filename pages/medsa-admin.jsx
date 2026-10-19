@@ -35,7 +35,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['healthcolumn','pulse','Health Column'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -43,6 +43,7 @@ export default function MedsaAdminPage() {
         ))}
       </div>
       {tab==='carousel' && <CarouselTab/>}
+      {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
       {tab==='clinics' && <ClinicsTab/>}
@@ -1553,6 +1554,88 @@ function CarouselTab() {
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:item.active?C.greenLight:C.card,color:item.active?C.green:C.textMuted,fontWeight:600}}>{item.active?'active':'inactive'}</span>
           </div>
           <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>toggleActive(item)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{item.active?'Deactivate':'Reactivate'}</button>
+            <button onClick={()=>handleDelete(item)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Delete</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Your request: a weekly health-facts "column" you publish, with the
+// option to pin certain editions behind an upgrade (Bump/Guardian) as a
+// subscription perk. Medsa never writes the medical content itself -
+// same no-fabrication rule as everywhere else in this app - this just
+// gives you a place to publish whatever you (or a clinician you trust)
+// write, with a free/premium flag per edition.
+function HealthColumnTab() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const EMPTY = { title:'', body:'', is_premium:false, published_at: new Date().toISOString().slice(0,10) }
+  const [form, setForm] = useState(EMPTY)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('health_columns').select('*').order('published_at',{ascending:false})
+    setItems(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  function startCreate() { setEditingId(null); setForm(EMPTY); setCreating(true) }
+  function startEdit(item) {
+    setEditingId(item.id)
+    setForm({ title:item.title, body:item.body, is_premium:!!item.is_premium, published_at:item.published_at })
+    setCreating(true)
+  }
+
+  async function handleSubmit() {
+    if (!form.title.trim() || !form.body.trim()) return
+    setSaving(true)
+    const payload = { title:form.title.trim(), body:form.body.trim(), is_premium:form.is_premium, published_at:form.published_at }
+    if (editingId) await supabase.from('health_columns').update(payload).eq('id', editingId)
+    else await supabase.from('health_columns').insert({ ...payload, active:true })
+    setSaving(false); setCreating(false); setEditingId(null)
+    setForm(EMPTY)
+    load()
+  }
+  async function toggleActive(item) { await supabase.from('health_columns').update({ active: !item.active }).eq('id', item.id); load() }
+  async function handleDelete(item) { await supabase.from('health_columns').delete().eq('id', item.id); load() }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Health column editions shown to patients on a dedicated screen. Mark one Premium to lock it behind an active Bump or Guardian subscription - free patients see a locked teaser with an upgrade prompt instead of the full text.</div>
+      {!creating&&<button onClick={startCreate} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ New edition</button>}
+      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit edition':'New edition'}</div>
+        <input value={form.title} onChange={e=>setForm(f=>({...f,title:e.target.value}))} placeholder="Title" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <input type="date" value={form.published_at} onChange={e=>setForm(f=>({...f,published_at:e.target.value}))} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <textarea value={form.body} onChange={e=>setForm(f=>({...f,body:e.target.value}))} rows={8} placeholder="Full article text" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'vertical',fontFamily:'inherit'}}/>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'14px',cursor:'pointer'}}>
+          <input type="checkbox" checked={form.is_premium} onChange={e=>setForm(f=>({...f,is_premium:e.target.checked}))}/>
+          Premium - locked to active Bump/Guardian subscribers only
+        </label>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button onClick={()=>{setCreating(false);setEditingId(null)}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.title.trim()||!form.body.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':editingId?'Save changes':'Publish'}</button>
+        </div>
+      </div>}
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&items.map(item => (
+        <div key={item.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{item.title}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{item.published_at}{item.is_premium?' · Premium':''}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:item.active?C.greenLight:C.card,color:item.active?C.green:C.textMuted,fontWeight:600}}>{item.active?'active':'inactive'}</span>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>startEdit(item)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Edit</button>
             <button onClick={()=>toggleActive(item)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{item.active?'Deactivate':'Reactivate'}</button>
             <button onClick={()=>handleDelete(item)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Delete</button>
           </div>

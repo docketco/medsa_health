@@ -121,7 +121,7 @@ function Badge({ text, type }) {
 // ── EMERGENCY CARD SETUP + CONSENT FLOW ──────────────────────────────────────
 // This is shown to PATIENTS only for setup/consent — not for showing to EMS.
 // EMS access the emergency card automatically via QR scan in the practitioner portal.
-function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], patient }) {
+function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], liveFamilyHistory=[], patient }) {
   const __theme = useContext(ThemeContext)
   const p = patient
   const [step, setStep] = useState(consented ? 'view' : 'intro')
@@ -146,7 +146,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
           </div>
           <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'16px',marginBottom:'16px'}}>
             <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginBottom:'10px'}}>What emergency personnel will see:</div>
-            {['Blood type','Critical conditions','Severe allergies','Current medications','Emergency contact'].map((item,i)=>(
+            {['Blood type','Critical conditions','Severe allergies','Current medications','Family history (self-reported)','Emergency contact'].map((item,i)=>(
               <div key={i} style={{fontSize:'13px',color:C.text,padding:'4px 0',display:'flex',alignItems:'center',gap:'8px'}}><span style={{color:__theme.accent,fontSize:'10px'}}>✓</span>{item}</div>
             ))}
           </div>
@@ -219,6 +219,12 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
                   ))
                 : <div style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>No current medications on file</div>}
             </div>
+            {liveFamilyHistory.length>0&&<div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
+              <div style={{fontSize:'10px',color:C.red,marginBottom:'3px',textTransform:'uppercase',letterSpacing:'0.5px'}}>Family history (self-reported)</div>
+              {liveFamilyHistory.map((fh,i)=>(
+                <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◈ {fh.relationship}: {fh.condition_name}</div>
+              ))}
+            </div>}
           </div>
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
             ◇ <strong>Physical card:</strong> Medsa provides a blank courtesy card with your QR pre-printed. Fill in fields by hand from the information above. Keep it in your wallet. Note: you are responsible for keeping the handwritten fields accurate. Scanning the QR always retrieves live verified data.
@@ -761,6 +767,8 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{padding:'0 16px'}}>
         {[
           {key:'doctors',icon:'doctors',bg:themeAccentLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
+          {key:'healthcolumn',icon:'pulse',bg:themeAccentLight,label:isEn?'Health column':'健康專欄',sub:isEn?'New editions published regularly':'定期發布新一期'},
+          {key:'ingredientscan',icon:'scan',bg:themeAccentLight,label:isEn?'Scan an ingredient label':'掃描成分標籤',sub:isEn?'Check against your allergies':'對照您的過敏記錄'},
           {key:'editprofile',icon:'alert',bg:themeAccentLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px',marginBottom:'10px'}}>
@@ -1691,6 +1699,148 @@ function IncomingCallOverlay({ call, isEn, patient, onDismiss }) {
           <span style={{fontSize:'11px',opacity:0.7}}>{isEn?'Answer':'接聽'}</span>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Your request: a weekly-ish health-facts column you publish from
+// medsa-admin, with the option to pin an edition behind an upgrade.
+// Entitlement check mirrors the switcher's own guardianActive logic
+// (active, non-expired guardian subscription) plus any non-graduated
+// Bump pass - if the signed-in patient is a dependent riding under a
+// parent's Guardian subscription, their parent's row is checked too,
+// since the child's own row never carries guardian_subscription_active.
+function HealthColumnScreen({ isEn, patient={} }) {
+  const __theme = useContext(ThemeContext)
+  const [items,setItems]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [isSubscriber,setIsSubscriber]=useState(false)
+  const [openId,setOpenId]=useState(null)
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true)
+      const { data } = await supabase.from('health_columns').select('*').eq('active',true).lte('published_at', new Date().toISOString().slice(0,10)).order('published_at',{ascending:false})
+      setItems(data||[])
+      if (patient?.id) {
+        const [{ data: bumpRows }] = await Promise.all([
+          supabase.from('bump_subscriptions').select('id').eq('patient_id', patient.id).is('graduated_at', null).limit(1),
+        ])
+        const todayStr = new Date().toISOString().slice(0,10)
+        let guardianOk = !!patient.guardian_subscription_active && (!patient.guardian_subscription_expires_at || patient.guardian_subscription_expires_at >= todayStr)
+        if (!guardianOk && patient.parent_patient_id) {
+          const { data: parentRow } = await supabase.from('patients').select('guardian_subscription_active, guardian_subscription_expires_at').eq('id', patient.parent_patient_id).maybeSingle()
+          guardianOk = !!parentRow?.guardian_subscription_active && (!parentRow?.guardian_subscription_expires_at || parentRow.guardian_subscription_expires_at >= todayStr)
+        }
+        setIsSubscriber((bumpRows&&bumpRows.length>0) || guardianOk)
+      } else {
+        setIsSubscriber(false)
+      }
+      setLoading(false)
+    }
+    load()
+  }, [patient?.id])
+
+  if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
+
+  return (
+    <div style={{padding:'16px 16px 24px'}}>
+      <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'16px'}}>{isEn?'New editions published regularly - locked ones unlock with any active Medsa Bump or Guardian subscription.':'定期發布新一期 - 鎖定的文章可透過任何有效的Medsa Bump或Guardian訂閱解鎖。'}</div>
+      {items.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Nothing published yet - check back soon.':'暫無發布內容 - 請稍後再查看。'}</div>}
+      {items.map(item => {
+        const locked = item.is_premium && !isSubscriber
+        const open = openId===item.id
+        return (
+          <div key={item.id} style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',marginBottom:'12px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div style={{fontSize:'15px',fontWeight:700,flex:1}}>{item.title}</div>
+              {item.is_premium&&<span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:__theme.accentXLight,color:__theme.accent,fontWeight:600,flexShrink:0,marginLeft:'8px'}}>{isEn?'Premium':'付費專屬'}</span>}
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{new Date(item.published_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+            {locked
+              ? <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'10px',padding:'12px 14px'}}>
+                  <div style={{fontSize:'12.5px',color:C.textSub,lineHeight:1.6,marginBottom:'8px'}}>{isEn?'This edition is for Medsa Bump/Guardian subscribers.':'此期文章僅供Medsa Bump/Guardian訂閱者閱讀。'}</div>
+                  <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:'pointer'}} onClick={()=>window.alert(isEn?'Subscribe to Medsa Bump or Guardian from Account Settings to unlock this.':'請於帳戶設定訂閱Medsa Bump或Guardian以解鎖此內容。')}>{isEn?'Unlock with a subscription →':'訂閱以解鎖 →'}</div>
+                </div>
+              : <div style={{fontSize:'13px',color:C.text,lineHeight:1.6,whiteSpace:'pre-wrap'}}>{open ? item.body : item.body.slice(0,180)+(item.body.length>180?'…':'')}</div>}
+            {!locked&&item.body.length>180&&<div onClick={()=>setOpenId(open?null:item.id)} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'8px',cursor:'pointer'}}>{open?(isEn?'Show less':'收起'):(isEn?'Read more':'閱讀更多')}</div>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// kc-01, reframed - a photo of an ingredient label, not a barcode
+// lookup, cross-checked against this patient's own allergies/conditions
+// (same for an adult's own profile or a Kids profile - whichever is
+// active). Same propose-only framing as every other OCR feature: flags
+// to read and judge, never a block/allow verdict.
+function IngredientScanScreen({ isEn, patient={} }) {
+  const __theme = useContext(ThemeContext)
+  const [file,setFile]=useState(null)
+  const [preview,setPreview]=useState(null)
+  const [scanning,setScanning]=useState(false)
+  const [error,setError]=useState(null)
+  const [result,setResult]=useState(null)
+
+  function handleFile(f) {
+    setFile(f); setResult(null); setError(null)
+    if (f) setPreview(URL.createObjectURL(f))
+  }
+
+  async function handleScan() {
+    if (!file || !patient?.id) return
+    setScanning(true); setError(null); setResult(null)
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/patient/scan_ingredient_label', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileBase64, mediaType: file.type, patientId: patient.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error || (isEn?'Could not scan this label.':'無法掃描此標籤。')); setScanning(false); return }
+      setResult(data)
+    } catch {
+      setError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
+    }
+    setScanning(false)
+  }
+
+  return (
+    <div style={{padding:'16px 16px 24px'}}>
+      <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'16px'}}>{isEn?"Take or upload a photo of a food/formula/medication/supplement ingredient label - it's read and checked against your own known allergies and, if relevant, G6PD-safety guidance. This is a proposal to review, not a safety verdict - always check with a doctor or pharmacist if unsure.":'拍攝或上傳食物/奶粉/藥物/保健品的成分標籤照片 - 系統會讀取並對照您的已知過敏及(如適用)G6PD安全指引進行檢查。此為建議供您參考,並非安全判斷 - 如有疑問請諮詢醫生或藥劑師。'}</div>
+      <Card style={{padding:'16px',marginBottom:'16px'}}>
+        <input type="file" accept="image/*" onChange={e=>handleFile(e.target.files?.[0]||null)} style={{width:'100%',fontSize:'12px',marginBottom:'10px'}}/>
+        {preview&&<img src={preview} alt="" style={{width:'100%',maxHeight:220,objectFit:'contain',borderRadius:'8px',marginBottom:'10px',background:C.beige}}/>}
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleScan} disabled={!file||scanning}>{scanning?(isEn?'Reading…':'讀取中…'):(isEn?'Scan label':'掃描標籤')}</Btn>
+        {error&&<div style={{fontSize:'12px',color:C.red,marginTop:'10px'}}>{error}</div>}
+      </Card>
+      {result&&<>
+        {result.flags.length>0
+          ? <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
+              <div style={{fontSize:'13px',fontWeight:700,color:C.red,marginBottom:'8px'}}>⚠ {isEn?`${result.flags.length} possible conflict${result.flags.length>1?'s':''} found`:`發現${result.flags.length}項可能衝突`}</div>
+              {result.flags.map((f,i)=>(
+                <div key={i} style={{fontSize:'12.5px',color:C.text,padding:'5px 0',borderTop:i===0?undefined:`0.5px solid rgba(192,57,43,0.2)`}}>
+                  <strong>{f.ingredient}</strong> — {f.detail}
+                </div>
+              ))}
+            </div>
+          : <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,color:__theme.accent}}>✓ {isEn?'No conflicts found against what\'s on your profile':'與您檔案上的資料沒有發現衝突'}</div>
+            </div>}
+        <SecLabel>{isEn?'Ingredients read from label':'從標籤讀取的成分'}</SecLabel>
+        <Card style={{padding:'14px 16px'}}>
+          {result.ingredients.length===0
+            ? <div style={{fontSize:'12px',color:C.textMuted}}>{isEn?'None read.':'未讀取到成分。'}</div>
+            : result.ingredients.map((ing,i)=><div key={i} style={{fontSize:'12.5px',color:C.text,padding:'3px 0'}}>• {ing}</div>)}
+        </Card>
+      </>}
     </div>
   )
 }
@@ -7137,6 +7287,45 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
     onSaved?.()
   }
 
+  // Family history - your request: so emergency/clinic staff have a real
+  // factor to weigh against presenting symptoms (e.g. a parent's early
+  // heart disease matters a lot if this patient shows up with chest
+  // pain), not something that exists anywhere today. Same self-reported
+  // framing and table shape as My allergies above - patient's own words,
+  // never a clinical judgment on our end.
+  const [familyHistory,setFamilyHistory]=useState([])
+  const [loadingFamilyHistory,setLoadingFamilyHistory]=useState(true)
+  const [newFhRelationship,setNewFhRelationship]=useState('')
+  const [newFhCondition,setNewFhCondition]=useState('')
+  const [newFhNotes,setNewFhNotes]=useState('')
+  const [savingFh,setSavingFh]=useState(false)
+
+  async function loadFamilyHistory() {
+    if (!patient.id) return
+    setLoadingFamilyHistory(true)
+    const { data } = await supabase.from('family_history').select('*').eq('patient_id', patient.id).order('created_at',{ascending:false})
+    setFamilyHistory(data||[])
+    setLoadingFamilyHistory(false)
+  }
+  useEffect(() => { loadFamilyHistory() }, [patient.id])
+
+  async function handleAddFamilyHistory() {
+    if (!newFhRelationship.trim() || !newFhCondition.trim()) return
+    setSavingFh(true)
+    await supabase.from('family_history').insert({
+      patient_id: patient.id, relationship: newFhRelationship.trim(), condition_name: newFhCondition.trim(), notes: newFhNotes.trim()||null,
+    })
+    setNewFhRelationship(''); setNewFhCondition(''); setNewFhNotes('')
+    setSavingFh(false)
+    loadFamilyHistory()
+    onSaved?.()
+  }
+  async function handleRemoveFamilyHistory(id) {
+    await supabase.from('family_history').delete().eq('id', id)
+    loadFamilyHistory()
+    onSaved?.()
+  }
+
   return (
     <div style={{background:C.beige,flex:1,padding:'0 16px 24px'}}>
       <SecLabel>{isEn?'Emergency contact':'緊急聯絡人'}</SecLabel>
@@ -7198,6 +7387,28 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut }) {
         <input value={newAllergen} onChange={e=>setNewAllergen(e.target.value)} placeholder={isEn?'Allergen (e.g. Penicillin)':'過敏原（例如：青黴素）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
         <input value={newSeverity} onChange={e=>setNewSeverity(e.target.value)} placeholder={isEn?'Severity (optional, e.g. Severe)':'嚴重程度（選填，例如：嚴重）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleAddAllergy} disabled={savingAllergy||!newAllergen.trim()}>{savingAllergy?'Adding…':(isEn?'+ Add allergy':'+ 新增過敏')}</Btn>
+      </Card>
+
+      <SecLabel>{isEn?'Family medical history':'家族病史'}</SecLabel>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+        {isEn?"Self-reported, same as allergies above - not confirmed by a clinician. Helps emergency or clinic staff weigh risk factors (e.g. a parent's early heart disease) alongside your own symptoms, not a diagnosis.":'自行申報，與上方過敏相同 - 並非由醫護人員確認。有助急症或診所人員在評估您的症狀時考慮風險因素（例如父母早年患有心臟病），並非診斷。'}
+      </div>
+      {loadingFamilyHistory&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'10px'}}>{isEn?'Loading…':'載入中…'}</div>}
+      {!loadingFamilyHistory&&familyHistory.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'Nothing on file yet.':'暫無記錄。'}</div>}
+      {!loadingFamilyHistory&&familyHistory.map(fh=>(
+        <Card key={fh.id} style={{padding:'10px 14px',marginBottom:'6px',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{fh.relationship} - {fh.condition_name}</div>
+            {fh.notes&&<div style={{fontSize:'11.5px',color:C.textSub,marginTop:'2px'}}>{fh.notes}</div>}
+          </div>
+          <span onClick={()=>handleRemoveFamilyHistory(fh.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer',flexShrink:0,marginLeft:'10px'}}>{isEn?'Remove':'移除'}</span>
+        </Card>
+      ))}
+      <Card style={{padding:'14px',marginTop:'10px'}}>
+        <input value={newFhRelationship} onChange={e=>setNewFhRelationship(e.target.value)} placeholder={isEn?'Relationship (e.g. Mother, Father, Sibling)':'關係（例如：母親、父親、兄弟姊妹）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={newFhCondition} onChange={e=>setNewFhCondition(e.target.value)} placeholder={isEn?'Condition (e.g. Heart disease, Diabetes)':'病況（例如：心臟病、糖尿病）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+        <input value={newFhNotes} onChange={e=>setNewFhNotes(e.target.value)} placeholder={isEn?'Notes (optional, e.g. age of onset)':'備註（選填，例如：發病年齡）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleAddFamilyHistory} disabled={savingFh||!newFhRelationship.trim()||!newFhCondition.trim()}>{savingFh?'Adding…':(isEn?'+ Add family history':'+ 新增家族病史')}</Btn>
       </Card>
 
       {onSignOut&&<div style={{margin:'24px 16px 0',textAlign:'center'}}>
@@ -8368,7 +8579,7 @@ export default function PatientApp({ liveData={} }) {
   // that mismatch is why pull-to-refresh looked "fake."
   const loadRealData = useCallback(async () => {
     if (!signedInPatient?.id) return
-    const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes] = await Promise.all([
+    const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes, fhRes] = await Promise.all([
       supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
       supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
       supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
@@ -8382,6 +8593,7 @@ export default function PatientApp({ liveData={} }) {
       supabase.from('insurance_claims').select('*, institutions(name), insurance_plans(plan_name, company_name)').eq('patient_id', signedInPatient.id).order('submitted_at',{ascending:false}),
       supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
       supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
+      supabase.from('family_history').select('*').eq('patient_id', signedInPatient.id).order('created_at',{ascending:false}),
     ])
     setRealPatientData({
       conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
@@ -8392,6 +8604,7 @@ export default function PatientApp({ liveData={} }) {
       records: (recRes.data||[]).filter(r => r.record_status !== 'draft' && r.record_status !== 'submitted'),
       appointments: apptRes.data||[], claims: claimRes.data||[],
       vaccinations: vaxRes.data||[], transactions: txnRes.data||[],
+      familyHistory: fhRes.data||[],
     })
   }, [signedInPatient?.id])
 
@@ -8544,6 +8757,7 @@ export default function PatientApp({ liveData={} }) {
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
   const liveMedications = signedInPatient ? (realPatientData?.medications||[]) : (liveData.medications || [])
+  const liveFamilyHistory = signedInPatient ? (realPatientData?.familyHistory||[]) : (liveData.familyHistory || [])
   // Previously never checked signedInPatient at all, unlike every other
   // liveXxx variable here - meaning a real signed-in patient always fell
   // through to liveData.vaccinations (empty, since real sign-in doesn't
@@ -8552,7 +8766,7 @@ export default function PatientApp({ liveData={} }) {
   const liveVaccinations = signedInPatient ? (realPatientData?.vaccinations||[]) : (liveData.vaccinations || [])
   const liveAppointments = signedInPatient ? (realPatientData?.appointments||[]) : (liveData.appointments || [])
   const liveClaims = signedInPatient ? (realPatientData?.claims||[]) : (liveData.claims || [])
-  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養',bumphealth:isEn?'Pregnancy health log':'孕期健康記錄',bumpcohort:isEn?'Birth club':'待產小組'}
+  const titles={home:'medsa',records:isEn?'Medical records':'醫療記錄',doctors:isEn?'Doctors & clinics':'醫生與診所',healthcolumn:isEn?'Health column':'健康專欄',ingredientscan:isEn?'Ingredient scan':'成分掃描',calendar:isEn?'Calendar':'日曆',insurance:isEn?'Insurance':'保險',prescriptions:isEn?'Prescriptions':'處方',family:isEn?'Family & guardians':'家庭與監護',storage:isEn?'Storage & plan':'儲存與計劃',forum:isEn?'Community':'社群',kidsgrowth:isEn?'Growth & feeding':'生長與餵養',bumphealth:isEn?'Pregnancy health log':'孕期健康記錄',bumpcohort:isEn?'Birth club':'待產小組'}
   const navItems=[{key:'home',icon:'home',en:'Home',zh:'主頁'},{key:'records',icon:'records',en:'Records',zh:'記錄'},{key:'doctors',icon:'doctors',en:'Find care',zh:'尋找'},{key:'calendar',icon:'calendar',en:'Calendar',zh:'日曆'},{key:'insurance',icon:'insurance',en:'Insurance',zh:'保險'}]
   const rootContent = (
     // Real gap reported live-testing: minHeight let this column grow
@@ -8591,6 +8805,8 @@ export default function PatientApp({ liveData={} }) {
         {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight} bumpActive={bumpActive}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
+        {screen==='healthcolumn'&&<HealthColumnScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
+        {screen==='ingredientscan'&&<IngredientScanScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
@@ -8627,6 +8843,7 @@ export default function PatientApp({ liveData={} }) {
         liveConditions={liveConditions}
         liveAllergies={liveAllergies}
         liveMedications={liveMedications}
+        liveFamilyHistory={liveFamilyHistory}
         patient={patient}
       />
       <ShareForVisitModal open={shareOpen} onClose={()=>{setShareOpen(false);setShareRecordIds(null)}} patient={patient} recordIds={shareRecordIds}/>
