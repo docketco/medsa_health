@@ -9,12 +9,18 @@
 // before creating the bundle - nothing here writes to the database, and
 // nothing is trusted as the final checklist without the patient seeing it
 // first. Requires ANTHROPIC_API_KEY; without it this returns a clear 503
-// instead of silently doing nothing.
+// instead of silently doing nothing. Same free-tier monthly cap as the
+// ingredient scanner (your call: same treatment for both AI-vision
+// scans) - unlimited for an active Bump/Guardian subscriber.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from '@anthropic-ai/sdk'
+import { createClient } from '@supabase/supabase-js'
+import { checkAndConsumeQuota } from '../../../lib/aiScanQuota'
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } }
+
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -22,9 +28,15 @@ export default async function handler(req, res) {
     return res.status(503).json({ error: 'Document suggestions are not set up yet - ANTHROPIC_API_KEY is missing.' })
   }
 
-  const { fileBase64, mediaType, isPdf } = req.body || {}
+  const { fileBase64, mediaType, isPdf, patientId } = req.body || {}
   if (!fileBase64) return res.status(400).json({ error: 'fileBase64 is required' })
+  if (!patientId) return res.status(400).json({ error: 'patientId is required' })
   const safeMediaType = isPdf ? 'application/pdf' : (['image/jpeg', 'image/png', 'image/webp'].includes(mediaType) ? mediaType : 'image/jpeg')
+
+  const quota = await checkAndConsumeQuota(supabase, patientId, 'doc_prep_suggest')
+  if (!quota.allowed) {
+    return res.status(429).json({ error: `You've used your ${quota.cap} free suggestions this month - upgrade to Medsa Bump or Guardian for unlimited, or try again next month.` })
+  }
 
   try {
     const client = new Anthropic()

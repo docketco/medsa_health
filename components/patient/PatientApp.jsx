@@ -767,7 +767,6 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       <div style={{padding:'0 16px'}}>
         {[
           {key:'doctors',icon:'doctors',bg:themeAccentLight,label:isEn?'Doctors & clinics':'醫生與診所',sub:isEn?'Search, book, pay':'搜索、預約、付款'},
-          {key:'healthcolumn',icon:'pulse',bg:themeAccentLight,label:isEn?'Health column':'健康專欄',sub:isEn?'New editions published regularly':'定期發布新一期'},
           {key:'ingredientscan',icon:'scan',bg:themeAccentLight,label:isEn?'Scan an ingredient label':'掃描成分標籤',sub:isEn?'Check against your allergies':'對照您的過敏記錄'},
           {key:'editprofile',icon:'alert',bg:themeAccentLight,label:isEn?'Emergency contact & allergies':'緊急聯絡人與過敏',sub:isEn?'Edit your info':'編輯您的資料'},
         ].map(item=>(
@@ -3487,7 +3486,7 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
       })
       const res = await fetch('/api/patient/suggest_doc_prep_items', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ fileBase64: base64, mediaType: sourceFormFile.type, isPdf }),
+        body: JSON.stringify({ fileBase64: base64, mediaType: sourceFormFile.type, isPdf, patientId: patient.id }),
       })
       const data = await res.json()
       if (!res.ok) { setSuggestError(data.error || (isEn?'Could not read this document.':'無法讀取此文件。')); setSuggesting(false); return }
