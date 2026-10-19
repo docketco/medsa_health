@@ -31,6 +31,7 @@ const ICON_PATHS = {
   building: <><rect x="4" y="9" width="16" height="11" rx="1"/><path d="M8 9V5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v4"/><path d="M12 12v4M10 14h4"/></>,
   growth: <><path d="M3.5 19.5 9 13l4 3 7.5-8.5"/><path d="M15.5 7h5v5"/></>,
   pulse: <path d="M3.5 12.5h4l2-6 4 11 2-5h5"/>,
+  search: <><circle cx="10.5" cy="10.5" r="6.5"/><path d="m20 20-4.3-4.3"/></>,
 }
 export default function Icon({ name, size=20, style }) {
   const body = ICON_PATHS[name]
