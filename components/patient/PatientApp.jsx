@@ -4701,9 +4701,9 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           to the same icon + filled-pill treatment as the Bump/Kids
           sub-tabs, instead of plain underlined text. */}
       <div style={{display:'flex',gap:'6px',margin:'0 16px 14px',padding:'4px',background:C.card,borderRadius:'12px',overflowX:'auto'}}>
-        {[['coverage','🛡️',isEn?'Coverage':'保障'],['plans','🔍',isEn?'Plans':'計劃'],['inquiries','💬',isEn?'Inquiries':'查詢'],['claims','📋',isEn?'Claims':'索賠'],['documents','📁',isEn?'Documents':'文件'],['agents','⭐',isEn?'Agents':'代理']].map(([k,icon,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'58px',textAlign:'center',padding:'8px 4px',borderRadius:'9px',fontSize:'10.5px',fontWeight:600,cursor:'pointer',background:tab===k?C.navy:'transparent',color:tab===k?'#fff':C.textSub,transition:'background .12s,color .12s'}}>
-            <div style={{fontSize:'15px',marginBottom:'2px'}}>{icon}</div>{l}
+        {[['coverage','shield',isEn?'Coverage':'保障'],['plans','search',isEn?'Plans':'計劃'],['inquiries','community',isEn?'Inquiries':'查詢'],['claims','claims',isEn?'Claims':'索賠'],['documents','records',isEn?'Documents':'文件'],['agents','badge',isEn?'Agents':'代理']].map(([k,iconName,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'58px',textAlign:'center',padding:'8px 4px',borderRadius:'9px',fontSize:'10.5px',fontWeight:600,cursor:'pointer',background:tab===k?__theme.accent:'transparent',color:tab===k?'#fff':C.textSub,transition:'background .12s,color .12s'}}>
+            <Icon name={iconName} size={15} style={{display:'block',margin:'0 auto 3px'}}/>{l}
           </div>
         ))}
       </div>
@@ -5997,6 +5997,28 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   )
 }
 
+// Hospital bag checklist - a generic packing list, same kind of
+// organizational (not clinical) content as the Document Prep checklists
+// elsewhere in the app. No sourcing concern since nothing here is a
+// medical claim, just what people typically bring.
+const HOSPITAL_BAG_ITEMS = [
+  { key:'id_docs', en:'ID, HKID, Medsa/insurance card, hospital admission paperwork', zh:'身份證、Medsa/保險卡、醫院入院文件' },
+  { key:'maternal_notes', en:'Antenatal records / maternal health summary (see export above)', zh:'產前記錄／孕產健康摘要(見上方匯出)' },
+  { key:'comfortable_clothes', en:'Comfortable going-home outfit, nursing bra, slippers, socks', zh:'舒適的出院衣物、哺乳胸圍、拖鞋、襪子' },
+  { key:'toiletries', en:'Toiletries, hair tie, lip balm, phone charger', zh:'洗漱用品、髮帶、潤唇膏、充電器' },
+  { key:'maternity_pads', en:'Maternity pads, disposable underwear', zh:'產褥墊、即棄內褲' },
+  { key:'snacks_drinks', en:'Snacks and a water bottle for labor', zh:'分娩用小食及水樽' },
+  { key:'baby_outfit', en:"Baby's going-home outfit, hat, swaddle/blanket", zh:'寶寶出院衣物、帽子、包被' },
+  { key:'baby_car_seat', en:'Infant car seat arranged for the ride home', zh:'已安排嬰兒汽車座椅' },
+  { key:'partner_bag', en:"Partner/support person's own change of clothes and charger", zh:'伴侶/陪產者的替換衣物及充電器' },
+  { key:'entertainment', en:'Something to pass the time - book, earphones, playlist', zh:'消磨時間用品 - 書本、耳機、歌單' },
+]
+const MOOD_OPTIONS = [
+  { value:'great', en:'🙂 Great', zh:'🙂 良好' },
+  { value:'okay', en:'😐 Okay', zh:'😐 一般' },
+  { value:'low', en:'😔 Low', zh:'😔 低落' },
+  { value:'anxious', en:'😟 Anxious', zh:'😟 焦慮' },
+]
 const GLUCOSE_CONTEXTS = [
   { value:'fasting', en:'Fasting', zh:'空腹' },
   { value:'1hr_postprandial', en:'1hr after eating', zh:'餐後1小時' },
@@ -6113,6 +6135,19 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [exportingAdmission,setExportingAdmission]=useState(false)
   const [biometryLogs,setBiometryLogs]=useState([])
   const [biometryForm,setBiometryForm]=useState({ scanDate:'', efw:'' })
+  // Tools tab - contraction timer, hospital bag checklist, birth plan
+  // builder, mood/symptom journal. None of these need a verified medical
+  // source (they're organizational tools / the patient's own words), so
+  // unlike the clinical logs above they didn't wait on anything.
+  const [contractionLogs,setContractionLogs]=useState([])
+  const [contractionStart,setContractionStart]=useState(null) // Date while a contraction is being timed
+  const [bagChecked,setBagChecked]=useState([])
+  const [birthPlanForm,setBirthPlanForm]=useState({ painRelief:'', companions:'', feeding:'', specialRequests:'' })
+  const [birthPlanSaving,setBirthPlanSaving]=useState(false)
+  const [birthPlanSaved,setBirthPlanSaved]=useState(false)
+  const [journalEntries,setJournalEntries]=useState([])
+  const [journalForm,setJournalForm]=useState({ text:'', mood:'' })
+  const [journalSaving,setJournalSaving]=useState(false)
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -6121,7 +6156,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -6134,6 +6169,8 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
       supabase.from('bump_epds_screens').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('completed_at',{ascending:false}),
       patient?.id ? supabase.from('agent_policies').select('*, insurance_plans(company_name)').eq('patient_id',patient.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1) : Promise.resolve({data:[]}),
       supabase.from('bump_fetal_biometry').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('scan_date',{ascending:false}),
+      supabase.from('bump_contraction_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(30),
+      supabase.from('bump_journal_entries').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('created_at',{ascending:false}).limit(30),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
@@ -6142,6 +6179,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
     setEpdsScreens(epds||[])
     setActivePolicy((policies||[])[0]||null)
     setBiometryLogs(biometry||[])
+    setContractionLogs(contractions||[])
+    setJournalEntries(journal||[])
+    setBagChecked(sub?.hospital_bag_checked||[])
+    if (isInitial) setBirthPlanForm(sub?.birth_plan || { painRelief:'', companions:'', feeding:'', specialRequests:'' })
     setLoading(false)
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
@@ -6454,6 +6495,37 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   }
   async function deleteKick(id) { await supabase.from('bump_kick_logs').delete().eq('id', id); load() }
 
+  function startContraction() { setContractionStart(new Date()) }
+  async function endContraction() {
+    if (!contractionStart || !bumpSubscriptionId) return
+    await supabase.from('bump_contraction_logs').insert({ bump_subscription_id:bumpSubscriptionId, started_at:contractionStart.toISOString(), ended_at:new Date().toISOString() })
+    setContractionStart(null)
+    await load()
+  }
+  async function deleteContraction(id) { await supabase.from('bump_contraction_logs').delete().eq('id', id); load() }
+
+  async function toggleBagItem(key) {
+    const next = bagChecked.includes(key) ? bagChecked.filter(k=>k!==key) : [...bagChecked, key]
+    setBagChecked(next)
+    if (bumpSubscriptionId) await supabase.from('bump_subscriptions').update({ hospital_bag_checked: next }).eq('id', bumpSubscriptionId)
+  }
+
+  async function saveBirthPlan() {
+    if (!bumpSubscriptionId) return
+    setBirthPlanSaving(true); setBirthPlanSaved(false)
+    await supabase.from('bump_subscriptions').update({ birth_plan: birthPlanForm }).eq('id', bumpSubscriptionId)
+    setBirthPlanSaving(false); setBirthPlanSaved(true)
+  }
+
+  async function addJournalEntry() {
+    if (!journalForm.text.trim() || !bumpSubscriptionId) return
+    setJournalSaving(true)
+    await supabase.from('bump_journal_entries').insert({ bump_subscription_id:bumpSubscriptionId, entry_text:journalForm.text.trim(), mood:journalForm.mood||null })
+    setJournalForm({ text:'', mood:'' })
+    await load(); setJournalSaving(false)
+  }
+  async function deleteJournalEntry(id) { await supabase.from('bump_journal_entries').delete().eq('id', id); load() }
+
   if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
 
   return (
@@ -6472,7 +6544,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
           stay outside the tabs since they apply regardless of which
           section you're looking at. */}
       <div style={{display:'flex',gap:'6px',margin:'0 0 16px',padding:'4px',background:C.card,borderRadius:'10px'}}>
-        {[{value:'monitoring',en:'Monitoring',zh:'監測'},{value:'growth',en:'Growth & scans',zh:'生長與超聲波'},{value:'postpartum',en:'Postpartum',zh:'產後'}].map(t=>(
+        {[{value:'monitoring',en:'Monitoring',zh:'監測'},{value:'growth',en:'Growth & scans',zh:'生長與超聲波'},{value:'tools',en:'Tools',zh:'工具'},{value:'postpartum',en:'Postpartum',zh:'產後'}].map(t=>(
           <div key={t.value} onClick={()=>setBumpTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:bumpTab===t.value?__theme.accent:'transparent',color:bumpTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
         ))}
       </div>
@@ -6623,6 +6695,84 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
               <span onClick={()=>deleteBiometry(b.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
+        </div>
+      </Card>
+      </>}
+
+      {bumpTab==='tools'&&<>
+      <SecLabel>{isEn?'Contraction timer':'宮縮計時器'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        {!contractionStart&&<Btn variant="primary" style={{width:'100%'}} onClick={startContraction}>{isEn?'Start contraction':'開始記錄宮縮'}</Btn>}
+        {contractionStart&&<Btn variant="primary" style={{width:'100%'}} onClick={endContraction}>{isEn?'End contraction':'結束記錄'}</Btn>}
+        <div style={{marginTop:'12px'}}>
+          {contractionLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No contractions logged yet.':'暫無宮縮記錄。'}</div>}
+          {contractionLogs.map((c,i)=>{
+            const durationSec = c.ended_at ? Math.round((new Date(c.ended_at)-new Date(c.started_at))/1000) : null
+            const prev = contractionLogs[i+1]
+            const intervalMin = prev ? Math.round((new Date(c.started_at)-new Date(prev.started_at))/60000) : null
+            return (
+              <div key={c.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(c.started_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{flex:1}}>{durationSec!=null?(isEn?`${durationSec}s`:`${durationSec}秒`):(isEn?'in progress':'進行中')}{intervalMin!=null?(isEn?` · ${intervalMin}min since last`:` · 距上次${intervalMin}分鐘`):''}</span>
+                <span onClick={()=>deleteContraction(c.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+
+      <SecLabel>{isEn?'Hospital bag checklist':'入院袋清單'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        {HOSPITAL_BAG_ITEMS.map(item=>{
+          const checked = bagChecked.includes(item.key)
+          return (
+            <div key={item.key} onClick={()=>toggleBagItem(item.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'6px 0',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?__theme.accent:C.border}`,background:checked?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
+              <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?item.en:item.zh}</div>
+            </div>
+          )
+        })}
+      </Card>
+
+      <SecLabel>{isEn?'Birth plan':'分娩計劃'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Your own preferences to bring up with your care team - not medical advice, just a record of what you'd like.":'您想與醫護團隊討論的個人偏好 - 並非醫療建議,僅記錄您的意願。'}</div>
+        {[
+          { key:'painRelief', en:'Pain relief preferences', zh:'止痛方式偏好' },
+          { key:'companions', en:'Who you want in the room', zh:'想陪產的人' },
+          { key:'feeding', en:'Feeding intentions', zh:'餵養意願' },
+          { key:'specialRequests', en:'Other special requests', zh:'其他特別要求' },
+        ].map(f=>(
+          <div key={f.key} style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11.5px',fontWeight:600,color:C.textSub,marginBottom:'4px'}}>{isEn?f.en:f.zh}</div>
+            <textarea value={birthPlanForm[f.key]||''} onChange={e=>{setBirthPlanForm({...birthPlanForm,[f.key]:e.target.value}); setBirthPlanSaved(false)}} rows={2} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',fontFamily:'inherit',resize:'vertical'}}/>
+          </div>
+        ))}
+        <Btn variant="primary" style={{width:'100%'}} disabled={birthPlanSaving} onClick={saveBirthPlan}>{birthPlanSaving?(isEn?'Saving…':'儲存中…'):birthPlanSaved?(isEn?'Saved ✓':'已儲存 ✓'):(isEn?'Save birth plan':'儲存分娩計劃')}</Btn>
+      </Card>
+
+      <SecLabel>{isEn?'Mood & symptom journal':'情緒及症狀日記'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{display:'flex',gap:'6px',marginBottom:'10px',flexWrap:'wrap'}}>
+          {MOOD_OPTIONS.map(m=>(
+            <div key={m.value} onClick={()=>setJournalForm({...journalForm,mood:journalForm.mood===m.value?'':m.value})} style={{padding:'6px 10px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',border:`1px solid ${journalForm.mood===m.value?__theme.accent:C.border}`,background:journalForm.mood===m.value?__theme.accentXLight:'#fff',color:journalForm.mood===m.value?__theme.accent:C.textSub}}>{isEn?m.en:m.zh}</div>
+          ))}
+        </div>
+        <textarea value={journalForm.text} onChange={e=>setJournalForm({...journalForm,text:e.target.value})} placeholder={isEn?'How are you feeling today? Anything you want to remember or mention at your next check-up…':'今天感覺如何？有什麼想記下或在下次檢查時提及的…'} rows={3} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px'}}/>
+        <Btn variant="primary" style={{width:'100%'}} disabled={journalSaving||!journalForm.text.trim()} onClick={addJournalEntry}>{journalSaving?(isEn?'Saving…':'儲存中…'):(isEn?'Add entry':'新增記錄')}</Btn>
+        <div style={{marginTop:'12px'}}>
+          {journalEntries.map(j=>{
+            const moodOpt = MOOD_OPTIONS.find(m=>m.value===j.mood)
+            return (
+              <div key={j.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'3px'}}>
+                  <span style={{fontSize:'11px',color:C.textMuted,flex:1}}>{new Date(j.created_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}{moodOpt?` · ${isEn?moodOpt.en:moodOpt.zh}`:''}</span>
+                  <span onClick={()=>deleteJournalEntry(j.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+                </div>
+                <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.5,whiteSpace:'pre-wrap'}}>{j.entry_text}</div>
+              </div>
+            )
+          })}
         </div>
       </Card>
       </>}
