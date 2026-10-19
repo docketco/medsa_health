@@ -4160,7 +4160,7 @@ function ForumScreen({ isEn, patient={} }) {
 function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInquiryId=null, onConsumeInquiryDeepLink }) {
   const __theme = useContext(ThemeContext)
   const hasLiveClaims = claims.length > 0
-  const [tab,setTab]=useState('plans')
+  const [tab,setTab]=useState('coverage')
   // Jumping straight to a specific inquiry's conversation from the home
   // screen's message board - switching tabs is this screen's job,
   // MyInquiriesTab itself expands the right card once its own list loads.
@@ -4815,37 +4815,47 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         </Card>}
       </div>
 
-      {/* "Your coverage" - one consolidated answer, see loadCoverageSummary above */}
-      {(heldPolicies.length>0||lapsedPolicies.length>0||coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'12px 16px 0',background:'#fff',border:`1.5px solid ${__theme.accent}`,borderRadius:'14px',padding:'14px'}}>
-        <div style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em',color:C.textMuted,marginBottom:'8px'}}>{isEn?'Your coverage':'您的保障'}</div>
-        {heldPolicies.map(p=>(
-          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${__theme.accentXLight}`}}>
-            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
-            <div style={{fontSize:'11px',color:__theme.accent,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
-          </div>
-        ))}
-        {lapsedPolicies.map(p=>(
-          <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${__theme.accentXLight}`}}>
-            <div style={{fontSize:'13px',fontWeight:600}}>{p.plan_name}</div>
-            <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
-          </div>
-        ))}
-        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${__theme.accentXLight}`:'none',cursor:'pointer'}}>
-          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
-          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
-        </div>}
-        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
-          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
-          <span style={{color:__theme.accent,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
-        </div>}
-      </div>}
-
       {/* Tabs */}
-      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px'}}>
-        {[['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?__theme.accent:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?__theme.accent:'transparent'}`,cursor:'pointer'}}>{l}</div>
+      <div style={{display:'flex',background:C.cream,borderBottom:`0.5px solid ${C.border}`,marginTop:'12px',overflowX:'auto'}}>
+        {[['coverage',isEn?'Your coverage':'您的保障'],['plans',isEn?'Compare plans':'比較計劃'],['inquiries',isEn?'My inquiries':'我的查詢'],['claims',isEn?'Claims':'索賠'],['documents',isEn?'Document prep':'文件準備'],['agents',isEn?'Agent ratings':'代理人評分']].map(([k,l])=>(
+          <div key={k} onClick={()=>setTab(k)} style={{flex:'1 0 auto',minWidth:'72px',padding:'11px 4px',fontSize:'11px',fontWeight:500,color:tab===k?C.navy:C.textSub,textAlign:'center',borderBottom:`2px solid ${tab===k?C.navy:'transparent'}`,cursor:'pointer'}}>{l}</div>
         ))}
       </div>
+
+      {/* ── YOUR COVERAGE ── one consolidated answer, see loadCoverageSummary
+          above. Redesigned per your feedback: was a white bordered card
+          floating above the tabs, in the theme-accent color (pink/yellow
+          whenever viewing as a Bump/Kids profile) - inconsistent with
+          every other info card on this screen, which uses the navy-tinted
+          style below regardless of which profile mode you're in, since
+          coverage itself isn't a Bump/Kids-specific concept. */}
+      {tab==='coverage'&&<div style={{padding:'16px 16px 0'}}>
+        {(heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0)
+          ? <div style={{background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold.':'暫無保障記錄 - 可瀏覽比較計劃,或新增您已持有的保單。'}</div>
+          : <div style={{background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
+            <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'8px'}}>◈ {isEn?'Where you stand':'目前狀況'}</div>
+            {heldPolicies.map(p=>(
+              <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                <div style={{fontSize:'13px',fontWeight:600,color:C.text}}>{p.plan_name}</div>
+                <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>✓ {isEn?'Active':'生效中'}{p.premium!=null?` — HK$${p.premium}/mo`:''}</div>
+              </div>
+            ))}
+            {lapsedPolicies.map(p=>(
+              <div key={p.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                <div style={{fontSize:'13px',fontWeight:600,color:C.text}}>{p.plan_name}</div>
+                <div style={{fontSize:'11px',color:C.red,fontWeight:600}}>✕ {isEn?'Coverage ended':'保障已終止'}</div>
+              </div>
+            ))}
+            {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${C.border}`:'none',cursor:'pointer'}}>
+              <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
+              <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+            </div>}
+            {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 0',cursor:'pointer'}}>
+              <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
+              <span style={{color:C.navy,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+            </div>}
+          </div>}
+      </div>}
 
       {/* ── PLANS & COMPARISON ── */}
       {tab==='plans'&&<>
