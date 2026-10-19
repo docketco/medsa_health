@@ -100,13 +100,10 @@ function InsuranceDashboard({ onNav, company }) {
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
-        {(company?.relationshipType==='unpartnered' ? [
-          {key:'planrules',icon:'▣',label:'Coverage rules',sub:'Register your plans\' name, logo, and categories'},
-          {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
-        ] : [
+        {[
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
-          {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
-        ]).map(item=>(
+          {key:'ads',icon:'⬡',label:company?.relationshipType==='unpartnered'?'Promote a plan':'Sponsored listings',sub:company?.relationshipType==='unpartnered'?'Sponsor an individual plan in patient search, priced per month':'Promote plans in AI recommendations'},
+        ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
             <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
@@ -2923,8 +2920,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // shape for both tiers: Overview, Plans/Coverage (registration - real
   // benefit info, not claims terms), and Sponsored/Promote (a real
   // revenue feature orthogonal to claims, untouched).
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'ads',icon:'✦',label:'Sponsored'}]
-    : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'ads',icon:'✦',label:'Promote'}]
+  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'ads',icon:'✦',label:isPartnered?'Sponsored':'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -2945,8 +2941,14 @@ export default function InsuranceApp({ company, onLogout }) {
       </div>
       <div ref={contentRef} style={{flex:1,overflowY:'auto'}}>
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
-        {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
-        {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
+        {/* One registration flow for every insurer now, per your call -
+            the partnered/unpartnered split had no remaining job here
+            once adjudication collapsed to nothing for everyone; keeping
+            two differently-named, differently-featured forms (Plans vs
+            Coverage Rules) made it look like a real distinction still
+            existed. CoverageRulesManager is left defined above, not
+            deleted, in case a cut-down intake ever makes sense again. */}
+        {screen==='plans'&&<PlanManager company={company}/>}
         {/* Verify, Claims log, and claim-detail are unreachable for every
             insurer now - no nav button ever sets `screen` to any of
             these keys. Left as dead branches (not deleted) rather than

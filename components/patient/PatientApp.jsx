@@ -6299,6 +6299,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
   const [recoveryChecks,setRecoveryChecks]=useState([])
   const [epdsScreens,setEpdsScreens]=useState([])
   const [epdsAnswers,setEpdsAnswers]=useState({})
+  // Your request: the postpartum tab got long once the confinement guide
+  // joined EPDS/recovery there too - collapsed behind a click rather than
+  // always showing all 10 questions inline.
+  const [epdsFormOpen,setEpdsFormOpen]=useState(false)
   const [epdsSaving,setEpdsSaving]=useState(false)
   const [epdsResult,setEpdsResult]=useState(null)
   const [activePolicy,setActivePolicy]=useState(null)
@@ -6730,7 +6734,8 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
           {epdsResult.item10Flagged&&<div style={{fontSize:'12px',color:C.red,fontWeight:600,marginTop:'8px',lineHeight:1.6}}>{isEn?"You answered that thoughts of harming yourself have occurred to you. Please talk to someone now - contact your OBGYN, midwife, or GP today, or if you're in immediate danger, call 999 or go to your nearest A&E.":'您回答曾出現傷害自己的想法。請立即向人求助 - 今天聯絡您的婦產科醫生、助產士或家庭醫生,若有即時危險,請致電999或前往最近的急症室。'}</div>}
         </div>}
 
-        {!epdsResult&&<>
+        {!epdsResult&&!epdsFormOpen&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>setEpdsFormOpen(true)}>{isEn?'Start the check-in (10 questions) ▸':'開始檢視（10個問題） ▸'}</Btn>}
+        {!epdsResult&&epdsFormOpen&&<>
           {EPDS_ITEMS.map(item=>(
             <div key={item.key} style={{marginBottom:'14px'}}>
               <div style={{fontSize:'12.5px',fontWeight:600,color:C.text,marginBottom:'6px'}}>{item.key}. {item.en}</div>
@@ -6743,8 +6748,9 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId }) {
             </div>
           ))}
           <Btn variant="primary" style={{width:'100%'}} disabled={epdsSaving||EPDS_ITEMS.some(item=>epdsAnswers[item.key]==null)} onClick={submitEpds}>{epdsSaving?(isEn?'Saving…':'儲存中…'):(isEn?'See my score':'查看分數')}</Btn>
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setEpdsFormOpen(false)}>{isEn?'Collapse':'收起'}</Btn>
         </>}
-        {epdsResult&&<Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>setEpdsResult(null)}>{isEn?'Take it again':'重新進行'}</Btn>}
+        {epdsResult&&<Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>{setEpdsResult(null);setEpdsFormOpen(false)}}>{isEn?'Take it again':'重新進行'}</Btn>}
 
         {epdsScreens.length>0&&<div style={{marginTop:'16px'}}>
           <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Past check-ins':'過往記錄'}</div>
