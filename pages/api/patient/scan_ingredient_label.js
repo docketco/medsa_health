@@ -10,11 +10,15 @@
 // other OCR feature here - this only ever returns flags for the patient
 // to read and judge themselves, never a block/allow verdict, and nothing
 // here is written to the database. Requires ANTHROPIC_API_KEY.
+// Subscriber-only (Bump/Guardian) - your own call, after noting this is
+// usually a one-off a person can just do themselves; the repeat/heavy
+// use (managing several people's health, chronic-illness care) is
+// exactly what the subscription is for.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
-import { checkAndConsumeQuota } from '../../../lib/aiScanQuota'
+import { isActiveSubscriber } from '../../../lib/aiScanQuota'
 
 export const config = { api: { bodyParser: { sizeLimit: '12mb' } } }
 
@@ -39,9 +43,8 @@ export default async function handler(req, res) {
   if (!patientId) return res.status(400).json({ error: 'patientId is required' })
   const safeMediaType = ['image/jpeg', 'image/png', 'image/webp'].includes(mediaType) ? mediaType : 'image/jpeg'
 
-  const quota = await checkAndConsumeQuota(supabase, patientId, 'ingredient_scan')
-  if (!quota.allowed) {
-    return res.status(429).json({ error: `You've used your ${quota.cap} free scans this month - upgrade to Medsa Bump or Guardian for unlimited scans, or try again next month.` })
+  if (!(await isActiveSubscriber(supabase, patientId))) {
+    return res.status(402).json({ error: 'Ingredient scanning is a Medsa Bump/Guardian subscriber feature - subscribe from Account Settings to use it.' })
   }
 
   const [{ data: allergies }, { data: conditions }] = await Promise.all([

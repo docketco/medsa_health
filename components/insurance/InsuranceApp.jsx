@@ -94,10 +94,9 @@ function InsuranceDashboard({ onNav, company }) {
         <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.relationshipType==='unpartnered'?'Registered insurer':'Partner'}{company?.medsaId?` · ${company.medsaId}`:''}</div>
       </div>
       <SecLabel>Performance</SecLabel>
-      <div style={{display:'grid',gridTemplateColumns:company?.relationshipType==='unpartnered'?'1fr 1fr':'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',padding:'0 16px'}}>
         <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
         <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>
-        {company?.relationshipType!=='unpartnered'&&<StatCard icon="◇" label="Pending claims" value={stats.loading?'…':stats.pendingClaims} sub="require attention" color={C.amber} bg={C.amberLight}/>}
       </div>
       <SecLabel>Quick access</SecLabel>
       <div style={{padding:'0 16px'}}>
@@ -106,7 +105,6 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'ads',icon:'⬡',label:'Promote a plan',sub:'Sponsor an individual plan in patient search, priced per month'},
         ] : [
           {key:'plans',icon:'▣',label:'Manage plans',sub:'Add, edit, sponsor plan listings'},
-          {key:'claims',icon:'◇',label:'Claims log',sub:'All claims — pending, approved, rejected'},
           {key:'ads',icon:'⬡',label:'Sponsored listings',sub:'Promote plans in AI recommendations'},
         ]).map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
@@ -125,7 +123,7 @@ function InsuranceDashboard({ onNav, company }) {
       ) : (
         <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px'}}>
           <div style={{fontSize:'12px',color:C.brown,fontWeight:600,marginBottom:'4px'}}>How Medsa partner listings work</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Claims submitted via Medsa are routed to your existing system via webhook.</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6}}>Your plans appear in patient searches and AI recommendations. Sponsored plans get priority placement. Medsa charges a listing fee + referral commission. Medsa doesn't process or adjudicate claims - a patient pays in full and submits a reimbursement claim with you directly.</div>
         </div>
       )}
     </div>
@@ -357,17 +355,20 @@ function CompanyLogoUploader({ company }) {
 }
 
 // ── PLAN MANAGER ──────────────────────────────────────────────────────────────
-// Shares its claims-adjudication fields (copay, deductible, covered
-// categories, per-category limits, overall/room-&-board limits, billing
-// model, network, pre-auth threshold) with CoverageRulesManager below via
-// AdjudicationFieldsSection/DocumentAutoFillCard (UX audit item 5) - see
-// the comment above those shared components for why.
+// Collapsed per the pivot: the claims-adjudication fields this used to
+// share with CoverageRulesManager (copay, deductible, per-category
+// limits, overall/room-&-board limits, billing model, network, pre-auth
+// threshold) are gone from both forms - Medsa never computes real
+// adjudication math now, partnered insurers included (see
+// lib/insuranceAdapter.js's ADJUDICATION_ENABLED). What's left here is
+// plan COMMERCE, not claims math: name/type/benefits/categories (real
+// info, not claims terms), the pricing tiers below (what the plan
+// actually costs to buy), and the agent/commission/self-checkout fields
+// - none of that is Medsa deciding a claim, it's Medsa selling a
+// policy, which the pivot never objected to.
 const PLAN_MANAGER_EMPTY_FORM = {
   plan_name:'', plan_type:'', key_benefits:'',
-  copay_rate:'', annual_deductible_hkd:'', covered_categories:[],
-  overall_annual_limit_hkd:'', room_board_daily_limit_hkd:'', network_type:'', waiting_period_days:'',
-  pre_existing_condition_policy:'', preauth_threshold_hkd:'', category_limits:{},
-  policy_document_path:'', billing_model:'direct',
+  covered_categories:[], policy_document_path:'',
   commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
   self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
 }
@@ -436,12 +437,7 @@ function PlanManager({ company }) {
   }
   function buildAutoFillTerms(f) {
     const lines = []
-    if (f.waiting_period_days) lines.push(`Most benefits can be claimed after a ${f.waiting_period_days}-day waiting period from the policy start date.`)
-    const peLabel = PRE_EXISTING_POLICIES.find(([k])=>k===f.pre_existing_condition_policy)?.[1]
-    if (peLabel) lines.push(`Pre-existing conditions: ${peLabel.toLowerCase()}.`)
     if (f.covered_categories.length>0) lines.push(`This plan covers: ${f.covered_categories.join(', ')}.`)
-    if (f.copay_rate!=='') lines.push(`You pay a ${f.copay_rate}% copay on claims covered by this plan.`)
-    if (f.annual_deductible_hkd!=='') lines.push(`An annual deductible of HK$${f.annual_deductible_hkd} applies before this plan starts paying.`)
     return lines.join('\n')
   }
 
@@ -454,27 +450,10 @@ function PlanManager({ company }) {
   }
   function startEdit(plan) {
     setEditingId(plan.id)
-    const category_limits = {}
-    for (const cat of (plan.covered_categories||[])) {
-      const stored = (plan.category_limits||{})[cat] || {}
-      category_limits[cat] = {
-        annual_limit_hkd: stored.annual_limit_hkd!=null ? String(stored.annual_limit_hkd) : '',
-        per_visit_limit_hkd: stored.per_visit_limit_hkd!=null ? String(stored.per_visit_limit_hkd) : '',
-        requires_preauth: !!stored.requires_preauth, requires_referral: !!stored.requires_referral,
-      }
-    }
     setForm({
       plan_name: plan.plan_name||'', plan_type: plan.plan_type||'', key_benefits: plan.key_benefits||'',
-      copay_rate: plan.copay_rate!=null ? String(Math.round(plan.copay_rate*100)) : '',
-      annual_deductible_hkd: plan.annual_deductible_hkd!=null ? String(plan.annual_deductible_hkd) : '',
       covered_categories: plan.covered_categories||[],
-      overall_annual_limit_hkd: plan.overall_annual_limit_hkd!=null ? String(plan.overall_annual_limit_hkd) : '',
-      room_board_daily_limit_hkd: plan.room_board_daily_limit_hkd!=null ? String(plan.room_board_daily_limit_hkd) : '',
-      network_type: plan.network_type||'', waiting_period_days: plan.waiting_period_days!=null?String(plan.waiting_period_days):'',
-      pre_existing_condition_policy: plan.pre_existing_condition_policy||'',
-      preauth_threshold_hkd: plan.preauth_threshold_hkd!=null ? String(plan.preauth_threshold_hkd) : '',
-      category_limits, policy_document_path: plan.policy_document_path||'',
-      billing_model: plan.billing_model||'direct',
+      policy_document_path: plan.policy_document_path||'',
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
       requires_agent: !!plan.requires_agent,
       insurer_flags: plan.insurer_flags||[],
@@ -559,38 +538,19 @@ function PlanManager({ company }) {
     const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
     if (!form.plan_name || validTiers.length===0) return
     setSaving(true)
-    const category_limits = {}
-    for (const cat of form.covered_categories) {
-      const cl = form.category_limits[cat]
-      if (!cl) continue
-      category_limits[cat] = {
-        annual_limit_hkd: cl.annual_limit_hkd!=='' ? parseFloat(cl.annual_limit_hkd) : null,
-        per_visit_limit_hkd: cl.per_visit_limit_hkd!=='' ? parseFloat(cl.per_visit_limit_hkd) : null,
-        requires_preauth: !!cl.requires_preauth, requires_referral: !!cl.requires_referral,
-      }
-    }
     const payload = {
       plan_name: form.plan_name, plan_type: form.plan_type || null,
       key_benefits: form.key_benefits || null,
       covered_categories: form.covered_categories,
-      // Real, plan-specific values the adjudication engine actually uses
-      // (see lib/insuranceAdapter.js) - previously nothing on this form
-      // ever set these, so every plan silently used the same hardcoded
-      // 10% copay / $500 deductible regardless of what was entered here.
-      copay_rate: form.copay_rate!=='' ? parseFloat(form.copay_rate)/100 : null,
-      annual_deductible_hkd: form.annual_deductible_hkd!=='' ? parseFloat(form.annual_deductible_hkd) : null,
-      // Same gap as copay/deductible above, for the fields Plan Manager
-      // was missing entirely until now (see AdjudicationFieldsSection) -
-      // a partnered insurer's marketplace-sold plan now adjudicates
-      // claims with the same accuracy as an unpartnered one's.
-      overall_annual_limit_hkd: form.overall_annual_limit_hkd!=='' ? parseFloat(form.overall_annual_limit_hkd) : null,
-      room_board_daily_limit_hkd: form.room_board_daily_limit_hkd!=='' ? parseFloat(form.room_board_daily_limit_hkd) : null,
-      network_type: form.network_type || null,
-      preauth_threshold_hkd: form.preauth_threshold_hkd!=='' ? parseFloat(form.preauth_threshold_hkd) : null,
-      category_limits,
+      // Deliberately NOT writing copay_rate/annual_deductible_hkd/
+      // overall_annual_limit_hkd/room_board_daily_limit_hkd/network_type/
+      // preauth_threshold_hkd/category_limits/billing_model/pre_existing_
+      // condition_policy/waiting_period_days anymore - Medsa doesn't
+      // adjudicate claims for anyone now (lib/insuranceAdapter.js's
+      // ADJUDICATION_ENABLED), partnered insurers included. Those columns
+      // stay real on the table and just go untouched/null going forward.
       policy_document_path: form.policy_document_path || null,
       policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
-      billing_model: form.billing_model || 'direct',
       // Real gap: an agent's own commission on a policy was a free-text
       // field THEY typed, with Medsa's referral fee capped against
       // whatever number they entered - backwards, since commission is
@@ -600,8 +560,6 @@ function PlanManager({ company }) {
       requires_agent: form.requires_agent,
       insurer_flags: form.insurer_flags,
       additional_terms: form.additional_terms || null,
-      pre_existing_condition_policy: form.pre_existing_condition_policy || null,
-      waiting_period_days: form.waiting_period_days!=='' ? parseInt(form.waiting_period_days,10) : null,
       auto_buy_on_clean: form.auto_buy_on_clean,
       // Only ever actually takes effect while the company's own Connect
       // account is active (see complete_auto_purchase.js) - saved as
@@ -715,10 +673,7 @@ function PlanManager({ company }) {
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>What's covered (key benefits)</div>
             <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
           </div>
-          {/* Shared with Coverage Rules (UX audit item 5) - the exact same
-              claims-adjudication fields, so a partnered insurer's plan and
-              an unpartnered one's calculate claims with the same accuracy. */}
-          <AdjudicationFieldsSection form={form} setForm={setForm}/>
+          <BasicCategoriesSection form={form} setForm={setForm}/>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Commission rate (%) - what you pay an agent on this plan</div>
             <input type="number" value={form.commission_rate_pct} onChange={e=>setForm(f=>({...f,commission_rate_pct:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 20"/>
@@ -810,7 +765,7 @@ function PlanManager({ company }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.copay_rate!=null ? `${Math.round(p.copay_rate*100)}% copay` : 'Copay not set (defaults to 10%)'} · {p.annual_deductible_hkd!=null ? `HK$${p.annual_deductible_hkd} annual deductible` : 'Deductible not set (defaults to HK$500)'} · {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
+            {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
@@ -2960,12 +2915,15 @@ export default function InsuranceApp({ company, onLogout }) {
   // the components (TeamsAndAgents/PreauthRequestsManager/PaymentsManager)
   // are left defined further up this file, not deleted, in case a real
   // TPA-style deal ever actually calls for them.
-  // Parking Lot: for an unpartnered insurer, Medsa isn't the TPA - there's
-  // no claims relationship to Verify a policy against or a Claims log to
-  // show, since nothing here ever gets adjudicated. Dropped from this
-  // tier's nav entirely rather than left empty - a real partnership (the
-  // Apply link above) is what actually unlocks them.
-  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Sponsored'}]
+  // Full collapse, per your go-ahead: Medsa isn't the TPA for ANY
+  // insurer now, partnered included - there's no claims relationship to
+  // Verify a policy against, no Claims log to show, and no Underwriters
+  // role to staff, since nothing here ever gets adjudicated anymore
+  // (lib/insuranceAdapter.js's ADJUDICATION_ENABLED=false). One nav
+  // shape for both tiers: Overview, Plans/Coverage (registration - real
+  // benefit info, not claims terms), and Sponsored/Promote (a real
+  // revenue feature orthogonal to claims, untouched).
+  const navItems=isPartnered ? [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'ads',icon:'✦',label:'Sponsored'}]
     : [{key:'dashboard',icon:'⌂',label:'Overview'},{key:'planrules',icon:'▦',label:'Coverage'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
@@ -2989,14 +2947,18 @@ export default function InsuranceApp({ company, onLogout }) {
         {screen==='dashboard'&&<InsuranceDashboard onNav={setScreen} company={company}/>}
         {screen==='plans'&&isPartnered&&<PlanManager company={company}/>}
         {screen==='planrules'&&!isPartnered&&<CoverageRulesManager company={company}/>}
-        {screen==='verify'&&isPartnered&&<PolicyVerificationManager company={company}/>}
-        {screen==='claims'&&isPartnered&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
-        {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
+        {/* Verify, Claims log, and claim-detail are unreachable for every
+            insurer now - no nav button ever sets `screen` to any of
+            these keys. Left as dead branches (not deleted) rather than
+            torn out, same as the components they render. */}
+        {false&&screen==='verify'&&<PolicyVerificationManager company={company}/>}
+        {false&&screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
+        {false&&screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
         {/* Available to both tiers - a TPA-claims-only insurer can sponsor
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
         {screen==='ads'&&<SponsoredListings company={company}/>}
-        {screen==='underwriters'&&<UnderwritersManager company={company}/>}
+        {false&&screen==='underwriters'&&<UnderwritersManager company={company}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{
