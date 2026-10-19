@@ -6278,8 +6278,24 @@ const EPDS_ITEMS = [
 // right cutoff depends on which test protocol was actually used and a
 // wrong guess here would be worse than the no-flag default this shipped
 // with originally.
-function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab }) {
+function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, onSwitchBumpSubscription }) {
   const __theme = useContext(ThemeContext)
+  // Real bug: this screen only ever showed whichever ONE bump pass it was
+  // handed - a patient with a concurrent pregnancy AND an earlier still-
+  // open postpartum pass had no reliable way to reach the other one's own
+  // confinement guide/EPDS/recovery checklist, since that depended on
+  // finding a specific banner elsewhere in Account Settings. Self-
+  // contained now: this screen checks for itself whether another open
+  // pass exists for this patient and surfaces a direct switch, wherever
+  // it was opened from.
+  const [otherBumpPass,setOtherBumpPass]=useState(null)
+  useEffect(() => {
+    if (!patient?.id) return
+    supabase.from('bump_subscriptions').select('*').eq('patient_id',patient.id).is('graduated_at',null).then(({data}) => {
+      const other = (data||[]).find(r => r.id !== bumpSubscriptionId)
+      setOtherBumpPass(other || null)
+    })
+  }, [patient?.id, bumpSubscriptionId])
   // Real gap this closes: opening the OTHER (postpartum) pass via the
   // "Also finishing postpartum recovery" banner always landed on
   // Monitoring by default - the confinement guide/EPDS/recovery
@@ -6709,6 +6725,12 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab }) 
 
   return (
     <div style={{padding:'0 16px 24px'}}>
+      {otherBumpPass&&<div onClick={()=>{onSwitchBumpSubscription&&onSwitchBumpSubscription(otherBumpPass.id); setBumpTab(otherBumpPass.child_dob?'postpartum':'monitoring')}} style={{margin:'16px 0 0',padding:'12px 14px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',cursor:onSwitchBumpSubscription?'pointer':'default',display:'flex',alignItems:'center',gap:'10px'}}>
+        <div style={{flex:1,fontSize:'12px',color:C.navy,lineHeight:1.5}}>{otherBumpPass.child_dob
+          ? (isEn?`Also viewing: switch to the postpartum recovery log (incl. confinement guide) for ${otherBumpPass.child_full_name||'your other baby'}, born ${new Date(otherBumpPass.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:`同時查看:切換至另一寶寶(${otherBumpPass.child_full_name||''})的產後復原記錄(包括坐月指南),出生於${new Date(otherBumpPass.child_dob).toLocaleDateString('zh-HK',{day:'numeric',month:'short',year:'numeric'})}`)
+          : (isEn?"Also viewing: switch to your current pregnancy's own log":'同時查看:切換至您目前懷孕的記錄')}</div>
+        {onSwitchBumpSubscription&&<span style={{color:C.navy,fontSize:'18px'}}>›</span>}
+      </div>}
       <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
         <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Pregnancy health log':'孕期健康記錄'}</div>
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}>{isEn?'For high-risk monitoring your OBGYN has asked you to track - not a substitute for a scheduled check-up.':'用於記錄您的婦產科醫生要求監察的數據 - 並非取代既定的檢查。'}</div>
@@ -8915,7 +8937,7 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
-        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={viewBumpOverrideId||bumpSubscriptionId} initialTab={viewBumpOverrideId?'postpartum':undefined}/>}
+        {screen==='bumphealth'&&<BumpHealthScreen isEn={isEn} patient={patient} bumpSubscriptionId={viewBumpOverrideId||bumpSubscriptionId} initialTab={viewBumpOverrideId?'postpartum':undefined} onSwitchBumpSubscription={setViewBumpOverrideId}/>}
         {screen==='bumpcohort'&&<BumpCohortScreen isEn={isEn} patient={patient}/>}
         {screen==='forum'&&<ForumScreen isEn={isEn} patient={patient}/>}
         {screen==='editprofile'&&<EditProfileScreen isEn={isEn} patient={patient} onSaved={async()=>{
