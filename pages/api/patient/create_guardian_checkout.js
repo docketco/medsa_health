@@ -19,11 +19,17 @@
 //
 // Corrected back out: an earlier wrong guess routed the Bump loyalty
 // credit here. Your call - that stays a discount on the repeat Bump
-// purchase itself (see create_bump_checkout.js). Separately raised, not
-// built yet: Guardian should never be discounted except when managing a
-// disabled dependent (DEPENDENT_RELATIONSHIPS already has 'disabled') -
-// needs the actual discount mechanic (full waiver? a %?) before this
-// file can do anything with it.
+// purchase itself (see create_bump_checkout.js).
+//
+// Disabled-dependent discount, built per your spec: 50% off the whole
+// package price when this guardian manages at least one dependent
+// flagged is_disabled with real proof on file (disability_proof_
+// attachment_id set) - both required, not just the checkbox alone.
+// Guardian bills per ACCOUNT (one subscription covering up to
+// GUARDIAN_PACKAGE_SIZE profiles), not per dependent, so the discount
+// applies to the whole subscription rather than being itemized per
+// head. Computed server-side from the real DB rows, never trusted from
+// the client, same posture as every other discount/fee in this app.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -49,6 +55,11 @@ export default async function handler(req, res) {
   const { data: patient } = await supabase.from('patients').select('id, full_name, phone, guardian_stripe_customer_id').eq('id', patientId).maybeSingle()
   if (!patient) return res.status(404).json({ status: 'ERROR', message: 'Patient not found.' })
 
+  const { data: dependents } = await supabase.from('patients')
+    .select('is_disabled, disability_proof_attachment_id').eq('parent_patient_id', patientId)
+  const hasProvenDisabledDependent = (dependents||[]).some(d => d.is_disabled && d.disability_proof_attachment_id)
+  const packagePriceHkd = hasProvenDisabledDependent ? GUARDIAN_PACKAGE_PRICE_HKD * 0.5 : GUARDIAN_PACKAGE_PRICE_HKD
+
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
 
@@ -65,17 +76,17 @@ export default async function handler(req, res) {
     line_items: [{
       price_data: {
         currency: 'hkd',
-        product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)` },
-        unit_amount: Math.round(GUARDIAN_PACKAGE_PRICE_HKD * 100),
+        product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)${hasProvenDisabledDependent ? ' - 50% disability discount applied' : ''}` },
+        unit_amount: Math.round(packagePriceHkd * 100),
         recurring: { interval: 'year' },
       },
       quantity: 1,
     }],
     success_url: `${siteUrl}/patient?guardian_started=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${siteUrl}/patient?guardian_cancelled=1`,
-    metadata: { guardian_patient_id: patientId },
-    subscription_data: { metadata: { guardian_patient_id: patientId } },
+    metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent) },
+    subscription_data: { metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent) } },
   })
 
-  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url })
+  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, discountApplied: hasProvenDisabledDependent })
 }

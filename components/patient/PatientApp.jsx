@@ -8489,6 +8489,10 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   // right now, not just at the moment it was added.
   const isLocked = (idx) => idx >= 2 && !guardianActive
   const canAddFree = profiles.length <= 1
+  // Display-only hint, computed from what's already loaded - the real
+  // discount decision happens server-side in create_guardian_checkout.js
+  // off the same two columns, never trusted from here.
+  const disabilityDiscountEligible = profiles.some(p => p.is_disabled && p.disability_proof_attachment_id)
 
   async function handleSubscribeGuardian() {
     if (!managingAdult?.id) return
@@ -8559,7 +8563,10 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a dependent profile</Btn>
             : guardianActive
               ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another dependent profile</Btn>
-              : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
+              : <>
+                  {disabilityDiscountEligible&&<div style={{fontSize:'11px',color:C.green,textAlign:'center',marginBottom:'6px'}}>50% disability discount applies to this account</div>}
+                  <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
+                </>}
         </div>
       </div>
     </div>
@@ -8591,6 +8598,16 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
   const [relationship,setRelationship]=useState('child')
   const [form,setForm]=useState({fullName:'',dob:'',sex:''})
   const [certFile,setCertFile]=useState(null)
+  // Real gap from your feedback: "disabled" used to only exist as its own
+  // relationship category, with no way to flag a CHILD (or parent, etc.)
+  // who's also disabled without mis-labeling their relationship just to
+  // reach the discount. A separate declaration, available on every new
+  // profile regardless of relationship - the Guardian discount checks
+  // this flag, not the relationship picker. Proof is required (not
+  // optional like the relationship doc above) since this one gates real
+  // money off a subscription.
+  const [isDisabled,setIsDisabled]=useState(false)
+  const [disabilityProofFile,setDisabilityProofFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
   const rel = DEPENDENT_RELATIONSHIPS.find(r=>r.value===relationship) || DEPENDENT_RELATIONSHIPS[0]
@@ -8602,7 +8619,7 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
       const { data: child, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob, sex: form.sex||null,
         account_type: 'kids', parent_patient_id: parentPatient.id, registration_path: 'guardian_created',
-        dependent_relationship: relationship,
+        dependent_relationship: relationship, is_disabled: isDisabled,
       }).select().maybeSingle()
       if (insErr) throw insErr
       if (certFile) {
@@ -8612,6 +8629,14 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
           patient_id: child.id, category: relationship==='child' ? 'birth_certificate' : 'dependent_relationship_doc', file_url: path, file_name: certFile.name, verification_status: 'unverified',
         }).select().maybeSingle()
         if (att) await supabase.from('patients').update({ birth_certificate_attachment_id: att.id }).eq('id', child.id)
+      }
+      if (isDisabled && disabilityProofFile) {
+        const path = `${medsaId}/disability-proof-${Date.now()}-${disabilityProofFile.name}`
+        await supabase.storage.from('id-verification').upload(path, disabilityProofFile)
+        const { data: att } = await supabase.from('medical_record_attachments').insert({
+          patient_id: child.id, category: 'disability_proof', file_url: path, file_name: disabilityProofFile.name, verification_status: 'unverified',
+        }).select().maybeSingle()
+        if (att) await supabase.from('patients').update({ disability_proof_attachment_id: att.id }).eq('id', child.id)
       }
       onComplete(child)
     } catch (e) {
@@ -8643,8 +8668,18 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
         </div>
         <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>{rel.docLabel} (optional, can add later)</div>
         <input type="file" accept="image/*,application/pdf" onChange={e=>setCertFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
+
+        <div onClick={()=>setIsDisabled(d=>!d)} style={{display:'flex',alignItems:'flex-start',gap:'10px',cursor:'pointer',marginBottom:isDisabled?'10px':'20px'}}>
+          <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${isDisabled?__theme.accent:C.border}`,background:isDisabled?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{isDisabled?'✓':''}</div>
+          <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.5}}>This dependent has a disability <span style={{color:C.textMuted}}>(qualifies this account for 50% off Medsa Guardian - proof required)</span></div>
+        </div>
+        {isDisabled&&<div style={{marginBottom:'20px'}}>
+          <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Proof of disability (required for the discount)</div>
+          <input type="file" accept="image/*,application/pdf" onChange={e=>setDisabilityProofFile(e.target.files[0])} style={{width:'100%'}}/>
+        </div>}
+
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob||(relationship==='child'&&!form.sex)}>{saving?'Creating…':'Create profile'}</Btn>
+        <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!form.fullName||!form.dob||(relationship==='child'&&!form.sex)||(isDisabled&&!disabilityProofFile)}>{saving?'Creating…':'Create profile'}</Btn>
       </div>
     </div>
   )
