@@ -6274,7 +6274,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
             : (isEn?"Tap a tooth to log it falling out, with the real date - keep going, one by one, as each one actually comes out.":'輕按牙齒以記錄脫落及實際日期 - 可逐一記錄每顆牙齒實際脫落的情況。')}
         </div>
         {allFallenOut && <div style={{margin:'0 0 10px',padding:'8px 12px',background:C.greenXLight,borderRadius:'10px',fontSize:'11.5px',color:__theme.accent,fontWeight:600,textAlign:'center'}}>{isEn?'🎉 Full set has come and gone - the permanent teeth are next.':'🎉 整組乳齒已全部脫落 - 恆齒即將長出。'}</div>}
-        <svg viewBox="0 0 220 300" style={{width:'100%',maxWidth:220,display:'block',margin:'0 auto 10px'}}>
+        <svg viewBox="0 -12 220 324" style={{width:'100%',maxWidth:220,display:'block',margin:'0 auto 10px'}}>
           {['upper','lower'].map(arch => {
             const ecx = 110, erx = 78, ery = 72, ecy = arch==='upper' ? 80 : 220
             const maxDeg = TOOTH_TYPE_ARC_DEGREES['second-molar'] + 10
@@ -6350,7 +6350,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
                 <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
                   <span style={{fontSize:'11px',width:84,color:C.textSub,flexShrink:0}}>{isEn?'First tooth, on:':'第一顆萌出於:'}</span>
                   <input type="date" value={logged.erupted_at} onChange={e=>setToothStage(selectedTooth,'erupted',e.target.value)} style={{fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'3px 6px',width:108}}/>
-                  <span onClick={()=>clearToothStage(selectedTooth,'erupted')} style={{fontSize:'10px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Undo':'取消'}</span>
+                  <span onClick={()=>clearToothStage(selectedTooth,'erupted')} title={isEn?'Remove - resets the whole set back to not-erupted':'移除 - 整組牙齒將回復為未萌出'} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
                 </div>
               )}
               {!isFirstToothRecord && !hasAnyEruption && (
@@ -6363,7 +6363,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
                 <div style={{display:'flex',alignItems:'center',gap:'8px',marginTop:isFirstToothRecord?'4px':0}}>
                   <span style={{fontSize:'11px',width:84,color:C.textSub,flexShrink:0}}>{isEn?'Fell out:':'脫落於:'}</span>
                   <input type="date" value={logged.lost_at} onChange={e=>setToothStage(selectedTooth,'lost',e.target.value)} style={{fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'3px 6px',width:108}}/>
-                  <span onClick={()=>clearToothStage(selectedTooth,'lost')} style={{fontSize:'10px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Undo':'取消'}</span>
+                  <span onClick={()=>clearToothStage(selectedTooth,'lost')} title={isEn?'Remove - tooth goes back to erupted':'移除 - 牙齒將回復為已萌出'} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
                 </div>
               )}
             </div>
