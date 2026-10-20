@@ -36,7 +36,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -55,6 +55,7 @@ export default function MedsaAdminPage() {
       {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
       {tab==='roster' && <InsurerTestRosterScreen/>}
+      {tab==='adulttransfers' && <AdultTransfersTab/>}
       {tab==='qa' && <QaToolsTab/>}
     </div>
   )
@@ -2316,6 +2317,91 @@ function InsurerTestRosterScreen() {
 // successful payment, just triggered by hand instead of a real charge.
 // Never touches anything the webhook doesn't also touch, and every write
 // is scoped to one row the admin explicitly picked.
+// Two-step, human-reviewed sweep for Kids profiles that aged out
+// (dependent_relationship='child', turned 19+) with no adult_transfer_
+// choice on file - never an automatic/unattended delete. Step 1 (Flag
+// for deletion) just stamps pending_deletion_at, starting a real but
+// separately-reviewed 30-day grace window; step 2 (Delete now) only
+// ever appears for a row that's already past that window, and still
+// requires a click naming the exact patient, never a bulk/blind action.
+function AdultTransfersTab() {
+  const [overdue,setOverdue] = useState([])
+  const [pendingDeletion,setPendingDeletion] = useState([])
+  const [loading,setLoading] = useState(true)
+  const [busyId,setBusyId] = useState(null)
+  const [notice,setNotice] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const nineteenYearsAgo = new Date(); nineteenYearsAgo.setFullYear(nineteenYearsAgo.getFullYear()-19)
+    const { data } = await supabase.from('patients')
+      .select('id, full_name, medsa_id, date_of_birth, parent_patient_id, adult_transfer_choice, pending_deletion_at')
+      .eq('account_type','kids').or('dependent_relationship.is.null,dependent_relationship.eq.child')
+      .is('adult_transfer_choice', null)
+      .lte('date_of_birth', nineteenYearsAgo.toISOString().slice(0,10))
+      .order('date_of_birth')
+    setOverdue((data||[]).filter(p=>!p.pending_deletion_at))
+    setPendingDeletion((data||[]).filter(p=>p.pending_deletion_at))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function flagForDeletion(p) {
+    setBusyId(p.id); setNotice(null)
+    const { error } = await supabase.from('patients').update({ pending_deletion_at: new Date().toISOString() }).eq('id', p.id)
+    setBusyId(null)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setNotice(`${p.full_name} flagged - deletable from ${new Date(Date.now()+30*86400000).toLocaleDateString('en-HK')} if still unclaimed.`)
+    load()
+  }
+  async function deleteNow(p) {
+    setBusyId(p.id); setNotice(null)
+    const { error } = await supabase.from('patients').delete().eq('id', p.id)
+    setBusyId(null)
+    if (error) { setNotice(`Error: ${error.message}`); return }
+    setNotice(`${p.full_name} deleted permanently.`)
+    load()
+  }
+  function ageYears(dob) { return Math.floor((Date.now()-new Date(dob).getTime())/(365.25*86400000)) }
+  function pastGraceWindow(pendingAt) { return Date.now() - new Date(pendingAt).getTime() >= 30*86400000 }
+
+  return (
+    <div>
+      <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
+        Kids profiles (dependent_relationship 'child') that turned 19+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Nothing here is automatic: flagging starts a real 30-day grace window, and delete only unlocks once that window has passed. Always check first whether the parent is mid-flow before acting.
+      </div>
+      {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'12px'}}>{notice}</div>}
+      {loading ? <div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div> : <>
+        <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>Overdue, not yet flagged ({overdue.length})</div>
+        {overdue.length===0 && <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>None right now.</div>}
+        {overdue.map(p=>(
+          <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Turned {ageYears(p.date_of_birth)} · DOB {p.date_of_birth}</div>
+            </div>
+            <button onClick={()=>flagForDeletion(p)} disabled={busyId===p.id} style={{padding:'7px 14px',border:`0.5px solid ${C.amber}`,borderRadius:'8px',background:'#fff',color:C.amber,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===p.id?'…':'Flag for deletion'}</button>
+          </div>
+        ))}
+        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Flagged, pending final delete ({pendingDeletion.length})</div>
+        {pendingDeletion.length===0 && <div style={{fontSize:'12px',color:C.textMuted}}>None right now.</div>}
+        {pendingDeletion.map(p=>{
+          const ready = pastGraceWindow(p.pending_deletion_at)
+          return (
+            <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${ready?C.red:C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Flagged {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')} · {ready?'grace window passed':`deletable from ${new Date(new Date(p.pending_deletion_at).getTime()+30*86400000).toLocaleDateString('en-HK')}`}</div>
+              </div>
+              <button onClick={()=>deleteNow(p)} disabled={!ready||busyId===p.id} style={{padding:'7px 14px',border:'none',borderRadius:'8px',background:ready?C.red:C.border,color:'#fff',fontSize:'12px',fontWeight:600,cursor:ready?'pointer':'not-allowed'}}>{busyId===p.id?'…':'Delete now'}</button>
+            </div>
+          )
+        })}
+      </>}
+    </div>
+  )
+}
+
 function QaToolsTab() {
   return (
     <div>
