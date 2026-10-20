@@ -8948,6 +8948,12 @@ function SelfRegisterFlow({ onBack, onComplete }) {
   const __theme = useContext(ThemeContext)
   const [step,setStep]=useState('form') // form | id_upload | selfie | pending
   const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
+  // Your call: the disability declaration shouldn't only live on
+  // dependent profiles (where it gates the Guardian discount) - it
+  // should be on every new account, including your own, purely as
+  // information on file. No proof required here (unlike the dependent
+  // flow) since nothing is being gated by it.
+  const [isDisabled,setIsDisabled]=useState(false)
   const [idFile,setIdFile]=useState(null)
   const [selfieFile,setSelfieFile]=useState(null)
   const [saving,setSaving]=useState(false)
@@ -9011,6 +9017,7 @@ function SelfRegisterFlow({ onBack, onComplete }) {
         id_verification_status: 'pending',
         id_document_path: idPath,
         selfie_verification_path: selfiePath,
+        is_disabled: isDisabled,
       }).select().single()
       // 23505 is the backstop database constraint (see migration) catching
       // a race the check in handleContinueFromForm can't - two signups
@@ -9039,6 +9046,10 @@ function SelfRegisterFlow({ onBack, onComplete }) {
             <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+          </div>
+          <div onClick={()=>setIsDisabled(d=>!d)} style={{display:'flex',alignItems:'flex-start',gap:'10px',cursor:'pointer',marginBottom:'20px'}}>
+            <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${isDisabled?__theme.accent:C.border}`,background:isDisabled?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{isDisabled?'✓':''}</div>
+            <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.5}}>I have a disability <span style={{color:C.textMuted}}>(for your records only - this doesn't change anything about your account)</span></div>
           </div>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleContinueFromForm} disabled={checkingHkid||!form.fullName||!form.dob||!form.hkid||!form.phone}>{checkingHkid?'Checking…':'Continue'}</Btn>
