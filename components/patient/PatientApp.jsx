@@ -6375,6 +6375,34 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [journalEntries,setJournalEntries]=useState([])
   const [journalForm,setJournalForm]=useState({ text:'', mood:'' })
   const [journalSaving,setJournalSaving]=useState(false)
+  // 陪月 (confinement helper) directory - admin-managed listings, free to
+  // list (see medsa-admin's new tab). Independent of bumpSubscriptionId's
+  // own load() below since the helper list itself isn't pass-specific.
+  const [confinementHelpers,setConfinementHelpers]=useState([])
+  const [myConfinementInquiries,setMyConfinementInquiries]=useState([])
+  const [inquiringHelper,setInquiringHelper]=useState(null)
+  const [inquiryMessage,setInquiryMessage]=useState('')
+  const [savingInquiry,setSavingInquiry]=useState(false)
+  useEffect(() => {
+    supabase.from('confinement_helpers').select('*').eq('status','active').order('display_name').then(({data})=>setConfinementHelpers(data||[]))
+  }, [])
+  async function loadMyConfinementInquiries() {
+    if (!patient?.id) return
+    const { data } = await supabase.from('confinement_inquiries').select('*, confinement_helpers(display_name)').eq('patient_id',patient.id).order('created_at',{ascending:false})
+    setMyConfinementInquiries(data||[])
+  }
+  useEffect(() => { loadMyConfinementInquiries() }, [patient?.id])
+  async function submitConfinementInquiry() {
+    if (!inquiringHelper || !patient?.id) return
+    setSavingInquiry(true)
+    await supabase.from('confinement_inquiries').insert({
+      patient_id: patient.id, helper_id: inquiringHelper.id, bump_subscription_id: bumpSubscriptionId||null,
+      requested_start_date: bumpRow?.predicted_due_date || null,
+      message: inquiryMessage.trim()||null,
+    })
+    setSavingInquiry(false); setInquiringHelper(null); setInquiryMessage('')
+    await loadMyConfinementInquiries()
+  }
 
   // Only the very first load shows the full "Loading…" screen - every
   // reload after adding/deleting an entry used to set loading=true again
@@ -7074,6 +7102,53 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           })}
         </div>
       </Card>
+
+      {/* 陪月 (confinement helper) directory - your board idea, built on
+          top of the one real signal Medsa already has that a standalone
+          directory doesn't: predicted_due_date, used to pre-fill an
+          inquiry's requested start date. Medsa never touches the
+          salary/deposit (that's a real employer-employee relationship
+          under HK law) - this just makes the match, same principle as
+          never holding an insurance premium. */}
+      <SecLabel>{isEn?'Confinement help (陪月)':'陪月服務'}</SecLabel>
+      <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',fontSize:'11px',color:C.navy,lineHeight:1.5}}>
+        {isEn?"Medsa introduces you to a helper - the arrangement (salary, deposit, hours) is agreed and paid directly between you and them, same as hiring any domestic helper under HK law. Medsa doesn't hold any of that money.":'Medsa負責為您配對陪月員 - 薪酬、按金、工作時數等安排,由您與對方直接商議及支付,與聘請任何家務助理一樣,受香港法例規範。Medsa不會經手任何款項。'}
+      </div>
+      {confinementHelpers.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'12px 0'}}>{isEn?'No helpers listed yet - check back soon.':'暫無陪月員資料,請稍後再查看。'}</div>}
+      {confinementHelpers.map(h=>(
+        <Card key={h.id} style={{padding:'12px 14px',marginBottom:'8px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'4px'}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:C.text}}>{h.display_name}</div>
+            {h.rate_hkd&&<div style={{fontSize:'12px',fontWeight:600,color:__theme.accent}}>HK${h.rate_hkd}/{isEn?h.rate_unit:({month:'月',day:'日',hour:'時'})[h.rate_unit]}</div>}
+          </div>
+          <div style={{fontSize:'11.5px',color:C.textSub,marginBottom:'4px'}}>{({live_in:isEn?'Live-in':'住家',day_8hr:isEn?'8hr/day':'每日8小時',hourly:isEn?'Hourly':'時薪'})[h.service_type]}{h.years_experience?` · ${h.years_experience}${isEn?'y experience':'年經驗'}`:''}{h.babies_cared_for_count?` · ${h.babies_cared_for_count}${isEn?' babies cared for':'名寶寶經驗'}`:''}</div>
+          {h.languages?.length>0&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{h.languages.join(', ')}</div>}
+          {h.bio&&<div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'8px'}}>{h.bio}</div>}
+          <Btn style={{width:'100%'}} onClick={()=>{setInquiringHelper(h);setInquiryMessage('')}}>{isEn?'Send inquiry':'發送查詢'}</Btn>
+        </Card>
+      ))}
+
+      {inquiringHelper&&<div onClick={()=>setInquiringHelper(null)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:400,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Inquire with ${inquiringHelper.display_name}`:`向${inquiringHelper.display_name}發送查詢`}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'12px',lineHeight:1.5}}>{isEn?"Medsa passes this on and follows up - this doesn't book or pay anyone yet.":'Medsa會轉交此查詢並跟進 - 此操作並不涉及預訂或付款。'}</div>
+          <textarea value={inquiryMessage} onChange={e=>setInquiryMessage(e.target.value)} placeholder={isEn?'Anything you want to mention (dates, questions)…':'想提及的事項(日期、問題等)…'} rows={3} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',fontFamily:'inherit',resize:'vertical',marginBottom:'12px'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setInquiringHelper(null)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={savingInquiry} onClick={submitConfinementInquiry}>{savingInquiry?(isEn?'Sending…':'傳送中…'):(isEn?'Send':'傳送')}</Btn>
+          </div>
+        </div>
+      </div>}
+
+      {myConfinementInquiries.length>0&&<div style={{marginTop:'10px'}}>
+        <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Your inquiries':'您的查詢記錄'}</div>
+        {myConfinementInquiries.map(inq=>(
+          <div key={inq.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+            <span style={{flex:1}}>{inq.confinement_helpers?.display_name||'—'}</span>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',fontWeight:600,background:inq.status==='confirmed'||inq.status==='completed'?C.greenLight:inq.status==='cancelled'?C.card:C.amberLight,color:inq.status==='confirmed'||inq.status==='completed'?C.green:inq.status==='cancelled'?C.textMuted:C.amber}}>{inq.status}</span>
+          </div>
+        ))}
+      </div>}
       </>}
     </div>
   )
