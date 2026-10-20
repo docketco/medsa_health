@@ -6192,26 +6192,58 @@ function isGlucoseFlagged(contextValue, mgdl) {
 // directly. The last item is a plain prompt, not the real EPDS
 // screening instrument - see the note on bc-05 in the QA checklist for
 // why that stays blocked until a verified source is on hand.
-// bc-08 - Chinese postpartum confinement (坐月/月子) guide, transcribed
-// from the sourced material you supplied (a 4-stage TCM recovery
-// progression cross-checked against modern postpartum nutrition
-// science - fourthtrimester.mom, juliaskitchen.ca, and others, as
-// cited). This is cultural practice, framed separately from the
-// evidence-based medical recovery checklist above (bc-05) - not a
-// replacement for it, and not medical advice. The avoid-list carries
-// the real cautions (rice wine, cold/raw foods) you asked this item
-// to wait on.
+// bc-08 - Chinese postpartum confinement (坐月/月子) guide. Rebuilt from
+// real, cited sources rather than the earlier generic 4-stage version:
+// HK01's 陪月員-sourced weekly recipe guidance (named soups, not just
+// example foods), Cosmopolitan HK's soup roundup, and the TCM herbal-
+// remedy timing literature for Sheng Hua Tang / Du Zhong specifically
+// (which run on their OWN schedules, not the weekly food phases below).
+// Each item is tagged by evidence status - 'supported' (backed by a
+// real study, not just tradition), 'cultural' (real traditional
+// practice, not harmful as described, but not independently proven),
+// or 'refuted' (modern medicine specifically disagrees) - rather than
+// presenting folklore and evidence as the same kind of claim. This is
+// cultural/nutritional practice, not medical advice, and stays separate
+// from the evidence-based recovery checklist below (bc-05).
 const CONFINEMENT_PHASES = [
-  { week: isEn=>isEn?'Week 1 - Cleansing (排除)':'第1週 - 排除', en:'Clear lochia, reduce water retention, ease digestion. For a C-section, heavy herbs/rich meats are typically delayed the first 24-48hrs.', foods:'Pork liver, fish soup, red date tea, Sheng Hua Tang (herbal tonic).' },
-  { week: isEn=>isEn?'Week 2 - Stabilization (收縮)':'第2週 - 收縮', en:'Strengthen the lower back/kidneys, tighten joints, support cellular repair.', foods:'Pork kidneys, sesame oil chicken, Du Zhong (eucommia bark) soup, Ba Zhen Tang.' },
-  { week: isEn=>isEn?'Week 3 - Rebuilding (進補)':'第3週 - 進補', en:'Active nourishment, boosting breastmilk supply, rebuilding Qi and blood.', foods:'Pig trotter with peanut or black vinegar soup, black chicken, papaya fish soup, Gui Pi Tang.' },
-  { week: isEn=>isEn?'Week 4+ - Integration (調理)':'第4週起 - 調理', en:'Full systemic strengthening and balancing energy before returning to regular life.', foods:'Shi Quan Da Bu Tang (all-inclusive tonic soup), braised meats, balanced grain-protein-veggie bowls.' },
+  { week:{en:'Week 1 - Appetite & cleansing (開胃排毒)',zh:'第1週 - 開胃排毒'},
+    focus:{en:'Light, easy-to-digest food while lochia clears - not the week for rich tonics.',zh:'惡露排清期間,宜清淡易消化,暫不宜濃補。'},
+    foods:{en:'Yam (淮山), millet congee, potato, plain fish congee.',zh:'淮山、小米粥、薯類、清淡魚粥。'} },
+  { week:{en:'Week 2 - Lactation support (催乳上奶)',zh:'第2週 - 催乳上奶'},
+    focus:{en:"Named soups aimed at milk supply: 淮山杞子石崇魚湯, 木瓜通草章魚湯, 眉豆花生木瓜雞腳湯, 紅豆通草王不留行鯽魚湯.",zh:'主打上奶的湯水:淮山杞子石崇魚湯、木瓜通草章魚湯、眉豆花生木瓜雞腳湯、紅豆通草王不留行鯽魚湯。'},
+    foods:{en:"Pig's feet, crucian carp, green papaya, octopus, peanuts.",zh:'豬手、鯽魚、青木瓜、章魚、花生。'} },
+  { week:{en:'Week 3 - Qi & blood (補氣血)',zh:'第3週 - 補氣血'},
+    focus:{en:'Continue nourishing, but avoid overly cooling ingredients.',zh:'繼續調理,但避免過於寒涼的食材。'},
+    foods:{en:'Red-date/goji soups, warm protein, avoid raw/cold dishes.',zh:'紅棗杞子湯、溫性蛋白質,避免生冷菜式。'} },
+  { week:{en:'Week 4 - Deep nourishment (調理滋補)',zh:'第4週 - 調理滋補'},
+    focus:{en:'Wine-based dishes (麻油煎蛋, 燒酒雞) are traditionally held back until day 14+, not used from week 1.',zh:'酒類菜式(如麻油煎蛋、燒酒雞)傳統上由第14天起才開始,並非第一週使用。'},
+    foods:{en:'Sesame, black beans, lamb, sea cucumber.',zh:'芝麻、黑豆、羊肉、海參。'} },
+]
+// These two run on their OWN timing, independent of the weekly food
+// phases above - a real, sourced distinction the old version missed by
+// just listing "Sheng Hua Tang" under Week 1 as if it were a food.
+const CONFINEMENT_HERBS = [
+  { name:{en:'生化湯 (Sheng Hua Tang)',zh:'生化湯'}, status:'cultural',
+    timing:{en:'Natural birth: from day 2, once daily for 7-10 days. C-section: 5-7 days, and only after checking with your own doctor/TCM practitioner.',zh:'順產:產後第2天起,每日一帖,連服7至10天。剖腹產:約5至7天,並須先諮詢醫生/中醫師。'},
+    note:{en:'Traditionally used to support uterine contraction and lochia clearing. Not for anyone with excess bleeding, pelvic infection, or placenta accreta - a real contraindication, not just a preference.',zh:'傳統用於幫助子宮收縮及排清惡露。產後大出血、骨盆腔感染或植入性胎盤者不適用,屬真正禁忌,並非個人喜好。'} },
+  { name:{en:'杜仲 (Du Zhong / Eucommia bark)',zh:'杜仲'}, status:'cultural',
+    timing:{en:'Starts right after birth, ideally continued daily for 30 days - a different window from Sheng Hua Tang above.',zh:'產後即可開始服用,最好連續30天 - 與上方生化湯的時間窗不同。'},
+    note:{en:'Traditionally associated with uterine recovery and shorter lochia duration.',zh:'傳統認為有助子宮復原及縮短惡露時間。'} },
 ]
 const CONFINEMENT_AVOID = [
-  'Cold & raw foods (salads, raw fruit/veg, ice water, cold desserts) - believed in TCM to stagnate circulation/digestion.',
-  'Excessively spicy, sour, or heavily processed foods.',
-  'High-mercury fish; limit caffeine and alcohol (small amounts of rice wine fully cooked into dishes is the traditional exception, not raw).',
-  'Where modern medicine differs from strict tradition: a "no water, only herbal tea" rule is discouraged - stay properly hydrated with warm water or safe fluids.',
+  { status:'refuted', en:'"No plain water, only herbal tea/soup" - modern medicine specifically disagrees: under-hydration raises the risk of UTIs and kidney stones. Drink normally; warm water is fine.', zh:'「不喝清水,只喝湯水/茶」- 現代醫學並不認同:水份不足會增加尿道感染及腎結石風險。應正常飲水,溫水即可。' },
+  { status:'refuted', en:'捂月子 (bundling up in heavy layers/blankets to "sweat out the wind," windows shut) - this can cause dangerous dehydration or heatstroke, especially in Hong Kong\'s climate. Normal, comfortable clothing and ventilation are fine.', zh:'「捂月子」(穿蓋厚重衣物以「發汗驅風」,緊閉窗戶) - 可能引致脫水或中暑,在香港氣候下更危險。穿著舒適衣物並保持通風即可。' },
+  { status:'refuted', en:'Alcohol-based cooking (rice wine, 燒酒) while breastfeeding - alcohol does transfer into breast milk. If used at all, it should be fully cooked off, not added raw, and not while nursing on demand.', zh:'哺乳期間使用酒類烹調(米酒、燒酒等) - 酒精確實會進入母乳。如需使用,必須完全煮至酒精揮發,並非生加,亦不宜在按需餵哺期間使用。' },
+  { status:'cultural', en:'Cold & raw foods (salads, raw fruit/veg, ice water, cold desserts) - traditional belief that this stagnates digestion/circulation; not independently proven, but not known to be harmful either.', zh:'生冷食物(沙律、生果生菜、冰水、凍甜品) - 傳統認為會阻滞消化及氣血運行,未有獨立證據證實,但亦非已知有害。' },
+  { status:'cultural', en:'Ginger and sesame oil used too early - several sources flag that these can delay wound healing if used before natural birth day 12 / C-section day 21; traditionally held back, not banned outright.', zh:'過早使用薑及麻油 - 多個來源指出,順產12天內、剖腹產21天內使用可能影響傷口癒合;傳統建議延後使用,並非完全禁止。' },
+]
+// Not reproduced here (someone else's copyrighted work) - just what each
+// one actually covers, so "I want to go deeper" has a real next step.
+const CONFINEMENT_FURTHER_READING = [
+  { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
+  { title:'Real Food for Pregnancy', author:'Lily Nichols, RDN', focus:{en:'Clinical prenatal/postpartum nutrition, peer-reviewed - the science behind why warm, protein/collagen-rich foods support tissue repair.',zh:'具臨床及同行評審根據的孕產營養書 - 解釋溫熱、高蛋白/膠原質食物如何幫助組織修復的科學原理。'} },
+  { title:'The Fourth Trimester', author:'Kimberly Ann Johnson', focus:{en:'Physical recovery (pelvic floor, hormones) combined with structured postpartum rest.',zh:'身體復原(盤底肌肉、荷爾蒙)與有系統的產後休養相結合。'} },
+  { title:'Good Moms Have Scary Thoughts', author:'Karen Kleiman, MSW', focus:{en:'Postpartum anxiety/intrusive thoughts - widely recommended by perinatal therapists.',zh:'產後焦慮及侵入性想法 - 受產後治療師廣泛推薦。'} },
 ]
 const POSTPARTUM_RECOVERY_ITEMS = [
   { key:'incision_healing', en:"Incision/perineal healing checked by a provider", zh:'傷口/會陰癒合情況已由醫護檢查' },
@@ -6752,15 +6784,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
 
       {bumpTab==='postpartum'&&<>
       {/* Real gap found from your feedback: tapping into Postpartum on
-          the CURRENT pass (still pregnant, no child_dob yet) shows only
-          EPDS below - the recovery checklist and confinement guide are
-          gated on THIS pass's own child_dob, so they're invisible here
-          even though a real postpartum pass exists. The switch banner
-          above the tabs covers this, but it's easy to miss once you've
-          already tapped into this tab - this is the same thing, said
-          again right where the content is actually missing. */}
+          the CURRENT pass (still pregnant, no child_dob yet) used to show
+          only EPDS - the recovery CHECKLIST is genuinely tied to this
+          pass's own birth (checking off "incision healed" means nothing
+          before one has happened), so it stays gated and needs this
+          pointer to the other pass. The confinement guide below it is
+          reference content now, not gated - it's always here regardless
+          of which pass you're viewing, per your call. */}
       {!bumpRow?.child_dob&&otherBumpPass?.child_dob&&<div onClick={()=>onSwitchBumpSubscription&&onSwitchBumpSubscription(otherBumpPass.id)} style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',cursor:onSwitchBumpSubscription?'pointer':'default',display:'flex',alignItems:'center',gap:'10px'}}>
-        <div style={{flex:1,fontSize:'12px',color:C.amber,lineHeight:1.5}}>{isEn?`The recovery checklist and confinement guide are under ${otherBumpPass.child_full_name||'your other baby'}'s own postpartum pass, not this pregnancy's. Tap to switch.`:`復原清單及坐月指南屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。請點按切換。`}</div>
+        <div style={{flex:1,fontSize:'12px',color:C.amber,lineHeight:1.5}}>{isEn?`The postpartum recovery checklist is under ${otherBumpPass.child_full_name||'your other baby'}'s own pass, not this pregnancy's. Tap to switch. (The confinement guide below works for either pass.)`:`產後復原清單屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。請點按切換。(下方坐月指南適用於任何一方。)`}</div>
         {onSwitchBumpSubscription&&<span style={{color:C.amber,fontSize:'18px'}}>›</span>}
       </div>}
       <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
@@ -6806,7 +6838,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       {bumpRow?.child_dob&&<>
         <SecLabel>{isEn?'Postpartum recovery':'產後復原'}</SecLabel>
         <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"The topics a 6-week postpartum check-up usually covers - check off what's been addressed. The last one is a feelings check-in, not a clinical depression screen.":'一般產後6週檢查會涵蓋的項目 - 請勾選已處理的項目。最後一項為情緒自我檢視,並非臨床抑鬱症篩查。'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Based on WHO's 2022 postnatal care guideline and ACOG's \"Fourth Trimester\" recommendation - contact with a provider within 3 weeks, a comprehensive check by 12 weeks, covering physical, feeding, and emotional wellbeing. Check off what's been addressed; the last item is a feelings check-in, not a clinical depression screen.":'根據世衛2022年產後護理指引及美國婦產科學會「第四孕期」建議 - 產後3週內應與醫護聯繫,並於12週內完成全面檢查,涵蓋身體、餵養及情緒健康。請勾選已處理項目;最後一項為情緒自我檢視,並非臨床抑鬱症篩查。'}</div>
           {POSTPARTUM_RECOVERY_ITEMS.map(item=>{
             const checked = recoveryChecks.some(r=>r.item_key===item.key)
             return (
@@ -6817,23 +6849,59 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             )
           })}
         </Card>
-
-        <SecLabel>{isEn?'Confinement (坐月/月子) guide':'坐月/月子指南'}</SecLabel>
-        <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-          {isEn?"Cultural practice, not medical advice - separate from the evidence-based checklist above, not a replacement for it.":'此為文化習俗,並非醫療建議 - 與上方循證復原清單分開,並非取代之。'}
-        </div>
-        {CONFINEMENT_PHASES.map(phase=>(
-          <Card key={phase.week(true)} style={{padding:'12px 14px',marginBottom:'8px'}}>
-            <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{phase.week(isEn)}</div>
-            <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,marginBottom:'6px'}}>{phase.en}</div>
-            <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}><strong>{isEn?'Foods: ':'食物:'}</strong>{phase.foods}</div>
-          </Card>
-        ))}
-        <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
-          <div style={{fontSize:'12px',fontWeight:700,color:C.red,marginBottom:'6px'}}>{isEn?'To limit or avoid':'需限制或避免'}</div>
-          {CONFINEMENT_AVOID.map((a,i)=><div key={i} style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,padding:'3px 0'}}>• {a}</div>)}
-        </Card>
       </>}
+
+      {/* Your call: this is reference content, not clinical data tied to
+          one specific pregnancy pass - it should always be here whether
+          or not you've used it yet, not vanish depending on which Bump
+          pass you're currently viewing. Only the recovery CHECKLIST above
+          stays gated to this pass's own child_dob, since checking off
+          "incision healed" before a birth has happened doesn't mean
+          anything; the guide itself doesn't need that gate. */}
+      <SecLabel>{isEn?'Confinement (坐月/月子) guide':'坐月/月子指南'}</SecLabel>
+      <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+        {isEn?"Cultural practice, not medical advice. The research on confinement specifically preventing postpartum depression is mixed - what seems to matter more is the quality of support you get, not strict adherence to every rule. Each item below is tagged: supported by a real study, cultural tradition (not harmful as described, not independently proven), or refuted by modern medicine.":'此為文化習俗,並非醫療建議。坐月是否能預防產後抑鬱,研究結果並不一致 - 重要的似乎是支援的質素,而非嚴格遵守每項規條。以下每項均標示:有研究支持、傳統習俗(非已知有害,但未有獨立證據)、或現代醫學不認同。'}
+      </div>
+      {CONFINEMENT_PHASES.map(phase=>(
+        <Card key={phase.week.en} style={{padding:'12px 14px',marginBottom:'8px'}}>
+          <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?phase.week.en:phase.week.zh}</div>
+          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,marginBottom:'6px'}}>{isEn?phase.focus.en:phase.focus.zh}</div>
+          <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}><strong>{isEn?'Foods: ':'食物:'}</strong>{isEn?phase.foods.en:phase.foods.zh}</div>
+        </Card>
+      ))}
+      <SecLabel>{isEn?'Herbal remedies (on their own timing)':'中藥調理(獨立時程)'}</SecLabel>
+      {CONFINEMENT_HERBS.map((h,i)=>(
+        <Card key={i} style={{padding:'12px 14px',marginBottom:'8px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
+            <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent}}>{isEn?h.name.en:h.name.zh}</div>
+            <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:C.amberLight,color:C.amber}}>{isEn?'Cultural':'傳統習俗'}</span>
+          </div>
+          <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'4px'}}><strong>{isEn?'Timing: ':'時程:'}</strong>{isEn?h.timing.en:h.timing.zh}</div>
+          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?h.note.en:h.note.zh}</div>
+        </Card>
+      ))}
+      <SecLabel>{isEn?'To limit or avoid':'需限制或避免'}</SecLabel>
+      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
+        {CONFINEMENT_AVOID.map((a,i)=>{
+          const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight}}[a.status]
+          return (
+            <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_AVOID.length-1?`0.5px solid ${C.border}`:'none'}}>
+              <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px'}}>{isEn?tag.en:tag.zh}</span>
+              <span style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?a.en:a.zh}</span>
+            </div>
+          )
+        })}
+      </Card>
+      <SecLabel>{isEn?'Want to go deeper?':'想了解更多?'}</SecLabel>
+      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"These books go into more depth than fits here - referenced, not reproduced.":'以下書籍比本頁更深入 - 僅作參考推薦,並非轉載內容。'}</div>
+        {CONFINEMENT_FURTHER_READING.map((b,i)=>(
+          <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_FURTHER_READING.length-1?`0.5px solid ${C.border}`:'none'}}>
+            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{b.title} <span style={{fontWeight:400,color:C.textMuted}}>— {b.author}</span></div>
+            <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.5}}>{isEn?b.focus.en:b.focus.zh}</div>
+          </div>
+        ))}
+      </Card>
       </>}
 
       {bumpTab==='monitoring'&&<>
