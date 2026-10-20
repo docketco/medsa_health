@@ -367,6 +367,7 @@ const PLAN_MANAGER_EMPTY_FORM = {
   covered_categories:[], policy_document_path:'',
   commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
   self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
+  patient_facing_description:'',
 }
 // readOnly: the insurer portal passes this - per your call, going back
 // to the original (pre-refinement) decision, adding/editing a plan is a
@@ -383,6 +384,8 @@ export function PlanManager({ company, readOnly=false }) {
   const [editingId,setEditingId]=useState(null)
   const [form,setForm]=useState(PLAN_MANAGER_EMPTY_FORM)
   const [customFlag,setCustomFlag]=useState('')
+  const [generatingDescription,setGeneratingDescription]=useState(false)
+  const [descriptionError,setDescriptionError]=useState(null)
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
   // Bulk CSV plan import - requested live-testing: a platform partner's
@@ -437,6 +440,32 @@ export function PlanManager({ company, readOnly=false }) {
   function removeFlag(val) {
     setForm(f => ({ ...f, insurer_flags: f.insurer_flags.filter(x=>x!==val) }))
   }
+  // Parking Lot item, built: a patient reading about this plan shouldn't
+  // have to leave Medsa's experience to read the insurer's own PDF -
+  // writes Medsa's own patient-facing description from whatever's
+  // already typed above (name/type/benefits/categories/terms), nothing
+  // new to upload. Proposal only - lands in the textarea below for you
+  // to review and edit, same as every other AI draft in this app.
+  async function generateDescription() {
+    if (!form.plan_name.trim()) return
+    setGeneratingDescription(true); setDescriptionError(null)
+    try {
+      const res = await fetch('/api/insurer/generate_plan_description', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          planName: form.plan_name, planType: form.plan_type,
+          keyBenefits: form.key_benefits, coveredCategories: form.covered_categories,
+          additionalTerms: form.additional_terms,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setDescriptionError(data.error || 'Could not generate a description.'); setGeneratingDescription(false); return }
+      setForm(f => ({ ...f, patient_facing_description: data.draft }))
+    } catch {
+      setDescriptionError('Could not reach the server - try again.')
+    }
+    setGeneratingDescription(false)
+  }
   function buildAutoFillTerms(f) {
     const lines = []
     if (f.covered_categories.length>0) lines.push(`This plan covers: ${f.covered_categories.join(', ')}.`)
@@ -463,6 +492,7 @@ export function PlanManager({ company, readOnly=false }) {
       self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
       auto_buy_on_clean: !!plan.auto_buy_on_clean,
       logo_url: plan.logo_url||'',
+      patient_facing_description: plan.patient_facing_description||'',
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -570,6 +600,7 @@ export function PlanManager({ company, readOnly=false }) {
       // account be silently selected as a checkout destination.
       self_serve_checkout_enabled: connectActive ? form.self_serve_checkout_enabled : false,
       logo_url: form.logo_url || null,
+      patient_facing_description: form.patient_facing_description || null,
     }
     let planId = editingId
     if (editingId) {
@@ -677,6 +708,14 @@ export function PlanManager({ company, readOnly=false }) {
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>What's covered (key benefits)</div>
             <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={3} placeholder="Hospitalisation, outpatient, specialist, dental…"/>
+          </div>
+          <div style={{marginBottom:'12px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+              <div style={{fontSize:'12px',color:C.textSub}}>Patient-facing description - shown instead of linking patients out to your own site</div>
+              <div onClick={generatingDescription?undefined:generateDescription} style={{fontSize:'11px',fontWeight:600,color:generatingDescription?C.textMuted:C.navy,cursor:form.plan_name.trim()?'pointer':'default',whiteSpace:'nowrap'}}>{generatingDescription?'Writing…':'✨ Generate with AI'}</div>
+            </div>
+            <textarea value={form.patient_facing_description} onChange={e=>setForm(f=>({...f,patient_facing_description:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',boxSizing:'border-box'}} rows={5} placeholder="A short, plain-language description patients see on this plan - write your own, or generate a draft above from what you've already entered."/>
+            {descriptionError&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>{descriptionError}</div>}
           </div>
           <BasicCategoriesSection form={form} setForm={setForm}/>
           <div style={{marginBottom:'12px'}}>

@@ -4849,6 +4849,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           // a short comparable summary in Medsa's own UI.
           policyDocumentPath: p.policy_document_path || null,
           keyBenefits: p.key_benefits || null,
+          patientFacingDescription: p.patient_facing_description || null,
         }
       })
       // Real bug this fixes: every insurer-facing screen (Sponsored
