@@ -5525,16 +5525,32 @@ const MILESTONE_AGE_BANDS = [...new Set(MILESTONES.map(m=>m.ageBand.en))]
 // right are genuinely separate, not two copies of one state. Typical
 // eruption ranges are still per TYPE (a real eruption chart doesn't
 // differentiate left vs right timing), just applied to both sides.
+// Redone to actually trace your reference image, not approximate it:
+// teeth arranged around a real ellipse per arch (upper closes into a
+// full oval, lower stays an open horseshoe, exactly like the two
+// stacked shapes in that chart), each tooth rotated to point toward
+// its own arch's center, two shape families (a tapered shield for
+// incisors/canines, a rounded square with fissure cracks for molars),
+// pure outline by default - no fill at all until erupted, matching the
+// reference exactly instead of a faded/dashed "ghost" state.
 const TOOTH_TYPE_INFO = [
-  { type:'central-incisor', en:'Central incisor', zh:'中切牙', upperTypical:'8–12 months', lowerTypical:'6–10 months', shape:'incisor' },
-  { type:'lateral-incisor', en:'Lateral incisor', zh:'側切牙', upperTypical:'9–13 months', lowerTypical:'10–16 months', shape:'incisor' },
-  { type:'canine', en:'Canine', zh:'犬齒', upperTypical:'16–22 months', lowerTypical:'17–23 months', shape:'canine' },
+  { type:'central-incisor', en:'Central incisor', zh:'中切牙', upperTypical:'8–12 months', lowerTypical:'6–10 months', shape:'front' },
+  { type:'lateral-incisor', en:'Lateral incisor', zh:'側切牙', upperTypical:'9–13 months', lowerTypical:'10–16 months', shape:'front' },
+  { type:'canine', en:'Canine', zh:'犬齒', upperTypical:'16–22 months', lowerTypical:'17–23 months', shape:'front' },
   { type:'first-molar', en:'First molar', zh:'第一乳臼齒', upperTypical:'13–19 months', lowerTypical:'14–18 months', shape:'molar' },
   { type:'second-molar', en:'Second molar', zh:'第二乳臼齒', upperTypical:'25–33 months', lowerTypical:'23–31 months', shape:'molar' },
 ]
 const TOOTH_TYPE_ORDER = TOOTH_TYPE_INFO.map(t=>t.type)
-const TOOTH_TYPE_OFFSET = { 'central-incisor':13, 'lateral-incisor':30, 'canine':47, 'first-molar':68, 'second-molar':90 }
-const TOOTH_TYPE_WIDTH = { 'central-incisor':13, 'lateral-incisor':14, 'canine':13, 'first-molar':19, 'second-molar':21 }
+// Degrees from the arch's own bottom-center (90°), per type, per arch -
+// upper reaches almost all the way around (closed oval, small gap at
+// the back/top); lower stops well short (open horseshoe, wide gap at
+// the top) - this is what actually produces the two different shapes
+// in the reference, not a styling difference, a layout one.
+const TOOTH_TYPE_ARC_DEGREES = {
+  upper: { 'central-incisor':20, 'lateral-incisor':52, 'canine':84, 'first-molar':116, 'second-molar':148 },
+  lower: { 'central-incisor':18, 'lateral-incisor':42, 'canine':66, 'first-molar':90, 'second-molar':114 },
+}
+const TOOTH_TYPE_WIDTH = { 'central-incisor':13, 'lateral-incisor':14, 'canine':14, 'first-molar':19, 'second-molar':20 }
 const TEETH = ['upper','lower'].flatMap(arch => ['left','right'].flatMap(side => TOOTH_TYPE_INFO.map(info => ({
   key: `${arch}-${side}-${info.type}`,
   en: `${side==='left'?'Left':'Right'} ${arch} ${info.en.toLowerCase()}`,
@@ -6227,38 +6243,47 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Tap a tooth: it fills in white when it's erupted, tap again and it's taken off when it falls out. Each tap logs today's real date, editable below. Typical timing per the ADA's own eruption chart - it varies widely between children.":'輕按牙齒:萌出時會填滿白色,脫落時再按一下便會移除。每次點按都會記錄當日實際日期,並可在下方編輯。一般時間參考美國牙科協會(ADA)萌牙時間表 - 每個孩子差異很大。'}</div>
-        <svg viewBox="0 0 300 180" style={{width:'100%',maxWidth:300,display:'block',margin:'0 auto 10px'}}>
-          <line x1="50" y1="90" x2="250" y2="90" stroke={C.border} strokeWidth="0.75" strokeDasharray="2,3"/>
+        <svg viewBox="0 0 220 300" style={{width:'100%',maxWidth:220,display:'block',margin:'0 auto 10px'}}>
           {TEETH.map(t => {
             const [arch, side] = t.key.split('-')
             const logged = teethLog.find(l=>l.tooth_key===t.key)
             const stage = logged?.lost_at ? 'lost' : logged?.erupted_at ? 'erupted' : 'none'
             const w = TOOTH_TYPE_WIDTH[t.type]
-            const offset = TOOTH_TYPE_OFFSET[t.type]
-            const h = 22
-            const cx = 150 + (side==='left' ? -offset : offset)
-            const curve = offset*0.16
-            const cy = arch==='upper' ? (54+curve) : (126-curve)
+            const h = 24
+            const ecx = 110, ecy = arch==='upper' ? 75 : 225, erx = 85, ery = 68
+            const deg = 90 + (side==='left' ? 1 : -1) * TOOTH_TYPE_ARC_DEGREES[arch][t.type]
+            const rad = deg * Math.PI / 180
+            const cx = ecx + erx*Math.cos(rad), cy = ecy + ery*Math.sin(rad)
+            const rotation = deg + 90
             const selected = selectedTooth===t.key
             // "Taken off" - no tooth shape at all once it's fallen out,
-            // just a faint dashed gap on the gumline so there's still
+            // just a visible dashed gap on the arch so there's still
             // something to tap (view dates, Undo) without it reading
             // as "not erupted yet."
             if (stage==='lost') {
-              return <ellipse key={t.key} cx={cx} cy={cy} rx={w/2-1} ry={3.5}
+              return <ellipse key={t.key} cx={cx} cy={cy} rx={w/2-1} ry={3.5} transform={`rotate(${rotation} ${cx} ${cy})`}
                 fill="none" stroke={selected?__theme.accent:C.textMuted} strokeWidth={selected?1.75:1.25} strokeDasharray="2,2"
                 onClick={()=>setSelectedTooth(t.key)} style={{cursor:'pointer'}}/>
             }
-            const fillOpacity = stage==='erupted' ? 1 : 0.12
-            const stroke = selected ? __theme.accent : (stage==='erupted' ? C.text : C.border)
-            const strokeW = selected ? 2 : 1.1
-            const dash = stage==='none' ? '2,2' : 'none'
-            const rx = t.shape==='molar' ? w*0.22 : t.shape==='canine' ? w*0.3 : w*0.42
-            const flip = arch==='lower'
+            // Pure outline by default - no fill at all until erupted,
+            // same look as the reference chart. Erupted fills the exact
+            // same shape solid white; nothing about the outline itself
+            // changes between the two states.
+            const fillOpacity = stage==='erupted' ? 1 : 0
+            const stroke = selected ? __theme.accent : '#2b2b2b'
+            const strokeW = selected ? 2 : 1
+            const r = 3
+            const frontPath = `M${-w/2+r},${-h/2} Q${-w/2},${-h/2} ${-w/2},${-h/2+r} L${-w*0.22},${h/2-5} Q${-w*0.2},${h/2} 0,${h/2} Q${w*0.2},${h/2} ${w*0.22},${h/2-5} L${w/2},${-h/2+r} Q${w/2},${-h/2} ${w/2-r},${-h/2} Z`
             return (
-              <g key={t.key} transform={`translate(${cx},${cy}) ${flip?'rotate(180)':''}`} onClick={()=>handleToothTap(t.key)} style={{cursor:'pointer'}}>
-                <rect x={-w/2} y={-h/2} width={w} height={h} rx={rx} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW} strokeDasharray={dash}/>
-                {t.shape==='canine' && <path d={`M${-w*0.16},${h/2-2} L0,${h/2+4} L${w*0.16},${h/2-2} Z`} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW*0.8}/>}
+              <g key={t.key} transform={`translate(${cx},${cy}) rotate(${rotation})`} onClick={()=>handleToothTap(t.key)} style={{cursor:'pointer'}}>
+                {t.shape==='front'
+                  ? <path d={frontPath} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW}/>
+                  : <rect x={-w/2} y={-h/2} width={w} height={h} rx={w*0.3} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW}/>}
+                {t.shape==='molar' && <>
+                  <line x1="0" y1={-h*0.18} x2="0" y2={-h*0.38} stroke={stroke} strokeWidth="0.75"/>
+                  <line x1="0" y1={-h*0.18} x2={-w*0.22} y2={h*0.3} stroke={stroke} strokeWidth="0.75"/>
+                  <line x1="0" y1={-h*0.18} x2={w*0.2} y2={h*0.35} stroke={stroke} strokeWidth="0.75"/>
+                </>}
               </g>
             )
           })}
