@@ -5858,6 +5858,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // (not auto-matched against the generic vaccinations table - see the
   // migration note for why).
   async function toggleImmunizationDose(key) {
+    if (isReadOnly) return
     const existing = immunizationChecks.find(c=>c.dose_key===key)
     if (existing) {
       await supabase.from('kids_immunization_checks').delete().eq('id', existing.id)
@@ -5878,6 +5879,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // the whole way to adulthood, just without a misleading number).
   const ageDaysNow = patient.date_of_birth ? ageDaysBetween(patient.date_of_birth, new Date().toISOString().slice(0,10)) : null
   const pastWhoRange = ageDaysNow!=null && ageDaysNow > WHO_MAX_AGE_DAYS
+  // Permanent read-only, your call - never auto-deleted. This flips true
+  // once an admin has flagged this profile overdue (pending_deletion_at
+  // set via medsa-admin's Adult Transfers sweep) AND the 30-day grace
+  // window on that flag has passed - same condition medsa-admin's own
+  // pastGraceWindow() checks, just read-only instead of delete-eligible.
+  // Every write function below checks this first and no-ops if true;
+  // the only way out is one of the 3 actions on Home's banner (transfer/
+  // convert/export), none of which live in this component anymore.
+  const isReadOnly = !!patient.pending_deletion_at && (Date.now() - new Date(patient.pending_deletion_at).getTime() >= 30*86400000)
   const [showGrowthConfetti,setShowGrowthConfetti] = useState(false)
   useEffect(() => {
     if (pastWhoRange && patient.id && !patient.growth_journal_transition_seen_at) {
@@ -5894,9 +5904,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // the moment the baby falls asleep doesn't have to remember or re-enter
   // a time later, and the duration is computed automatically rather than
   // typed in.
-  function startSleepSession() { setSleepSession({ startedAt:new Date(), sleepType:sleepForm.sleepType }) }
+  function startSleepSession() { if (isReadOnly) return; setSleepSession({ startedAt:new Date(), sleepType:sleepForm.sleepType }) }
   async function finishSleepSession() {
-    if (!sleepSession || !patient?.id) return
+    if (!sleepSession || !patient?.id || isReadOnly) return
     setSaving(true)
     await supabase.from('kids_sleep_logs').insert({
       patient_id: patient.id,
@@ -5907,7 +5917,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setSleepSession(null)
     await load(); setSaving(false)
   }
-  async function deleteSleepLog(id) { await supabase.from('kids_sleep_logs').delete().eq('id', id); load() }
+  async function deleteSleepLog(id) { if (isReadOnly) return; await supabase.from('kids_sleep_logs').delete().eq('id', id); load() }
   useEffect(() => {
     if (!sleepSession) return
     const interval = setInterval(() => setSleepTick(t=>t+1), 30000)
@@ -5915,11 +5925,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   }, [sleepSession])
 
   async function addDiaperLog(diaperType) {
-    if (!patient?.id) return
+    if (!patient?.id || isReadOnly) return
     await supabase.from('kids_diaper_logs').insert({ patient_id: patient.id, diaper_type: diaperType })
     load()
   }
-  async function deleteDiaperLog(id) { await supabase.from('kids_diaper_logs').delete().eq('id', id); load() }
+  async function deleteDiaperLog(id) { if (isReadOnly) return; await supabase.from('kids_diaper_logs').delete().eq('id', id); load() }
 
   // kp-05 - pediatric ER prep package: the same export mechanism as kp-04,
   // just a tighter 24-hour window and pulling in feeding + diaper output
@@ -5987,7 +5997,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // pediatric visit. "Recent" = last 14 days, same cutoff a doctor would
   // actually want context on for an acute visit.
   async function addSymptomLog() {
-    if (!patient?.id || (!symptomForm.temperatureC && !symptomForm.symptoms)) return
+    if (!patient?.id || isReadOnly || (!symptomForm.temperatureC && !symptomForm.symptoms)) return
     setSaving(true)
     await supabase.from('kids_symptom_logs').insert({
       patient_id: patient.id,
@@ -5998,7 +6008,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setSymptomForm({ temperatureC:'', symptoms:'', medicationGiven:'' })
     await load(); setSaving(false)
   }
-  async function deleteSymptomLog(id) { await supabase.from('kids_symptom_logs').delete().eq('id', id); load() }
+  async function deleteSymptomLog(id) { if (isReadOnly) return; await supabase.from('kids_symptom_logs').delete().eq('id', id); load() }
 
   // kp-02 - AI OCR for a photographed medication label, so "medication
   // given" doesn't have to be typed by hand. Only ever fills the text
@@ -6067,7 +6077,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // the Home screen's alert feed, just a longer window since MCHC visits
   // are scheduled weeks out, not booked same-week.
   async function addMchcAppointment() {
-    if (!patient?.id || !mchcForm.appointmentAt) return
+    if (!patient?.id || isReadOnly || !mchcForm.appointmentAt) return
     setSaving(true)
     // mchcForm.appointmentAt is a <input type="datetime-local"> value
     // ("YYYY-MM-DDTHH:MM") with no timezone of its own - `new Date(...)` on
@@ -6085,11 +6095,12 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setMchcForm({ appointmentAt:'', note:'' })
     await load(); setSaving(false)
   }
-  async function deleteMchcAppointment(id) { await supabase.from('kids_mchc_appointments').delete().eq('id', id); load() }
+  async function deleteMchcAppointment(id) { if (isReadOnly) return; await supabase.from('kids_mchc_appointments').delete().eq('id', id); load() }
   const nextMchcAppointment = mchcAppointments.find(a => new Date(a.appointment_at).getTime() > Date.now() - 24*60*60*1000)
   const mchcAppointmentSoon = nextMchcAppointment && (new Date(nextMchcAppointment.appointment_at).getTime() - Date.now() < 7*24*60*60*1000)
 
   async function toggleMilestone(key) {
+    if (isReadOnly) return
     const existing = milestoneChecks.find(m=>m.milestone_key===key)
     if (existing) {
       await supabase.from('kids_milestone_checks').delete().eq('id', existing.id)
@@ -6138,6 +6149,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     return Math.min(1, Math.max(TOOTH_BASELINE_OPACITY, frac))
   }
   async function setToothStage(key, stage, dateStr) {
+    if (isReadOnly) return
     const existing = teethLog.find(t=>t.tooth_key===key)
     const col = stage==='erupted' ? 'erupted_at' : 'lost_at'
     if (!existing) {
@@ -6153,6 +6165,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // only ever existed for the fall-out (the common case now), removes
   // the row outright so nothing empty lingers.
   async function clearToothStage(key, stage) {
+    if (isReadOnly) return
     const existing = teethLog.find(t=>t.tooth_key===key)
     if (!existing) return
     if (stage==='erupted') { await supabase.from('kids_teeth_log').delete().eq('id', existing.id) }
@@ -6220,7 +6233,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   }
 
   async function addGrowthLog() {
-    if (!patient?.id || !gForm.recordedAt) return
+    if (!patient?.id || isReadOnly || !gForm.recordedAt) return
     setSaving(true)
     await supabase.from('kids_growth_logs').insert({
       patient_id: patient.id, recorded_at: gForm.recordedAt,
@@ -6232,10 +6245,10 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load()
     setSaving(false)
   }
-  async function deleteGrowthLog(id) { await supabase.from('kids_growth_logs').delete().eq('id', id); load() }
+  async function deleteGrowthLog(id) { if (isReadOnly) return; await supabase.from('kids_growth_logs').delete().eq('id', id); load() }
 
   async function addFeedingLog() {
-    if (!patient?.id) return
+    if (!patient?.id || isReadOnly) return
     setSaving(true)
     await supabase.from('kids_feeding_logs').insert({
       patient_id: patient.id, feeding_type: fForm.type,
@@ -6247,7 +6260,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load()
     setSaving(false)
   }
-  async function deleteFeedingLog(id) { await supabase.from('kids_feeding_logs').delete().eq('id', id); load() }
+  async function deleteFeedingLog(id) { if (isReadOnly) return; await supabase.from('kids_feeding_logs').delete().eq('id', id); load() }
 
   // General record-keeping, not login - HK residents first register for
   // an HKID around age 11, well before the earliest adult-transfer
@@ -6260,6 +6273,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [hkidInput,setHkidInput]=useState(patient.hkid||'')
   const [savingHkid,setSavingHkid]=useState(false)
   async function saveHkid() {
+    if (isReadOnly) return
     setSavingHkid(true)
     await supabase.from('patients').update({ hkid: hkidInput||null }).eq('id', patient.id)
     setSavingHkid(false)
@@ -6267,6 +6281,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   }
   const [settingSex,setSettingSex]=useState(false)
   async function setSex(sex) {
+    if (isReadOnly) return
     setSettingSex(true)
     await supabase.from('patients').update({ sex }).eq('id', patient.id)
     setSettingSex(false)
@@ -6314,6 +6329,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           </div>
         </div>
       </Card>
+
+      {isReadOnly&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12px',color:C.red,fontWeight:700,marginBottom:'4px'}}>{isEn?'This profile is permanently read-only':'此檔案現為永久唯讀'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5}}>{isEn?"It's over a year past 18 with no choice made, so new entries can't be added here. Nothing is deleted - every past record stays exactly as it is. Transfer it to their own account, convert it to a Guardian dependent, or export a keepsake record from the banner on Home to unlock it again.":'此檔案已超過18歲一年,但仍未作任何選擇,故無法新增記錄。所有過往記錄將完整保留,不會被刪除。請於主頁橫幅中選擇轉移為本人帳戶、轉為Guardian受養人,或匯出紀念記錄,以重新解鎖。'}</div>
+      </div>}
 
       {!patient.sex&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
         <div style={{fontSize:'12px',color:C.amber,fontWeight:600,marginBottom:'8px'}}>{isEn?"Set this profile's sex to see the WHO growth percentile chart - the reference curves differ by sex.":'請設定此檔案的性別以查看WHO生長百分比圖 - 參考曲線因性別而異。'}</div>
