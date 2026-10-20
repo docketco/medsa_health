@@ -6531,6 +6531,34 @@ const POSTPARTUM_RECOVERY_ITEMS = [
 // isn't in hand here, and this is exactly the kind of wording where an
 // unverified machine translation of a validated instrument could shift
 // what's actually being asked - not guessing it.
+// bc-10 - urgent maternal warning signs, during pregnancy and up to a
+// year postpartum. Real content, cross-referenced against several state
+// health department reproductions of the same ACOG/AIM (Alliance for
+// Innovation on Maternal Health) "Urgent Maternal Warning Signs"
+// resource (Texas DSHS, Michigan MDHHS, Tennessee DOH, Boston Medical
+// Center) - not ACOG's own copyrighted wording verbatim (their site
+// wasn't reachable from this environment to pull exact text), but the
+// same real symptom set every one of those independent reproductions
+// agrees on. It's a single list, not tiered by urgency, with one
+// instruction that applies to every item - corrects an earlier assumed
+// "call 911 / call your doctor / mention at next visit" tiering that
+// turned out not to be how the real source is actually structured.
+const URGENT_WARNING_SIGNS = [
+  { en:'Headache that is severe or does not go away', zh:'嚴重或持續不退的頭痛' },
+  { en:'Dizziness or fainting', zh:'頭暈或暈厥' },
+  { en:'Changes in vision', zh:'視力變化' },
+  { en:'Fever over 38°C (100.4°F)', zh:'體溫超過38°C' },
+  { en:'Trouble breathing', zh:'呼吸困難' },
+  { en:'Chest pain or a fast or irregular heartbeat', zh:'胸痛或心跳過快/不規律' },
+  { en:'Severe belly pain that does not go away', zh:'嚴重且持續不退的腹痛' },
+  { en:'Severe nausea or vomiting', zh:'嚴重噁心或嘔吐' },
+  { en:'Vaginal bleeding or fluid leaking, or foul-smelling discharge', zh:'陰道出血、漏液,或有異味的分泌物' },
+  { en:'Swelling, redness, or pain in a leg or arm', zh:'腿部或手臂腫脹、發紅或疼痛' },
+  { en:'Extreme swelling of your hands or face', zh:'手部或臉部嚴重腫脹' },
+  { en:'Overwhelming tiredness', zh:'極度疲倦' },
+  { en:'Thoughts of harming yourself or your baby', zh:'出現傷害自己或寶寶的想法' },
+  { en:'Baby moving less than usual (during pregnancy)', zh:'胎動比平常減少(懷孕期間)' },
+]
 const EPDS_ITEMS = [
   { key:1, en:'I have been able to laugh and see the funny side of things', options:[
     {points:0, en:'As much as I always could'}, {points:1, en:'Not quite so much now'}, {points:2, en:'Definitely not so much now'}, {points:3, en:'Not at all'},
@@ -7254,6 +7282,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         <div style={{flex:1,fontSize:'12px',color:C.amber,lineHeight:1.5}}>{isEn?`The postpartum recovery checklist is under ${otherBumpPass.child_full_name||'your other baby'}'s own pass, not this pregnancy's. Tap to switch. (The confinement guide below works for either pass.)`:`產後復原清單屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。請點按切換。(下方坐月指南適用於任何一方。)`}</div>
         {onSwitchBumpSubscription&&<span style={{color:C.amber,fontSize:'18px'}}>›</span>}
       </div>}
+      <SecLabel>{isEn?'Urgent warning signs':'緊急警號'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px',border:`1px solid ${C.red}`}}>
+        <div style={{fontSize:'12px',fontWeight:700,color:C.red,marginBottom:'8px',lineHeight:1.6}}>{isEn?"If you have any of these, contact your provider immediately. If you can't reach them, go to the ER or call 999 - don't wait. Applies during pregnancy and up to a year after birth.":'若出現以下任何情況,請立即聯絡您的醫護人員。如無法聯絡,請前往急症室或致電999 - 切勿等待。適用於懷孕期間及產後一年內。'}</div>
+        {URGENT_WARNING_SIGNS.map((s,i)=>(
+          <div key={i} style={{display:'flex',gap:'8px',alignItems:'flex-start',padding:'5px 0'}}>
+            <span style={{color:C.red,fontSize:'12px',marginTop:'1px'}}>●</span>
+            <span style={{fontSize:'12.5px',color:C.text,lineHeight:1.4}}>{isEn?s.en:s.zh}</span>
+          </div>
+        ))}
+        <div style={{fontSize:'10.5px',color:C.textMuted,marginTop:'10px',lineHeight:1.5}}>{isEn?"Not an exhaustive list - if something feels wrong and isn't here, contact your provider anyway. Based on ACOG/AIM's Urgent Maternal Warning Signs resource.":'此清單並非詳盡無遺 - 若感覺不適但未列於上述項目,仍應聯絡您的醫護人員。內容參考ACOG/AIM的緊急孕產警號資源。'}</div>
+      </Card>
+
       <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
