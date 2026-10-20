@@ -2319,11 +2319,16 @@ function InsurerTestRosterScreen() {
 // is scoped to one row the admin explicitly picked.
 // Two-step, human-reviewed sweep for Kids profiles that aged out
 // (dependent_relationship='child', turned 19+) with no adult_transfer_
-// choice on file - never an automatic/unattended delete. Step 1 (Flag
-// for deletion) just stamps pending_deletion_at, starting a real but
-// separately-reviewed 30-day grace window; step 2 (Delete now) only
-// ever appears for a row that's already past that window, and still
-// requires a click naming the exact patient, never a bulk/blind action.
+// choice on file. Your call: permanent read-only, never auto-deleted -
+// real childhood medical history (vaccination records especially) has
+// genuine value far later in life, and storage is cheap compared to
+// the cost of someone losing it for good. Step 1 (Flag) stamps
+// pending_deletion_at, starting a real 30-day grace window; once that
+// passes, the profile goes read-only automatically (PatientApp.jsx's
+// own isReadOnly check, computed live - nothing to do here for that
+// part). "Delete now" below stays only for a genuine manual request
+// (e.g. GDPR-style) - never the expected outcome, and still requires a
+// click naming the exact patient.
 function AdultTransfersTab() {
   const [overdue,setOverdue] = useState([])
   const [pendingDeletion,setPendingDeletion] = useState([])
@@ -2351,7 +2356,7 @@ function AdultTransfersTab() {
     const { error } = await supabase.from('patients').update({ pending_deletion_at: new Date().toISOString() }).eq('id', p.id)
     setBusyId(null)
     if (error) { setNotice(`Error: ${error.message}`); return }
-    setNotice(`${p.full_name} flagged - deletable from ${new Date(Date.now()+30*86400000).toLocaleDateString('en-HK')} if still unclaimed.`)
+    setNotice(`${p.full_name} flagged - goes permanently read-only from ${new Date(Date.now()+30*86400000).toLocaleDateString('en-HK')} if still unclaimed.`)
     load()
   }
   async function deleteNow(p) {
@@ -2368,7 +2373,7 @@ function AdultTransfersTab() {
   return (
     <div>
       <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
-        Kids profiles (dependent_relationship 'child') that turned 19+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Nothing here is automatic: flagging starts a real 30-day grace window, and delete only unlocks once that window has passed. Always check first whether the parent is mid-flow before acting.
+        Kids profiles (dependent_relationship 'child') that turned 19+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Flagging starts a real 30-day grace window, after which the profile goes permanently read-only on its own (never deleted). "Delete now" below is a rare, manual, one-at-a-time action - not the expected outcome. Always check first whether the parent is mid-flow before acting.
       </div>
       {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'12px'}}>{notice}</div>}
       {loading ? <div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div> : <>
@@ -2383,17 +2388,17 @@ function AdultTransfersTab() {
             <button onClick={()=>flagForDeletion(p)} disabled={busyId===p.id} style={{padding:'7px 14px',border:`0.5px solid ${C.amber}`,borderRadius:'8px',background:'#fff',color:C.amber,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===p.id?'…':'Flag for deletion'}</button>
           </div>
         ))}
-        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Flagged, pending final delete ({pendingDeletion.length})</div>
+        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Flagged ({pendingDeletion.length})</div>
         {pendingDeletion.length===0 && <div style={{fontSize:'12px',color:C.textMuted}}>None right now.</div>}
         {pendingDeletion.map(p=>{
           const ready = pastGraceWindow(p.pending_deletion_at)
           return (
-            <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${ready?C.red:C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+            <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${ready?C.border:C.amber}`,borderRadius:'8px',marginBottom:'8px'}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>Flagged {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')} · {ready?'grace window passed':`deletable from ${new Date(new Date(p.pending_deletion_at).getTime()+30*86400000).toLocaleDateString('en-HK')}`}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>Flagged {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')} · {ready?'now permanently read-only (automatic)':`goes read-only from ${new Date(new Date(p.pending_deletion_at).getTime()+30*86400000).toLocaleDateString('en-HK')}`}</div>
               </div>
-              <button onClick={()=>deleteNow(p)} disabled={!ready||busyId===p.id} style={{padding:'7px 14px',border:'none',borderRadius:'8px',background:ready?C.red:C.border,color:'#fff',fontSize:'12px',fontWeight:600,cursor:ready?'pointer':'not-allowed'}}>{busyId===p.id?'…':'Delete now'}</button>
+              <button onClick={()=>{ if(confirm(`Permanently delete ${p.full_name}'s profile and all its records? This cannot be undone - only do this for a genuine manual deletion request.`)) deleteNow(p) }} disabled={!ready||busyId===p.id} title="Rare manual action - the profile is already read-only on its own" style={{padding:'7px 14px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',color:ready?C.red:C.border,fontSize:'12px',fontWeight:600,cursor:ready?'pointer':'not-allowed'}}>{busyId===p.id?'…':'Delete now (manual)'}</button>
             </div>
           )
         })}
