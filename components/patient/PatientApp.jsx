@@ -5586,7 +5586,6 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [sleepTick,setSleepTick]=useState(0) // forces a re-render every 30s so the live elapsed time moves
   const [immunizationChecks,setImmunizationChecks]=useState([])
   const [teethLog,setTeethLog]=useState([])
-  const [teethDateDrafts,setTeethDateDrafts]=useState({})
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
@@ -5844,21 +5843,34 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load()
   }
 
-  async function toggleTooth(key) {
+  // Real gap from your feedback: a tooth's actual lifecycle doesn't end
+  // at eruption - it goes on to get loose and eventually fall out
+  // (replaced by the permanent tooth), each its own dated event worth
+  // recording, not just "in or not." Three independent, sequential date
+  // columns (erupted_at/loose_at/lost_at) on the same row rather than a
+  // single status enum, so each stage keeps its own real date exactly
+  // like erupted_at always has.
+  async function setToothStage(key, stage, dateStr) {
     const existing = teethLog.find(t=>t.tooth_key===key)
-    if (existing) {
-      await supabase.from('kids_teeth_log').delete().eq('id', existing.id)
+    const col = stage==='erupted' ? 'erupted_at' : stage==='loose' ? 'loose_at' : 'lost_at'
+    if (!existing) {
+      if (stage!=='erupted') return // can't skip straight to loose/lost with no row yet
+      await supabase.from('kids_teeth_log').insert({ patient_id: patient.id, tooth_key: key, erupted_at: dateStr })
     } else {
-      const erupted = teethDateDrafts[key] || new Date().toISOString().slice(0,10)
-      await supabase.from('kids_teeth_log').insert({ patient_id: patient.id, tooth_key: key, erupted_at: erupted })
+      await supabase.from('kids_teeth_log').update({ [col]: dateStr }).eq('id', existing.id)
     }
     await load()
   }
-  async function updateToothDate(key, dateStr) {
+  // Clearing a stage also clears whatever came after it - a tooth that's
+  // no longer marked loose can't still be marked fallen out, and
+  // un-erupting one removes the whole row (same as the old toggle).
+  async function clearToothStage(key, stage) {
     const existing = teethLog.find(t=>t.tooth_key===key)
-    if (existing) await supabase.from('kids_teeth_log').update({ erupted_at: dateStr }).eq('id', existing.id)
-    setTeethDateDrafts(prev=>({...prev,[key]:dateStr}))
-    if (existing) await load()
+    if (!existing) return
+    if (stage==='erupted') { await supabase.from('kids_teeth_log').delete().eq('id', existing.id) }
+    else if (stage==='loose') { await supabase.from('kids_teeth_log').update({ loose_at:null, lost_at:null }).eq('id', existing.id) }
+    else { await supabase.from('kids_teeth_log').update({ lost_at:null }).eq('id', existing.id) }
+    await load()
   }
 
   const [exportingPdf,setExportingPdf]=useState(false)
@@ -6169,6 +6181,35 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           </div>
         </>}
       </Card>
+
+      <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Typical eruption ranges per the ADA's own eruption chart - timing varies widely between children and isn't a sign of a problem on its own. Three stages per tooth, each with its own real date: erupted, then loose, then fallen out.":'根據美國牙科協會(ADA)的萌牙時間表,僅供參考 - 每個孩子的萌牙時間差異很大,單純較遲並不代表有問題。每顆牙齒分三階段記錄,各有實際日期:萌出、鬆動、脫落。'}</div>
+        {TEETH.map(t=>{
+          const logged = teethLog.find(l=>l.tooth_key===t.key)
+          const stages = [
+            { key:'erupted', label: isEn?'Erupted':'萌出', date: logged?.erupted_at, enabled: true },
+            { key:'loose', label: isEn?'Loose':'鬆動', date: logged?.loose_at, enabled: !!logged?.erupted_at },
+            { key:'lost', label: isEn?'Fell out':'脫落', date: logged?.lost_at, enabled: !!logged?.loose_at },
+          ]
+          return (
+            <div key={t.key} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+              <div style={{fontSize:'12.5px',color:C.text,textDecoration:logged?.lost_at?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?t.en:t.zh}</div>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px'}}>{isEn?`Typical eruption: ${t.typical}`:`一般萌出時間:${t.typical}`}</div>
+              <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+                {stages.map(s=>(
+                  <div key={s.key} style={{display:'flex',alignItems:'center',gap:'6px',opacity:s.enabled?1:0.4}}>
+                    <div onClick={()=>{ if(!s.enabled) return; s.date ? clearToothStage(t.key,s.key) : setToothStage(t.key,s.key,new Date().toISOString().slice(0,10)) }}
+                      style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${s.date?__theme.accent:C.border}`,background:s.date?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0,cursor:s.enabled?'pointer':'default'}}>{s.date?'✓':''}</div>
+                    <div style={{fontSize:'11px',color:C.textSub}}>{s.label}</div>
+                    {s.date&&<input type="date" value={s.date} onChange={e=>setToothStage(t.key,s.key,e.target.value)} style={{fontSize:'10px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'2px 4px',width:96}}/>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </Card>
       </>}
 
       {kidsTab==='daily'&&<>
@@ -6263,25 +6304,6 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         })}
       </Card>
 
-      <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
-      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Typical eruption ranges per the ADA's own eruption chart - timing varies widely between children and isn't a sign of a problem on its own. Tap when a tooth comes in; the date defaults to today but you can set it to when it actually happened.":'根據美國牙科協會(ADA)的萌牙時間表,僅供參考 - 每個孩子的萌牙時間差異很大,單純較遲並不代表有問題。長出新牙時請點按記錄,日期預設為今天,但您可以改為實際日期。'}</div>
-        {TEETH.map(t=>{
-          const logged = teethLog.find(l=>l.tooth_key===t.key)
-          return (
-            <div key={t.key} style={{display:'flex',gap:'10px',alignItems:'center',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`}}>
-              <div onClick={()=>toggleTooth(t.key)} style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${logged?__theme.accent:C.border}`,background:logged?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,cursor:'pointer'}}>{logged?'✓':''}</div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'12.5px',color:C.text}}>{isEn?t.en:t.zh}</div>
-                <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?`Typical: ${t.typical}`:`一般時間:${t.typical}`}</div>
-              </div>
-              {logged
-                ? <input type="date" value={logged.erupted_at} onChange={e=>updateToothDate(t.key,e.target.value)} style={{fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'4px 6px',width:110}}/>
-                : <div style={{fontSize:'10px',color:C.textMuted,width:110,textAlign:'right'}}>{isEn?'Not yet':'尚未'}</div>}
-            </div>
-          )
-        })}
-      </Card>
       </>}
     </div>
   )
