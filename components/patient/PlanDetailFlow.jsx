@@ -464,6 +464,12 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             {plan.patientFacingDescription
               ? <div style={{fontSize:'13px',color:C.text,lineHeight:1.7,marginTop:'10px',whiteSpace:'pre-line'}}>{plan.patientFacingDescription}</div>
               : plan.keyBenefits&&<div style={{fontSize:'13px',color:C.text,lineHeight:1.6,marginTop:'10px'}}>{plan.keyBenefits}</div>}
+            {/* Plain suitability filter - reads the insurer's own stated
+                terms (insurer_flags, pre_existing_condition_policy)
+                against the patient's own conditions already on file.
+                Never blocks "Inquire" below - informational only, same
+                as "reads published terms, makes no judgment call." */}
+            {plan.suitability&&<div style={{fontSize:'12.5px',color:plan.suitability.verdict==='suitable'?C.green:C.amber,marginTop:'10px',fontWeight:600}}>{plan.suitability.verdict==='suitable'?'✓ ':'⚠ '}{plan.suitability.reason}</div>}
             {plan.waitingPeriodDays!=null&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>Waiting period: {plan.waitingPeriodDays} days for new conditions.</div>}
             {plan.price!=null&&<div style={{fontSize:'18px',fontWeight:700,color:C.navy,marginTop:'12px'}}>Estimated HK${plan.price}/mo</div>}
             {/* Legal T&Cs only, not the main description anymore - kept

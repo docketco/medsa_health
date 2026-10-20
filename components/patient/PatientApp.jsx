@@ -4817,6 +4817,27 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
         // Real matching: does the patient have a condition this plan explicitly
         // covers? This is deterministic overlap-checking, not AI - see chat.
         const matchedConditions = conditionNames.filter(c => coveredLower.some(cov => cov.includes(c) || c.includes(cov)))
+        // Plain suitability filter, built per your call: no declaration
+        // wizard, no flagged-for-a-human state - just the patient's own
+        // conditions already on file, read against the insurer's own
+        // stated terms (insurer_flags, pre_existing_condition_policy),
+        // same deterministic text-match style as matchedConditions
+        // above. Never a judgment call Medsa makes - purely "does this
+        // match what the insurer themselves published." Null when the
+        // patient has nothing on file to check in the first place.
+        let suitability = null
+        if (conditionNames.length > 0) {
+          const insurerFlagsLower = (p.insurer_flags||[]).map(f=>f.toLowerCase())
+          const flaggedConditions = conditionNames.filter(c => insurerFlagsLower.some(f => f.includes(c) || c.includes(f)))
+          const unmatchedConditions = conditionNames.filter(c => !matchedConditions.includes(c))
+          if (flaggedConditions.length > 0) {
+            suitability = { verdict:'check', reason: `This insurer flags "${flaggedConditions[0]}" for review before buying` }
+          } else if (p.pre_existing_condition_policy==='excluded' && unmatchedConditions.length>0) {
+            suitability = { verdict:'check', reason: `This plan excludes pre-existing conditions, and "${unmatchedConditions[0]}" isn't in its covered list` }
+          } else {
+            suitability = { verdict:'suitable', reason: 'Matches the conditions you have on file' }
+          }
+        }
         const tiers = p.insurance_plan_pricing_tiers || []
         const myTier = patientAge!=null ? tiers.find(t => patientAge>=t.age_min && patientAge<=t.age_max) : null
         return {
@@ -4834,7 +4855,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           sponsored: p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr,
           sponsorDescription: p.sponsor_description||null, sponsorThumbnailUrl: p.sponsor_thumbnail_url||null,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
-          matchedConditions, isMatched: matchedConditions.length > 0,
+          matchedConditions, isMatched: matchedConditions.length > 0, suitability,
           requiresAgent: !!p.requires_agent,
           waitingPeriodDays: p.waiting_period_days ?? null,
           preExistingConditionPolicy: p.pre_existing_condition_policy || null,
@@ -5257,6 +5278,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                 </div>
                 <div style={{fontSize:'15px',fontWeight:700}}>{plan.name}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{plan.company}</div>
+                {plan.suitability&&<div style={{fontSize:'11px',color:plan.suitability.verdict==='suitable'?C.green:C.amber,marginTop:'3px'}}>{plan.suitability.verdict==='suitable'?'✓ ':'⚠ '}{plan.suitability.reason}</div>}
               </div>
               <div style={{textAlign:'right',flexShrink:0}}>
                 {plan.priceUnavailable
