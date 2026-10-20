@@ -36,7 +36,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -46,6 +46,7 @@ export default function MedsaAdminPage() {
       {tab==='carousel' && <CarouselTab/>}
       {tab==='plans' && <AdminPlansTab/>}
       {tab==='confinement' && <ConfinementHelpersTab/>}
+      {tab==='verifiedpros' && <VerifiedProsTab/>}
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
@@ -1865,6 +1866,70 @@ function ConfinementHelpersTab() {
   )
 }
 
+// The half of bc-04 that was deliberately left unbuilt at the time -
+// "a real admin-side professional-verification workflow that doesn't
+// exist yet." This is that workflow: search a patient by name/Medsa
+// ID, grant/revoke the badge and set their title. BumpCohortScreen
+// reads is_verified_perinatal_professional off the poster's own patient
+// row to show it next to their posts/replies.
+function VerifiedProsTab() {
+  const [search, setSearch] = useState('')
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [titleDrafts, setTitleDrafts] = useState({})
+
+  async function runSearch() {
+    if (!search.trim()) { setResults([]); return }
+    setLoading(true)
+    const { data } = await supabase.from('patients').select('id, full_name, medsa_id, is_verified_perinatal_professional, verified_professional_title')
+      .or(`full_name.ilike.%${search.trim()}%,medsa_id.ilike.%${search.trim()}%`).limit(20)
+    setResults(data||[])
+    setLoading(false)
+  }
+
+  async function toggleVerified(p) {
+    const title = (titleDrafts[p.id] ?? p.verified_professional_title ?? '').trim()
+    await supabase.from('patients').update({
+      is_verified_perinatal_professional: !p.is_verified_perinatal_professional,
+      verified_professional_title: !p.is_verified_perinatal_professional ? (title||'Lactation Consultant') : p.verified_professional_title,
+    }).eq('id', p.id)
+    runSearch()
+  }
+  async function saveTitle(p) {
+    const title = (titleDrafts[p.id] ?? '').trim()
+    if (!title) return
+    await supabase.from('patients').update({ verified_professional_title: title }).eq('id', p.id)
+    runSearch()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Grant the verified badge to a real lactation consultant, midwife, or similar perinatal professional before they post in the Bump due-date cohort discussions (bc-04) - a "Verified" badge with no verification behind it would be worse than none at all, so check their credentials yourself before toggling this.</div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&runSearch()} placeholder="Search by name or Medsa ID…" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <button onClick={runSearch} style={{padding:'10px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>Search</button>
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&results.map(p=>(
+        <div key={p.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'8px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.full_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.medsa_id}</div>
+            </div>
+            <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:p.is_verified_perinatal_professional?C.greenLight:C.card,color:p.is_verified_perinatal_professional?C.green:C.textMuted,fontWeight:600}}>{p.is_verified_perinatal_professional?'Verified':'Not verified'}</span>
+          </div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <input defaultValue={p.verified_professional_title||''} onChange={e=>setTitleDrafts(prev=>({...prev,[p.id]:e.target.value}))} onBlur={()=>p.is_verified_perinatal_professional&&saveTitle(p)} placeholder="Title (e.g. IBCLC Lactation Consultant)" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+            <button onClick={()=>toggleVerified(p)} style={{padding:'8px 14px',background:p.is_verified_perinatal_professional?C.card:C.green,color:p.is_verified_perinatal_professional?C.text:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>{p.is_verified_perinatal_professional?'Revoke':'Grant badge'}</button>
+          </div>
+        </div>
+      ))}
+      {!loading&&search&&results.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No matches.</div>}
+    </div>
+  )
+}
+
 function parseCSV(text) {
   const lines = text.trim().split('\n')
   const headers = lines[0].split(',').map(h=>h.trim())
@@ -2003,6 +2068,16 @@ function ForumModerationTab() {
     await supabase.from('forum_products').update({ sponsored_by: sponsorName.trim()||null }).eq('id', product.id)
     searchProductsForSponsor()
   }
+  // Your call: Kids commerce/brand affiliates should be the same model
+  // as this one - a brand sponsors a product thread, set here, no
+  // separate affiliate-click-tracking system. 'category' already
+  // existed on forum_products but nothing ever set or read it; this is
+  // what actually turns that into Kids-relevant surfacing (the patient
+  // Community screen filters by it - see CATEGORY_FILTERS there).
+  async function setCategory(product, category) {
+    await supabase.from('forum_products').update({ category: category||null }).eq('id', product.id)
+    searchProductsForSponsor()
+  }
 
   // Product photos are admin-set only, never patient-uploaded - same
   // reasoning as ads: Medsa doesn't want to be responsible for curating
@@ -2084,13 +2159,18 @@ function ForumModerationTab() {
               {p.image_url&&<img src={p.image_url} alt="" style={{width:32,height:32,objectFit:'cover',borderRadius:'6px'}}/>}
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored_by?`Sponsored by ${p.sponsored_by}`:'Not sponsored'}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored_by?`Sponsored by ${p.sponsored_by}`:'Not sponsored'}{p.category?` · ${p.category}`:''}</div>
               </div>
             </div>
             <div style={{display:'flex',gap:'6px',flexShrink:0}}>
               <button onClick={()=>setEditingPhotoFor(editingPhotoFor===p.id?null:p.id)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Photo</button>
               <button onClick={()=>setSponsor(p)} style={{padding:'6px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Set sponsor</button>
             </div>
+          </div>
+          <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
+            {[['','General'],['baby_kids','Baby & Kids'],['maternity','Maternity']].map(([v,l])=>(
+              <div key={v} onClick={()=>setCategory(p,v)} style={{padding:'5px 10px',borderRadius:'14px',fontSize:'11px',cursor:'pointer',background:(p.category||'')===v?C.green:C.card,color:(p.category||'')===v?'#fff':C.textSub}}>{l}</div>
+            ))}
           </div>
           {editingPhotoFor===p.id&&<div style={{marginTop:'10px'}}><AdminImagePicker label="" value={p.image_url} onChange={url=>setProductImage(p, url)}/></div>}
         </div>

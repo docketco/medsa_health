@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   const { patientId } = req.body || {}
   if (!patientId) return res.status(400).json({ status: 'ERROR', message: 'patientId is required.' })
 
-  const { data: patient } = await supabase.from('patients').select('id, full_name, phone, guardian_stripe_customer_id').eq('id', patientId).maybeSingle()
+  const { data: patient } = await supabase.from('patients').select('id, full_name, phone, guardian_stripe_customer_id, bump_loyalty_credit_hkd').eq('id', patientId).maybeSingle()
   if (!patient) return res.status(404).json({ status: 'ERROR', message: 'Patient not found.' })
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
@@ -51,23 +51,32 @@ export default async function handler(req, res) {
     await supabase.from('patients').update({ guardian_stripe_customer_id: customerId }).eq('id', patient.id)
   }
 
+  // Bump loyalty redirect lands here, not on a second Bump purchase -
+  // see create_bump_checkout.js/verify_bump_checkout.js. Only ever
+  // reduces this one checkout's price, never goes negative; the credit
+  // itself isn't actually spent until verify_guardian_checkout.js
+  // confirms this session was paid, so an abandoned checkout doesn't
+  // lose it.
+  const creditApplied = Math.min(patient.bump_loyalty_credit_hkd || 0, GUARDIAN_PACKAGE_PRICE_HKD)
+  const netPriceHKD = GUARDIAN_PACKAGE_PRICE_HKD - creditApplied
+
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
     line_items: [{
       price_data: {
         currency: 'hkd',
-        product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)` },
-        unit_amount: Math.round(GUARDIAN_PACKAGE_PRICE_HKD * 100),
+        product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)${creditApplied>0?` (HK$${creditApplied.toFixed(2)} Bump loyalty credit applied)`:''}` },
+        unit_amount: Math.round(netPriceHKD * 100),
         recurring: { interval: 'year' },
       },
       quantity: 1,
     }],
     success_url: `${siteUrl}/patient?guardian_started=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${siteUrl}/patient?guardian_cancelled=1`,
-    metadata: { guardian_patient_id: patientId },
+    metadata: { guardian_patient_id: patientId, guardian_loyalty_credit_applied_hkd: String(creditApplied) },
     subscription_data: { metadata: { guardian_patient_id: patientId } },
   })
 
-  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url })
+  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, creditApplied })
 }

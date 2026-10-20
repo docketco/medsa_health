@@ -4187,6 +4187,11 @@ function ForumScreen({ isEn, patient={} }) {
   const [creating,setCreating]=useState(false)
   const [postRating,setPostRating]=useState(null)
   const [postError,setPostError]=useState(null)
+  // Kids commerce/brand affiliates - your call: same model as this
+  // existing sponsorship system, not a separate affiliate-link/click-
+  // tracking build. 'category' is admin-set (see medsa-admin's Forum
+  // tab), this is just the patient-facing filter on top of it.
+  const [categoryFilter,setCategoryFilter]=useState('')
 
   useEffect(() => {
     async function resolvePatient() {
@@ -4206,7 +4211,8 @@ function ForumScreen({ isEn, patient={} }) {
   useEffect(() => { loadProducts() }, [])
 
   const searchNorm = normalizeProductName(search)
-  const matches = search.trim() ? products.filter(p=>p.canonical_name.toLowerCase().includes(search.toLowerCase().trim())) : products
+  const byCategory = categoryFilter ? products.filter(p=>p.category===categoryFilter) : products
+  const matches = search.trim() ? byCategory.filter(p=>p.canonical_name.toLowerCase().includes(search.toLowerCase().trim())) : byCategory
 
   async function handleOpenThread(product) {
     setActiveProduct(product)
@@ -4356,7 +4362,12 @@ function ForumScreen({ isEn, patient={} }) {
     <div>
       <div style={{padding:'16px'}}>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>{isEn?'Discuss supplements and healthcare products with other verified Medsa patients - anonymously.':'與其他已驗證的Medsa患者匿名討論保健品和醫療產品。'}</div>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={isEn?'Search a product to discuss...':'搜尋想討論的產品...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={isEn?'Search a product to discuss...':'搜尋想討論的產品...'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px'}}/>
+        <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
+          {[['','All'],['baby_kids',isEn?'Baby & Kids':'嬰幼兒'],['maternity',isEn?'Maternity':'孕婦用品']].map(([v,l])=>(
+            <div key={v} onClick={()=>setCategoryFilter(v)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',border:`1px solid ${categoryFilter===v?__theme.accent:C.border}`,background:categoryFilter===v?__theme.accentXLight:'#fff',color:categoryFilter===v?__theme.accent:C.textSub}}>{l}</div>
+          ))}
+        </div>
         {!loading&&products.length===0&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>{isEn?'Nothing here yet - try searching something like "Vitamin C" or "Fish Oil" to start the first discussion.':'暫時未有內容 - 試試搜尋「維他命C」或「魚油」開始第一個討論。'}</div>}
       </div>
       <div style={{padding:'0 16px'}}>
@@ -7158,11 +7169,11 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
 // brief: a real discussion space grouped by predicted due-date month,
 // since the existing Community tab (forum_products/forum_posts) is a
 // product-review board keyed by product name, not a general discussion
-// space, and doesn't fit this. The "verified badge for a participating
-// lactation consultant or midwife" half of the brief is NOT built here -
-// that needs a real admin-side professional-verification workflow that
-// doesn't exist yet, and a "Verified" badge with no actual verification
-// behind it would be worse than no badge at all. Posts show a stable,
+// space, and doesn't fit this. ✅ The "verified badge for a participating
+// lactation consultant or midwife" half is now built too - see
+// medsa-admin's "Verified Pros" tab (VerifiedProsTab) for the admin-side
+// grant/revoke workflow; posts/replies read the badge straight off the
+// poster's own patients row. Posts show a stable,
 // anonymous per-poster handle rather than the patient's real name, same
 // "anonymously" framing as the product Community tab.
 // Report reasons kept short and generic on purpose - this is a flag for a
@@ -7200,7 +7211,7 @@ function BumpCohortScreen({ isEn, patient={} }) {
     const key = sub?.predicted_due_date ? sub.predicted_due_date.slice(0,7) : null
     setCohortKey(key)
     if (key) {
-      const { data } = await supabase.from('bump_cohort_posts').select('*').eq('cohort_key',key).is('hidden_at',null).order('created_at',{ascending:false}).limit(50)
+      const { data } = await supabase.from('bump_cohort_posts').select('*, patients(is_verified_perinatal_professional, verified_professional_title)').eq('cohort_key',key).is('hidden_at',null).order('created_at',{ascending:false}).limit(50)
       setPosts(data||[])
     }
     setLoading(false)
@@ -7216,23 +7227,24 @@ function BumpCohortScreen({ isEn, patient={} }) {
   }
   async function deletePost(id) { await supabase.from('bump_cohort_posts').delete().eq('id', id); load() }
 
+  async function loadReplies(postId) {
+    const { data } = await supabase.from('bump_cohort_replies').select('*, patients(is_verified_perinatal_professional, verified_professional_title)').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
+    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+  }
   async function toggleReplies(postId) {
     if (openReplies[postId]) { setOpenReplies(prev => { const next={...prev}; delete next[postId]; return next }) ; return }
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
-    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+    loadReplies(postId)
   }
   async function addReply(postId) {
     const text = (replyDrafts[postId]||'').trim()
     if (!text) return
     await supabase.from('bump_cohort_replies').insert({ post_id: postId, patient_id: patient.id, body: text })
     setReplyDrafts(prev => ({ ...prev, [postId]: '' }))
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
-    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+    loadReplies(postId)
   }
   async function deleteReply(postId, id) {
     await supabase.from('bump_cohort_replies').delete().eq('id', id)
-    const { data } = await supabase.from('bump_cohort_replies').select('*').eq('post_id',postId).is('hidden_at',null).order('created_at',{ascending:true})
-    setOpenReplies(prev => ({ ...prev, [postId]: data||[] }))
+    loadReplies(postId)
   }
 
   // Reports from 3 distinct people auto-hide the post/reply for everyone -
@@ -7289,6 +7301,7 @@ function BumpCohortScreen({ isEn, patient={} }) {
         <Card key={p.id} style={{padding:'14px 16px',marginBottom:'10px'}}>
           <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}>
             <span style={{fontSize:'11px',fontWeight:700,color:__theme.accent}}>{pseudonym(p.patient_id)}</span>
+            {p.patients?.is_verified_perinatal_professional&&<span style={{fontSize:'9px',fontWeight:700,padding:'2px 7px',borderRadius:'10px',background:C.greenLight,color:C.green}}>✓ {p.patients.verified_professional_title||(isEn?'Verified professional':'認證專業人員')}</span>}
             <span style={{fontSize:'10px',color:C.textMuted}}>{new Date(p.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
             {p.patient_id===patient.id
               ? <span onClick={()=>deletePost(p.id)} style={{marginLeft:'auto',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>✕</span>
@@ -7308,6 +7321,7 @@ function BumpCohortScreen({ isEn, patient={} }) {
               <div key={r.id} style={{marginBottom:'8px'}}>
                 <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
                   <span style={{fontSize:'10.5px',fontWeight:700,color:__theme.accent}}>{pseudonym(r.patient_id)}</span>
+                  {r.patients?.is_verified_perinatal_professional&&<span style={{fontSize:'8.5px',fontWeight:700,padding:'2px 6px',borderRadius:'10px',background:C.greenLight,color:C.green}}>✓ {r.patients.verified_professional_title||(isEn?'Verified':'認證')}</span>}
                   <span style={{fontSize:'9.5px',color:C.textMuted}}>{new Date(r.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
                   {r.patient_id===patient.id
                     ? <span onClick={()=>deleteReply(p.id,r.id)} style={{marginLeft:'auto',fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>✕</span>
@@ -7986,7 +8000,7 @@ function MedsaBumpSection({ isEn, patient, onViewBumpHealth }) {
           a disclosed fee. */}
       <div style={{fontSize:'12px',color:'#fff',fontWeight:600,marginBottom:'2px'}}>{isEn?'HK$888 one-time':'一次性HK$888'}</div>
       <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:'10px'}}>
-        {isEn?"HK$710.40 automatically if you've used Medsa Bump before. A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge.":'如曾使用Medsa Bump,將自動收取HK$710.40。付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。'}
+        {isEn?"A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge. If you've used Medsa Bump before, HK$177.60 (20%) is credited toward your next Medsa Guardian payment instead of a discount here.":'付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。如曾使用Medsa Bump,將獲得HK$177.60(20%)信用額,可用於下次Medsa Guardian付款,而非本次折扣。'}
       </div>
       {whatsIncludedLink}
       <div style={{background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
@@ -8186,7 +8200,10 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a dependent profile</Btn>
             : guardianActive
               ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another dependent profile</Btn>
-              : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
+              : <>
+                  {managingAdult?.bump_loyalty_credit_hkd>0&&<div style={{fontSize:'11px',color:C.green,marginBottom:'6px',textAlign:'center'}}>HK${managingAdult.bump_loyalty_credit_hkd.toFixed(2)} Bump loyalty credit will be applied</div>}
+                  <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
+                </>}
         </div>
       </div>
     </div>
