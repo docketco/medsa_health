@@ -6412,6 +6412,41 @@ function isGlucoseFlagged(contextValue, mgdl) {
   const threshold = GLUCOSE_IADPSG_MGDL[contextValue]
   return threshold != null && mgdl != null && mgdl >= threshold
 }
+// bc-09 - gestational weight-gain guidance, Institute of Medicine (now
+// National Academy of Medicine) 2009 report "Weight Gain During
+// Pregnancy: Reexamining the Guidelines," the figures ACOG itself
+// endorses and republishes (Committee Opinion 548). Singleton ranges
+// are well-established and consistently reproduced across sources
+// (MSD Manual, PMC6434527, JAMA Network Open). Converted to kg since
+// the rest of this app is kg-based; original IOM figures are in lb.
+// Twin ranges are explicitly marked "provisional" by IOM itself
+// (derived from a single study) and secondary sources disagree
+// slightly on the exact bounds - surfaced to the patient as a real
+// caveat rather than presented with the same confidence as the
+// singleton numbers, same "don't overstate a shaky source" rule as
+// everywhere else in this app.
+const WEIGHT_GAIN_RANGES_KG = {
+  singleton: {
+    underweight: { minKg:12.5, maxKg:18 },
+    normal: { minKg:11.5, maxKg:16 },
+    overweight: { minKg:7, maxKg:11.5 },
+    obese: { minKg:5, maxKg:9 },
+  },
+  twin: {
+    // IOM states no established range for underweight twin pregnancies.
+    normal: { minKg:16.8, maxKg:24.5 },
+    overweight: { minKg:14.1, maxKg:22.7 },
+    obese: { minKg:11.3, maxKg:19.1 },
+  },
+}
+function bmiCategory(weightKg, heightCm) {
+  if (!weightKg || !heightCm) return null
+  const bmi = weightKg / ((heightCm/100) ** 2)
+  if (bmi < 18.5) return 'underweight'
+  if (bmi < 25) return 'normal'
+  if (bmi < 30) return 'overweight'
+  return 'obese'
+}
 // "Fourth trimester" postpartum recovery topics - standard patient-
 // education checklist items (what a 6-week postpartum visit typically
 // covers), not a diagnosis or dosing instruction, so safe to author
@@ -6563,11 +6598,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [bumpRow,setBumpRow]=useState(null)
   const [bpLogs,setBpLogs]=useState([])
   const [glucoseLogs,setGlucoseLogs]=useState([])
+  const [weightLogs,setWeightLogs]=useState([])
   const [kickLogs,setKickLogs]=useState([])
   const [documents,setDocuments]=useState([])
   const [loading,setLoading]=useState(true)
   const [bpForm,setBpForm]=useState({systolic:'',diastolic:''})
   const [glucoseForm,setGlucoseForm]=useState({value:'',context:'fasting'})
+  const [weightSetupForm,setWeightSetupForm]=useState({prePregWeightKg:'',prePregHeightCm:'',isTwin:false})
+  const [savingWeightSetup,setSavingWeightSetup]=useState(false)
+  const [weightLogForm,setWeightLogForm]=useState({weightKg:''})
   const [saving,setSaving]=useState(false)
   const [kickSession,setKickSession]=useState(null) // {startedAt, count} while a count is in progress
   const [exportingPdf,setExportingPdf]=useState(false)
@@ -6646,10 +6685,11 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:w},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
+      supabase.from('bump_weight_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:true}),
       supabase.from('bump_kick_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(20),
       patient?.id ? supabase.from('medical_record_attachments').select('*').eq('patient_id',patient.id).in('category', BUMP_DOC_TYPES.map(t=>t.value)).order('uploaded_at',{ascending:false}) : Promise.resolve({data:[]}),
       patient?.id ? supabase.from('allergies').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
@@ -6663,7 +6703,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       supabase.from('bump_journal_entries').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('created_at',{ascending:false}).limit(30),
     ])
     setBumpRow(sub||null)
-    setBpLogs(bp||[]); setGlucoseLogs(g||[]); setKickLogs(k||[]); setDocuments(docs||[])
+    setBpLogs(bp||[]); setGlucoseLogs(g||[]); setWeightLogs(w||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setRecoveryChecks(recovery||[])
     setEpdsScreens(epds||[])
@@ -6673,6 +6713,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
     setJournalEntries(journal||[])
     setBagChecked(sub?.hospital_bag_checked||[])
     if (isInitial) setBirthPlanForm(sub?.birth_plan || { painRelief:'', companions:'', feeding:'', specialRequests:'' })
+    if (isInitial) setWeightSetupForm({ prePregWeightKg: sub?.pre_pregnancy_weight_kg!=null?String(sub.pre_pregnancy_weight_kg):'', prePregHeightCm: sub?.pre_pregnancy_height_cm!=null?String(sub.pre_pregnancy_height_cm):'', isTwin: !!sub?.is_twin_pregnancy })
     setLoading(false)
   }
   useEffect(() => { load(true) }, [bumpSubscriptionId])
@@ -7072,6 +7113,26 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   }
   async function deleteBp(id) { await supabase.from('bump_bp_logs').delete().eq('id', id); load() }
 
+  async function saveWeightSetup() {
+    if (!bumpSubscriptionId || !weightSetupForm.prePregWeightKg || !weightSetupForm.prePregHeightCm) return
+    setSavingWeightSetup(true)
+    await supabase.from('bump_subscriptions').update({
+      pre_pregnancy_weight_kg: Number(weightSetupForm.prePregWeightKg),
+      pre_pregnancy_height_cm: Number(weightSetupForm.prePregHeightCm),
+      is_twin_pregnancy: weightSetupForm.isTwin,
+    }).eq('id', bumpSubscriptionId)
+    await load()
+    setSavingWeightSetup(false)
+  }
+  async function addWeightLog() {
+    if (!bumpSubscriptionId || !weightLogForm.weightKg) return
+    setSaving(true)
+    await supabase.from('bump_weight_logs').insert({ bump_subscription_id:bumpSubscriptionId, weight_kg:Number(weightLogForm.weightKg) })
+    setWeightLogForm({weightKg:''})
+    await load(); setSaving(false)
+  }
+  async function deleteWeightLog(id) { await supabase.from('bump_weight_logs').delete().eq('id', id); load() }
+
   async function addGlucose() {
     if (!bumpSubscriptionId || !glucoseForm.value) return
     setSaving(true)
@@ -7303,6 +7364,56 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       </>}
 
       {bumpTab==='monitoring'&&<>
+      <SecLabel>{isEn?'Weight gain':'體重增長'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        {!bumpRow?.pre_pregnancy_weight_kg ? (
+          <>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Enter your pre-pregnancy weight and height once, so later entries can be checked against real guidance for your BMI category.":'請輸入您的孕前體重及身高(只需一次),日後記錄便可根據您的BMI類別對照實際指引。'}</div>
+            <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
+              <input type="number" value={weightSetupForm.prePregWeightKg} onChange={e=>setWeightSetupForm({...weightSetupForm,prePregWeightKg:e.target.value})} placeholder={isEn?'Pre-pregnancy weight (kg)':'孕前體重 (kg)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+              <input type="number" value={weightSetupForm.prePregHeightCm} onChange={e=>setWeightSetupForm({...weightSetupForm,prePregHeightCm:e.target.value})} placeholder={isEn?'Height (cm)':'身高 (cm)'} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+            </div>
+            <div onClick={()=>setWeightSetupForm({...weightSetupForm,isTwin:!weightSetupForm.isTwin})} style={{display:'flex',alignItems:'center',gap:'8px',cursor:'pointer',marginBottom:'12px'}}>
+              <div style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${weightSetupForm.isTwin?__theme.accent:C.border}`,background:weightSetupForm.isTwin?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0}}>{weightSetupForm.isTwin?'✓':''}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{isEn?'This is a twin pregnancy':'這是雙胞胎妊娠'}</div>
+            </div>
+            <Btn variant="primary" style={{width:'100%'}} disabled={savingWeightSetup||!weightSetupForm.prePregWeightKg||!weightSetupForm.prePregHeightCm} onClick={saveWeightSetup}>{savingWeightSetup?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
+          </>
+        ) : (() => {
+          const category = bmiCategory(bumpRow.pre_pregnancy_weight_kg, bumpRow.pre_pregnancy_height_cm)
+          const range = category ? WEIGHT_GAIN_RANGES_KG[bumpRow.is_twin_pregnancy?'twin':'singleton'][category] : null
+          const latest = weightLogs.length>0 ? weightLogs[weightLogs.length-1] : null
+          const gained = latest ? (latest.weight_kg - bumpRow.pre_pregnancy_weight_kg) : null
+          const status = (gained!=null && range) ? (gained<range.minKg?'below':gained>range.maxKg?'above':'within') : null
+          return (
+            <>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?`Pre-pregnancy: ${bumpRow.pre_pregnancy_weight_kg}kg at ${bumpRow.pre_pregnancy_height_cm}cm${category?` (${category} BMI category)`:''}.`:`孕前:${bumpRow.pre_pregnancy_weight_kg}kg,身高${bumpRow.pre_pregnancy_height_cm}cm${category?`(BMI類別:${category})`:''}。`}</div>
+              {range ? (
+                <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>{isEn
+                  ? `Guidance (IOM/ACOG${bumpRow.is_twin_pregnancy?', twin - provisional, ranges vary across sources':''}): total gain of ${range.minKg}–${range.maxKg}kg for your BMI category.`
+                  : `建議(IOM/ACOG${bumpRow.is_twin_pregnancy?',雙胞胎 - 暫定,各來源數字略有差異':''}):您的BMI類別建議總增重${range.minKg}–${range.maxKg}kg。`}</div>
+              ) : bumpRow.is_twin_pregnancy && category==='underweight' ? (
+                <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{isEn?'No established weight-gain range for underweight twin pregnancies - ask your OBGYN directly.':'暫無雙胞胎體重過輕孕婦的既定增重範圍 - 請直接諮詢婦產科醫生。'}</div>
+              ) : null}
+              {gained!=null && <div style={{fontSize:'13px',fontWeight:700,marginBottom:'10px',color:status==='above'||status==='below'?C.amber:C.text}}>{isEn?`Gained so far: ${gained.toFixed(1)}kg`:`目前累計增重:${gained.toFixed(1)}kg`}{status==='above'?(isEn?' ⚠ above guidance':' ⚠ 高於建議'):status==='below'?(isEn?' ⚠ below guidance':' ⚠ 低於建議'):''}</div>}
+              <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+                <input type="number" value={weightLogForm.weightKg} onChange={e=>setWeightLogForm({weightKg:e.target.value})} placeholder={isEn?'Current weight (kg)':'目前體重 (kg)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+                <Btn variant="primary" disabled={saving||!weightLogForm.weightKg} onClick={addWeightLog}>{isEn?'Add':'新增'}</Btn>
+              </div>
+              <div>
+                {[...weightLogs].reverse().map(w=>(
+                  <div key={w.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                    <span style={{color:C.textMuted,width:120,flexShrink:0}}>{new Date(w.recorded_at).toLocaleDateString('en-HK',{month:'short',day:'numeric',year:'numeric'})}</span>
+                    <span style={{flex:1}}>{w.weight_kg}kg</span>
+                    <span onClick={()=>deleteWeightLog(w.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )
+        })()}
+      </Card>
+
       <SecLabel>{isEn?'Blood pressure':'血壓'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
