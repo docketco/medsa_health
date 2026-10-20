@@ -6538,6 +6538,32 @@ const CONFINEMENT_AVOID = [
   { status:'refuted', en:'Alcohol-based cooking (rice wine, 燒酒) while breastfeeding - alcohol does transfer into breast milk. If used at all, it should be fully cooked off, not added raw, and not while nursing on demand.', zh:'哺乳期間使用酒類烹調(米酒、燒酒等) - 酒精確實會進入母乳。如需使用,必須完全煮至酒精揮發,並非生加,亦不宜在按需餵哺期間使用。' },
   { status:'cultural', en:'Cold & raw foods (salads, raw fruit/veg, ice water, cold desserts) - traditional belief that this stagnates digestion/circulation; not independently proven, but not known to be harmful either.', zh:'生冷食物(沙律、生果生菜、冰水、凍甜品) - 傳統認為會阻滞消化及氣血運行,未有獨立證據證實,但亦非已知有害。' },
   { status:'cultural', en:'Ginger and sesame oil used too early - several sources flag that these can delay wound healing if used before natural birth day 12 / C-section day 21; traditionally held back, not banned outright.', zh:'過早使用薑及麻油 - 多個來源指出,順產12天內、剖腹產21天內使用可能影響傷口癒合;傳統建議延後使用,並非完全禁止。' },
+  { status:'cultural', en:'人參 (ginseng) specifically during confinement and while breastfeeding - unlike general tonics, this one is called out on its own: held to overstimulate uterine contraction too early and to suppress milk supply. Not independently proven, but specific enough to flag separately rather than lump in with "cooling/heating foods" in general.', zh:'坐月及哺乳期間使用人參 - 與一般補品不同,此項被特別獨立提出:認為會過早刺激子宮收縮及抑制奶量。未有獨立證據證實,但顧忌具體,故獨立列出,不歸入一般「寒涼/燥熱食物」。' },
+]
+// Added from real, cited sources on the 42-day core recovery window,
+// activity/bathing timing, and the day-42 checkup convention (sources:
+// shiuanti.com, derchen.com.tw, tinyanco.com.hk, a tsgh.ndmutsgh.edu.tw
+// hospital patient-education page, and scribd-hosted HK/TW confinement
+// references) - the 42-day figure is the clinical postpartum-recovery
+// window (same window the 6-week checkup below is built around), distinct
+// from "月子" colloquially meaning a 30-day month.
+const CONFINEMENT_CORE_PERIOD_NOTE = {
+  en: "The core physical recovery window is about 42 days, not the colloquial 30-day \"month\" (月子) - the uterus, cervix, and any tear/incision site take roughly 6 weeks to heal regardless of how the confinement itself is observed. Hong Kong and Taiwan hospitals schedule the standard postpartum checkup at day 42 for this reason, not day 30.",
+  zh: "核心身體復原期約為42天,並非俗稱的30天「月子」- 子宮、子宮頸及任何撕裂/傷口位置,不論坐月安排如何,一般需約6週才能復原。因此香港及台灣醫院的標準產後檢查多安排在第42天,而非第30天。",
+}
+const CONFINEMENT_ACTIVITY_TIMING = [
+  { key:'mobility',
+    en:'Start getting up and walking a little within 6-12 hours after a vaginal birth (from around 12+ hours after a C-section, once cleared by your care team) - lying still longer than needed raises clot risk rather than helping recovery.',
+    zh:'順產後6至12小時內應開始下床稍作走動;剖腹產則約12小時後(須經醫護確認可下床)。臥床過久並非有助復原,反而會增加血栓風險。' },
+  { key:'bathing',
+    en:'Showering (not a soaking bath) is generally fine from around week 2 for most people - a full bath is held off longer because the cervix is still closing and a soak raises infection risk. If there was a perineal tear, repair, or C-section incision, check timing with your own provider first.',
+    zh:'對大部分人而言,約第2週起可淋浴(非浸浴)- 浸浴需延後較久,因子宮頸仍在閉合中,浸浴會增加感染風險。若有會陰撕裂、縫合或剖腹傷口,應先向醫護確認適合時間。' },
+  { key:'wound_lochia',
+    en:'Keep an eye on your wound (incision/perineal repair) and lochia (postpartum bleeding) as they heal - lochia normally fades from red to pink/brown to light/white over a few weeks. Fresh bright-red bleeding returning after it had slowed, a foul smell, fever, or a wound that\'s increasingly painful/swolling/discharging are not normal - contact your doctor.',
+    zh:'留意傷口(剖腹傷口或會陰縫合)及惡露的復原情況 - 惡露一般會由鮮紅轉為粉/棕色,再轉為淡色/白色,歷時數週。若惡露減少後再次轉為鮮紅、有異味、發燒,或傷口持續疼痛/腫脹/有分泌物,均非正常現象,應聯絡醫生。' },
+  { key:'heavy_lifting',
+    en:"Avoid heavy lifting (anything heavier than carrying your own baby) for the first 4-6 weeks - too much intra-abdominal pressure before the pelvic floor and uterine ligaments have healed raises the risk of uterine prolapse.",
+    zh:'首4至6週避免提重物(抱起嬰兒以外的重物)- 盤底肌肉及子宮韌帶尚未復原時承受過大腹腔壓力,會增加子宮脫垂風險。' },
 ]
 // Not reproduced here (someone else's copyrighted work) - just what each
 // one actually covers, so "I want to go deeper" has a real next step.
@@ -7402,6 +7428,10 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
         {isEn?"Cultural practice, not medical advice. The research on confinement specifically preventing postpartum depression is mixed - what seems to matter more is the quality of support you get, not strict adherence to every rule. Each item below is tagged: supported by a real study, cultural tradition (not harmful as described, not independently proven), or refuted by modern medicine.":'此為文化習俗,並非醫療建議。坐月是否能預防產後抑鬱,研究結果並不一致 - 重要的似乎是支援的質素,而非嚴格遵守每項規條。以下每項均標示:有研究支持、傳統習俗(非已知有害,但未有獨立證據)、或現代醫學不認同。'}
       </div>
+      <Card style={{padding:'12px 14px',marginBottom:'10px',background:C.accentLight||undefined}}>
+        <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'How long is the core recovery window?':'核心復原期有多長?'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>
+      </Card>
       {CONFINEMENT_PHASES.map(phase=>(
         <Card key={phase.week.en} style={{padding:'12px 14px',marginBottom:'8px'}}>
           <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?phase.week.en:phase.week.zh}</div>
@@ -7420,6 +7450,14 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?h.note.en:h.note.zh}</div>
         </Card>
       ))}
+      <SecLabel>{isEn?'Activity, bathing & wound/lochia monitoring':'活動、沐浴及傷口/惡露監察'}</SecLabel>
+      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
+        {CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
+          <div key={a.key} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_ACTIVITY_TIMING.length-1?`0.5px solid ${C.border}`:'none'}}>
+            <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}>{isEn?a.en:a.zh}</div>
+          </div>
+        ))}
+      </Card>
       <SecLabel>{isEn?'To limit or avoid':'需限制或避免'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
         {CONFINEMENT_AVOID.map((a,i)=>{
