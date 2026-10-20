@@ -4,7 +4,7 @@ import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumn
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
-import { ageDaysBetween, percentileBands, growthPercentile } from '../../lib/whoGrowth'
+import { ageDaysBetween, percentileBands, growthPercentile, WHO_MAX_AGE_DAYS } from '../../lib/whoGrowth'
 import { searchPregnancyDrugSafety } from '../../lib/pregnancyDrugSafety'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
@@ -307,7 +307,7 @@ function PullToRefresh({ onRefresh, children }) {
   )
 }
 
-function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid, themeAccentLight=C.greenLight, themeAccentXLight=C.greenXLight, bumpActive=false }) {
+function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenShare, onOpenSignUp, emergencyConsented, patient={}, appointments=[], claims=[], onRefreshData, themeAccent=C.green, themeAccentMid=C.greenMid, themeAccentLight=C.greenLight, themeAccentXLight=C.greenXLight, bumpActive=false, onPatientUpdated, onSwitchToPatient }) {
   // Live queue position - reads from the real `clinic_queue` table that
   // ClinicOpsApp writes to on check-in, so this updates the moment front
   // desk checks the patient in, and clears once their status is no longer
@@ -591,6 +591,10 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           <span style={{display:'inline-block',transition:'transform 0.5s',transform:manualRefreshing?'rotate(360deg)':'none'}}>{'⟳'}</span>
           {manualRefreshing?(isEn?'Refreshing…':'刷新中…'):(isEn?'Refresh':'刷新')}
         </div>
+      </div>
+
+      <div style={{padding:'0 16px'}}>
+        <AdultTransferBanner isEn={isEn} patient={patient} onPatientUpdated={onPatientUpdated} onSwitchToPatient={onSwitchToPatient}/>
       </div>
 
       {/* ── Weekly pregnancy size-comparison card - real request: this
@@ -986,6 +990,172 @@ function CarouselArticleView({ item, allItems=[], isEn, onClose, onOpenItem }) {
         </div>
       </div>
     </div>
+  )
+}
+
+// One-shot celebration burst - no new dependency (canvas-confetti etc.),
+// just a handful of CSS-animated pieces that fall/fade and unmount
+// themselves. Reused for the growth-journal transition at 5 and the
+// teeth-journey completion.
+function Confetti({ onDone }) {
+  const [pieces] = useState(() => Array.from({length:36}, () => ({
+    left: Math.random()*100,
+    delay: Math.random()*0.4,
+    duration: 1.6+Math.random()*0.8,
+    color: [C.green,C.blue,C.amber,'#e85d9c','#a855f7'][Math.floor(Math.random()*5)],
+    round: Math.random()<0.4,
+  })))
+  useEffect(() => {
+    const t = setTimeout(() => onDone && onDone(), 2400)
+    return () => clearTimeout(t)
+  }, [])
+  return (
+    <div style={{position:'fixed',inset:0,pointerEvents:'none',zIndex:500,overflow:'hidden'}}>
+      <style>{`@keyframes medsaConfettiFall{0%{transform:translateY(-10px) rotate(0deg);opacity:1}100%{transform:translateY(100vh) rotate(360deg);opacity:0}}`}</style>
+      {pieces.map((p,i)=>(
+        <div key={i} style={{position:'absolute',top:0,left:`${p.left}%`,width:8,height:8,background:p.color,borderRadius:p.round?'50%':'2px',animation:`medsaConfettiFall ${p.duration}s ease-in ${p.delay}s forwards`}}/>
+      ))}
+    </div>
+  )
+}
+
+// Lives on Home (your call - not buried in the Growth tab) for any Kids
+// dependent profile (dependent_relationship 'child' only) once it turns
+// 16, escalating once it's a year past 18. Self-contained: fetches its
+// own data for the keepsake export rather than depending on whatever
+// screen happens to be mounted, since Home doesn't load growth/teeth/
+// immunization state itself.
+function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatient }) {
+  const ageYears = patient.date_of_birth ? (Date.now()-new Date(patient.date_of_birth).getTime())/(1000*60*60*24*365.25) : null
+  const isChildDependent = patient.account_type==='kids' && (patient.dependent_relationship==null||patient.dependent_relationship==='child')
+  const show = isChildDependent && !patient.adult_transfer_choice && ageYears!=null && ageYears>=16
+  const overdue = show && ageYears>=19
+  const [transferModalOpen,setTransferModalOpen]=useState(false)
+  const [transferHkid,setTransferHkid]=useState(patient.hkid||'')
+  const [transferPhone,setTransferPhone]=useState('')
+  const [transferSaving,setTransferSaving]=useState(false)
+  const [transferError,setTransferError]=useState(null)
+  const [convertingGuardian,setConvertingGuardian]=useState(false)
+  const [guardianConfirmOpen,setGuardianConfirmOpen]=useState(false)
+  const [exportingKeepsake,setExportingKeepsake]=useState(false)
+
+  // Detaches from the parent account entirely and sets real login
+  // credentials (HKID + phone), same fields LoginFlow checks - this IS
+  // the "transfer as keepsake": no data is copied anywhere, it's the
+  // exact same patient row (every growth/teeth/immunization record
+  // stays attached) just no longer parented, so history survives
+  // completely intact under the now-adult's own account.
+  async function transferToAdultAccount() {
+    setTransferSaving(true); setTransferError(null)
+    const { error } = await supabase.from('patients').update({
+      parent_patient_id: null, account_type: 'regular', dependent_relationship: null,
+      hkid: transferHkid, phone: transferPhone,
+      registration_path: 'adult_transfer', claimed_at: new Date().toISOString(),
+      adult_transfer_choice: 'transferred', adult_transfer_choice_at: new Date().toISOString(),
+    }).eq('id', patient.id)
+    setTransferSaving(false)
+    if (error) { setTransferError(isEn?'Could not complete the transfer - that HKID/phone may already be in use.':'無法完成轉移 - 該身份證號碼/電話可能已被使用。'); return }
+    setTransferModalOpen(false)
+    if (patient.parent_patient_id) {
+      const { data: parentRow } = await supabase.from('patients').select('*').eq('id', patient.parent_patient_id).maybeSingle()
+      if (parentRow) onSwitchToPatient && onSwitchToPatient(parentRow)
+    }
+  }
+  // Stays a dependent (parent keeps full control, same as today) but
+  // moves off the Kids-specific screens - dependent_relationship
+  // leaving 'child' is what already hides Growth & feeding and shows
+  // Community instead, the same switch a non-child dependent (elderly
+  // relative, etc.) already gets. No separate Guardian flag needed -
+  // the parent's own Guardian subscription already covers every
+  // dependent on their account uniformly.
+  async function convertToGuardianDependent() {
+    setConvertingGuardian(true)
+    await supabase.from('patients').update({
+      dependent_relationship: 'other',
+      adult_transfer_choice: 'guardian_dependent', adult_transfer_choice_at: new Date().toISOString(),
+    }).eq('id', patient.id)
+    setConvertingGuardian(false)
+    setGuardianConfirmOpen(false)
+    onPatientUpdated && onPatientUpdated()
+  }
+  async function exportKeepsakePdf() {
+    setExportingKeepsake(true)
+    const [{ data: growthLogs }, { data: teethLogRows }, { data: immunizationRows }] = await Promise.all([
+      supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at'),
+      supabase.from('kids_teeth_log').select('*').eq('patient_id', patient.id),
+      supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
+    ])
+    const GREEN = [0,98,65]
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Childhood Health Keepsake`
+    drawPdfHeader(doc, pageWidth, subtitle, GREEN)
+    let y = 40
+    if (growthLogs?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Growth log', subtitle, accentColor: GREEN,
+      dateInstitution: `${growthLogs.length} measurement${growthLogs.length===1?'':'s'}`,
+      details: [...growthLogs].reverse().map(g=>[g.recorded_at, [g.weight_kg!=null?`${g.weight_kg}kg`:null, g.height_cm!=null?`${g.height_cm}cm`:null, g.head_circumference_cm!=null?`head ${g.head_circumference_cm}cm`:null].filter(Boolean).join(' · ')]),
+    })
+    const firstTooth = teethLogRows?.find(l=>l.erupted_at)
+    const fallenOut = TEETH.map(t=>({t,logged:teethLogRows?.find(l=>l.tooth_key===t.key)})).filter(r=>r.logged?.lost_at)
+    if (firstTooth || fallenOut.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Teeth', subtitle, accentColor: GREEN,
+      dateInstitution: firstTooth ? `First tooth: ${TEETH.find(t=>t.key===firstTooth.tooth_key)?.en||firstTooth.tooth_key}, ${firstTooth.erupted_at}` : '',
+      details: fallenOut.map(({t,logged})=>[logged.lost_at, `${t.en} fell out`]),
+    })
+    if (immunizationRows?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Immunisations (HKCIP)', subtitle, accentColor: GREEN,
+      dateInstitution: `${immunizationRows.length} dose${immunizationRows.length===1?'':'s'} recorded`,
+      details: HKCIP_SCHEDULE.flatMap(band=>band.doses).filter(d=>immunizationRows.some(c=>c.dose_key===d.key)).map(d=>['✓', `${d.vaccine.en}${d.dose.en?` - ${d.dose.en}`:''}`]),
+    })
+    doc.save(`${patient.full_name||'keepsake'}-childhood-health-record.pdf`)
+    setExportingKeepsake(false)
+  }
+
+  if (!show) return null
+  return (
+    <>
+      <div style={{margin:'0 0 16px',padding:'14px',background:overdue?C.redLight:C.amberLight,border:`0.5px solid ${overdue?C.red:C.amber}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12.5px',color:overdue?C.red:C.amber,fontWeight:700,marginBottom:'4px'}}>
+          {overdue
+            ? (isEn?`${patient.full_name||'This profile'} turned 18 over a year ago - this profile will be deleted a year after turning 18 if nothing's done. All history is unrecoverable once that happens.`:`${patient.full_name||'此檔案'}已滿18歲超過一年 - 若未作任何選擇,此檔案將於滿18歲一年後刪除。屆時所有記錄將無法復原。`)
+            : (isEn?`${patient.full_name||'This profile'} is 16+ - time to decide what happens to this profile as an adult.`:`${patient.full_name||'此檔案'}已年滿16歲 - 請決定此檔案成年後的去向。`)}
+        </div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Transfer it to their own account (all history goes with them), convert it to a Guardian dependent if you're staying in control of their care, or export everything now and let the profile be deleted after a year of being unclaimed past 18.":'可轉移為其本人帳戶(所有記錄將一併轉移)、轉為Guardian受養人(由您繼續管理其照護)、或現在匯出所有記錄,並讓檔案在滿18歲一年後(如未被認領)自動刪除。'}</div>
+        <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+          <Btn variant="primary" style={{flex:'1 1 140px'}} onClick={()=>setTransferModalOpen(true)}>{isEn?'Transfer to their own account':'轉移為本人帳戶'}</Btn>
+          <Btn style={{flex:'1 1 140px'}} onClick={()=>setGuardianConfirmOpen(true)}>{isEn?'Convert to Guardian dependent':'轉為Guardian受養人'}</Btn>
+          <Btn style={{flex:'1 1 140px'}} disabled={exportingKeepsake} onClick={exportKeepsakePdf}>{exportingKeepsake?(isEn?'Exporting…':'匯出中…'):(isEn?'📖 Export keepsake record':'📖 匯出紀念記錄')}</Btn>
+        </div>
+      </div>
+
+      {transferModalOpen && <div onClick={()=>setTransferModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Transfer ${patient.full_name||'this profile'} to their own account`:`將${patient.full_name||'此檔案'}轉移為本人帳戶`}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"Every growth, teeth, and immunisation record stays attached - nothing is copied, it just stops being managed under your account. They'll log in with the HKID and phone number you set here.":'所有生長、牙齒及疫苗記錄將完整保留 - 並非複製,只是不再由您的帳戶管理。對方日後將以您在此設定的身份證號碼及電話號碼登入。'}</div>
+          <input value={transferHkid} onChange={e=>setTransferHkid(e.target.value)} placeholder={isEn?"Their HKID":'對方身份證號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={transferPhone} onChange={e=>setTransferPhone(e.target.value)} placeholder={isEn?"Their phone number":'對方電話號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {transferError && <div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{transferError}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setTransferModalOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={transferSaving||!transferHkid||!transferPhone} onClick={transferToAdultAccount}>{transferSaving?(isEn?'Transferring…':'轉移中…'):(isEn?'Transfer':'轉移')}</Btn>
+          </div>
+        </div>
+      </div>}
+
+      {guardianConfirmOpen && <div onClick={()=>setGuardianConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Convert ${patient.full_name||'this profile'} to a Guardian dependent`:`將${patient.full_name||'此檔案'}轉為Guardian受養人`}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"You'll keep full control, same as today - this just moves them off the Kids-specific screens (growth charts, teeth, immunisations), since those stop being relevant once they're an adult. Their existing records stay on file.":'您將繼續完全管理此帳戶,一如以往 - 此操作僅將檔案移離兒童專屬畫面(生長圖表、牙齒、疫苗),因為成年後這些已不再適用。現有記錄將繼續保留。'}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
+          </div>
+        </div>
+      </div>}
+    </>
   )
 }
 
@@ -5627,7 +5797,7 @@ const HKCIP_SCHEDULE = [
   ]},
 ]
 
-function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchToPatient }) {
+function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
   const [kidsTab,setKidsTab]=useState('growth')
   const [growthLogs,setGrowthLogs]=useState([])
@@ -5697,98 +5867,25 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
     load()
   }
   const ageInMonths = patient.date_of_birth ? (Date.now() - new Date(patient.date_of_birth)) / (1000*60*60*24*30.44) : null
-  const dueImmunizationBand = ageInMonths!=null ? HKCIP_SCHEDULE.find(band => band.ageMonths!=null && ageInMonths >= band.ageMonths && band.doses.some(d=>!immunizationChecks.some(c=>c.dose_key===d.key))) : null
 
-  // Adult-transfer lifecycle, your call: a Kids profile (dependent_
-  // relationship 'child' only - this never applies to a non-child
-  // dependent like an elderly relative) gets prompted at 16 to either
-  // become its own adult account or convert into a general Guardian
-  // dependent, with a hard deadline at 18. Nothing is ever deleted from
-  // here - at most an admin sweep (medsa-admin) stamps
-  // pending_deletion_at a year past 18 if still undecided, starting a
-  // real but separately-reviewed grace window before an actual delete.
-  const ageYears = ageInMonths!=null ? ageInMonths/12 : null
-  const isChildDependent = patient.account_type==='kids' && (patient.dependent_relationship==null||patient.dependent_relationship==='child')
-  const showAdultTransferBanner = isChildDependent && !patient.adult_transfer_choice && ageYears!=null && ageYears>=16
-  const adultTransferOverdue = showAdultTransferBanner && ageYears>=19
-  const [transferModalOpen,setTransferModalOpen]=useState(false)
-  const [transferHkid,setTransferHkid]=useState('')
-  const [transferPhone,setTransferPhone]=useState('')
-  const [transferSaving,setTransferSaving]=useState(false)
-  const [transferError,setTransferError]=useState(null)
-  const [convertingGuardian,setConvertingGuardian]=useState(false)
-  const [guardianConfirmOpen,setGuardianConfirmOpen]=useState(false)
-  const [exportingKeepsake,setExportingKeepsake]=useState(false)
-
-  // Detaches from the parent account entirely and sets real login
-  // credentials (HKID + phone), same fields LoginFlow checks - this IS
-  // the "transfer as keepsake": no data is copied anywhere, it's the
-  // exact same patient row (every growth/teeth/immunization record
-  // stays attached) just no longer parented, so history survives
-  // completely intact under the now-adult's own account.
-  async function transferToAdultAccount() {
-    setTransferSaving(true); setTransferError(null)
-    const { error } = await supabase.from('patients').update({
-      parent_patient_id: null, account_type: 'regular', dependent_relationship: null,
-      hkid: transferHkid, phone: transferPhone,
-      registration_path: 'adult_transfer', claimed_at: new Date().toISOString(),
-      adult_transfer_choice: 'transferred', adult_transfer_choice_at: new Date().toISOString(),
-    }).eq('id', patient.id)
-    setTransferSaving(false)
-    if (error) { setTransferError(isEn?'Could not complete the transfer - that HKID/phone may already be in use.':'無法完成轉移 - 該身份證號碼/電話可能已被使用。'); return }
-    setTransferModalOpen(false)
-    if (patient.parent_patient_id) {
-      const { data: parentRow } = await supabase.from('patients').select('*').eq('id', patient.parent_patient_id).maybeSingle()
-      if (parentRow) onSwitchToPatient && onSwitchToPatient(parentRow)
+  // Growth journal transition - the WHO percentile data this app bundles
+  // (who-growth-standards) is the 0-5y WHO Child Growth Standards, not
+  // the separate 5-19y WHO Growth Reference this app doesn't have.
+  // growthPercentile() already silently clamps any age past 5 to the
+  // 5-year boundary, which is just wrong, not "close enough" - so past
+  // that point this screen stops showing percentile bands at all and
+  // becomes a plain lifelong log instead (still logging height/weight
+  // the whole way to adulthood, just without a misleading number).
+  const ageDaysNow = patient.date_of_birth ? ageDaysBetween(patient.date_of_birth, new Date().toISOString().slice(0,10)) : null
+  const pastWhoRange = ageDaysNow!=null && ageDaysNow > WHO_MAX_AGE_DAYS
+  const [showGrowthConfetti,setShowGrowthConfetti] = useState(false)
+  useEffect(() => {
+    if (pastWhoRange && patient.id && !patient.growth_journal_transition_seen_at) {
+      setShowGrowthConfetti(true)
+      supabase.from('patients').update({ growth_journal_transition_seen_at: new Date().toISOString() }).eq('id', patient.id).then(()=>onPatientUpdated&&onPatientUpdated())
     }
-  }
-  // Stays a dependent (parent keeps full control, same as today) but
-  // moves off the Kids-specific screens - dependent_relationship
-  // leaving 'child' is what already hides Growth & feeding and shows
-  // Community instead (see HomeScreen), the same switch a non-child
-  // dependent (elderly relative, etc.) already gets. No separate
-  // Guardian flag needed - the parent's own Guardian subscription
-  // already covers every dependent on their account uniformly.
-  async function convertToGuardianDependent() {
-    setConvertingGuardian(true)
-    await supabase.from('patients').update({
-      dependent_relationship: 'other',
-      adult_transfer_choice: 'guardian_dependent', adult_transfer_choice_at: new Date().toISOString(),
-    }).eq('id', patient.id)
-    setConvertingGuardian(false)
-    setGuardianConfirmOpen(false)
-    onPatientUpdated && onPatientUpdated()
-  }
-  async function exportKeepsakePdf() {
-    setExportingKeepsake(true)
-    const GREEN = [0,98,65]
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const pageHeight = doc.internal.pageSize.getHeight()
-    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Childhood Health Keepsake`
-    drawPdfHeader(doc, pageWidth, subtitle, GREEN)
-    let y = 40
-    if (growthLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Growth log', subtitle, accentColor: GREEN,
-      dateInstitution: `${growthLogs.length} measurement${growthLogs.length===1?'':'s'}`,
-      details: [...growthLogs].reverse().map(g=>[g.recorded_at, [g.weight_kg!=null?`${g.weight_kg}kg`:null, g.height_cm!=null?`${g.height_cm}cm`:null, g.head_circumference_cm!=null?`head ${g.head_circumference_cm}cm`:null].filter(Boolean).join(' · ')]),
-    })
-    const firstTooth = teethLog.find(l=>l.erupted_at)
-    const fallenOut = TEETH.map(t=>({t,logged:teethLog.find(l=>l.tooth_key===t.key)})).filter(r=>r.logged?.lost_at)
-    if (firstTooth || fallenOut.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Teeth', subtitle, accentColor: GREEN,
-      dateInstitution: firstTooth ? `First tooth: ${TEETH.find(t=>t.key===firstTooth.tooth_key)?.en||firstTooth.tooth_key}, ${firstTooth.erupted_at}` : '',
-      details: fallenOut.map(({t,logged})=>[logged.lost_at, `${t.en} fell out`]),
-    })
-    if (immunizationChecks.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Immunisations (HKCIP)', subtitle, accentColor: GREEN,
-      dateInstitution: `${immunizationChecks.length} dose${immunizationChecks.length===1?'':'s'} recorded`,
-      details: HKCIP_SCHEDULE.flatMap(band=>band.doses).filter(d=>immunizationChecks.some(c=>c.dose_key===d.key)).map(d=>['✓', `${d.vaccine.en}${d.dose.en?` - ${d.dose.en}`:''}`]),
-    })
-    doc.save(`${patient.full_name||'keepsake'}-childhood-health-record.pdf`)
-    setExportingKeepsake(false)
-  }
+  }, [pastWhoRange, patient.id])
+  const dueImmunizationBand = ageInMonths!=null ? HKCIP_SCHEDULE.find(band => band.ageMonths!=null && ageInMonths >= band.ageMonths && band.doses.some(d=>!immunizationChecks.some(c=>c.dose_key===d.key))) : null
 
   // Sleep log - the clearest gap against every benchmarked baby tracker
   // (BabyCenter, Ovia Parenting, etc.), which all log sleep alongside
@@ -6019,6 +6116,13 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
   const hasAnyEruption = teethLog.some(l=>l.erupted_at)
   const firstEruption = teethLog.filter(l=>l.erupted_at).sort((a,b)=>a.erupted_at.localeCompare(b.erupted_at))[0] || null
   const allFallenOut = hasAnyEruption && TEETH.every(t => teethLog.find(l=>l.tooth_key===t.key)?.lost_at)
+  const [showTeethConfetti,setShowTeethConfetti] = useState(false)
+  useEffect(() => {
+    if (allFallenOut && patient.id && !patient.teeth_journey_complete_seen_at) {
+      setShowTeethConfetti(true)
+      supabase.from('patients').update({ teeth_journey_complete_seen_at: new Date().toISOString() }).eq('id', patient.id).then(()=>onPatientUpdated&&onPatientUpdated())
+    }
+  }, [allFallenOut, patient.id])
   const TOOTH_BASELINE_OPACITY = 0.18
   // A tooth with its own logged erupted_at is confirmed - full opacity,
   // no ramp. Any other tooth, once eruption has started, fades in
@@ -6145,6 +6249,22 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
   }
   async function deleteFeedingLog(id) { await supabase.from('kids_feeding_logs').delete().eq('id', id); load() }
 
+  // General record-keeping, not login - HK residents first register for
+  // an HKID around age 11, well before the earliest adult-transfer
+  // conversation at 16, and the number itself never changes afterward
+  // (a renewal around 18 just reissues the same number on a new card).
+  // Having it on file early is useful on its own for doctor check-ins;
+  // it's also what later speeds up the actual transfer-to-own-account
+  // claim at 18, since the number's already here rather than typed in
+  // fresh at that point.
+  const [hkidInput,setHkidInput]=useState(patient.hkid||'')
+  const [savingHkid,setSavingHkid]=useState(false)
+  async function saveHkid() {
+    setSavingHkid(true)
+    await supabase.from('patients').update({ hkid: hkidInput||null }).eq('id', patient.id)
+    setSavingHkid(false)
+    onPatientUpdated && onPatientUpdated()
+  }
   const [settingSex,setSettingSex]=useState(false)
   async function setSex(sex) {
     setSettingSex(true)
@@ -6213,45 +6333,6 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
         <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{isEn?'See the HKCIP schedule below.':'請參閱下方HKCIP疫苗接種時間表。'}</div>
       </div>}
 
-      {showAdultTransferBanner && <div style={{margin:'0 0 16px',padding:'14px',background:adultTransferOverdue?C.redLight:C.amberLight,border:`0.5px solid ${adultTransferOverdue?C.red:C.amber}`,borderRadius:'10px'}}>
-        <div style={{fontSize:'12.5px',color:adultTransferOverdue?C.red:C.amber,fontWeight:700,marginBottom:'4px'}}>
-          {adultTransferOverdue
-            ? (isEn?`${patient.full_name||'This profile'} turned 18 over a year ago - this profile will be deleted a year after turning 18 if nothing's done. All history is unrecoverable once that happens.`:`${patient.full_name||'此檔案'}已滿18歲超過一年 - 若未作任何選擇,此檔案將於滿18歲一年後刪除。屆時所有記錄將無法復原。`)
-            : (isEn?`${patient.full_name||'This profile'} is 16+ - time to decide what happens to this profile as an adult.`:`${patient.full_name||'此檔案'}已年滿16歲 - 請決定此檔案成年後的去向。`)}
-        </div>
-        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Transfer it to their own account (all history goes with them), convert it to a Guardian dependent if you're staying in control of their care, or export everything now and let the profile be deleted after a year of being unclaimed past 18.":'可轉移為其本人帳戶(所有記錄將一併轉移)、轉為Guardian受養人(由您繼續管理其照護)、或現在匯出所有記錄,並讓檔案在滿18歲一年後(如未被認領)自動刪除。'}</div>
-        <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-          <Btn variant="primary" style={{flex:'1 1 140px'}} onClick={()=>setTransferModalOpen(true)}>{isEn?'Transfer to their own account':'轉移為本人帳戶'}</Btn>
-          <Btn style={{flex:'1 1 140px'}} onClick={()=>setGuardianConfirmOpen(true)}>{isEn?'Convert to Guardian dependent':'轉為Guardian受養人'}</Btn>
-          <Btn style={{flex:'1 1 140px'}} disabled={exportingKeepsake} onClick={exportKeepsakePdf}>{exportingKeepsake?(isEn?'Exporting…':'匯出中…'):(isEn?'📖 Export keepsake record':'📖 匯出紀念記錄')}</Btn>
-        </div>
-      </div>}
-
-      {transferModalOpen && <div onClick={()=>setTransferModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
-          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Transfer ${patient.full_name||'this profile'} to their own account`:`將${patient.full_name||'此檔案'}轉移為本人帳戶`}</div>
-          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"Every growth, teeth, and immunisation record stays attached - nothing is copied, it just stops being managed under your account. They'll log in with the HKID and phone number you set here.":'所有生長、牙齒及疫苗記錄將完整保留 - 並非複製,只是不再由您的帳戶管理。對方日後將以您在此設定的身份證號碼及電話號碼登入。'}</div>
-          <input value={transferHkid} onChange={e=>setTransferHkid(e.target.value)} placeholder={isEn?"Their HKID":'對方身份證號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
-          <input value={transferPhone} onChange={e=>setTransferPhone(e.target.value)} placeholder={isEn?"Their phone number":'對方電話號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
-          {transferError && <div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{transferError}</div>}
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setTransferModalOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
-            <Btn variant="primary" style={{flex:1}} disabled={transferSaving||!transferHkid||!transferPhone} onClick={transferToAdultAccount}>{transferSaving?(isEn?'Transferring…':'轉移中…'):(isEn?'Transfer':'轉移')}</Btn>
-          </div>
-        </div>
-      </div>}
-
-      {guardianConfirmOpen && <div onClick={()=>setGuardianConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
-        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
-          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Convert ${patient.full_name||'this profile'} to a Guardian dependent`:`將${patient.full_name||'此檔案'}轉為Guardian受養人`}</div>
-          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"You'll keep full control, same as today - this just moves them off the Kids-specific screens (growth charts, teeth, immunisations), since those stop being relevant once they're an adult. Their existing records stay on file.":'您將繼續完全管理此帳戶,一如以往 - 此操作僅將檔案移離兒童專屬畫面(生長圖表、牙齒、疫苗),因為成年後這些已不再適用。現有記錄將繼續保留。'}</div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
-            <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
-          </div>
-        </div>
-      </div>}
-
       {/* Same sub-tab treatment as the Bump pregnancy log - this screen had
           grown into eight stacked sections on one long scroll. The digest
           and alert banners above stay outside the tabs since they're an
@@ -6263,6 +6344,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
       </div>
 
       {kidsTab==='health'&&<>
+      <SecLabel>{isEn?'HKID':'身份證號碼'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Optional, for general record-keeping (doctor check-ins etc.) - most children register for one around age 11. Having it on file now also speeds up transferring this profile to their own account later.":'非必填,作一般記錄之用(如求診登記等)- 大部分兒童約11歲開始登記身份證。現在記錄下來,亦有助日後將此檔案轉移至其本人帳戶。'}</div>
+        <div style={{display:'flex',gap:'8px'}}>
+          <input value={hkidInput} onChange={e=>setHkidInput(e.target.value)} placeholder={isEn?'HKID':'身份證號碼'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <Btn variant="primary" disabled={savingHkid||hkidInput===(patient.hkid||'')} onClick={saveHkid}>{savingHkid?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
+        </div>
+      </Card>
+
       <SecLabel>{isEn?'MCHC appointments':'母嬰健康院預約'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Medsa doesn't book MCHC visits - enter a date here after booking with the centre and we'll remind you as it approaches.":'Medsa並不代為預約母嬰健康院 - 預約後在此輸入日期,我們會在預約臨近時提醒您。'}</div>
@@ -6375,27 +6465,33 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
       </>}
 
       {kidsTab==='growth'&&<>
-      <SecLabel>{isEn?'Growth':'生長'}</SecLabel>
+      {showGrowthConfetti && <Confetti onDone={()=>setShowGrowthConfetti(false)}/>}
+      <SecLabel>{isEn?(pastWhoRange?'Growth journal':'Growth'):(pastWhoRange?'生長日誌':'生長')}</SecLabel>
+      {showGrowthConfetti && <div style={{margin:'0 0 10px',padding:'12px 14px',background:C.greenXLight,borderRadius:'10px',fontSize:'12px',color:__theme.accent,fontWeight:600,lineHeight:1.5,textAlign:'center'}}>{isEn?"🎉 Past the WHO 0-5 reference range - this becomes a lifelong growth journal from here. Every weight and height you've already logged carries over, and you can keep logging for as long as you want."+'':'🎉 已超出WHO 0至5歲參考範圍 - 由此起成為終身生長日誌。所有已記錄的體重及身高將會保留,您可以持續記錄下去。'}</div>}
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
           <input type="date" value={gForm.recordedAt} max={todayStr} onChange={e=>setGForm({...gForm,recordedAt:e.target.value})} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
           <input type="number" value={gForm.weightKg} onChange={e=>setGForm({...gForm,weightKg:e.target.value})} placeholder={isEn?'Weight (kg)':'體重(kg)'} style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
           <input type="number" value={gForm.heightCm} onChange={e=>setGForm({...gForm,heightCm:e.target.value})} placeholder={isEn?'Height (cm)':'身高(cm)'} style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
-          <input type="number" value={gForm.headCm} onChange={e=>setGForm({...gForm,headCm:e.target.value})} placeholder={isEn?'Head circ. (cm, optional)':'頭圍(cm,可選)'} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          {!pastWhoRange && <input type="number" value={gForm.headCm} onChange={e=>setGForm({...gForm,headCm:e.target.value})} placeholder={isEn?'Head circ. (cm, optional)':'頭圍(cm,可選)'} style={{flex:'1 1 120px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
         </div>
         <Btn variant="primary" style={{width:'100%'}} disabled={saving||(!gForm.weightKg&&!gForm.heightCm&&!gForm.headCm)} onClick={addGrowthLog}>{isEn?'Add entry':'新增記錄'}</Btn>
 
         {growthLogs.length>0&&<>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'16px',marginBottom:'2px'}}>{isEn?'Weight-for-age (WHO percentiles)':'年齡體重(WHO百分比)'}</div>
-          <WhoGrowthChart logs={growthLogs} valueKey="weight_kg" indicator="wfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="kg" accentColor={__theme.accent} isEn={isEn}/>
-          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'10px',marginBottom:'2px'}}>{isEn?'Length/height-for-age (WHO percentiles)':'年齡身高(WHO百分比)'}</div>
-          <WhoGrowthChart logs={growthLogs} valueKey="height_cm" indicator="lhfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="cm" accentColor={C.blue} isEn={isEn}/>
-          <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Reference curves assume a full-term birth - no preterm correction applied.':'參考曲線假設足月出生,未作早產矯正。'}</div>
-          <div style={{marginTop:'14px'}}>
+          {!pastWhoRange && <>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'16px',marginBottom:'2px'}}>{isEn?'Weight-for-age (WHO percentiles)':'年齡體重(WHO百分比)'}</div>
+            <WhoGrowthChart logs={growthLogs} valueKey="weight_kg" indicator="wfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="kg" accentColor={__theme.accent} isEn={isEn}/>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'10px',marginBottom:'2px'}}>{isEn?'Length/height-for-age (WHO percentiles)':'年齡身高(WHO百分比)'}</div>
+            <WhoGrowthChart logs={growthLogs} valueKey="height_cm" indicator="lhfa" sex={patient.sex} dobISO={patient.date_of_birth} unit="cm" accentColor={C.blue} isEn={isEn}/>
+            <div style={{fontSize:'10px',color:C.textMuted,marginTop:'6px',lineHeight:1.5}}>{isEn?'Reference curves assume a full-term birth - no preterm correction applied.':'參考曲線假設足月出生,未作早產矯正。'}</div>
+          </>}
+          {pastWhoRange && <div style={{fontSize:'10.5px',color:C.textMuted,marginTop:'16px',marginBottom:'4px',lineHeight:1.5}}>{isEn?'No percentile reference past age 5 - just the numbers, logged for as long as you keep going.':'5歲後不設百分比參考 - 僅記錄數值,可持續記錄。'}</div>}
+          <div style={{marginTop:pastWhoRange?'6px':'14px'}}>
             {[...growthLogs].reverse().map(g=>{
               const ageDays = patient.date_of_birth ? ageDaysBetween(patient.date_of_birth, g.recorded_at) : null
-              const wResult = (patient.sex && ageDays!=null && g.weight_kg!=null) ? growthPercentile('wfa', g.weight_kg, patient.sex, ageDays) : null
-              const hResult = (patient.sex && ageDays!=null && g.height_cm!=null) ? growthPercentile('lhfa', g.height_cm, patient.sex, ageDays) : null
+              const inRange = ageDays!=null && ageDays <= WHO_MAX_AGE_DAYS
+              const wResult = (inRange && patient.sex && g.weight_kg!=null) ? growthPercentile('wfa', g.weight_kg, patient.sex, ageDays) : null
+              const hResult = (inRange && patient.sex && g.height_cm!=null) ? growthPercentile('lhfa', g.height_cm, patient.sex, ageDays) : null
               return (
                 <div key={g.id} style={{padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
@@ -6415,14 +6511,31 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
         </>}
       </Card>
 
-      <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
+      <SecLabel>{isEn?(allFallenOut?'Teeth journal':'Teeth'):(allFallenOut?'牙齒日誌':'牙齒')}</SecLabel>
+      {showTeethConfetti && <Confetti onDone={()=>setShowTeethConfetti(false)}/>}
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+      {allFallenOut ? (() => {
+        const complete = TEETH.map(t=>({t,logged:teethLog.find(l=>l.tooth_key===t.key)})).sort((a,b)=>a.logged.lost_at.localeCompare(b.logged.lost_at))
+        const firstToothName = firstEruption ? TEETH.find(t=>t.key===firstEruption.tooth_key) : null
+        return (
+          <>
+            <div style={{padding:'12px 14px',background:C.greenXLight,borderRadius:'10px',fontSize:'12px',color:__theme.accent,fontWeight:600,textAlign:'center',marginBottom:'14px',lineHeight:1.5}}>{isEn?'🎉 Congratulations - every primary tooth has come in and gone. This card is now a permanent record of the whole journey.':'🎉 恭喜 - 所有乳齒已完成萌出及脫落。此卡片現為整個過程的永久記錄。'}</div>
+            {firstEruption && <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}><strong>{isEn?'First tooth: ':'第一顆萌出:'}</strong>{firstToothName?(isEn?firstToothName.en:firstToothName.zh):firstEruption.tooth_key} · {firstEruption.erupted_at}</div>}
+            <div style={{fontSize:'10.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Fell out, in order':'脫落順序'}</div>
+            {complete.map(({t,logged})=>(
+              <div key={t.key} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`}}>
+                <span style={{flex:1,fontSize:'12px',color:C.text}}>{isEn?t.en:t.zh}</span>
+                <span style={{fontSize:'11px',color:C.textMuted}}>{logged.lost_at}</span>
+              </div>
+            ))}
+          </>
+        )
+      })() : <>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>
           {!hasAnyEruption
             ? (isEn?"Tap whichever tooth comes in first, and log the date - from then on the rest of the set fades in on its own, following the typical eruption timeline for each tooth, same as how eruption actually gets noticed in real life.":'輕按第一顆萌出的牙齒並記錄日期 - 其後整組牙齒將按各自的一般萌出時間逐漸顯示,正如現實中家長一般只會留意第一顆萌牙的時間。')
             : (isEn?"Tap a tooth to log it falling out, with the real date - keep going, one by one, as each one actually comes out.":'輕按牙齒以記錄脫落及實際日期 - 可逐一記錄每顆牙齒實際脫落的情況。')}
         </div>
-        {allFallenOut && <div style={{margin:'0 0 10px',padding:'8px 12px',background:C.greenXLight,borderRadius:'10px',fontSize:'11.5px',color:__theme.accent,fontWeight:600,textAlign:'center'}}>{isEn?'🎉 Full set has come and gone - the permanent teeth are next.':'🎉 整組乳齒已全部脫落 - 恆齒即將長出。'}</div>}
         <svg viewBox="0 -12 220 324" style={{width:'100%',maxWidth:220,display:'block',margin:'0 auto 10px'}}>
           {['upper','lower'].map(arch => {
             const ecx = 110, erx = 78, ery = 72, ecy = arch==='upper' ? 80 : 220
@@ -6536,6 +6649,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchT
             </div>
           )
         })()}
+      </>}
       </Card>
       </>}
 
@@ -9972,7 +10086,11 @@ export default function PatientApp({ liveData={} }) {
         {signedInPatient&&<div onClick={()=>setSwitcherOpen(true)} style={{width:30,height:30,borderRadius:'50%',background:'rgba(255,255,255,0.9)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:'13px',color:themeAccent,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>{(patient.preferred_name||patient.full_name||'?')[0]}</div>}
       </div>
       <div data-app-scroll-root style={{flex:1,overflowY:'auto'}}>
-        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight} bumpActive={bumpActive}/>}
+        {screen==='home'&&<HomeScreen onNav={setScreen} onOpenInquiry={(id)=>{setDeepLinkInquiryId(id);setScreen('insurance')}} isEn={isEn} onOpenEmergencySetup={()=>setEmergencyOpen(true)} onOpenShare={()=>setShareOpen(true)} onOpenSignUp={()=>{setSignedInPatient(null);setShowGate(true)}} emergencyConsented={emergencyConsented} patient={patient} appointments={liveAppointments} claims={liveClaims} onRefreshData={loadRealData} themeAccent={themeAccent} themeAccentMid={themeAccentMid} themeAccentLight={themeAccentLight} themeAccentXLight={themeAccentXLight} bumpActive={bumpActive} onSwitchToPatient={switchToPatient} onPatientUpdated={async()=>{
+          if (!signedInPatient?.id) return
+          const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
+          if (data) setSignedInPatient(data)
+        }}/>}
         {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='healthcolumn'&&<HealthColumnScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
