@@ -5420,6 +5420,28 @@ const MILESTONES = [
 ]
 const MILESTONE_AGE_BANDS = [...new Set(MILESTONES.map(m=>m.ageBand.en))]
 
+// gp-01 - primary (baby) tooth eruption tracker, ranges per the ADA's
+// own MouthHealthy eruption chart (cross-checked against multiple
+// pediatric dental sources for consistency, same "verified range, not
+// guessed" rule as the growth percentiles and HKCIP schedule above).
+// Grouped by tooth type rather than all 20 individual teeth - the left
+// and right of a pair typically erupt within days of each other, and
+// that's how a parent actually notices it, not clinical left/right
+// charting. Framed as "typical," not a deadline - timing varies widely
+// and isn't itself a sign of a problem.
+const TEETH = [
+  { key:'lower-central-incisor', en:'Lower central incisors', zh:'下顎中切牙', typical:'6–10 months' },
+  { key:'upper-central-incisor', en:'Upper central incisors', zh:'上顎中切牙', typical:'8–12 months' },
+  { key:'upper-lateral-incisor', en:'Upper lateral incisors', zh:'上顎側切牙', typical:'9–13 months' },
+  { key:'lower-lateral-incisor', en:'Lower lateral incisors', zh:'下顎側切牙', typical:'10–16 months' },
+  { key:'upper-first-molar', en:'Upper first molars', zh:'上顎第一乳臼齒', typical:'13–19 months' },
+  { key:'lower-first-molar', en:'Lower first molars', zh:'下顎第一乳臼齒', typical:'14–18 months' },
+  { key:'upper-canine', en:'Upper canines', zh:'上顎犬齒', typical:'16–22 months' },
+  { key:'lower-canine', en:'Lower canines', zh:'下顎犬齒', typical:'17–23 months' },
+  { key:'lower-second-molar', en:'Lower second molars', zh:'下顎第二乳臼齒', typical:'23–31 months' },
+  { key:'upper-second-molar', en:'Upper second molars', zh:'上顎第二乳臼齒', typical:'25–33 months' },
+]
+
 // bb-01 - the real Hong Kong Childhood Immunisation Programme (HKCIP)
 // schedule, transcribed verbatim from the user's own copy: "Updated
 // schedule of the Hong Kong Childhood Immunisation Programme (HKCIP)
@@ -5496,13 +5518,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [sleepSession,setSleepSession]=useState(null) // {startedAt, sleepType} while a sleep is in progress
   const [sleepTick,setSleepTick]=useState(0) // forces a re-render every 30s so the live elapsed time moves
   const [immunizationChecks,setImmunizationChecks]=useState([])
+  const [teethLog,setTeethLog]=useState([])
+  const [teethDateDrafts,setTeethDateDrafts]=useState({})
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
   async function load(isInitial=false) {
     if (!patient?.id) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }, { data: imm }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }, { data: imm }, { data: teeth }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
@@ -5511,6 +5535,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       supabase.from('kids_diaper_logs').select('*').eq('patient_id', patient.id).order('logged_at',{ascending:false}).limit(30),
       supabase.from('kids_sleep_logs').select('*').eq('patient_id', patient.id).order('started_at',{ascending:false}).limit(30),
       supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
+      supabase.from('kids_teeth_log').select('*').eq('patient_id', patient.id),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
@@ -5520,6 +5545,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setDiaperLogs(diaper||[])
     setSleepLogs(sleep||[])
     setImmunizationChecks(imm||[])
+    setTeethLog(teeth||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [patient?.id])
@@ -5749,6 +5775,23 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       await supabase.from('kids_milestone_checks').insert({ patient_id: patient.id, milestone_key: key, achieved_at: new Date().toISOString().slice(0,10) })
     }
     await load()
+  }
+
+  async function toggleTooth(key) {
+    const existing = teethLog.find(t=>t.tooth_key===key)
+    if (existing) {
+      await supabase.from('kids_teeth_log').delete().eq('id', existing.id)
+    } else {
+      const erupted = teethDateDrafts[key] || new Date().toISOString().slice(0,10)
+      await supabase.from('kids_teeth_log').insert({ patient_id: patient.id, tooth_key: key, erupted_at: erupted })
+    }
+    await load()
+  }
+  async function updateToothDate(key, dateStr) {
+    const existing = teethLog.find(t=>t.tooth_key===key)
+    if (existing) await supabase.from('kids_teeth_log').update({ erupted_at: dateStr }).eq('id', existing.id)
+    setTeethDateDrafts(prev=>({...prev,[key]:dateStr}))
+    if (existing) await load()
   }
 
   const [exportingPdf,setExportingPdf]=useState(false)
@@ -6148,6 +6191,26 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
                   </div>
                 )
               })}
+            </div>
+          )
+        })}
+      </Card>
+
+      <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Typical eruption ranges per the ADA's own eruption chart - timing varies widely between children and isn't a sign of a problem on its own. Tap when a tooth comes in; the date defaults to today but you can set it to when it actually happened.":'根據美國牙科協會(ADA)的萌牙時間表,僅供參考 - 每個孩子的萌牙時間差異很大,單純較遲並不代表有問題。長出新牙時請點按記錄,日期預設為今天,但您可以改為實際日期。'}</div>
+        {TEETH.map(t=>{
+          const logged = teethLog.find(l=>l.tooth_key===t.key)
+          return (
+            <div key={t.key} style={{display:'flex',gap:'10px',alignItems:'center',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`}}>
+              <div onClick={()=>toggleTooth(t.key)} style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${logged?__theme.accent:C.border}`,background:logged?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,cursor:'pointer'}}>{logged?'✓':''}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:'12.5px',color:C.text}}>{isEn?t.en:t.zh}</div>
+                <div style={{fontSize:'10px',color:C.textMuted}}>{isEn?`Typical: ${t.typical}`:`一般時間:${t.typical}`}</div>
+              </div>
+              {logged
+                ? <input type="date" value={logged.erupted_at} onChange={e=>updateToothDate(t.key,e.target.value)} style={{fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'4px 6px',width:110}}/>
+                : <div style={{fontSize:'10px',color:C.textMuted,width:110,textAlign:'right'}}>{isEn?'Not yet':'尚未'}</div>}
             </div>
           )
         })}
