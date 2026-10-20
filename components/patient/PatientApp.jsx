@@ -5508,6 +5508,11 @@ const TEETH = [
   { key:'lower-second-molar', en:'Lower second molars', zh:'下顎第二乳臼齒', typical:'23–31 months' },
   { key:'upper-second-molar', en:'Upper second molars', zh:'上顎第二乳臼齒', typical:'25–33 months' },
 ]
+// Real anatomical order from the midline outward, used to lay the SVG mouth
+// diagram out left-to-right - TEETH itself stays unordered/by-lookup above.
+const TOOTH_TYPE_ORDER = ['central-incisor','lateral-incisor','canine','first-molar','second-molar']
+const TOOTH_TYPE_OFFSET = { 'central-incisor':14, 'lateral-incisor':32, 'canine':50, 'first-molar':72, 'second-molar':96 }
+const TOOTH_TYPE_WIDTH = { 'central-incisor':15, 'lateral-incisor':16, 'canine':16, 'first-molar':22, 'second-molar':24 }
 
 // bb-01 - the real Hong Kong Childhood Immunisation Programme (HKCIP)
 // schedule, transcribed verbatim from the user's own copy: "Updated
@@ -5586,6 +5591,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [sleepTick,setSleepTick]=useState(0) // forces a re-render every 30s so the live elapsed time moves
   const [immunizationChecks,setImmunizationChecks]=useState([])
   const [teethLog,setTeethLog]=useState([])
+  const [selectedTooth,setSelectedTooth]=useState(null)
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
@@ -5871,6 +5877,20 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     else if (stage==='loose') { await supabase.from('kids_teeth_log').update({ loose_at:null, lost_at:null }).eq('id', existing.id) }
     else { await supabase.from('kids_teeth_log').update({ lost_at:null }).eq('id', existing.id) }
     await load()
+  }
+  // Tapping a tooth on the diagram both selects it (shows its dates below)
+  // and advances it one real stage - translucent (nothing yet) becomes
+  // erupted on the first tap, erupted becomes loose on the next, loose
+  // becomes fallen-out on the one after. A fully-logged tooth just
+  // selects on tap instead of advancing further; correcting a stage is
+  // the explicit Undo link in the detail panel below, not another tap.
+  function handleToothTap(key) {
+    setSelectedTooth(key)
+    const logged = teethLog.find(l=>l.tooth_key===key)
+    const today = new Date().toISOString().slice(0,10)
+    if (!logged?.erupted_at) setToothStage(key,'erupted',today)
+    else if (!logged?.loose_at) setToothStage(key,'loose',today)
+    else if (!logged?.lost_at) setToothStage(key,'lost',today)
   }
 
   const [exportingPdf,setExportingPdf]=useState(false)
@@ -6184,31 +6204,62 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
       <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Typical eruption ranges per the ADA's own eruption chart - timing varies widely between children and isn't a sign of a problem on its own. Three stages per tooth, each with its own real date: erupted, then loose, then fallen out.":'根據美國牙科協會(ADA)的萌牙時間表,僅供參考 - 每個孩子的萌牙時間差異很大,單純較遲並不代表有問題。每顆牙齒分三階段記錄,各有實際日期:萌出、鬆動、脫落。'}</div>
-        {TEETH.map(t=>{
-          const logged = teethLog.find(l=>l.tooth_key===t.key)
-          const stages = [
-            { key:'erupted', label: isEn?'Erupted':'萌出', date: logged?.erupted_at, enabled: true },
-            { key:'loose', label: isEn?'Loose':'鬆動', date: logged?.loose_at, enabled: !!logged?.erupted_at },
-            { key:'lost', label: isEn?'Fell out':'脫落', date: logged?.lost_at, enabled: !!logged?.loose_at },
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Tap a tooth: translucent means not in yet, tap once and it fills in (erupted), tap again once it's loose, tap once more when it falls out. Each tap logs today's real date, editable below. Typical timing per the ADA's own eruption chart - it varies widely between children.":'輕按牙齒:半透明代表尚未萌出,按一下填滿(萌出),鬆動後再按一下,脫落時再按一下。每次點按都會記錄當日實際日期,並可在下方編輯。一般時間參考美國牙科協會(ADA)萌牙時間表 - 每個孩子差異很大。'}</div>
+        <svg viewBox="0 0 300 190" style={{width:'100%',maxWidth:320,display:'block',margin:'0 auto 10px'}}>
+          <ellipse cx="150" cy="95" rx="138" ry="88" fill={C.beige} opacity="0.5"/>
+          <line x1="40" y1="95" x2="260" y2="95" stroke={C.border} strokeWidth="1" strokeDasharray="3,3"/>
+          {['upper','lower'].flatMap(arch => TOOTH_TYPE_ORDER.flatMap(type => {
+            const toothKey = `${arch}-${type}`
+            const t = TEETH.find(tt=>tt.key===toothKey)
+            if (!t) return []
+            const logged = teethLog.find(l=>l.tooth_key===toothKey)
+            const stage = logged?.lost_at ? 'lost' : logged?.loose_at ? 'loose' : logged?.erupted_at ? 'erupted' : 'none'
+            const w = TOOTH_TYPE_WIDTH[type]
+            const offset = TOOTH_TYPE_OFFSET[type]
+            const selected = selectedTooth===toothKey
+            const fill = stage==='lost' ? 'none' : '#fff'
+            const fillOpacity = stage==='none' ? 0.3 : 1
+            const stroke = stage==='loose' ? C.amber : stage==='lost' ? C.textMuted : selected ? __theme.accent : (stage==='erupted' ? __theme.accent : C.border)
+            const strokeDasharray = (stage==='loose'||stage==='lost') ? '3,2' : 'none'
+            return [-1,1].map(side => {
+              const cx = 150 + side*offset
+              const curve = offset*0.14
+              const cy = arch==='upper' ? (58+curve) : (132-curve)
+              const h = 26
+              return (
+                <rect key={`${toothKey}-${side}`} x={cx-w/2} y={cy-h/2} width={w} height={h} rx={6}
+                  fill={fill} fillOpacity={fillOpacity} stroke={stroke} strokeWidth={selected?2.5:1.5} strokeDasharray={strokeDasharray}
+                  onClick={()=>handleToothTap(toothKey)} style={{cursor:'pointer'}}/>
+              )
+            })
+          }))}
+        </svg>
+        {selectedTooth ? (() => {
+          const t = TEETH.find(tt=>tt.key===selectedTooth)
+          const logged = teethLog.find(l=>l.tooth_key===selectedTooth)
+          const rows = [
+            { stage:'erupted', en:'Erupted', zh:'萌出', date: logged?.erupted_at, enabled: true },
+            { stage:'loose', en:'Loose', zh:'鬆動', date: logged?.loose_at, enabled: !!logged?.erupted_at },
+            { stage:'lost', en:'Fell out', zh:'脫落', date: logged?.lost_at, enabled: !!logged?.loose_at },
           ]
           return (
-            <div key={t.key} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
-              <div style={{fontSize:'12.5px',color:C.text,textDecoration:logged?.lost_at?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?t.en:t.zh}</div>
-              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px'}}>{isEn?`Typical eruption: ${t.typical}`:`一般萌出時間:${t.typical}`}</div>
-              <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
-                {stages.map(s=>(
-                  <div key={s.key} style={{display:'flex',alignItems:'center',gap:'6px',opacity:s.enabled?1:0.4}}>
-                    <div onClick={()=>{ if(!s.enabled) return; s.date ? clearToothStage(t.key,s.key) : setToothStage(t.key,s.key,new Date().toISOString().slice(0,10)) }}
-                      style={{width:16,height:16,borderRadius:'4px',border:`1.5px solid ${s.date?__theme.accent:C.border}`,background:s.date?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'10px',color:'#fff',flexShrink:0,cursor:s.enabled?'pointer':'default'}}>{s.date?'✓':''}</div>
-                    <div style={{fontSize:'11px',color:C.textSub}}>{s.label}</div>
-                    {s.date&&<input type="date" value={s.date} onChange={e=>setToothStage(t.key,s.key,e.target.value)} style={{fontSize:'10px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'2px 4px',width:96}}/>}
-                  </div>
-                ))}
-              </div>
+            <div style={{background:C.cream,borderRadius:'10px',padding:'12px 14px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,textDecoration:logged?.lost_at?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?t.en:t.zh}</div>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'8px'}}>{isEn?`Typical eruption: ${t.typical}`:`一般萌出時間:${t.typical}`}</div>
+              {rows.map(r=>(
+                <div key={r.stage} style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px',opacity:r.enabled?1:0.4}}>
+                  <span style={{fontSize:'11px',width:64,color:C.textSub,flexShrink:0}}>{isEn?r.en:r.zh}</span>
+                  {r.date
+                    ? <>
+                        <input type="date" value={r.date} onChange={e=>setToothStage(selectedTooth,r.stage,e.target.value)} style={{fontSize:'11px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'3px 6px',width:108}}/>
+                        <span onClick={()=>clearToothStage(selectedTooth,r.stage)} style={{fontSize:'10px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Undo':'取消'}</span>
+                      </>
+                    : <span style={{fontSize:'11px',color:C.textMuted}}>{r.enabled?(isEn?'Tap the tooth above':'輕按上方牙齒'):(isEn?'Not yet':'尚未')}</span>}
+                </div>
+              ))}
             </div>
           )
-        })}
+        })() : <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center'}}>{isEn?'Tap a tooth above to log it.':'輕按上方牙齒以記錄。'}</div>}
       </Card>
       </>}
 
