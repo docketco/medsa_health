@@ -9,8 +9,8 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const { endpoint, apiKey, body } = req.body || {}
-  if (!['eligibility', 'adjudicate'].includes(endpoint)) {
-    return res.status(400).json({ status: 'ERROR', message: 'endpoint must be eligibility or adjudicate.' })
+  if (!['eligibility', 'adjudicate', 'register_plans'].includes(endpoint)) {
+    return res.status(400).json({ status: 'ERROR', message: 'endpoint must be eligibility, adjudicate, or register_plans.' })
   }
 
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || `https://${req.headers.host}`

@@ -1375,6 +1375,24 @@ function MyPatientsScreen({ queue, onSelectPatient, staffMember, onRefresh, onMa
   )
 }
 
+// gp-02 - structured note templates, raised directly: "do we have specific
+// places and templates for different medical notes" - we didn't, just one
+// flat notes field for every visit type. These are standard structural
+// formats (SOAP is the universal clinical-note skeleton; the well-child
+// headers follow AAP's own visit structure), not clinical content or
+// thresholds, so this doesn't carry the "verify before using" caution the
+// WHO growth tables/HKCIP schedule needed - it's just section headers the
+// doctor fills in themselves. Inserted into the SAME notes field below
+// (no schema change to the note itself) - only which template was picked
+// is tracked separately (note_template), so this stays one real note per
+// visit, not a second parallel structured-data system to keep in sync.
+const NOTE_TEMPLATES = [
+  { key:'general', label:'General', skeleton:'' },
+  { key:'soap', label:'SOAP', skeleton:'Subjective:\n\nObjective:\n\nAssessment:\n\nPlan:\n' },
+  { key:'well_child', label:'Well-child visit', skeleton:'Growth & development:\n\nFeeding/nutrition:\n\nImmunization status:\n\nParent/caregiver concerns:\n\nAnticipatory guidance given:\n\nPlan:\n' },
+  { key:'follow_up', label:'Follow-up', skeleton:'Reason for follow-up:\n\nInterval history since last visit:\n\nResponse to treatment:\n\nExamination findings:\n\nPlan:\n' },
+  { key:'specialist', label:'Specialist consult', skeleton:'Reason for referral:\n\nHistory relevant to referral:\n\nExamination/findings:\n\nImpression:\n\nRecommendation back to referring doctor:\n' },
+]
 function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
   const [records,setRecords]=useState([])
@@ -1383,6 +1401,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [activeMedications,setActiveMedications]=useState([])
   const [loading,setLoading]=useState(true)
   const [notes,setNotes]=useState('')
+  const [noteTemplate,setNoteTemplate]=useState('general')
   const [diagnosis,setDiagnosis]=useState('')
   const [icd10Codes,setIcd10Codes]=useState([])
   const [icd10Search,setIcd10Search]=useState('')
@@ -1893,7 +1912,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         const visitDate = new Date().toISOString().slice(0,10)
         const { error: recErr } = await supabase.from('medical_records').insert({
           patient_id: patient.id, record_type: 'visit', title: visitTitle,
-          notes: notes || null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
+          notes: notes || null, note_template: noteTemplate!=='general' ? noteTemplate : null, diagnosis: diagnosis || null, icd10_code: icd10Codes.length>0 ? icd10Codes.map(c=>c.code).join(', ') : null,
           date_of_record: visitDate, source: 'clinic_ops', record_status: 'submitted',
           line_items: lineItems.length>0 ? lineItems : null, total_fee: invoiceTotal || null,
           doctor_name: staffMember?.name || 'Unknown', appointment_id: queueEntry?.appointmentId || null,
@@ -2131,7 +2150,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       </div>
 
       <SecLabel>Consultation notes</SecLabel>
-      <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={saved} rows={4} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical',background:saved?C.card:'#fff'}}/>
+      {!saved&&<div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'8px'}}>
+        {NOTE_TEMPLATES.map(t=>(
+          <div key={t.key} onClick={()=>{
+            setNoteTemplate(t.key)
+            if (t.skeleton) setNotes(prev => prev.trim() ? prev + (prev.endsWith('\n')?'':'\n') + '\n' + t.skeleton : t.skeleton)
+          }} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:noteTemplate===t.key?C.green:C.card,color:noteTemplate===t.key?'#fff':C.textSub}}>{t.label}</div>
+        ))}
+      </div>}
+      <textarea value={notes} onChange={e=>setNotes(e.target.value)} disabled={saved} rows={6} placeholder="Clinical findings, examination notes, follow-up plan..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'18px',fontFamily:'inherit',resize:'vertical',background:saved?C.card:'#fff'}}/>
 
       {!saved&&<>
         <SecLabel>Outside referral letter (optional)</SecLabel>

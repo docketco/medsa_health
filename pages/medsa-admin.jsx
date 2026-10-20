@@ -307,6 +307,7 @@ function ApiTester({ onTested }) {
   const [hkid, setHkid] = useState('')
   const [policyNumber, setPolicyNumber] = useState('')
   const [totalGrossAmount, setTotalGrossAmount] = useState('500')
+  const [testPlanName, setTestPlanName] = useState('API Test Plan')
   const [sending, setSending] = useState(null)
   const [result, setResult] = useState(null)
   const [open, setOpen] = useState(false)
@@ -317,7 +318,9 @@ function ApiTester({ onTested }) {
     const keyToSend = mode === 'wrong' ? 'medsa_live_0000000000000000000000000000invalid' : mode === 'missing' ? '' : apiKey
     const body = endpoint === 'eligibility'
       ? (policyNumber.trim() ? { policyNumber: policyNumber.trim() } : { hkid: hkid.trim() })
-      : { hkid: hkid.trim(), totalGrossAmount: parseFloat(totalGrossAmount) || 0 }
+      : endpoint === 'adjudicate'
+      ? { hkid: hkid.trim(), totalGrossAmount: parseFloat(totalGrossAmount) || 0 }
+      : { plans: [{ planName: testPlanName.trim(), planType: 'Comprehensive', coveredCategories: 'Outpatient;Specialist', tiers: '0-60:300:360:450:500000' }] }
     const res = await fetch('/api/admin/test_partner_api', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ endpoint, apiKey: keyToSend, body }),
@@ -328,7 +331,7 @@ function ApiTester({ onTested }) {
     onTested?.()
   }
 
-  const canSend = endpoint==='eligibility' ? (hkid.trim()||policyNumber.trim()) : hkid.trim()
+  const canSend = endpoint==='eligibility' ? (hkid.trim()||policyNumber.trim()) : endpoint==='adjudicate' ? hkid.trim() : testPlanName.trim()
 
   return (
     <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
@@ -340,13 +343,14 @@ function ApiTester({ onTested }) {
       {open&&<div style={{marginTop:'12px'}}>
         <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Paste a raw API key (shown once when issued above)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',fontFamily:'monospace'}}/>
         <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
-          {['eligibility','adjudicate'].map(ep => (
-            <div key={ep} onClick={()=>setEndpoint(ep)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:endpoint===ep?C.navy:C.card,color:endpoint===ep?'#fff':C.text}}>POST /{ep}</div>
+          {['eligibility','adjudicate','register_plans'].map(ep => (
+            <div key={ep} onClick={()=>setEndpoint(ep)} style={{flex:1,textAlign:'center',padding:'8px',borderRadius:'8px',fontSize:'11px',fontWeight:600,cursor:'pointer',background:endpoint===ep?C.navy:C.card,color:endpoint===ep?'#fff':C.text}}>POST /{ep}</div>
           ))}
         </div>
-        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="Patient HKID" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        {endpoint!=='register_plans' && <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="Patient HKID" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
         {endpoint==='eligibility' && <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="…or a policyNumber directly (skips HKID lookup)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
         {endpoint==='adjudicate' && <input type="number" value={totalGrossAmount} onChange={e=>setTotalGrossAmount(e.target.value)} placeholder="Total gross amount (HKD)" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+        {endpoint==='register_plans' && <input value={testPlanName} onChange={e=>setTestPlanName(e.target.value)} placeholder="Test plan name" style={{width:'100%',padding:'9px',fontSize:'12px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
 
         <div style={{display:'flex',gap:'8px',marginBottom:'10px',flexWrap:'wrap'}}>
           <button onClick={()=>send('normal')} disabled={!apiKey.trim()||!canSend||!!sending} style={{flex:1,minWidth:120,padding:'9px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{sending==='normal'?'Sending…':'Send with this key'}</button>
@@ -414,7 +418,7 @@ function ApiClientsTab() {
   return (
     <div>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>
-        Insurers who pay to call the adjudication engine (POST /api/v1/eligibility, /api/v1/adjudicate) directly with their own API key - no clinic or patient app involved at all. Real HTTP endpoints, real usage logging, same engine as ClinicOps and the TPA portal.
+        Insurers who pay to call the adjudication engine (POST /api/v1/eligibility, /api/v1/adjudicate) directly with their own API key - no clinic or patient app involved at all. Real HTTP endpoints, real usage logging, same engine as ClinicOps and the TPA portal. POST /api/v1/register_plans is the same key, different job - pm-01's bulk plan registration rebuilt as a real API instead of a CSV upload, so a partner's own system (an insurer, or BeeFintech once that integration exists) can push its catalog whenever it actually changes. Pass externalPlanRef on a plan to make a later call update it instead of creating a duplicate.
       </div>
 
       <ApiTester onTested={load}/>
