@@ -5,6 +5,7 @@ import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../.
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import { ageDaysBetween, percentileBands, growthPercentile } from '../../lib/whoGrowth'
+import { searchPregnancyDrugSafety } from '../../lib/pregnancyDrugSafety'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -6738,6 +6739,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [contractionLogs,setContractionLogs]=useState([])
   const [contractionStart,setContractionStart]=useState(null) // Date while a contraction is being timed
   const [bagChecked,setBagChecked]=useState([])
+  const [drugSafetyQuery,setDrugSafetyQuery]=useState('')
   const [birthPlanForm,setBirthPlanForm]=useState({ painRelief:'', companions:'', feeding:'', specialRequests:'' })
   const [birthPlanSaving,setBirthPlanSaving]=useState(false)
   const [birthPlanSaved,setBirthPlanSaved]=useState(false)
@@ -7627,6 +7629,26 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       </>}
 
       {bumpTab==='tools'&&<>
+      <SecLabel>{isEn?'Medication & supplement safety check':'藥物及保健品安全查詢'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Reference data only, not a safety verdict - always confirm with your own doctor or pharmacist before starting or stopping anything. A name not found here hasn't been checked, not confirmed safe.":'僅供參考,並非安全判斷 - 開始或停止使用任何藥物/保健品前,請務必先諮詢您的醫生或藥劑師。如查詢不到結果,代表尚未收錄,並非代表安全。'}</div>
+        <input value={drugSafetyQuery} onChange={e=>setDrugSafetyQuery(e.target.value)} placeholder={isEn?'Search a medication or supplement name…':'搜尋藥物或保健品名稱…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 11px',fontSize:'13px',marginBottom:'4px'}}/>
+        {drugSafetyQuery.trim().length>0 && (() => {
+          const results = searchPregnancyDrugSafety(drugSafetyQuery)
+          if (results.length===0) return <div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'14px 0'}}>{isEn?'No entry found for that name.':'找不到相關記錄。'}</div>
+          return results.map((d,i)=>(
+            <div key={i} style={{marginTop:'12px',padding:'10px 0',borderTop:`0.5px solid ${C.border}`}}>
+              <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'2px'}}>{d.name}</div>
+              <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'8px'}}>{d.category}</div>
+              <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'6px'}}><strong>{isEn?'Trimester 1: ':'第一孕期:'}</strong>{d.trimester1}</div>
+              <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'6px'}}><strong>{isEn?'Trimester 2 & 3: ':'第二及第三孕期:'}</strong>{d.trimester2and3}</div>
+              <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'6px'}}><strong>{isEn?'Breastfeeding: ':'哺乳期間:'}</strong>{d.breastfeeding}</div>
+              <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}><strong>{isEn?'Summary: ':'摘要:'}</strong>{d.summary}</div>
+            </div>
+          ))
+        })()}
+      </Card>
+
       <SecLabel>{isEn?'Contraction timer':'宮縮計時器'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         {!contractionStart&&<Btn variant="primary" style={{width:'100%'}} onClick={startContraction}>{isEn?'Start contraction':'開始記錄宮縮'}</Btn>}
