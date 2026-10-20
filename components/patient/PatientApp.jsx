@@ -3373,7 +3373,7 @@ const DOC_PREP_PRESETS = [
   'NIPT / T21 screening report', '20-week structural ultrasound', 'OGTT glucose result',
   'GBS swab result', 'Antenatal history card',
 ]
-function DocumentPrepTab({ isEn, patient={} }) {
+function DocumentPrepTab({ isEn, patient={}, records=[] }) {
   const [bundles,setBundles]=useState([])
   const [loading,setLoading]=useState(true)
   const [creating,setCreating]=useState(false)
@@ -3408,7 +3408,7 @@ function DocumentPrepTab({ isEn, patient={} }) {
     setBundles(prev => prev.filter(b=>b.id!==bundleId))
   }
 
-  if (openBundle) return <DocumentPrepBundleDetail isEn={isEn} patient={patient} bundle={openBundle} onBack={()=>setOpenBundleId(null)} onItemsChange={newItems=>updateBundleItems(openBundle.id, newItems)}/>
+  if (openBundle) return <DocumentPrepBundleDetail isEn={isEn} patient={patient} records={records} bundle={openBundle} onBack={()=>setOpenBundleId(null)} onItemsChange={newItems=>updateBundleItems(openBundle.id, newItems)}/>
 
   return (
     <div>
@@ -3571,11 +3571,19 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
   )
 }
 
-function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange }) {
+function DocumentPrepBundleDetail({ isEn, patient, records=[], bundle, onBack, onItemsChange }) {
   const [attachments,setAttachments]=useState([])
   const [pickerForIdx,setPickerForIdx]=useState(null)
+  const [visitPickerForIdx,setVisitPickerForIdx]=useState(null)
   const [uploading,setUploading]=useState(false)
+  const [attachingVisit,setAttachingVisit]=useState(false)
   const [exporting,setExporting]=useState(false)
+
+  // Same real-visit filter ClaimsTab uses ("visits with real receipt/
+  // diagnosis data") - a visit already on file at a Medsa-connected
+  // clinic, so there's a real record/receipt to turn into an attachment
+  // instead of asking the patient to photograph or re-type it.
+  const visitsWithData = records.filter(r => r.total_fee!=null || r.diagnosis)
 
   async function loadAttachments() {
     if (!patient?.id) return
@@ -3584,6 +3592,55 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
     setAttachments(data||[])
   }
   useEffect(() => { loadAttachments() }, [patient?.id])
+
+  // Real gap this closes: the only way to attach something here was a
+  // manual upload or picking a previously-uploaded file - a visit already
+  // captured by a Medsa-connected clinic (real diagnosis/ICD-10/itemized
+  // bill, same data ClaimsTab submits a claim from) had no path into a
+  // bundle at all, forcing the patient to screenshot/retype their own
+  // clinic's own record. Generates a one-page record/receipt PDF straight
+  // from that real data (same drawPdfRecordCard used by every other
+  // export on this screen) and stores it as a normal attachment, so it
+  // flows through the existing merge-export below unchanged. Marked
+  // verified (not 'unverified', unlike every upload path here) since
+  // Medsa generated it directly from its own first-party record, not a
+  // patient-provided photo/file.
+  async function attachVisitRecord(idx, visit) {
+    if (attachingVisit) return
+    setAttachingVisit(true)
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const NAVY = [26,42,74]
+    const institutionName = visit.institutions?.name || (isEn?'Medsa-connected clinic':'Medsa聯網診所')
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''}`
+    drawPdfHeader(doc, pageWidth, subtitle, NAVY)
+    drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
+      title: isEn?'Clinic visit record':'診所就診記錄', subtitle, accentColor: NAVY,
+      dateInstitution: `${visit.date_of_record||''} · ${institutionName}`,
+      details: [
+        [isEn?'Diagnosis':'診斷', visit.diagnosis || '—'],
+        [isEn?'ICD-10 code':'ICD-10代碼', visit.icd10_code || '—'],
+        [isEn?'Doctor':'醫生', visit.doctor_name || '—'],
+        [isEn?'Total billed':'總收費', visit.total_fee!=null ? `HK$${visit.total_fee}` : '—'],
+      ],
+    })
+    drawPdfFooter(doc, pageWidth, pageHeight)
+
+    const blob = doc.output('blob')
+    const fileName = `Visit-record-${visit.date_of_record||'unknown'}.pdf`
+    const path = `${patient.medsa_id || patient.id}/docprep-visit-${visit.id}-${Date.now()}.pdf`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, blob)
+    if (upErr) { setAttachingVisit(false); return }
+    const { data: newAtt } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'claim_document', file_url: path, file_name: fileName,
+      verification_status: 'verified',
+    }).select().maybeSingle()
+    setAttachingVisit(false)
+    setVisitPickerForIdx(null)
+    if (newAtt) { await loadAttachments(); setItemAttachment(idx, newAtt.id) }
+  }
 
   function setItemAttachment(idx, attachmentId) {
     const next = (bundle.items||[]).map((it,i)=> i===idx ? { ...it, attachment_id: attachmentId } : it)
@@ -3714,12 +3771,22 @@ function DocumentPrepBundleDetail({ isEn, patient, bundle, onBack, onItemsChange
             <span onClick={()=>viewAttachment(item.attachment_id)} style={{fontSize:'12px',color:C.navy,cursor:'pointer'}}>📄 {attachments.find(a=>a.id===item.attachment_id)?.file_name||(isEn?'View file':'查看文件')}</span>
             <span onClick={()=>setItemAttachment(idx,null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>
           </div>}
-          {!item.attachment_id && pickerForIdx!==idx && <div style={{display:'flex',gap:'8px'}}>
+          {!item.attachment_id && pickerForIdx!==idx && visitPickerForIdx!==idx && <div style={{display:'flex',gap:'8px'}}>
+            {visitsWithData.length>0&&<Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setVisitPickerForIdx(idx)}>{isEn?'Use a visit record':'使用就診記錄'}</Btn>}
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setPickerForIdx(idx)}>{isEn?'Choose existing':'選擇已有文件'}</Btn>
             <label style={{flex:1}}>
               <div style={{textAlign:'center',border:`1px dashed ${C.border}`,borderRadius:'10px',padding:'9px',cursor:uploading?'default':'pointer',fontSize:'12px',fontWeight:500,opacity:uploading?0.6:1}}>{uploading?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload':'+ 上傳')}</div>
               <input type="file" style={{display:'none'}} disabled={uploading} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) uploadForItem(idx,f)}}/>
             </label>
+          </div>}
+          {visitPickerForIdx===idx && <div style={{marginTop:'6px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>{isEn?'Generates a real record from this visit - no upload needed.':'從此就診記錄直接生成真實文件 - 無需上傳。'}</div>
+            {visitsWithData.map(v=>(
+              <div key={v.id} onClick={()=>attachVisitRecord(idx,v)} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:attachingVisit?'wait':'pointer',fontSize:'12px'}}>
+                {v.date_of_record||''} · {v.institutions?.name||(isEn?'Clinic':'診所')}{v.diagnosis?` - ${v.diagnosis}`:''}
+              </div>
+            ))}
+            <span onClick={()=>!attachingVisit&&setVisitPickerForIdx(null)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',display:'block',marginTop:'6px'}}>{attachingVisit?(isEn?'Generating…':'生成中…'):(isEn?'Cancel':'取消')}</span>
           </div>}
           {pickerForIdx===idx && <div style={{marginTop:'6px'}}>
             {attachments.length===0
@@ -5247,7 +5314,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       {tab==='claims'&&<ClaimsTab isEn={isEn} claims={claims} patient={patient} records={records} activePolicy={activePolicy} heldPolicies={heldPolicies}/>}
 
       {/* ── DOCUMENT PREP ── */}
-      {tab==='documents'&&<DocumentPrepTab isEn={isEn} patient={patient}/>}
+      {tab==='documents'&&<DocumentPrepTab isEn={isEn} patient={patient} records={records}/>}
 
       {/* ── AGENT RATINGS ── */}
       {tab==='agents'&&<>
