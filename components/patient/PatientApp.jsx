@@ -5627,7 +5627,7 @@ const HKCIP_SCHEDULE = [
   ]},
 ]
 
-function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
+function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated, onSwitchToPatient }) {
   const __theme = useContext(ThemeContext)
   const [kidsTab,setKidsTab]=useState('growth')
   const [growthLogs,setGrowthLogs]=useState([])
@@ -5698,6 +5698,97 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   }
   const ageInMonths = patient.date_of_birth ? (Date.now() - new Date(patient.date_of_birth)) / (1000*60*60*24*30.44) : null
   const dueImmunizationBand = ageInMonths!=null ? HKCIP_SCHEDULE.find(band => band.ageMonths!=null && ageInMonths >= band.ageMonths && band.doses.some(d=>!immunizationChecks.some(c=>c.dose_key===d.key))) : null
+
+  // Adult-transfer lifecycle, your call: a Kids profile (dependent_
+  // relationship 'child' only - this never applies to a non-child
+  // dependent like an elderly relative) gets prompted at 16 to either
+  // become its own adult account or convert into a general Guardian
+  // dependent, with a hard deadline at 18. Nothing is ever deleted from
+  // here - at most an admin sweep (medsa-admin) stamps
+  // pending_deletion_at a year past 18 if still undecided, starting a
+  // real but separately-reviewed grace window before an actual delete.
+  const ageYears = ageInMonths!=null ? ageInMonths/12 : null
+  const isChildDependent = patient.account_type==='kids' && (patient.dependent_relationship==null||patient.dependent_relationship==='child')
+  const showAdultTransferBanner = isChildDependent && !patient.adult_transfer_choice && ageYears!=null && ageYears>=16
+  const adultTransferOverdue = showAdultTransferBanner && ageYears>=19
+  const [transferModalOpen,setTransferModalOpen]=useState(false)
+  const [transferHkid,setTransferHkid]=useState('')
+  const [transferPhone,setTransferPhone]=useState('')
+  const [transferSaving,setTransferSaving]=useState(false)
+  const [transferError,setTransferError]=useState(null)
+  const [convertingGuardian,setConvertingGuardian]=useState(false)
+  const [guardianConfirmOpen,setGuardianConfirmOpen]=useState(false)
+  const [exportingKeepsake,setExportingKeepsake]=useState(false)
+
+  // Detaches from the parent account entirely and sets real login
+  // credentials (HKID + phone), same fields LoginFlow checks - this IS
+  // the "transfer as keepsake": no data is copied anywhere, it's the
+  // exact same patient row (every growth/teeth/immunization record
+  // stays attached) just no longer parented, so history survives
+  // completely intact under the now-adult's own account.
+  async function transferToAdultAccount() {
+    setTransferSaving(true); setTransferError(null)
+    const { error } = await supabase.from('patients').update({
+      parent_patient_id: null, account_type: 'regular', dependent_relationship: null,
+      hkid: transferHkid, phone: transferPhone,
+      registration_path: 'adult_transfer', claimed_at: new Date().toISOString(),
+      adult_transfer_choice: 'transferred', adult_transfer_choice_at: new Date().toISOString(),
+    }).eq('id', patient.id)
+    setTransferSaving(false)
+    if (error) { setTransferError(isEn?'Could not complete the transfer - that HKID/phone may already be in use.':'無法完成轉移 - 該身份證號碼/電話可能已被使用。'); return }
+    setTransferModalOpen(false)
+    if (patient.parent_patient_id) {
+      const { data: parentRow } = await supabase.from('patients').select('*').eq('id', patient.parent_patient_id).maybeSingle()
+      if (parentRow) onSwitchToPatient && onSwitchToPatient(parentRow)
+    }
+  }
+  // Stays a dependent (parent keeps full control, same as today) but
+  // moves off the Kids-specific screens - dependent_relationship
+  // leaving 'child' is what already hides Growth & feeding and shows
+  // Community instead (see HomeScreen), the same switch a non-child
+  // dependent (elderly relative, etc.) already gets. No separate
+  // Guardian flag needed - the parent's own Guardian subscription
+  // already covers every dependent on their account uniformly.
+  async function convertToGuardianDependent() {
+    setConvertingGuardian(true)
+    await supabase.from('patients').update({
+      dependent_relationship: 'other',
+      adult_transfer_choice: 'guardian_dependent', adult_transfer_choice_at: new Date().toISOString(),
+    }).eq('id', patient.id)
+    setConvertingGuardian(false)
+    setGuardianConfirmOpen(false)
+    onPatientUpdated && onPatientUpdated()
+  }
+  async function exportKeepsakePdf() {
+    setExportingKeepsake(true)
+    const GREEN = [0,98,65]
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Childhood Health Keepsake`
+    drawPdfHeader(doc, pageWidth, subtitle, GREEN)
+    let y = 40
+    if (growthLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Growth log', subtitle, accentColor: GREEN,
+      dateInstitution: `${growthLogs.length} measurement${growthLogs.length===1?'':'s'}`,
+      details: [...growthLogs].reverse().map(g=>[g.recorded_at, [g.weight_kg!=null?`${g.weight_kg}kg`:null, g.height_cm!=null?`${g.height_cm}cm`:null, g.head_circumference_cm!=null?`head ${g.head_circumference_cm}cm`:null].filter(Boolean).join(' · ')]),
+    })
+    const firstTooth = teethLog.find(l=>l.erupted_at)
+    const fallenOut = TEETH.map(t=>({t,logged:teethLog.find(l=>l.tooth_key===t.key)})).filter(r=>r.logged?.lost_at)
+    if (firstTooth || fallenOut.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Teeth', subtitle, accentColor: GREEN,
+      dateInstitution: firstTooth ? `First tooth: ${TEETH.find(t=>t.key===firstTooth.tooth_key)?.en||firstTooth.tooth_key}, ${firstTooth.erupted_at}` : '',
+      details: fallenOut.map(({t,logged})=>[logged.lost_at, `${t.en} fell out`]),
+    })
+    if (immunizationChecks.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Immunisations (HKCIP)', subtitle, accentColor: GREEN,
+      dateInstitution: `${immunizationChecks.length} dose${immunizationChecks.length===1?'':'s'} recorded`,
+      details: HKCIP_SCHEDULE.flatMap(band=>band.doses).filter(d=>immunizationChecks.some(c=>c.dose_key===d.key)).map(d=>['✓', `${d.vaccine.en}${d.dose.en?` - ${d.dose.en}`:''}`]),
+    })
+    doc.save(`${patient.full_name||'keepsake'}-childhood-health-record.pdf`)
+    setExportingKeepsake(false)
+  }
 
   // Sleep log - the clearest gap against every benchmarked baby tracker
   // (BabyCenter, Ovia Parenting, etc.), which all log sleep alongside
@@ -6120,6 +6211,45 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       {dueImmunizationBand&&<div style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px'}}>
         <div style={{fontSize:'12px',color:C.amber,fontWeight:700}}>{isEn?`Immunisation due: ${dueImmunizationBand.ageLabel.en}`:`疫苗接種提醒：${dueImmunizationBand.ageLabel.zh}`}</div>
         <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'3px'}}>{isEn?'See the HKCIP schedule below.':'請參閱下方HKCIP疫苗接種時間表。'}</div>
+      </div>}
+
+      {showAdultTransferBanner && <div style={{margin:'0 0 16px',padding:'14px',background:adultTransferOverdue?C.redLight:C.amberLight,border:`0.5px solid ${adultTransferOverdue?C.red:C.amber}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12.5px',color:adultTransferOverdue?C.red:C.amber,fontWeight:700,marginBottom:'4px'}}>
+          {adultTransferOverdue
+            ? (isEn?`${patient.full_name||'This profile'} turned 18 over a year ago - this profile will be deleted a year after turning 18 if nothing's done. All history is unrecoverable once that happens.`:`${patient.full_name||'此檔案'}已滿18歲超過一年 - 若未作任何選擇,此檔案將於滿18歲一年後刪除。屆時所有記錄將無法復原。`)
+            : (isEn?`${patient.full_name||'This profile'} is 16+ - time to decide what happens to this profile as an adult.`:`${patient.full_name||'此檔案'}已年滿16歲 - 請決定此檔案成年後的去向。`)}
+        </div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Transfer it to their own account (all history goes with them), convert it to a Guardian dependent if you're staying in control of their care, or export everything now and let the profile be deleted after a year of being unclaimed past 18.":'可轉移為其本人帳戶(所有記錄將一併轉移)、轉為Guardian受養人(由您繼續管理其照護)、或現在匯出所有記錄,並讓檔案在滿18歲一年後(如未被認領)自動刪除。'}</div>
+        <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+          <Btn variant="primary" style={{flex:'1 1 140px'}} onClick={()=>setTransferModalOpen(true)}>{isEn?'Transfer to their own account':'轉移為本人帳戶'}</Btn>
+          <Btn style={{flex:'1 1 140px'}} onClick={()=>setGuardianConfirmOpen(true)}>{isEn?'Convert to Guardian dependent':'轉為Guardian受養人'}</Btn>
+          <Btn style={{flex:'1 1 140px'}} disabled={exportingKeepsake} onClick={exportKeepsakePdf}>{exportingKeepsake?(isEn?'Exporting…':'匯出中…'):(isEn?'📖 Export keepsake record':'📖 匯出紀念記錄')}</Btn>
+        </div>
+      </div>}
+
+      {transferModalOpen && <div onClick={()=>setTransferModalOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Transfer ${patient.full_name||'this profile'} to their own account`:`將${patient.full_name||'此檔案'}轉移為本人帳戶`}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"Every growth, teeth, and immunisation record stays attached - nothing is copied, it just stops being managed under your account. They'll log in with the HKID and phone number you set here.":'所有生長、牙齒及疫苗記錄將完整保留 - 並非複製,只是不再由您的帳戶管理。對方日後將以您在此設定的身份證號碼及電話號碼登入。'}</div>
+          <input value={transferHkid} onChange={e=>setTransferHkid(e.target.value)} placeholder={isEn?"Their HKID":'對方身份證號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input value={transferPhone} onChange={e=>setTransferPhone(e.target.value)} placeholder={isEn?"Their phone number":'對方電話號碼'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {transferError && <div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{transferError}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setTransferModalOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={transferSaving||!transferHkid||!transferPhone} onClick={transferToAdultAccount}>{transferSaving?(isEn?'Transferring…':'轉移中…'):(isEn?'Transfer':'轉移')}</Btn>
+          </div>
+        </div>
+      </div>}
+
+      {guardianConfirmOpen && <div onClick={()=>setGuardianConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Convert ${patient.full_name||'this profile'} to a Guardian dependent`:`將${patient.full_name||'此檔案'}轉為Guardian受養人`}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"You'll keep full control, same as today - this just moves them off the Kids-specific screens (growth charts, teeth, immunisations), since those stop being relevant once they're an adult. Their existing records stay on file.":'您將繼續完全管理此帳戶,一如以往 - 此操作僅將檔案移離兒童專屬畫面(生長圖表、牙齒、疫苗),因為成年後這些已不再適用。現有記錄將繼續保留。'}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
+          </div>
+        </div>
       </div>}
 
       {/* Same sub-tab treatment as the Bump pregnancy log - this screen had
@@ -9850,7 +9980,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
-        {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen} onPatientUpdated={async()=>{
+        {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen} onSwitchToPatient={switchToPatient} onPatientUpdated={async()=>{
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
