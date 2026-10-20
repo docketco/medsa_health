@@ -36,7 +36,7 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -45,6 +45,7 @@ export default function MedsaAdminPage() {
       </div>
       {tab==='carousel' && <CarouselTab/>}
       {tab==='plans' && <AdminPlansTab/>}
+      {tab==='confinement' && <ConfinementHelpersTab/>}
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
@@ -1696,6 +1697,170 @@ function AdminPlansTab() {
           <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
         </div>
       ))}
+    </div>
+  )
+}
+
+// 陪月 (confinement helper) marketplace, admin-managed per your call -
+// no self-serve helper login for now (vetting matters more here than
+// with insurer plans - this is unsupervised access to a newborn), and
+// no listing fee (free to list so supply isn't the bottleneck). Medsa's
+// revenue is a one-time placement fee, tracked here once an inquiry is
+// marked 'confirmed' - collected directly (bank transfer/invoice),
+// same as everywhere else in the app that doesn't hold client money.
+function ConfinementHelpersTab() {
+  const [subTab, setSubTab] = useState('helpers')
+  const [helpers, setHelpers] = useState([])
+  const [inquiries, setInquiries] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState({ display_name:'', bio:'', years_experience:'', babies_cared_for_count:'', service_type:'live_in', rate_hkd:'', rate_unit:'month', languages:'', availability_start_date:'', availability_end_date:'', phone:'', email:'', status:'pending_verification', admin_notes:'' })
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const [{data:h},{data:inq}] = await Promise.all([
+      supabase.from('confinement_helpers').select('*').order('created_at',{ascending:false}),
+      supabase.from('confinement_inquiries').select('*, confinement_helpers(display_name), patients(full_name, phone)').order('created_at',{ascending:false}),
+    ])
+    setHelpers(h||[]); setInquiries(inq||[]); setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  function startEdit(h) {
+    setEditing(h)
+    setForm({ display_name:h.display_name||'', bio:h.bio||'', years_experience:h.years_experience??'', babies_cared_for_count:h.babies_cared_for_count??'', service_type:h.service_type||'live_in', rate_hkd:h.rate_hkd??'', rate_unit:h.rate_unit||'month', languages:(h.languages||[]).join(', '), availability_start_date:h.availability_start_date||'', availability_end_date:h.availability_end_date||'', phone:h.phone||'', email:h.email||'', status:h.status||'pending_verification', admin_notes:h.admin_notes||'' })
+    setCreating(true)
+  }
+
+  async function handleSubmit() {
+    if (!form.display_name.trim()) return
+    setSaving(true)
+    const payload = {
+      display_name: form.display_name.trim(), bio: form.bio.trim()||null,
+      years_experience: form.years_experience?Number(form.years_experience):null,
+      babies_cared_for_count: form.babies_cared_for_count?Number(form.babies_cared_for_count):null,
+      service_type: form.service_type, rate_hkd: form.rate_hkd?Number(form.rate_hkd):null, rate_unit: form.rate_unit,
+      languages: form.languages.split(',').map(s=>s.trim()).filter(Boolean),
+      availability_start_date: form.availability_start_date||null, availability_end_date: form.availability_end_date||null,
+      phone: form.phone.trim()||null, email: form.email.trim()||null, status: form.status, admin_notes: form.admin_notes.trim()||null,
+      updated_at: new Date().toISOString(),
+    }
+    if (editing) await supabase.from('confinement_helpers').update(payload).eq('id', editing.id)
+    else await supabase.from('confinement_helpers').insert(payload)
+    setSaving(false); setCreating(false); setEditing(null)
+    load()
+  }
+
+  const INQUIRY_STATUSES = ['inquiry','contacted','confirmed','completed','cancelled']
+  async function advanceInquiryStatus(inq) {
+    const next = INQUIRY_STATUSES[(INQUIRY_STATUSES.indexOf(inq.status)+1) % INQUIRY_STATUSES.length]
+    await supabase.from('confinement_inquiries').update({ status: next, updated_at: new Date().toISOString() }).eq('id', inq.id)
+    load()
+  }
+  const FEE_STATUSES = ['n/a','pending','invoiced','paid']
+  async function advanceFeeStatus(inq) {
+    const next = FEE_STATUSES[(FEE_STATUSES.indexOf(inq.placement_fee_status)+1) % FEE_STATUSES.length]
+    await supabase.from('confinement_inquiries').update({ placement_fee_status: next }).eq('id', inq.id)
+    load()
+  }
+  async function saveFee(inqId, value) {
+    await supabase.from('confinement_inquiries').update({ placement_fee_hkd: value?Number(value):null }).eq('id', inqId)
+    load()
+  }
+
+  const pendingCount = inquiries.filter(i=>i.status==='inquiry').length
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>陪月 (confinement helper) directory - free to list, no self-serve login. Medsa's revenue is a one-time placement fee once an inquiry is marked "confirmed", tracked below and collected directly (bank transfer/invoice) - Medsa never holds the family's or helper's money.</div>
+
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+        {[['helpers','Helpers'],['inquiries',`Inquiries${pendingCount>0?` (${pendingCount})`:''}`]].map(([k,l])=>(
+          <div key={k} onClick={()=>setSubTab(k)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:subTab===k?C.green:C.card,color:subTab===k?'#fff':C.text}}>{l}</div>
+        ))}
+      </div>
+
+      {subTab==='helpers'&&<>
+        {!creating&&<button onClick={()=>{setCreating(true);setEditing(null);setForm({ display_name:'', bio:'', years_experience:'', babies_cared_for_count:'', service_type:'live_in', rate_hkd:'', rate_unit:'month', languages:'', availability_start_date:'', availability_end_date:'', phone:'', email:'', status:'pending_verification', admin_notes:'' })}} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add a helper</button>}
+
+        {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+          <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>{editing?`Edit ${editing.display_name}`:'New helper'}</div>
+          <input value={form.display_name} onChange={e=>setForm(f=>({...f,display_name:e.target.value}))} placeholder="Display name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <textarea value={form.bio} onChange={e=>setForm(f=>({...f,bio:e.target.value}))} placeholder="Bio / experience summary" rows={3} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',fontFamily:'inherit'}}/>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input type="number" value={form.years_experience} onChange={e=>setForm(f=>({...f,years_experience:e.target.value}))} placeholder="Years experience" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+            <input type="number" value={form.babies_cared_for_count} onChange={e=>setForm(f=>({...f,babies_cared_for_count:e.target.value}))} placeholder="Babies cared for" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Service type</div>
+          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+            {[['live_in','Live-in'],['day_8hr','8hr/day'],['hourly','Hourly']].map(([v,l])=>(
+              <div key={v} onClick={()=>setForm(f=>({...f,service_type:v}))} style={{flex:1,padding:'8px',textAlign:'center',borderRadius:'8px',fontSize:'12px',cursor:'pointer',background:form.service_type===v?C.green:C.card,color:form.service_type===v?'#fff':C.text}}>{l}</div>
+            ))}
+          </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input type="number" value={form.rate_hkd} onChange={e=>setForm(f=>({...f,rate_hkd:e.target.value}))} placeholder="Rate (HK$)" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+            <select value={form.rate_unit} onChange={e=>setForm(f=>({...f,rate_unit:e.target.value}))} style={{flex:1,padding:'10px',fontSize:'13px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff'}}>
+              <option value="month">per month</option><option value="day">per day</option><option value="hour">per hour</option>
+            </select>
+          </div>
+          <input value={form.languages} onChange={e=>setForm(f=>({...f,languages:e.target.value}))} placeholder="Languages (comma-separated, e.g. Cantonese, Mandarin, English)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Availability window</div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input type="date" value={form.availability_start_date} onChange={e=>setForm(f=>({...f,availability_start_date:e.target.value}))} style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+            <input type="date" value={form.availability_end_date} onChange={e=>setForm(f=>({...f,availability_end_date:e.target.value}))} style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          </div>
+          <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{flex:1,padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          </div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Status</div>
+          <div style={{display:'flex',gap:'6px',marginBottom:'10px'}}>
+            {[['pending_verification','Pending'],['active','Active'],['inactive','Inactive']].map(([v,l])=>(
+              <div key={v} onClick={()=>setForm(f=>({...f,status:v}))} style={{flex:1,padding:'8px',textAlign:'center',borderRadius:'8px',fontSize:'12px',cursor:'pointer',background:form.status===v?C.green:C.card,color:form.status===v?'#fff':C.text}}>{l}</div>
+            ))}
+          </div>
+          <textarea value={form.admin_notes} onChange={e=>setForm(f=>({...f,admin_notes:e.target.value}))} placeholder="Admin notes (certifications, verification steps taken, etc. - not shown to patients)" rows={2} style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',fontFamily:'inherit'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>{setCreating(false);setEditing(null)}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+            <button onClick={handleSubmit} disabled={saving||!form.display_name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':editing?'Save changes':'Add helper'}</button>
+          </div>
+        </div>}
+
+        {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+        {!loading&&helpers.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No helpers yet.</div>}
+        {!loading&&helpers.map(h=>(
+          <div key={h.id} onClick={()=>startEdit(h)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'8px',cursor:'pointer'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:'14px',fontWeight:600}}>{h.display_name}</div>
+                <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{({live_in:'Live-in',day_8hr:'8hr/day',hourly:'Hourly'})[h.service_type]}{h.rate_hkd?` · HK$${h.rate_hkd}/${h.rate_unit}`:''}{h.years_experience?` · ${h.years_experience}y exp`:''}</div>
+              </div>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:h.status==='active'?C.greenLight:h.status==='pending_verification'?C.amberLight:C.card,color:h.status==='active'?C.green:h.status==='pending_verification'?C.amber:C.textMuted,fontWeight:600,whiteSpace:'nowrap'}}>{h.status}</span>
+            </div>
+          </div>
+        ))}
+      </>}
+
+      {subTab==='inquiries'&&<>
+        {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+        {!loading&&inquiries.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No inquiries yet.</div>}
+        {!loading&&inquiries.map(inq=>(
+          <div key={inq.id} style={{background:C.cream,border:`0.5px solid ${inq.status==='inquiry'?C.amber:C.border}`,borderRadius:'12px',padding:'12px 16px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{inq.patients?.full_name||'Unknown patient'} → {inq.confinement_helpers?.display_name||'Unknown helper'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{inq.requested_start_date||'?'} – {inq.requested_end_date||'?'}{inq.patients?.phone?` · ${inq.patients.phone}`:''}</div>
+            {inq.message&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'4px',fontStyle:'italic'}}>"{inq.message}"</div>}
+            <div style={{display:'flex',alignItems:'center',gap:'8px',marginTop:'8px',flexWrap:'wrap'}}>
+              <span onClick={()=>advanceInquiryStatus(inq)} style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',cursor:'pointer',fontWeight:600,background:inq.status==='confirmed'||inq.status==='completed'?C.greenLight:inq.status==='cancelled'?C.card:C.amberLight,color:inq.status==='confirmed'||inq.status==='completed'?C.green:inq.status==='cancelled'?C.textMuted:C.amber}}>{inq.status} - tap to advance</span>
+              {(inq.status==='confirmed'||inq.status==='completed')&&<>
+                <input type="number" defaultValue={inq.placement_fee_hkd||''} onBlur={e=>saveFee(inq.id, e.target.value)} placeholder="Placement fee HK$" style={{width:120,padding:'5px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'6px'}}/>
+                <span onClick={()=>advanceFeeStatus(inq)} style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',cursor:'pointer',fontWeight:600,background:inq.placement_fee_status==='paid'?C.greenLight:inq.placement_fee_status==='invoiced'?C.amberLight:C.card,color:inq.placement_fee_status==='paid'?C.green:inq.placement_fee_status==='invoiced'?C.amber:C.textMuted}}>{inq.placement_fee_status} - tap to advance</span>
+              </>}
+            </div>
+          </div>
+        ))}
+      </>}
     </div>
   )
 }
