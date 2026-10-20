@@ -5511,8 +5511,20 @@ const TEETH = [
 // Real anatomical order from the midline outward, used to lay the SVG mouth
 // diagram out left-to-right - TEETH itself stays unordered/by-lookup above.
 const TOOTH_TYPE_ORDER = ['central-incisor','lateral-incisor','canine','first-molar','second-molar']
-const TOOTH_TYPE_OFFSET = { 'central-incisor':14, 'lateral-incisor':32, 'canine':50, 'first-molar':72, 'second-molar':96 }
-const TOOTH_TYPE_WIDTH = { 'central-incisor':15, 'lateral-incisor':16, 'canine':16, 'first-molar':22, 'second-molar':24 }
+const TOOTH_TYPE_OFFSET = { 'central-incisor':13, 'lateral-incisor':30, 'canine':47, 'first-molar':68, 'second-molar':90 }
+const TOOTH_TYPE_WIDTH = { 'central-incisor':13, 'lateral-incisor':14, 'canine':13, 'first-molar':19, 'second-molar':21 }
+// A real tooth-crown silhouette (domed gum-side, flat/rounded biting
+// edge) instead of a plain rounded rectangle - built once per type/width
+// so the diagram reads as actual teeth, not checkboxes. Always drawn
+// dome-up; the caller rotates 180° around its own center for the lower
+// arch, where the biting edge faces up instead of down.
+function toothCrownPath(cx, cy, w, h, pointed) {
+  const top = cy - h/2, bottom = cy + h/2
+  const left = cx - w/2, right = cx + w/2
+  const domeLift = pointed ? 7 : 2.5
+  const r = 3.5
+  return `M${left},${bottom-r} L${left},${top+6} C${left},${top-domeLift*0.3} ${left+w*0.22},${top-domeLift} ${cx},${top-domeLift} C${right-w*0.22},${top-domeLift} ${right},${top-domeLift*0.3} ${right},${top+6} L${right},${bottom-r} Q${right},${bottom} ${right-r},${bottom} L${left+r},${bottom} Q${left},${bottom} ${left},${bottom-r} Z`
+}
 
 // bb-01 - the real Hong Kong Childhood Immunisation Programme (HKCIP)
 // schedule, transcribed verbatim from the user's own copy: "Updated
@@ -5849,47 +5861,40 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load()
   }
 
-  // Real gap from your feedback: a tooth's actual lifecycle doesn't end
-  // at eruption - it goes on to get loose and eventually fall out
-  // (replaced by the permanent tooth), each its own dated event worth
-  // recording, not just "in or not." Three independent, sequential date
-  // columns (erupted_at/loose_at/lost_at) on the same row rather than a
-  // single status enum, so each stage keeps its own real date exactly
-  // like erupted_at always has.
+  // Simplified per your call - just the two real events you actually
+  // want tracked: erupted and fell out. (loose_at stays in the DB,
+  // frozen not dropped - this sandbox's DROP COLUMN hangs - just unused
+  // from here on.) Two independent dated columns on the same row.
   async function setToothStage(key, stage, dateStr) {
     const existing = teethLog.find(t=>t.tooth_key===key)
-    const col = stage==='erupted' ? 'erupted_at' : stage==='loose' ? 'loose_at' : 'lost_at'
+    const col = stage==='erupted' ? 'erupted_at' : 'lost_at'
     if (!existing) {
-      if (stage!=='erupted') return // can't skip straight to loose/lost with no row yet
+      if (stage!=='erupted') return // can't skip straight to fell-out with no row yet
       await supabase.from('kids_teeth_log').insert({ patient_id: patient.id, tooth_key: key, erupted_at: dateStr })
     } else {
       await supabase.from('kids_teeth_log').update({ [col]: dateStr }).eq('id', existing.id)
     }
     await load()
   }
-  // Clearing a stage also clears whatever came after it - a tooth that's
-  // no longer marked loose can't still be marked fallen out, and
-  // un-erupting one removes the whole row (same as the old toggle).
+  // Clearing erupted also clears fell-out - a tooth that was never marked
+  // in can't still be marked fallen out.
   async function clearToothStage(key, stage) {
     const existing = teethLog.find(t=>t.tooth_key===key)
     if (!existing) return
     if (stage==='erupted') { await supabase.from('kids_teeth_log').delete().eq('id', existing.id) }
-    else if (stage==='loose') { await supabase.from('kids_teeth_log').update({ loose_at:null, lost_at:null }).eq('id', existing.id) }
     else { await supabase.from('kids_teeth_log').update({ lost_at:null }).eq('id', existing.id) }
     await load()
   }
   // Tapping a tooth on the diagram both selects it (shows its dates below)
-  // and advances it one real stage - translucent (nothing yet) becomes
-  // erupted on the first tap, erupted becomes loose on the next, loose
-  // becomes fallen-out on the one after. A fully-logged tooth just
-  // selects on tap instead of advancing further; correcting a stage is
-  // the explicit Undo link in the detail panel below, not another tap.
+  // and advances it one stage - translucent (nothing yet) becomes
+  // erupted (opaque) on the first tap, erupted becomes fallen-out (taken
+  // off) on the next. A fully-logged tooth just selects on tap; Undo in
+  // the detail panel below corrects a stage instead of another tap.
   function handleToothTap(key) {
     setSelectedTooth(key)
     const logged = teethLog.find(l=>l.tooth_key===key)
     const today = new Date().toISOString().slice(0,10)
     if (!logged?.erupted_at) setToothStage(key,'erupted',today)
-    else if (!logged?.loose_at) setToothStage(key,'loose',today)
     else if (!logged?.lost_at) setToothStage(key,'lost',today)
   }
 
@@ -6204,31 +6209,39 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
       <SecLabel>{isEn?'Teeth':'牙齒'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Tap a tooth: translucent means not in yet, tap once and it fills in (erupted), tap again once it's loose, tap once more when it falls out. Each tap logs today's real date, editable below. Typical timing per the ADA's own eruption chart - it varies widely between children.":'輕按牙齒:半透明代表尚未萌出,按一下填滿(萌出),鬆動後再按一下,脫落時再按一下。每次點按都會記錄當日實際日期,並可在下方編輯。一般時間參考美國牙科協會(ADA)萌牙時間表 - 每個孩子差異很大。'}</div>
-        <svg viewBox="0 0 300 190" style={{width:'100%',maxWidth:320,display:'block',margin:'0 auto 10px'}}>
-          <ellipse cx="150" cy="95" rx="138" ry="88" fill={C.beige} opacity="0.5"/>
-          <line x1="40" y1="95" x2="260" y2="95" stroke={C.border} strokeWidth="1" strokeDasharray="3,3"/>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Tap a tooth: it fills in white when it's erupted, tap again and it's taken off when it falls out. Each tap logs today's real date, editable below. Typical timing per the ADA's own eruption chart - it varies widely between children.":'輕按牙齒:萌出時會填滿白色,脫落時再按一下便會移除。每次點按都會記錄當日實際日期,並可在下方編輯。一般時間參考美國牙科協會(ADA)萌牙時間表 - 每個孩子差異很大。'}</div>
+        <svg viewBox="0 0 300 180" style={{width:'100%',maxWidth:300,display:'block',margin:'0 auto 10px'}}>
+          <line x1="55" y1="90" x2="245" y2="90" stroke={C.border} strokeWidth="0.75" strokeDasharray="2,3"/>
           {['upper','lower'].flatMap(arch => TOOTH_TYPE_ORDER.flatMap(type => {
             const toothKey = `${arch}-${type}`
             const t = TEETH.find(tt=>tt.key===toothKey)
             if (!t) return []
             const logged = teethLog.find(l=>l.tooth_key===toothKey)
-            const stage = logged?.lost_at ? 'lost' : logged?.loose_at ? 'loose' : logged?.erupted_at ? 'erupted' : 'none'
+            const stage = logged?.lost_at ? 'lost' : logged?.erupted_at ? 'erupted' : 'none'
             const w = TOOTH_TYPE_WIDTH[type]
             const offset = TOOTH_TYPE_OFFSET[type]
-            const selected = selectedTooth===toothKey
-            const fill = stage==='lost' ? 'none' : '#fff'
-            const fillOpacity = stage==='none' ? 0.3 : 1
-            const stroke = stage==='loose' ? C.amber : stage==='lost' ? C.textMuted : selected ? __theme.accent : (stage==='erupted' ? __theme.accent : C.border)
-            const strokeDasharray = (stage==='loose'||stage==='lost') ? '3,2' : 'none'
+            const h = 24
             return [-1,1].map(side => {
               const cx = 150 + side*offset
-              const curve = offset*0.14
-              const cy = arch==='upper' ? (58+curve) : (132-curve)
-              const h = 26
+              const curve = offset*0.16
+              const cy = arch==='upper' ? (54+curve) : (126-curve)
+              const selected = selectedTooth===toothKey
+              const renderKey = `${toothKey}-${side}`
+              // "Taken off" - no tooth shape at all once it's fallen out,
+              // just a faint dashed gap on the gumline so there's still
+              // something to tap (view the dates, Undo) without it
+              // reading as "not erupted yet."
+              if (stage==='lost') {
+                return <ellipse key={renderKey} cx={cx} cy={arch==='upper'?cy-6:cy+6} rx={w/2-1} ry={2.5}
+                  fill="none" stroke={selected?__theme.accent:C.border} strokeWidth={selected?1.5:1} strokeDasharray="2,2"
+                  onClick={()=>{setSelectedTooth(toothKey)}} style={{cursor:'pointer'}}/>
+              }
+              const d = toothCrownPath(cx, cy, w, h, type==='canine')
+              const fillOpacity = stage==='erupted' ? 1 : 0.1
+              const stroke = selected ? __theme.accent : (stage==='erupted' ? C.text : C.border)
               return (
-                <rect key={`${toothKey}-${side}`} x={cx-w/2} y={cy-h/2} width={w} height={h} rx={6}
-                  fill={fill} fillOpacity={fillOpacity} stroke={stroke} strokeWidth={selected?2.5:1.5} strokeDasharray={strokeDasharray}
+                <path key={renderKey} d={d} transform={arch==='lower'?`rotate(180 ${cx} ${cy})`:undefined}
+                  fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={selected?2:1.2} strokeDasharray={stage==='none'?'2,2':'none'}
                   onClick={()=>handleToothTap(toothKey)} style={{cursor:'pointer'}}/>
               )
             })
@@ -6239,8 +6252,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           const logged = teethLog.find(l=>l.tooth_key===selectedTooth)
           const rows = [
             { stage:'erupted', en:'Erupted', zh:'萌出', date: logged?.erupted_at, enabled: true },
-            { stage:'loose', en:'Loose', zh:'鬆動', date: logged?.loose_at, enabled: !!logged?.erupted_at },
-            { stage:'lost', en:'Fell out', zh:'脫落', date: logged?.lost_at, enabled: !!logged?.loose_at },
+            { stage:'lost', en:'Fell out', zh:'脫落', date: logged?.lost_at, enabled: !!logged?.erupted_at },
           ]
           return (
             <div style={{background:C.cream,borderRadius:'10px',padding:'12px 14px'}}>
