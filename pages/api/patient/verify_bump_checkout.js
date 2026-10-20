@@ -8,7 +8,6 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { retrievePaidSession } from '../../../lib/verifyStripeCheckout'
-import { BUMP_LOYALTY_CREDIT_HKD } from '../../../lib/bumpPricing'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -26,7 +25,6 @@ export default async function handler(req, res) {
     .select('id').eq('stripe_checkout_session_id', session.id).maybeSingle()
   if (existing) return res.status(200).json({ status: 'OK', alreadyApplied: true })
 
-  const isLoyaltyCredit = session.metadata?.bump_is_loyalty_credit === 'true'
   const { error: insErr } = await supabase.from('bump_subscriptions').insert({
     patient_id: patientId,
     predicted_due_date: session.metadata?.bump_predicted_due_date || null,
@@ -34,7 +32,7 @@ export default async function handler(req, res) {
     discovered_pregnant_at: session.metadata?.bump_discovered_pregnant_at || null,
     stripe_checkout_session_id: session.id,
     amount_paid_hkd: (session.amount_total || 0) / 100,
-    is_loyalty_discount: isLoyaltyCredit,
+    is_loyalty_discount: session.metadata?.bump_is_loyalty_discount === 'true',
   })
   // The select-then-insert above isn't atomic - two calls landing within
   // the same window (e.g. a double effect-fire on return from Stripe) can
@@ -44,18 +42,6 @@ export default async function handler(req, res) {
   // other call already won, so treat it the same as alreadyApplied rather
   // than surfacing a spurious error.
   if (insErr && insErr.code !== '23505') return res.status(200).json({ status: 'ERROR', message: insErr.message })
-  const alreadyApplied = insErr?.code === '23505'
 
-  // Loyalty redirect: Bump itself was charged full price (see
-  // create_bump_checkout.js) - this is where the same value actually
-  // becomes a credit, applied toward Guardian instead of this purchase.
-  // Reads the current balance rather than a blind increment so a retry
-  // of this same session (already caught by alreadyApplied above) can
-  // never double-grant it.
-  if (isLoyaltyCredit && !alreadyApplied) {
-    const { data: p } = await supabase.from('patients').select('bump_loyalty_credit_hkd').eq('id', patientId).maybeSingle()
-    await supabase.from('patients').update({ bump_loyalty_credit_hkd: (p?.bump_loyalty_credit_hkd||0) + BUMP_LOYALTY_CREDIT_HKD }).eq('id', patientId)
-  }
-
-  return res.status(200).json({ status: 'OK', alreadyApplied })
+  return res.status(200).json({ status: 'OK', alreadyApplied: insErr?.code === '23505' })
 }

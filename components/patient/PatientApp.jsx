@@ -6371,6 +6371,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [epdsResult,setEpdsResult]=useState(null)
   const [activePolicy,setActivePolicy]=useState(null)
   const [exportingAdmission,setExportingAdmission]=useState(false)
+  // Your call: this is the actual main point of recording everything
+  // above - a mother picking what goes into her own keepsake, not a
+  // clinical handoff document. Reuses the same data already loaded by
+  // load() below (no new queries) and the same PDF helpers as the three
+  // clinical exports above, just letting the patient choose the
+  // sections instead of a fixed clinical set.
+  const [journalExportOpen,setJournalExportOpen]=useState(false)
+  const [journalSections,setJournalSections]=useState({ pregnancy:true, bp:true, glucose:true, kicks:true, biometry:true, recovery:true, epds:true, journal:true, birthPlan:true, documents:true })
+  const [exportingJournal,setExportingJournal]=useState(false)
   const [biometryLogs,setBiometryLogs]=useState([])
   const [biometryForm,setBiometryForm]=useState({ scanDate:'', efw:'' })
   // Tools tab - contraction timer, hospital bag checklist, birth plan
@@ -6733,6 +6742,112 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
     setExportingHandoff(false)
   }
 
+  // Your call: the actual main point of recording everything this
+  // screen tracks isn't a clinical handoff - it's letting the mother
+  // keep it, on her own terms, choosing what goes in. Reuses the same
+  // state already loaded above (no new queries) and the same PDF
+  // helpers as the three clinical exports, just letting the patient
+  // pick sections instead of a fixed clinical set.
+  async function downloadJournalExport() {
+    if (!bumpSubscriptionId) return
+    setExportingJournal(true)
+    const PINK = [244,143,167]
+    const { jsPDF } = await import('jspdf')
+    const doc = new jsPDF()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · My Pregnancy & Postpartum Journal`
+    drawPdfHeader(doc, pageWidth, subtitle, PINK)
+    let y = 40
+    const s = journalSections
+
+    if (s.pregnancy) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Pregnancy', subtitle, accentColor: PINK,
+      dateInstitution: bumpRow?.started_at ? `Medsa Bump started ${new Date(bumpRow.started_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}` : '',
+      details: [
+        ...(bumpRow?.predicted_due_date ? [['Predicted due date', new Date(bumpRow.predicted_due_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})]] : []),
+        ...(bumpRow?.child_dob ? [['Born', `${new Date(bumpRow.child_dob).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}${bumpRow.child_full_name?` - ${bumpRow.child_full_name}`:''}`]] : []),
+      ],
+    })
+
+    if (s.bp && bpLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Blood pressure log', subtitle, accentColor: PINK,
+      dateInstitution: `${bpLogs.length} reading${bpLogs.length===1?'':'s'}`,
+      details: [...bpLogs].reverse().map(b=>[new Date(b.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${b.systolic}/${b.diastolic} mmHg`]),
+    })
+
+    if (s.glucose && glucoseLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Blood glucose log', subtitle, accentColor: PINK,
+      dateInstitution: `${glucoseLogs.length} reading${glucoseLogs.length===1?'':'s'}`,
+      details: [...glucoseLogs].reverse().map(g=>{
+        const ctx = GLUCOSE_CONTEXTS.find(c=>c.value===g.context)
+        return [new Date(g.recorded_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${g.glucose_mg_dl} mg/dL${ctx?` (${ctx.en})`:''}`]
+      }),
+    })
+
+    if (s.kicks && kickLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Kick-count sessions', subtitle, accentColor: PINK,
+      dateInstitution: `${kickLogs.length} session${kickLogs.length===1?'':'s'}`,
+      details: [...kickLogs].reverse().map(k=>[new Date(k.started_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${k.kick_count} kicks`]),
+    })
+
+    if (s.biometry && biometryLogs.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Ultrasound scans', subtitle, accentColor: PINK,
+      dateInstitution: `${biometryLogs.length} scan${biometryLogs.length===1?'':'s'}`,
+      details: [...biometryLogs].reverse().map(b=>[new Date(b.scan_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), `Estimated weight: ${b.efw_grams}g`]),
+    })
+
+    if (s.recovery && recoveryChecks.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Postpartum recovery checklist', subtitle, accentColor: PINK,
+      dateInstitution: `${recoveryChecks.length} of ${POSTPARTUM_RECOVERY_ITEMS.length} items addressed`,
+      details: POSTPARTUM_RECOVERY_ITEMS.filter(item=>recoveryChecks.some(r=>r.item_key===item.key)).map(item=>['✓', item.en]),
+    })
+
+    if (s.epds && epdsScreens.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Mental health check-ins (EPDS)', subtitle, accentColor: PINK,
+      dateInstitution: `${epdsScreens.length} check-in${epdsScreens.length===1?'':'s'}`,
+      details: [...epdsScreens].reverse().map(e=>[new Date(e.completed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}), `${e.total_score} / 30${e.item10_flagged?' (self-harm item flagged - discussed with provider)':''}`]),
+    })
+
+    if (s.journal && journalEntries.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Mood & symptom journal', subtitle, accentColor: PINK,
+      dateInstitution: `${journalEntries.length} entr${journalEntries.length===1?'y':'ies'} - your own words, kept as written`,
+      details: [...journalEntries].reverse().map(j=>{
+        const moodOpt = MOOD_OPTIONS.find(m=>m.value===j.mood)
+        return [new Date(j.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})+(moodOpt?` (${moodOpt.en})`:''), j.entry_text]
+      }),
+    })
+
+    if (s.birthPlan && Object.values(birthPlanForm).some(v=>v?.trim())) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Birth plan', subtitle, accentColor: PINK,
+      dateInstitution: 'Your own preferences, as recorded',
+      details: [
+        ...(birthPlanForm.painRelief?.trim() ? [['Pain relief preferences', birthPlanForm.painRelief]] : []),
+        ...(birthPlanForm.companions?.trim() ? [['Who you wanted in the room', birthPlanForm.companions]] : []),
+        ...(birthPlanForm.feeding?.trim() ? [['Feeding intentions', birthPlanForm.feeding]] : []),
+        ...(birthPlanForm.specialRequests?.trim() ? [['Other special requests', birthPlanForm.specialRequests]] : []),
+      ],
+    })
+
+    if (s.documents && documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'Uploaded documents', subtitle, accentColor: PINK,
+      dateInstitution: `${documents.length} document${documents.length===1?'':'s'} - see Account Settings to view the actual files`,
+      details: documents.map(d=>{
+        const t = BUMP_DOC_TYPES.find(t=>t.value===d.category)
+        return [t?t.label.en:d.category, d.file_name]
+      }),
+    })
+
+    drawPdfFooter(doc, pageWidth, pageHeight)
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = `Medsa-Bump-My-Journal-${patient.medsa_id||'export'}.pdf`
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setExportingJournal(false); setJournalExportOpen(false)
+  }
+
   async function addBp() {
     if (!bumpSubscriptionId || !bpForm.systolic || !bpForm.diastolic) return
     setSaving(true)
@@ -6808,7 +6923,36 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         <div onClick={exportingPdf?undefined:downloadMaternalSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingPdf?'wait':'pointer',textDecoration:'underline'}}>{exportingPdf?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export maternal health summary PDF':'⬇ 匯出孕產健康摘要PDF')}</div>
         <div onClick={exportingHandoff?undefined:downloadHandoffSummary} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingHandoff?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingHandoff?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export handoff summary for a new doctor/hospital':'⬇ 匯出轉介摘要（供新醫生／醫院使用）')}</div>
         <div onClick={exportingAdmission?undefined:downloadAdmissionPacket} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:exportingAdmission?'wait':'pointer',textDecoration:'underline',marginTop:'6px'}}>{exportingAdmission?(isEn?'Generating…':'生成中…'):(isEn?'⬇ Export hospital pre-admission packet':'⬇ 匯出醫院入院前摘要')}</div>
+        <div onClick={()=>setJournalExportOpen(true)} style={{fontSize:'12px',fontWeight:700,color:__theme.accent,cursor:'pointer',textDecoration:'underline',marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${__theme.accentLight}`}}>{isEn?'📖 Export your own keepsake journal':'📖 匯出個人紀念日記'}</div>
       </div>
+
+      {journalExportOpen&&<div onClick={()=>setJournalExportOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:420,width:'100%',maxHeight:'80vh',overflowY:'auto'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?'Your keepsake journal':'您的個人紀念日記'}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"This is yours to keep, not a clinical document - choose what you want included.":'這是屬於您自己的記錄,並非臨床文件 - 請選擇想包含的內容。'}</div>
+          {[
+            {key:'pregnancy',en:'Pregnancy details (due date, birth)',zh:'孕期資料(預產期、出生日期)'},
+            {key:'bp',en:'Blood pressure log',zh:'血壓記錄'},
+            {key:'glucose',en:'Blood glucose log',zh:'血糖記錄'},
+            {key:'kicks',en:'Kick-count sessions',zh:'胎動計算記錄'},
+            {key:'biometry',en:'Ultrasound scans',zh:'超聲波記錄'},
+            {key:'recovery',en:'Postpartum recovery checklist',zh:'產後復原清單'},
+            {key:'epds',en:'Mental health check-ins',zh:'情緒健康檢視'},
+            {key:'journal',en:'Mood & symptom journal entries',zh:'情緒及症狀日記'},
+            {key:'birthPlan',en:'Birth plan',zh:'分娩計劃'},
+            {key:'documents',en:'Uploaded documents (list only)',zh:'已上傳文件(僅列表)'},
+          ].map(opt=>(
+            <div key={opt.key} onClick={()=>setJournalSections(prev=>({...prev,[opt.key]:!prev[opt.key]}))} style={{display:'flex',gap:'10px',alignItems:'center',padding:'7px 0',cursor:'pointer'}}>
+              <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${journalSections[opt.key]?__theme.accent:C.border}`,background:journalSections[opt.key]?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{journalSections[opt.key]?'✓':''}</div>
+              <div style={{fontSize:'13px',color:C.text}}>{isEn?opt.en:opt.zh}</div>
+            </div>
+          ))}
+          <div style={{display:'flex',gap:'8px',marginTop:'16px'}}>
+            <Btn style={{flex:1}} onClick={()=>setJournalExportOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn variant="primary" style={{flex:1}} disabled={exportingJournal||!Object.values(journalSections).some(Boolean)} onClick={downloadJournalExport}>{exportingJournal?(isEn?'Generating…':'生成中…'):(isEn?'Export PDF':'匯出PDF')}</Btn>
+          </div>
+        </div>
+      </div>}
 
       {/* This screen had grown into one long scroll through every section
           at once - split into sub-tabs instead of adding a second nav
@@ -8000,7 +8144,7 @@ function MedsaBumpSection({ isEn, patient, onViewBumpHealth }) {
           a disclosed fee. */}
       <div style={{fontSize:'12px',color:'#fff',fontWeight:600,marginBottom:'2px'}}>{isEn?'HK$888 one-time':'一次性HK$888'}</div>
       <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',lineHeight:1.5,marginBottom:'10px'}}>
-        {isEn?"A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge. If you've used Medsa Bump before, HK$177.60 (20%) is credited toward your next Medsa Guardian payment instead of a discount here.":'付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。如曾使用Medsa Bump,將獲得HK$177.60(20%)信用額,可用於下次Medsa Guardian付款,而非本次折扣。'}
+        {isEn?"HK$710.40 automatically if you've used Medsa Bump before. A card processing fee is added at checkout, so the total shown on the payment page will be slightly higher - that's expected, not an extra charge.":'如曾使用Medsa Bump,將自動收取HK$710.40。付款頁面會額外加上信用卡手續費,因此總金額會略高 - 這是正常現象,並非額外收費。'}
       </div>
       {whatsIncludedLink}
       <div style={{background:'rgba(255,255,255,0.15)',borderRadius:'10px',padding:'14px'}}>
@@ -8200,10 +8344,7 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a dependent profile</Btn>
             : guardianActive
               ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another dependent profile</Btn>
-              : <>
-                  {managingAdult?.bump_loyalty_credit_hkd>0&&<div style={{fontSize:'11px',color:C.green,marginBottom:'6px',textAlign:'center'}}>HK${managingAdult.bump_loyalty_credit_hkd.toFixed(2)} Bump loyalty credit will be applied</div>}
-                  <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
-                </>}
+              : <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>}
         </div>
       </div>
     </div>
