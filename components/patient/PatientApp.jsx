@@ -5496,35 +5496,29 @@ const MILESTONE_AGE_BANDS = [...new Set(MILESTONES.map(m=>m.ageBand.en))]
 // that's how a parent actually notices it, not clinical left/right
 // charting. Framed as "typical," not a deadline - timing varies widely
 // and isn't itself a sign of a problem.
-const TEETH = [
-  { key:'lower-central-incisor', en:'Lower central incisors', zh:'下顎中切牙', typical:'6–10 months' },
-  { key:'upper-central-incisor', en:'Upper central incisors', zh:'上顎中切牙', typical:'8–12 months' },
-  { key:'upper-lateral-incisor', en:'Upper lateral incisors', zh:'上顎側切牙', typical:'9–13 months' },
-  { key:'lower-lateral-incisor', en:'Lower lateral incisors', zh:'下顎側切牙', typical:'10–16 months' },
-  { key:'upper-first-molar', en:'Upper first molars', zh:'上顎第一乳臼齒', typical:'13–19 months' },
-  { key:'lower-first-molar', en:'Lower first molars', zh:'下顎第一乳臼齒', typical:'14–18 months' },
-  { key:'upper-canine', en:'Upper canines', zh:'上顎犬齒', typical:'16–22 months' },
-  { key:'lower-canine', en:'Lower canines', zh:'下顎犬齒', typical:'17–23 months' },
-  { key:'lower-second-molar', en:'Lower second molars', zh:'下顎第二乳臼齒', typical:'23–31 months' },
-  { key:'upper-second-molar', en:'Upper second molars', zh:'上顎第二乳臼齒', typical:'25–33 months' },
+// Redone per your call: 20 individually-tracked teeth (not 10 types
+// mirrored into a paired visual), matching a real numbered dental chart
+// - each tooth is its own tap target with its own record, left and
+// right are genuinely separate, not two copies of one state. Typical
+// eruption ranges are still per TYPE (a real eruption chart doesn't
+// differentiate left vs right timing), just applied to both sides.
+const TOOTH_TYPE_INFO = [
+  { type:'central-incisor', en:'Central incisor', zh:'中切牙', upperTypical:'8–12 months', lowerTypical:'6–10 months', shape:'incisor' },
+  { type:'lateral-incisor', en:'Lateral incisor', zh:'側切牙', upperTypical:'9–13 months', lowerTypical:'10–16 months', shape:'incisor' },
+  { type:'canine', en:'Canine', zh:'犬齒', upperTypical:'16–22 months', lowerTypical:'17–23 months', shape:'canine' },
+  { type:'first-molar', en:'First molar', zh:'第一乳臼齒', upperTypical:'13–19 months', lowerTypical:'14–18 months', shape:'molar' },
+  { type:'second-molar', en:'Second molar', zh:'第二乳臼齒', upperTypical:'25–33 months', lowerTypical:'23–31 months', shape:'molar' },
 ]
-// Real anatomical order from the midline outward, used to lay the SVG mouth
-// diagram out left-to-right - TEETH itself stays unordered/by-lookup above.
-const TOOTH_TYPE_ORDER = ['central-incisor','lateral-incisor','canine','first-molar','second-molar']
+const TOOTH_TYPE_ORDER = TOOTH_TYPE_INFO.map(t=>t.type)
 const TOOTH_TYPE_OFFSET = { 'central-incisor':13, 'lateral-incisor':30, 'canine':47, 'first-molar':68, 'second-molar':90 }
 const TOOTH_TYPE_WIDTH = { 'central-incisor':13, 'lateral-incisor':14, 'canine':13, 'first-molar':19, 'second-molar':21 }
-// A real tooth-crown silhouette (domed gum-side, flat/rounded biting
-// edge) instead of a plain rounded rectangle - built once per type/width
-// so the diagram reads as actual teeth, not checkboxes. Always drawn
-// dome-up; the caller rotates 180° around its own center for the lower
-// arch, where the biting edge faces up instead of down.
-function toothCrownPath(cx, cy, w, h, pointed) {
-  const top = cy - h/2, bottom = cy + h/2
-  const left = cx - w/2, right = cx + w/2
-  const domeLift = pointed ? 7 : 2.5
-  const r = 3.5
-  return `M${left},${bottom-r} L${left},${top+6} C${left},${top-domeLift*0.3} ${left+w*0.22},${top-domeLift} ${cx},${top-domeLift} C${right-w*0.22},${top-domeLift} ${right},${top-domeLift*0.3} ${right},${top+6} L${right},${bottom-r} Q${right},${bottom} ${right-r},${bottom} L${left+r},${bottom} Q${left},${bottom} ${left},${bottom-r} Z`
-}
+const TEETH = ['upper','lower'].flatMap(arch => ['left','right'].flatMap(side => TOOTH_TYPE_INFO.map(info => ({
+  key: `${arch}-${side}-${info.type}`,
+  en: `${side==='left'?'Left':'Right'} ${arch} ${info.en.toLowerCase()}`,
+  zh: `${arch==='upper'?'上顎':'下顎'}${side==='left'?'左':'右'}${info.zh}`,
+  typical: arch==='upper' ? info.upperTypical : info.lowerTypical,
+  type: info.type, shape: info.shape,
+}))))
 
 // bb-01 - the real Hong Kong Childhood Immunisation Programme (HKCIP)
 // schedule, transcribed verbatim from the user's own copy: "Updated
@@ -6211,41 +6205,40 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Tap a tooth: it fills in white when it's erupted, tap again and it's taken off when it falls out. Each tap logs today's real date, editable below. Typical timing per the ADA's own eruption chart - it varies widely between children.":'輕按牙齒:萌出時會填滿白色,脫落時再按一下便會移除。每次點按都會記錄當日實際日期,並可在下方編輯。一般時間參考美國牙科協會(ADA)萌牙時間表 - 每個孩子差異很大。'}</div>
         <svg viewBox="0 0 300 180" style={{width:'100%',maxWidth:300,display:'block',margin:'0 auto 10px'}}>
-          <line x1="55" y1="90" x2="245" y2="90" stroke={C.border} strokeWidth="0.75" strokeDasharray="2,3"/>
-          {['upper','lower'].flatMap(arch => TOOTH_TYPE_ORDER.flatMap(type => {
-            const toothKey = `${arch}-${type}`
-            const t = TEETH.find(tt=>tt.key===toothKey)
-            if (!t) return []
-            const logged = teethLog.find(l=>l.tooth_key===toothKey)
+          <line x1="50" y1="90" x2="250" y2="90" stroke={C.border} strokeWidth="0.75" strokeDasharray="2,3"/>
+          {TEETH.map(t => {
+            const [arch, side] = t.key.split('-')
+            const logged = teethLog.find(l=>l.tooth_key===t.key)
             const stage = logged?.lost_at ? 'lost' : logged?.erupted_at ? 'erupted' : 'none'
-            const w = TOOTH_TYPE_WIDTH[type]
-            const offset = TOOTH_TYPE_OFFSET[type]
-            const h = 24
-            return [-1,1].map(side => {
-              const cx = 150 + side*offset
-              const curve = offset*0.16
-              const cy = arch==='upper' ? (54+curve) : (126-curve)
-              const selected = selectedTooth===toothKey
-              const renderKey = `${toothKey}-${side}`
-              // "Taken off" - no tooth shape at all once it's fallen out,
-              // just a faint dashed gap on the gumline so there's still
-              // something to tap (view the dates, Undo) without it
-              // reading as "not erupted yet."
-              if (stage==='lost') {
-                return <ellipse key={renderKey} cx={cx} cy={arch==='upper'?cy-6:cy+6} rx={w/2-1} ry={2.5}
-                  fill="none" stroke={selected?__theme.accent:C.border} strokeWidth={selected?1.5:1} strokeDasharray="2,2"
-                  onClick={()=>{setSelectedTooth(toothKey)}} style={{cursor:'pointer'}}/>
-              }
-              const d = toothCrownPath(cx, cy, w, h, type==='canine')
-              const fillOpacity = stage==='erupted' ? 1 : 0.1
-              const stroke = selected ? __theme.accent : (stage==='erupted' ? C.text : C.border)
-              return (
-                <path key={renderKey} d={d} transform={arch==='lower'?`rotate(180 ${cx} ${cy})`:undefined}
-                  fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={selected?2:1.2} strokeDasharray={stage==='none'?'2,2':'none'}
-                  onClick={()=>handleToothTap(toothKey)} style={{cursor:'pointer'}}/>
-              )
-            })
-          }))}
+            const w = TOOTH_TYPE_WIDTH[t.type]
+            const offset = TOOTH_TYPE_OFFSET[t.type]
+            const h = 22
+            const cx = 150 + (side==='left' ? -offset : offset)
+            const curve = offset*0.16
+            const cy = arch==='upper' ? (54+curve) : (126-curve)
+            const selected = selectedTooth===t.key
+            // "Taken off" - no tooth shape at all once it's fallen out,
+            // just a faint dashed gap on the gumline so there's still
+            // something to tap (view dates, Undo) without it reading
+            // as "not erupted yet."
+            if (stage==='lost') {
+              return <ellipse key={t.key} cx={cx} cy={cy} rx={w/2-1} ry={3.5}
+                fill="none" stroke={selected?__theme.accent:C.textMuted} strokeWidth={selected?1.75:1.25} strokeDasharray="2,2"
+                onClick={()=>setSelectedTooth(t.key)} style={{cursor:'pointer'}}/>
+            }
+            const fillOpacity = stage==='erupted' ? 1 : 0.12
+            const stroke = selected ? __theme.accent : (stage==='erupted' ? C.text : C.border)
+            const strokeW = selected ? 2 : 1.1
+            const dash = stage==='none' ? '2,2' : 'none'
+            const rx = t.shape==='molar' ? w*0.22 : t.shape==='canine' ? w*0.3 : w*0.42
+            const flip = arch==='lower'
+            return (
+              <g key={t.key} transform={`translate(${cx},${cy}) ${flip?'rotate(180)':''}`} onClick={()=>handleToothTap(t.key)} style={{cursor:'pointer'}}>
+                <rect x={-w/2} y={-h/2} width={w} height={h} rx={rx} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW} strokeDasharray={dash}/>
+                {t.shape==='canine' && <path d={`M${-w*0.16},${h/2-2} L0,${h/2+4} L${w*0.16},${h/2-2} Z`} fill="#fff" fillOpacity={fillOpacity} stroke={stroke} strokeWidth={strokeW*0.8}/>}
+              </g>
+            )
+          })}
         </svg>
         {selectedTooth ? (() => {
           const t = TEETH.find(tt=>tt.key===selectedTooth)
