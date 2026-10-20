@@ -2,9 +2,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Medsa Bump is a one-time payment, charged directly by Medsa (not an
 // insurance premium - that's bank transfer between agent/insurer, out of
-// scope here). A patient who's used Bump before gets the confirmed loyalty
-// discount automatically - no code/coupon step, just a real check against
-// their own bump_subscriptions history.
+// scope here).
+//
+// Loyalty redirect: a returning patient no longer gets a discount on THIS
+// Bump purchase - Bump is always full price now. Instead, the same value
+// is credited toward their next Medsa Guardian payment (see
+// verify_bump_checkout.js, which actually grants the credit on success,
+// and create_guardian_checkout.js, which spends it). Still a real check
+// against bump_subscriptions history, not a self-reported flag.
 //
 // BUMP_PRICE_HKD is intentionally unset until a real price is confirmed -
 // same "refuse rather than guess" pattern as STRIPE_SECRET_KEY below. Real
@@ -14,11 +19,9 @@
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { grossUpForStripeFee } from '../../../lib/paymentFees'
+import { BUMP_PRICE_HKD } from '../../../lib/bumpPricing'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
-
-const BUMP_PRICE_HKD = 888
-const BUMP_LOYALTY_DISCOUNT_PCT = 0.20
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -34,14 +37,14 @@ export default async function handler(req, res) {
   const { data: patient } = await supabase.from('patients').select('id, full_name').eq('id', patientId).maybeSingle()
   if (!patient) return res.status(404).json({ status: 'ERROR', message: 'Patient not found.' })
 
-  // Real loyalty check, not a self-reported flag - any prior Bump row at
-  // all (graduated or not) counts as "has used Medsa Bump before."
+  // Any prior Bump row at all (graduated or not) counts as "has used
+  // Medsa Bump before" - this just decides whether a Guardian credit
+  // gets granted on success, not the price charged here.
   const { count: priorCount } = await supabase.from('bump_subscriptions')
     .select('id', { count: 'exact', head: true }).eq('patient_id', patientId)
-  const isLoyaltyDiscount = (priorCount || 0) > 0
-  const netPriceHKD = isLoyaltyDiscount ? BUMP_PRICE_HKD * (1 - BUMP_LOYALTY_DISCOUNT_PCT) : BUMP_PRICE_HKD
+  const isLoyaltyCredit = (priorCount || 0) > 0
 
-  const { grossAmountHKD } = grossUpForStripeFee(netPriceHKD)
+  const { grossAmountHKD } = grossUpForStripeFee(BUMP_PRICE_HKD)
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
 
@@ -51,7 +54,7 @@ export default async function handler(req, res) {
     line_items: [{
       price_data: {
         currency: 'hkd',
-        product_data: { name: `Medsa Bump${isLoyaltyDiscount ? ' (loyalty discount applied)' : ''}` },
+        product_data: { name: 'Medsa Bump' },
         unit_amount: Math.round(grossAmountHKD * 100),
       },
       quantity: 1,
@@ -63,9 +66,9 @@ export default async function handler(req, res) {
       bump_predicted_due_date: predictedDueDate || '',
       bump_gestational_weeks_at_signup: gestationalWeeksAtSignup != null ? String(gestationalWeeksAtSignup) : '',
       bump_discovered_pregnant_at: discoveredPregnantAt || '',
-      bump_is_loyalty_discount: String(isLoyaltyDiscount),
+      bump_is_loyalty_credit: String(isLoyaltyCredit),
     },
   })
 
-  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, isLoyaltyDiscount, netPriceHKD })
+  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, isLoyaltyCredit })
 }
