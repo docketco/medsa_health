@@ -318,9 +318,15 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   const [messagesLoading,setMessagesLoading]=useState(true)
   const [openThread,setOpenThread]=useState(null) // array of messages in one conversation, shown in a modal
   const [homePatientId,setHomePatientId]=useState(null)
-  const [replyBody,setReplyBody]=useState('')
-  const [replying,setReplying]=useState(false)
-  const [replyError,setReplyError]=useState(null)
+  // A clinic's "request record access ahead of visit" used to write a
+  // real row here (record_access_requests), but the only place it ever
+  // surfaced was buried in Records → Sharing, with nothing pointing a
+  // patient there - functionally it never reached them before a visit,
+  // which is the whole point of asking ahead of time. Surfaced here
+  // instead, same prominent-banner treatment as urgent doctor messages.
+  const [homeAccessRequests,setHomeAccessRequests]=useState([])
+  const [homeAccessRequestsLoading,setHomeAccessRequestsLoading]=useState(true)
+  const [showAccessRequestsModal,setShowAccessRequestsModal]=useState(false)
   const [carouselItems,setCarouselItems]=useState([])
   const [openCarouselItem,setOpenCarouselItem]=useState(null)
   const [carouselIndex,setCarouselIndex]=useState(0)
@@ -401,6 +407,21 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 
   useEffect(() => { loadDoctorMessages() }, [patient?.medsa_id])
 
+  async function loadHomeAccessRequests(patientRowId) {
+    if (!patientRowId) { setHomeAccessRequestsLoading(false); return }
+    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patientRowId).eq('status','pending').order('created_at',{ascending:false})
+    setHomeAccessRequests(data||[])
+    setHomeAccessRequestsLoading(false)
+  }
+  useEffect(() => { loadHomeAccessRequests(homePatientId) }, [homePatientId])
+
+  async function handleHomeAccessDecision(req, approve) {
+    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
+    const remaining = homeAccessRequests.filter(r=>r.id!==req.id)
+    setHomeAccessRequests(remaining)
+    if (remaining.length===0) setShowAccessRequestsModal(false)
+  }
+
   // Unread messages on the patient's own insurance inquiries (agent or
   // underwriter replies) - same shared inquiry_messages thread the My
   // Inquiries tab reads/writes, surfaced here too so a reply doesn't sit
@@ -454,37 +475,6 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
     if (unreadIds.length>0) {
       await supabase.from('patient_messages').update({ read_by_patient: true }).in('id', unreadIds)
       setDoctorMessages(prev=>prev.map(x=>unreadIds.includes(x.id)?{...x,read_by_patient:true}:x))
-    }
-  }
-
-  async function handleReplyToDoctor() {
-    if (!replyBody.trim() || !openThread) return
-    setReplying(true)
-    setReplyError(null)
-    const rootMsg = openThread[0]
-    const { error: insErr } = await supabase.from('patient_messages').insert({
-      patient_id: homePatientId,
-      doctor_name: rootMsg.doctor_name,
-      body: replyBody,
-      sender_type: 'patient',
-      thread_id: msgThreadKey(rootMsg),
-      read_by_patient: true,
-    })
-    setReplying(false)
-    if (insErr) { setReplyError(insErr.message); return }
-    setReplyBody('')
-    const fresh = await loadDoctorMessages()
-    setOpenThread(getThreadFrom(fresh, rootMsg))
-  }
-
-  async function handleDeleteOwnReply(id) {
-    // Patients can only delete their own replies, never the doctor's
-    // original message, since that may be clinically important to keep.
-    await supabase.from('patient_messages').delete().eq('id', id).eq('sender_type', 'patient')
-    const fresh = await loadDoctorMessages()
-    if (openThread) {
-      const remaining = getThreadFrom(fresh, openThread[0])
-      setOpenThread(remaining.length>0 ? remaining : null)
     }
   }
 
@@ -619,6 +609,18 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${urgentMessages.length} urgent message${urgentMessages.length>1?'s':''} from your doctor`:`${urgentMessages.length}則來自醫生的緊急訊息`}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{urgentMessages[0].doctor_name} · {urgentMessages[0].subject||urgentMessages[0].body}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
+        </div>
+      )}
+
+      {/* ── Pending clinic access requests — ahead-of-visit record access ── */}
+      {!homeAccessRequestsLoading&&homeAccessRequests.length>0&&(
+        <div onClick={()=>setShowAccessRequestsModal(true)} style={{margin:'14px 16px 0',background:C.amber,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+          <span style={{fontSize:'20px'}}>◇</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${homeAccessRequests.length} clinic${homeAccessRequests.length>1?'s':''} requesting record access`:`${homeAccessRequests.length}間診所要求查看記錄`}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{homeAccessRequests[0].requesting_clinic||homeAccessRequests[0].requesting_staff}{homeAccessRequests[0].reason?` · ${homeAccessRequests[0].reason}`:''}</div>
           </div>
           <span style={{color:'#fff',fontSize:'16px'}}>›</span>
         </div>
@@ -876,27 +878,50 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setOpenThread(null)}>
           <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
             <div onClick={()=>setOpenThread(null)} style={{fontSize:'12px',color:themeAccent,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
+            {/* Read-only: a doctor's reminder/message to the patient, never a
+                two-way thread. The reply box this used to have went silently
+                nowhere - every clinic/practitioner screen that sends one of
+                these only ever INSERTs into patient_messages, none of them
+                ever read a patient's reply back - so a patient typing one
+                looked like it reached their doctor when nothing on the
+                clinic side could ever see it. Dropped rather than built out
+                into a real inbox: HK's default is calling the clinic or
+                booking another visit, not async messaging, and the
+                doctor-initiated half (results, reminders) already does the
+                real job on its own. */}
             {openThread.map((m)=>(
-              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.sender_type==='patient'?themeAccentXLight:(m.urgent?C.redLight:'#fff')}}>
+              <Card key={m.id} style={{padding:'14px 16px',marginBottom:'8px',background:m.urgent?C.redLight:'#fff'}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                    <span style={{fontSize:'13px',fontWeight:700}}>{m.sender_type==='patient'?(isEn?'You':'您'):m.doctor_name}</span>
+                    <span style={{fontSize:'13px',fontWeight:700}}>{m.doctor_name}</span>
                     {m.urgent&&<span style={{fontSize:'9px',background:C.red,color:'#fff',padding:'2px 7px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
                   </div>
-                  <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                    <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
-                    {m.sender_type==='patient'&&<span onClick={()=>handleDeleteOwnReply(m.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}} title={isEn?'Delete your reply':'刪除您的回覆'}>✕</span>}
-                  </div>
+                  <span style={{fontSize:'11px',color:C.textMuted}}>{new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
                 </div>
                 {m.subject&&<div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{m.subject}</div>}
                 <div style={{fontSize:'13px',color:C.text,lineHeight:1.6}}>{m.body}</div>
               </Card>
             ))}
-            <Card style={{padding:'14px 16px'}}>
-              <textarea value={replyBody} onChange={e=>setReplyBody(e.target.value)} rows={3} placeholder={isEn?'Write a reply…':'撰寫回覆…'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',resize:'none',marginBottom:'10px',boxSizing:'border-box'}}/>
-              {replyError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{replyError}</div>}
-              <Btn variant="primary" style={{width:'100%'}} onClick={handleReplyToDoctor} disabled={replying}>{replying?(isEn?'Sending…':'傳送中…'):(isEn?'Send reply':'傳送回覆')}</Btn>
-            </Card>
+          </div>
+        </div>
+      )}
+
+      {showAccessRequestsModal&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowAccessRequestsModal(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+            <div onClick={()=>setShowAccessRequestsModal(false)} style={{fontSize:'12px',color:themeAccent,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Clinic access requests':'診所查閱記錄要求'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{isEn?'A clinic ahead of your visit, or a doctor asking for a fuller report, is asking to view your records.':'一間診所希望在您就診前,或一位醫生希望查看更詳細的報告,要求查閱您的記錄。'}</div>
+            {homeAccessRequests.map(req=>(
+              <Card key={req.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+                <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{req.requesting_clinic||req.requesting_staff}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>{isEn?'Requesting your records':'要求查看您的記錄'}{req.reason?` - ${req.reason}`:''}</div>
+                <div style={{display:'flex',gap:'8px'}}>
+                  <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleHomeAccessDecision(req,true)}>{isEn?'Approve':'批准'}</Btn>
+                  <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>handleHomeAccessDecision(req,false)}>{isEn?'Deny':'拒絕'}</Btn>
+                </div>
+              </Card>
+            ))}
           </div>
         </div>
       )}
