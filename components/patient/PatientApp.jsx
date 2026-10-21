@@ -7078,6 +7078,12 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [weightLogs,setWeightLogs]=useState([])
   const [kickLogs,setKickLogs]=useState([])
   const [documents,setDocuments]=useState([])
+  // Real OBGYN consultation notes (ClinicOpsApp.jsx's note_template='obgyn'
+  // tag) - distinct from the logs above, which are the patient's own
+  // readings, not the doctor's. bm-01's ledger was built pulling from the
+  // Bump-specific tables only; this is the piece that was still missing -
+  // see downloadMaternalSummary below.
+  const [obgynNotes,setObgynNotes]=useState([])
   const [loading,setLoading]=useState(true)
   const [bpForm,setBpForm]=useState({systolic:'',diastolic:''})
   const [glucoseForm,setGlucoseForm]=useState({value:'',context:'fasting'})
@@ -7163,7 +7169,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:w},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:w},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal},{data:obgyn}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -7179,6 +7185,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       supabase.from('bump_fetal_biometry').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('scan_date',{ascending:false}),
       supabase.from('bump_contraction_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(30),
       supabase.from('bump_journal_entries').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('created_at',{ascending:false}).limit(30),
+      patient?.id ? supabase.from('medical_records').select('date_of_record, diagnosis, notes, icd10_code, institutions(name)').eq('patient_id',patient.id).eq('note_template','obgyn').order('date_of_record',{ascending:false}) : Promise.resolve({data:[]}),
     ])
     setBumpRow(sub||null)
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setWeightLogs(w||[]); setKickLogs(k||[]); setDocuments(docs||[])
@@ -7189,6 +7196,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
     setBiometryLogs(biometry||[])
     setContractionLogs(contractions||[])
     setJournalEntries(journal||[])
+    setObgynNotes(obgyn||[])
     setBagChecked(sub?.hospital_bag_checked||[])
     if (isInitial) setBirthPlanForm(sub?.birth_plan || { painRelief:'', companions:'', feeding:'', specialRequests:'' })
     if (isInitial) setWeightSetupForm({ prePregWeightKg: sub?.pre_pregnancy_weight_kg!=null?String(sub.pre_pregnancy_weight_kg):'', prePregHeightCm: sub?.pre_pregnancy_height_cm!=null?String(sub.pre_pregnancy_height_cm):'', isTwin: !!sub?.is_twin_pregnancy })
@@ -7379,6 +7387,21 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       title: 'Kick-count sessions', subtitle, accentColor: PINK,
       dateInstitution: `${kickLogs.length} session${kickLogs.length===1?'':'s'}`,
       details: [...kickLogs].reverse().map(k=>[new Date(k.started_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}), `${k.kick_count} kicks${k.ended_at?` over ${Math.round((new Date(k.ended_at)-new Date(k.started_at))/60000)} min`:''}`]),
+    })
+
+    // The one piece this ledger was missing: the doctor's own OBGYN
+    // consultation notes (ClinicOpsApp.jsx's note_template='obgyn'),
+    // distinct from everything above, which is the patient's own logged
+    // readings - without this, "continuous maternal ledger" only ever
+    // covered what the patient tracked herself, never what her OBGYN
+    // actually recorded at each visit.
+    if (obgynNotes.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+      title: 'OBGYN consultation notes', subtitle, accentColor: PINK,
+      dateInstitution: `${obgynNotes.length} visit${obgynNotes.length===1?'':'s'} on file from a Medsa-connected clinic`,
+      details: obgynNotes.map(n=>[
+        `${n.date_of_record?new Date(n.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}):''}${n.institutions?.name?` · ${n.institutions.name}`:''}`,
+        [n.diagnosis, n.icd10_code?`ICD-10: ${n.icd10_code}`:null, n.notes].filter(Boolean).join('\n'),
+      ]),
     })
 
     if (documents.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
