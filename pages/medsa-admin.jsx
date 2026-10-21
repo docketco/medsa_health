@@ -36,7 +36,10 @@ export default function MedsaAdminPage() {
           to self-check that at all. */}
       <div style={{fontSize:'9px',color:C.textMuted,marginBottom:'14px',opacity:0.6}}>Build {(process.env.NEXT_PUBLIC_BUILD_SHA||'local').slice(0,7)}</div>
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['tpa','records','TPA Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {/* TPA Clinics tab shelved (BeeFintech pivot) - see TpaClinicsTab's
+            header comment. Left out of this nav array entirely, same
+            pattern as every other shelved tab/screen this pivot. */}
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -51,7 +54,7 @@ export default function MedsaAdminPage() {
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
       {tab==='clinics' && <ClinicsTab/>}
-      {tab==='tpa' && <TpaClinicsTab/>}
+      {false&&tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
       {tab==='roster' && <InsurerTestRosterScreen/>}
@@ -142,6 +145,12 @@ function PartnerChecklist({ entity, entityType, onChanged }) {
   )
 }
 
+// ARCHIVED (BeeFintech pivot): provisioned TPA clinic accounts for the
+// out-of-network claim-intake flow at /claim-submit (components/tpa/
+// TpaClinicApp.jsx). That entry point is retired - see claim-submit.jsx's
+// header comment - so there's nowhere left for an account created here to
+// log in. Left defined/untouched (frozen, not deleted), same as the
+// component it provisions for.
 function TpaClinicsTab() {
   const [clinics, setClinics] = useState([])
   const [claimStats, setClaimStats] = useState({}) // clinicId -> {count, feesEarned}

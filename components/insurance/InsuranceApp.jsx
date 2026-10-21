@@ -2975,6 +2975,17 @@ export default function InsuranceApp({ company, onLogout }) {
   // one genuinely is a decision (whether to accept a new applicant),
   // confirmed earlier as carrier work, never a TPA's - a different,
   // separate call from today's.
+  // FULLY ARCHIVED (BeeFintech pivot, superseding the "Restored" note
+  // above): there is no longer a human-facing insurer portal AT ALL, not
+  // even for Verify/Claims display - every entry point into this
+  // component (pages/insurer-portal.jsx, pages/insurer-signup.jsx,
+  // pages/institution.jsx's old insurance option) has been archived, so
+  // nothing renders InsuranceApp anymore. The insurer relationship, where
+  // there is one, is a pure backend sync (lib/insuranceAdapter.js pulls
+  // the insurer's own policy/claim decisions in; the claims-plugin
+  // webhook pushes documents out) - no insurer ever logs into Medsa for
+  // it. This whole file is left defined/untouched (frozen, not deleted)
+  // in case a real reason to bring a human portal back ever comes up.
   const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
