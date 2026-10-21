@@ -19,6 +19,8 @@
 import { createClient } from '@supabase/supabase-js'
 import { matchPlanSuitability } from '../../../lib/planSuitabilityMatch'
 import { resolveManyIcd10, codeMapToObject } from '../../../lib/icd10Match'
+import { assignInquiryToNextAgent } from '../../../lib/agentAssignment'
+import { sendEmail } from '../../../lib/email'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -133,6 +135,24 @@ export default async function handler(req, res) {
     ? await supabase.from('plan_inquiries').update(inquiryPayload).eq('id', existingOpen.id).select('id').maybeSingle()
     : await supabase.from('plan_inquiries').insert(inquiryPayload).select('id').maybeSingle()
   if (insErr) return res.status(500).json({ status: 'ERROR', message: insErr.message })
+
+  // Push-assigns a brand-new agent-mode inquiry to the next agent in
+  // companyName's round-robin rotation (lib/agentAssignment.js) - this
+  // replaces the old model of every eligible agent racing to claim it
+  // out of a shared "Unclaimed" pool. Only on first creation: a
+  // re-declaration against an inquiry someone's already working
+  // (existingOpen above) must never bump them off it. mode:'auto' is
+  // skipped entirely - that inquiry already got its answer instantly on
+  // the patient's own screen, there's no agent to assign.
+  if (!existingOpen && mode === 'agent') {
+    const agent = await assignInquiryToNextAgent(supabase, { inquiryId: inquiry.id, companyName: plan.company_name })
+    if (agent?.email) {
+      await sendEmail({
+        to: agent.email, subject: `New plan inquiry - ${plan.plan_name}`,
+        html: `<p>A new inquiry for <strong>${plan.plan_name}</strong> has been assigned to you.</p><p>Open the agent portal's New Plan Inquiries tab to see it.</p>`,
+      })
+    }
+  }
 
   // Logs every auto-decision, not just flagged ones - an insurer's audit
   // log (medsa-admin, aq2-16) should show what the matching engine
