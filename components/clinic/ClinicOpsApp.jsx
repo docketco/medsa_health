@@ -1392,6 +1392,15 @@ const NOTE_TEMPLATES = [
   { key:'well_child', label:'Well-child visit', skeleton:'Growth & development:\n\nFeeding/nutrition:\n\nImmunization status:\n\nParent/caregiver concerns:\n\nAnticipatory guidance given:\n\nPlan:\n' },
   { key:'follow_up', label:'Follow-up', skeleton:'Reason for follow-up:\n\nInterval history since last visit:\n\nResponse to treatment:\n\nExamination findings:\n\nPlan:\n' },
   { key:'specialist', label:'Specialist consult', skeleton:'Reason for referral:\n\nHistory relevant to referral:\n\nExamination/findings:\n\nImpression:\n\nRecommendation back to referring doctor:\n' },
+  // First specialty-specific template beyond the generic structural ones
+  // above - sequenced first (of OBGYN/paediatrics/physio/OT/speech/
+  // developmental paeds/dentistry) because it's the one with an existing
+  // product depending on it: Medsa Bump's maternal summary export
+  // (PatientApp.jsx's downloadMaternalSummary, bm-01) now pulls in any
+  // visit tagged with this template as its own "OBGYN consultation
+  // notes" section - tagging a visit this way is what makes it show up
+  // there, not just cosmetic section headers like the others.
+  { key:'obgyn', label:'OBGYN', skeleton:'Gestational age:\n\nFundal height:\n\nFetal heart rate:\n\nFetal presentation/position:\n\nFetal movement reported by patient:\n\nBlood pressure/oedema:\n\nUrinalysis (protein/glucose):\n\nUltrasound/lab findings this visit:\n\nPlan:\n' },
 ]
 function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
