@@ -1457,37 +1457,24 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     setPendingUploadFile(null)
   }
 
+  // Fixed Oct 21 - this used to auto-mark a brand-new document "verified"
+  // whenever the CLINIC had standing verification on file (within 365
+  // days), on the theory that a verified clinic vouches for whatever it
+  // sends. That conflated two different kinds of trust: clinic-identity
+  // trust (legitimately long-lived - the clinic really is who it says it
+  // is) does not mean document-authenticity trust (this specific receipt
+  // is real) - nothing stopped a patient from uploading a fake receipt
+  // once their clinic happened to have verified status on file. Every
+  // patient upload through this flow is now always unverified, and feeds
+  // through to the insurer immediately rather than waiting on a clinic
+  // confirmation that could never actually attest to THIS document
+  // anyway. See the QA checklist's "Unverified claims" pinned note.
   async function handleConfirmClinic(clinic) {
     setSelectedClinic(clinic)
     setVerifyingClinic(true)
-    const alreadyVerified = clinic.verification_status === 'verified'
-      && clinic.last_verified_at
-      && (Date.now() - new Date(clinic.last_verified_at).getTime()) < 365*24*60*60*1000
-
-    if (alreadyVerified) {
-      await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'verified' })
-      setVerifyingClinic(false)
-      setUploadOutcome({ status:'verified', clinicName: clinic.name })
-      setUploadStage('done')
-      return
-    }
-
-    // Not yet verified, or verification has gone stale - send a real
-    // confirmation request to the clinic's own listed contact (never
-    // anything the patient typed), same as the clinic-side flow. The
-    // clinic confirms/denies against their real records; a phone-call
-    // reminder only follows after ~3 days with no response, and it's
-    // system-initiated, never routed through the patient.
-    const code = Math.random().toString(36).slice(2,8).toUpperCase()
-    await supabase.from('clinic_verification_requests').insert({
-      clinic_id: clinic.id, patient_id: patient.id, code,
-      contact_email_used: clinic.contact_email || null,
-      patient_name: patient.full_name || null,
-      requested_at: new Date().toISOString(), status: 'pending',
-    })
-    await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'pending' })
+    await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'unverified' })
     setVerifyingClinic(false)
-    setUploadOutcome({ status:'pending', clinicName: clinic.name })
+    setUploadOutcome({ status:'unverified', clinicName: clinic.name })
     setUploadStage('done')
   }
 
@@ -1798,16 +1785,11 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
         </Card>}
 
         {uploadStage==='done'&&uploadOutcome&&<Card style={{padding:'16px',textAlign:'center'}}>
-          <div style={{fontSize:'28px',marginBottom:'8px'}}>{uploadOutcome.status==='verified'?'✓':uploadOutcome.status==='pending'?'◇':'◈'}</div>
-          {uploadOutcome.status==='verified'&&<div style={{fontSize:'13px',color:__theme.accent,fontWeight:600,marginBottom:'6px'}}>{isEn?`Uploaded - ${uploadOutcome.clinicName} is already verified`:`已上傳 - ${uploadOutcome.clinicName}已完成核實`}</div>}
-          {uploadOutcome.status==='pending'&&<>
-            <div style={{fontSize:'13px',color:C.amber,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - verification pending':'已上傳 - 核實中'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?`We've sent a verification request to ${uploadOutcome.clinicName}'s registered contact. Your document is saved now and will be marked verified once they confirm - this usually takes a few days.`:`已向${uploadOutcome.clinicName}的登記聯絡方式發送核實請求。您的文件已儲存，待對方確認後將標示為已核實 - 通常需時數天。`}</div>
-          </>}
-          {uploadOutcome.status==='unverified'&&<>
-            <div style={{fontSize:'13px',color:C.textSub,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - unverified':'已上傳 - 未經核實'}</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - Medsa may follow up to confirm.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - Medsa可能會跟進確認。'}</div>
-          </>}
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>◈</div>
+          <div style={{fontSize:'13px',color:C.textSub,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - unverified':'已上傳 - 未經核實'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{uploadOutcome.clinicName
+            ? (isEn?`Saved and marked unverified. A matching clinic's own standing on file doesn't verify this specific document - it can still be submitted as a claim, just flagged for the insurer's own review.`:`已儲存並標示為未經核實。即使配對的診所本身已登記核實，亦不等於核實此份文件 - 仍可提交作索償，惟會標記供保險公司覆核。`)
+            : (isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - still submittable as a claim, flagged for the insurer's own review.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - 仍可提交作索償，惟會標記供保險公司覆核。')}</div>
           <Btn variant="primary" style={{width:'100%',marginTop:'14px'}} onClick={resetUploadFlow}>{isEn?'Done':'完成'}</Btn>
         </Card>}
 

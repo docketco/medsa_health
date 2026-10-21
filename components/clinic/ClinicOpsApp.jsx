@@ -1435,6 +1435,8 @@ const NOTE_TEMPLATES = [
 function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
   const [records,setRecords]=useState([])
+  const [patientReferrals,setPatientReferrals]=useState([])
+  const [expandedReferral,setExpandedReferral]=useState(null)
   const [conditions,setConditions]=useState([])
   const [allergies,setAllergies]=useState([])
   const [activeMedications,setActiveMedications]=useState([])
@@ -1874,6 +1876,15 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         if (pastStart) {
           const { data: r } = await supabase.from('medical_records').select('*,institutions(name)').eq('patient_id',p.id).order('date_of_record',{ascending:false})
           setRecords(r||[])
+          // Referral chaining (rc-03) - joins a referral (from either
+          // origin: this clinic's own handleSendReferral below, or an
+          // out-of-network doctor's /referral-portal submission - both
+          // write to the same referrals table, just different columns)
+          // with every referral_consultations row that cites it, so the
+          // referring+receiving sides of a referral read as one record
+          // instead of two disconnected tables.
+          const { data: refs } = await supabase.from('referrals').select('*, referral_consultations(*)').eq('patient_id',p.id).order('created_at',{ascending:false})
+          setPatientReferrals(refs||[])
         }
       }
       setLoading(false)
@@ -2144,6 +2155,45 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           })}
         </div>
       </div>}
+
+      {recordsVisible&&patientReferrals.length>0&&<>
+        <SecLabel>Referrals</SecLabel>
+        {patientReferrals.slice(0,5).map((ref,i)=>{
+          const isOpen = expandedReferral===i
+          const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || 'Unnamed receiving practitioner'
+          const toClinic = ref.to_clinic_name || null
+          const reasonText = ref.note || ref.reason || null
+          const consults = ref.referral_consultations || []
+          return (
+            <Card key={ref.id} style={{padding:'10px 14px',marginBottom:'6px'}}>
+              <div onClick={()=>setExpandedReferral(isOpen?null:i)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',cursor:'pointer'}}>
+                <div>
+                  <div style={{fontSize:'12px',fontWeight:600}}>To {toWho}{toClinic?` - ${toClinic}`:''}</div>
+                  <div style={{fontSize:'11px',color:C.textSub}}>{new Date(ref.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - {consults.length>0?`${consults.length} result${consults.length>1?'s':''} on file`:'awaiting result'}</div>
+                </div>
+                <span style={{color:C.textMuted,fontSize:'12px'}}>{isOpen?'−':'+'}</span>
+              </div>
+              {isOpen&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+                <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>REFERRING VISIT</div>
+                {reasonText&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>Reason:</strong> {reasonText}</div>}
+                {ref.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>Diagnosis:</strong> {ref.diagnosis}</div>}
+                {ref.consultation_summary&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>Consultation:</strong> {ref.consultation_summary}</div>}
+                {ref.clinical_notes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}><strong style={{color:C.text}}>Clinical notes:</strong> {ref.clinical_notes}</div>}
+                {!ref.diagnosis&&!ref.consultation_summary&&!ref.clinical_notes&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>No diagnosis/consultation detail on file for this referral (submitted via the out-of-network portal, which doesn't ask for it).</div>}
+                {consults.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>No result yet from the receiving practitioner.</div>}
+                {consults.map((cons,j)=>(
+                  <div key={cons.id} style={{marginTop:j===0?'4px':'8px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
+                    <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>RESULT - {cons.practitioner_name || 'Receiving practitioner'} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
+                    {cons.findings&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>Findings:</strong> {cons.findings}</div>}
+                    {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>Interventions:</strong> {cons.interventions}</div>}
+                    {!cons.findings&&!cons.interventions&&<div style={{fontSize:'12px',color:C.textMuted}}>No detail on file.</div>}
+                  </div>
+                ))}
+              </div>}
+            </Card>
+          )
+        })}
+      </>}
 
       <SecLabel>Diagnosis</SecLabel>
       <input value={diagnosis} onChange={e=>setDiagnosis(e.target.value)} disabled={saved} placeholder="e.g. Upper respiratory tract infection" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'10px',background:saved?C.card:'#fff'}}/>
