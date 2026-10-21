@@ -1407,6 +1407,30 @@ const NOTE_TEMPLATES = [
   // doesn't fit (no "parent concerns/anticipatory guidance," no room for
   // weight-based dosing or a fever timeline).
   { key:'pediatric_acute', label:'Paediatric acute visit', skeleton:'Weight (for dosing):\n\nVaccination status up to date:\n\nHydration/feeding status:\n\nFever history (onset, highest temperature):\n\nExamination findings:\n\nDiagnosis:\n\nWeight-based medication dosing:\n\nRed flags discussed / when to return:\n\nPlan:\n' },
+  // Third - physiotherapy. The disabled-people/allied-health anchor
+  // starts here: the single most common allied-health specialty for
+  // rehab in HK, with a well-defined structured note (ROM, strength,
+  // function scores, treatment, home program).
+  { key:'physio', label:'Physiotherapy', skeleton:'Reason for referral/presenting complaint:\n\nRelevant history:\n\nRange of motion:\n\nStrength/function assessment:\n\nPain score:\n\nTreatment provided this session:\n\nHome exercise program:\n\nProgress toward goals:\n\nPlan:\n' },
+  // Fourth - occupational therapy. Pairs with physio above (often the
+  // same clinics offer both) but covers daily-living/functional needs
+  // physio's ROM/strength focus doesn't - a different disability lens,
+  // not a duplicate.
+  { key:'ot', label:'Occupational therapy', skeleton:'Reason for referral/presenting complaint:\n\nFunctional assessment (activities of daily living, fine motor, sensory):\n\nTreatment/intervention provided this session:\n\nEquipment/adaptations recommended:\n\nHome program:\n\nProgress toward goals:\n\nPlan:\n' },
+  // Fifth - speech therapy. Genuinely serves two anchors at once: a
+  // common paediatric referral (developmental delay) and adult acquired
+  // communication/swallowing disorders.
+  { key:'speech', label:'Speech therapy', skeleton:'Reason for referral/presenting complaint:\n\nAreas assessed (articulation, language, fluency, voice, swallowing):\n\nObjective findings:\n\nIntervention provided this session:\n\nHome practice recommendations:\n\nProgress toward goals:\n\nPlan:\n' },
+  // Sixth - developmental paediatrics / child psychology. The real
+  // clinical bridge between the paediatrics and disabled-people anchors:
+  // diagnosing/managing developmental disabilities in children.
+  { key:'developmental_peds', label:'Developmental paediatrics', skeleton:'Reason for referral/presenting concern:\n\nDevelopmental history:\n\nBehavioural/developmental observations:\n\nScreening tools used and results:\n\nImpression:\n\nRecommendations (referrals, supports, follow-up):\n\nPlan:\n' },
+  // Seventh and last in the planned sequence - paediatric dentistry.
+  // High real-world volume in HK (every kid needs a dentist), distinct
+  // note needs from general/adult dentistry (caries risk, fluoride/
+  // sealant status, behaviour management, not just adult restorative
+  // work).
+  { key:'pediatric_dental', label:'Paediatric dentistry', skeleton:'Chief complaint:\n\nOral hygiene habits:\n\nExamination findings (teeth, gums, occlusion, caries risk):\n\nTreatment provided this session:\n\nFluoride/sealant status:\n\nParent education given:\n\nPlan/next visit:\n' },
 ]
 function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
