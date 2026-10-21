@@ -1432,7 +1432,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     return digitsA && digitsB ? digitsA === digitsB : null
   }
 
-  async function proceedWithUpload({ clinicId=null, verificationStatus }) {
+  async function proceedWithUpload({ clinicId=null, verificationStatus, isGovernmentRecord=false }) {
     if (!pendingUploadFile || !patient?.id) return
     setUploading(true)
     setUploadError(null)
@@ -1446,7 +1446,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     // anyone with the link could view them without ever authenticating.
     const { error: insErr } = await supabase.from('medical_record_attachments').insert({
       patient_id: patient.id, category: 'other', file_url: path, file_name: pendingUploadFile.name,
-      verification_status: verificationStatus, verified_clinic_id: clinicId,
+      verification_status: verificationStatus, verified_clinic_id: clinicId, is_government_record: isGovernmentRecord,
     })
     if (insErr) { setUploadError(insErr.message); setUploading(false); return }
     const { data } = await supabase.from('medical_record_attachments').select('*')
@@ -1471,10 +1471,33 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   // anyway. See the QA checklist's "Unverified claims" pinned note.
   async function handleConfirmClinic(clinic) {
     setSelectedClinic(clinic)
+    // Government-record routing, per your call: a match against a real
+    // public facility (ownership_type='public' - Hospital Authority/
+    // Department of Health, same registry /share already uses) doesn't
+    // automatically mean "not a bill" - a public-hospital visit can still
+    // generate a real fee a patient wants to claim. What you actually
+    // described (an eHealth HK account export) is a general-record
+    // transfer, not a receipt, and only the patient themselves knows
+    // which this is - so ask, rather than inferring from the clinic type
+    // alone and risking silently blocking a legitimate public-hospital
+    // claim.
+    if (clinic.ownership_type === 'public') {
+      setUploadStage('public_institution_type')
+      return
+    }
     setVerifyingClinic(true)
     await proceedWithUpload({ clinicId: clinic.id, verificationStatus: 'unverified' })
     setVerifyingClinic(false)
     setUploadOutcome({ status:'unverified', clinicName: clinic.name })
+    setUploadStage('done')
+  }
+
+  async function handlePublicInstitutionChoice(isGovernmentRecord) {
+    if (!selectedClinic) return
+    setVerifyingClinic(true)
+    await proceedWithUpload({ clinicId: selectedClinic.id, verificationStatus: 'unverified', isGovernmentRecord })
+    setVerifyingClinic(false)
+    setUploadOutcome({ status: isGovernmentRecord?'government':'unverified', clinicName: selectedClinic.name })
     setUploadStage('done')
   }
 
@@ -1784,12 +1807,24 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           </div>
         </Card>}
 
+        {uploadStage==='public_institution_type'&&selectedClinic&&<Card style={{padding:'16px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?`${selectedClinic.name} is a public institution`:`${selectedClinic.name}為公營機構`}</div>
+          <div style={{fontSize:'11.5px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>{isEn?"Which is this? A real bill/receipt can still be submitted as an insurance claim - a general record (e.g. something you exported from your own eHealth HK account) is kept for your files only and is never offered as a claim.":'此文件屬於哪一類？實際帳單/收據仍可提交作保險索償 - 一般記錄(例如從您自己的「醫健通」帳戶匯出的文件)僅作個人存檔之用,不會用作索償。'}</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+            <Btn variant="primary" disabled={verifyingClinic} onClick={()=>handlePublicInstitutionChoice(false)}>{isEn?'A bill or receipt (may be claimed)':'帳單或收據(可作索償)'}</Btn>
+            <Btn disabled={verifyingClinic} onClick={()=>handlePublicInstitutionChoice(true)}>{isEn?"A general record (e.g. eHealth HK export)":'一般記錄(如「醫健通」匯出文件)'}</Btn>
+          </div>
+        </Card>}
+
         {uploadStage==='done'&&uploadOutcome&&<Card style={{padding:'16px',textAlign:'center'}}>
-          <div style={{fontSize:'28px',marginBottom:'8px'}}>◈</div>
-          <div style={{fontSize:'13px',color:C.textSub,fontWeight:600,marginBottom:'6px'}}>{isEn?'Uploaded - unverified':'已上傳 - 未經核實'}</div>
-          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{uploadOutcome.clinicName
-            ? (isEn?`Saved and marked unverified. A matching clinic's own standing on file doesn't verify this specific document - it can still be submitted as a claim, just flagged for the insurer's own review.`:`已儲存並標示為未經核實。即使配對的診所本身已登記核實，亦不等於核實此份文件 - 仍可提交作索償，惟會標記供保險公司覆核。`)
-            : (isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - still submittable as a claim, flagged for the insurer's own review.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - 仍可提交作索償，惟會標記供保險公司覆核。')}</div>
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>{uploadOutcome.status==='government'?'⌂':'◈'}</div>
+          <div style={{fontSize:'13px',color:C.textSub,fontWeight:600,marginBottom:'6px'}}>{uploadOutcome.status==='government'?(isEn?'Saved - government record':'已儲存 - 政府記錄'):(isEn?'Uploaded - unverified':'已上傳 - 未經核實')}</div>
+          {uploadOutcome.status==='government'
+            ? <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{isEn?"Kept for your own files and continuity of care - a government-sourced record isn't a paid receipt, so it's never offered as an insurance claim."
+                :'此文件已儲存作個人存檔及延續護理之用 - 政府來源記錄並非付款收據,因此不會用作保險索償。'}</div>
+            : <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{uploadOutcome.clinicName
+                ? (isEn?`Saved and marked unverified. A matching clinic's own standing on file doesn't verify this specific document - it can still be submitted as a claim, just flagged for the insurer's own review.`:`已儲存並標示為未經核實。即使配對的診所本身已登記核實，亦不等於核實此份文件 - 仍可提交作索償，惟會標記供保險公司覆核。`)
+                : (isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - still submittable as a claim, flagged for the insurer's own review.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - 仍可提交作索償，惟會標記供保險公司覆核。')}</div>}
           <Btn variant="primary" style={{width:'100%',marginTop:'14px'}} onClick={resetUploadFlow}>{isEn?'Done':'完成'}</Btn>
         </Card>}
 
@@ -1802,7 +1837,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:500}}>{u.file_name}</div>
               <div style={{fontSize:'11px',color:C.textSub}}>{isEn?'Uploaded':'已上傳'} {new Date(u.uploaded_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
-              {u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?__theme.accentLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?__theme.accent:u.verification_status==='pending'?C.amber:C.textMuted}}>
+              {u.is_government_record
+                ? <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:C.card,color:C.textMuted}}>{isEn?'Government record - not claims-eligible':'政府記錄 - 不可用作索償'}</span>
+                : u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?__theme.accentLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?__theme.accent:u.verification_status==='pending'?C.amber:C.textMuted}}>
                 {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Unverified':'未經核實')}
               </span>}
             </div>
@@ -4051,9 +4088,14 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
   async function loadAttachments() {
     if (!patient?.id) return
+    // Excludes is_government_record uploads - a record sourced from a
+    // real Hospital Authority/Department of Health facility (the patient
+    // exported it themselves from their own eHealth HK account and
+    // uploaded it for continuity of care) was never a receipt for
+    // something paid out of pocket, so there's no claim to build from it.
     const { data } = await supabase.from('medical_record_attachments')
       .select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id)
-      .is('insurance_claim_id', null).order('uploaded_at',{ascending:false})
+      .is('insurance_claim_id', null).eq('is_government_record', false).order('uploaded_at',{ascending:false})
     setAttachments(data||[])
   }
   useEffect(() => { loadAttachments() }, [patient?.id])
