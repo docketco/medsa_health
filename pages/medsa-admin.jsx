@@ -1010,8 +1010,37 @@ function CompanyPlansManager({ company, onBack }) {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+  const [form, setForm] = useState({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', additional_terms:'', patient_facing_description:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
   const [tiers, setTiers] = useState([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+  const [generatingDescription, setGeneratingDescription] = useState(false)
+  const [descriptionError, setDescriptionError] = useState(null)
+
+  // The only place left a plan can be registered at all, now that the
+  // insurer-portal Plan Manager it was built for (components/insurance/
+  // InsuranceApp.jsx) is archived - see that file's own header comment.
+  // Same propose-don't-auto-apply pattern as every other AI draft in
+  // this app: writes into patient_facing_description for admin to review
+  // and edit, never saves on its own.
+  async function generateDescription() {
+    if (!form.plan_name.trim()) return
+    setGeneratingDescription(true); setDescriptionError(null)
+    try {
+      const res = await fetch('/api/insurer/generate_plan_description', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          planName: form.plan_name, planType: form.plan_type,
+          keyBenefits: form.key_benefits, coveredCategories: form.covered_categories,
+          additionalTerms: form.additional_terms,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setDescriptionError(data.error || 'Could not generate a description.'); setGeneratingDescription(false); return }
+      setForm(f => ({ ...f, patient_facing_description: data.draft }))
+    } catch {
+      setDescriptionError('Could not reach the AI description service - write one in manually.')
+    }
+    setGeneratingDescription(false)
+  }
 
   async function load() {
     setLoading(true)
@@ -1079,6 +1108,8 @@ function CompanyPlansManager({ company, onBack }) {
       covered_conditions: form.covered_conditions.split(',').map(s=>s.trim()).filter(Boolean),
       covered_categories: form.covered_categories,
       key_benefits: form.key_benefits || null,
+      additional_terms: form.additional_terms || null,
+      patient_facing_description: form.patient_facing_description || null,
       sponsored: form.sponsored,
       requires_doctor_referral_for_allied_health: form.requires_doctor_referral_for_allied_health,
       status: 'active',
@@ -1096,8 +1127,9 @@ function CompanyPlansManager({ company, onBack }) {
     }
     setSaving(false)
     setCreating(false)
-    setForm({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
+    setForm({ plan_name:'', plan_type:'', covered_conditions:'', covered_categories:[], key_benefits:'', additional_terms:'', patient_facing_description:'', sponsored:false, requires_doctor_referral_for_allied_health:false })
     setTiers([{ age_min:'', age_max:'', monthly_premium:'', annual_limit:'' }])
+    setDescriptionError(null)
     load()
   }
 
@@ -1186,9 +1218,20 @@ function CompanyPlansManager({ company, onBack }) {
             <div key={cat} onClick={()=>toggleCategory(cat)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',cursor:'pointer',background:form.covered_categories.includes(cat)?C.green:C.card,color:form.covered_categories.includes(cat)?'#fff':C.textSub}}>{cat}</div>
           ))}
         </div>
-        <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} rows={2} placeholder="Key benefits summary"
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Key benefits (your own words - raw info the AI draft below works from)</div>
+        <textarea value={form.key_benefits} onChange={e=>setForm(f=>({...f,key_benefits:e.target.value}))} rows={2} placeholder="e.g. Hospitalisation, outpatient, specialist, dental…"
           style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
-        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'8px',cursor:'pointer'}}>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Additional terms (optional - exclusions, waiting periods, etc.)</div>
+        <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={2} placeholder="Anything else a patient should know"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}}>
+          <div style={{fontSize:'12px',color:C.textSub}}>Patient-facing description - shown instead of linking patients out to the insurer's own site</div>
+          <div onClick={generatingDescription?undefined:generateDescription} style={{fontSize:'11px',fontWeight:600,color:generatingDescription?C.textMuted:C.green,cursor:form.plan_name.trim()?'pointer':'default',whiteSpace:'nowrap'}}>{generatingDescription?'Writing…':'✨ Generate with AI'}</div>
+        </div>
+        <textarea value={form.patient_facing_description} onChange={e=>setForm(f=>({...f,patient_facing_description:e.target.value}))} rows={4} placeholder="A short, plain-language description patients see on this plan - write your own, or generate a draft above from what you've already entered."
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'4px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
+        {descriptionError&&<div style={{fontSize:'11px',color:C.red,marginBottom:'10px'}}>{descriptionError}</div>}
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'8px',marginTop:'6px',cursor:'pointer'}}>
           <input type="checkbox" checked={form.sponsored} onChange={e=>setForm(f=>({...f,sponsored:e.target.checked}))}/>
           Sponsored placement
         </label>

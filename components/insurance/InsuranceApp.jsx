@@ -2839,13 +2839,14 @@ function TeamsAndAgents({ company }) {
   )
 }
 
-// Real regression found while updating the QA checklist: shelving Teams &
-// Agents (brokerage/agent management, out of scope after the pivot) took
-// underwriter onboarding down with it, since both lived in the same
-// TeamsAndAgents component - but underwriters aren't brokerage management,
-// they're the insurer's own claims-decision staff, core to the flagged-case
-// review flow this app still actively uses. Standalone, so it doesn't drag
-// the rest of Teams/Agents back in with it.
+// ARCHIVED, twice over: first because underwriting (deciding whether to
+// accept a new applicant) is carrier work, never Medsa's or a TPA's - the
+// `false&&` guard below already made this unreachable from the nav. Now
+// doubly unreachable: every entry point into InsuranceApp itself is gone
+// (see this file's own header comment on the final collapse), so there's
+// no portal left for a Quick access card to even live on. Left defined/
+// untouched here (frozen, not deleted), same as everything else shelved
+// this pivot.
 function UnderwritersManager({ company }) {
   const [underwriters,setUnderwriters]=useState([])
   const [loading,setLoading]=useState(true)
