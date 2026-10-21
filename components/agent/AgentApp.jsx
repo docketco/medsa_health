@@ -1470,10 +1470,16 @@ function RenewalsScreen({ agent, policies, onRenewed }) {
 }
 
 // ── TEAM LEAD SCREEN ─────────────────────────────────────────────────────
-// Only reachable by whoever insurance_teams.team_lead_agent_id actually
-// points at - same portal every other agent uses, just with this one
-// extra screen visible, so a lead who also carries their own book of
-// business isn't forced into a separate app.
+// ARCHIVED (BeeFintech pivot): was reachable by whoever
+// insurance_teams.team_lead_agent_id pointed at, as an extra nav item on
+// this same portal. Medsa doesn't organise its own agent teams under the
+// BeeFintech model - a BeeFintech-style vendor already has its own
+// agent/broker hierarchy, and duplicating it isn't the product (same
+// reasoning as InsuranceApp's own Teams & Agents archival - see that
+// file's header comment). Shelved from the nav below (navItems, and the
+// screen==='team' render branch); left defined/untouched here (frozen,
+// not deleted) in case a real reason to organise agents under Medsa
+// itself ever comes up.
 function TeamLeadScreen({ agent, team }) {
   const [members,setMembers]=useState([])
   const [plans,setPlans]=useState([])
@@ -1845,7 +1851,7 @@ export default function AgentApp() {
     {key:'claimsreview', icon:'\u26a0', label:'Pending Claims'},
     {key:'referrals', icon:'\u25c8', label:'Referrals'},
     {key:'renewals', icon:'\u25ce', label:'Renewals', badge: renewalsSoonCount},
-    ...(myLeadTeam ? [{key:'team', icon:'\u25c6', label:`Team: ${myLeadTeam.name}`}] : []),
+    // Team tab shelved - see TeamLeadScreen's header comment.
   ]
 
   if (!agent) return <AgentLogin onLogin={setAgent}/>
@@ -1863,7 +1869,7 @@ export default function AgentApp() {
         {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
         {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
-        {!loading&&screen==='team'&&myLeadTeam&&<TeamLeadScreen agent={agent} team={myLeadTeam}/>}
+        {false&&screen==='team'&&myLeadTeam&&<TeamLeadScreen agent={agent} team={myLeadTeam}/>}
       </div>
     </div>
   )

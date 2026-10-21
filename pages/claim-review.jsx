@@ -1,28 +1,28 @@
-import { useRouter } from 'next/router'
-import { AgentClaimView } from '../components/insurance/InsuranceApp'
+// pages/claim-review.jsx
+// ─────────────────────────────────────────────────────────────────────────────
+// ARCHIVED (BeeFintech pivot): this used to be a standalone link
+// (?claim=CLM-XXXXX) to AgentClaimView - a real human approve/reject
+// decision on a Medsa-held claim, written straight to insurance_claims.
+// That manual-decision screen made sense when Medsa itself stood in for
+// an insurer/TPA's claims reviewer. It doesn't anymore: the insurer's own
+// decision now gets pulled INTO Medsa (lib/insuranceAdapter.js) rather
+// than decided inside Medsa by a human, and pushed documents go OUT via
+// the claims-plugin webhook - there's no manual-decision link left to
+// send anyone. AgentClaimView itself is left defined/untouched in
+// components/insurance/InsuranceApp.jsx (frozen, not deleted).
+// ─────────────────────────────────────────────────────────────────────────────
 
-// medsa.health/claim-review?claim=CLM-XXXXX - real claim, real
-// approve/reject decision written to insurance_claims. Previously
-// rendered AgentClaimView with no props at all, so it always showed one
-// hardcoded fake claim regardless of the URL.
+import C from '../components/shared/colours'
+import MedsaLogo from '../components/shared/MedsaLogo'
+
 export default function ClaimReview() {
-  const router = useRouter()
-  // Real bug this fixes: router.query.claim reads as undefined on the
-  // very first client render - Next hasn't parsed the URL's query string
-  // yet (router.isReady is false) - so AgentClaimView used to mount with
-  // no claimRef at all, immediately conclude "not found," and (a separate
-  // bug fixed alongside this one - see AgentClaimView's load()) never
-  // clear that flag once the router caught up and the real claim loaded
-  // successfully a moment later. A genuinely valid /claim-review link
-  // read as permanently broken. Now waits for the router before mounting
-  // AgentClaimView at all, so it only ever sees the real claim ref.
-  if (!router.isReady) {
-    return <div style={{ maxWidth:'440px', margin:'0 auto', minHeight:'100vh', background:'#f0ede8', padding:'32px 20px', textAlign:'center', fontSize:'13px', color:'#6b6560' }}>Loading...</div>
-  }
-  const claimRef = router.query.claim
   return (
-    <div style={{ maxWidth:'440px', margin:'0 auto', minHeight:'100vh', background:'#f0ede8' }}>
-      <AgentClaimView claimRef={claimRef}/>
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:420,textAlign:'center'}}>
+        <MedsaLogo height={24}/>
+        <div style={{fontSize:'17px',fontWeight:700,color:C.text,marginTop:'16px',marginBottom:'8px'}}>This review link is no longer in use</div>
+        <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Claim decisions are no longer made through a Medsa link. If you were sent this link for a specific claim, please reach out to your Medsa contact directly.</div>
+      </div>
     </div>
   )
 }
