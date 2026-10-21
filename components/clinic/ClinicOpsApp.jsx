@@ -1401,6 +1401,12 @@ const NOTE_TEMPLATES = [
   // notes" section - tagging a visit this way is what makes it show up
   // there, not just cosmetic section headers like the others.
   { key:'obgyn', label:'OBGYN', skeleton:'Gestational age:\n\nFundal height:\n\nFetal heart rate:\n\nFetal presentation/position:\n\nFetal movement reported by patient:\n\nBlood pressure/oedema:\n\nUrinalysis (protein/glucose):\n\nUltrasound/lab findings this visit:\n\nPlan:\n' },
+  // Second in the specialty sequence. Well-child (above) already covers
+  // the routine/preventive AAP visit structure - this is the other half
+  // of general paediatrics, an acute/sick visit, which that structure
+  // doesn't fit (no "parent concerns/anticipatory guidance," no room for
+  // weight-based dosing or a fever timeline).
+  { key:'pediatric_acute', label:'Paediatric acute visit', skeleton:'Weight (for dosing):\n\nVaccination status up to date:\n\nHydration/feeding status:\n\nFever history (onset, highest temperature):\n\nExamination findings:\n\nDiagnosis:\n\nWeight-based medication dosing:\n\nRed flags discussed / when to return:\n\nPlan:\n' },
 ]
 function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institutionId, medicineType }) {
   const [patient,setPatient]=useState(null)
