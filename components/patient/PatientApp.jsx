@@ -5804,6 +5804,63 @@ const HKCIP_SCHEDULE = [
   ]},
 ]
 
+// kp-06 - cow's milk-related symptom awareness checklist. Scoring
+// criteria transcribed verbatim from the real published instrument you
+// supplied as a PDF (Vandenplas et al., "Cow's Milk related Symptom
+// Score: the update," submitted 2022) - not approximated, not from
+// memory, same sourcing rule as the HKCIP schedule/EPDS text. Earlier
+// research (Oct 21) found the original "detection engine" idea
+// shouldn't be built at all - diagnosing a cow's milk allergy needs a
+// supervised elimination diet + oral food challenge, which no amount of
+// correlating logged data can substitute for. This stays a plain
+// awareness/scoring checklist instead: it computes the same total score
+// the source instrument defines, but never names a suspected condition,
+// never correlates it against this patient's own other logged entries,
+// and the interpretation text never goes further than the source's own
+// two published bands - always "discuss with your doctor," never a
+// verdict. Deliberately not branded with the source's own trademarked
+// tool name/logo in the UI - the clinical scoring criteria are a
+// published, citable methodology; the name and page layout belong to
+// their publisher.
+const MILK_SYMPTOM_OPTIONS = {
+  crying: [
+    { value:0, en:'≤1 hour/day', zh:'每天≤1小時' },
+    { value:1, en:'1 to 1.5 hours/day', zh:'每天1至1.5小時' },
+    { value:2, en:'1.5 to 2 hours/day', zh:'每天1.5至2小時' },
+    { value:3, en:'2 to 3 hours/day', zh:'每天2至3小時' },
+    { value:4, en:'3 to 4 hours/day', zh:'每天3至4小時' },
+    { value:5, en:'4 to 5 hours/day', zh:'每天4至5小時' },
+    { value:6, en:'≥5 hours/day', zh:'每天≥5小時' },
+  ],
+  regurgitation: [
+    { value:0, en:'0 to 2 episodes/day', zh:'每天0至2次' },
+    { value:1, en:'3 to 5 episodes, each under 5ml', zh:'3至5次,每次少於5毫升' },
+    { value:2, en:'More than 5 episodes, each over 5ml', zh:'超過5次,每次超過5毫升' },
+    { value:3, en:'More than 5 episodes (about half the feed) in under half of feeds', zh:'超過5次(約半份餵食量),少於一半餵食次數' },
+    { value:4, en:'Continuous small regurgitations, 30+ min after each feed', zh:'每次餵食後持續少量溢奶,超過30分鐘' },
+    { value:5, en:'Half to a full feed regurgitated, in at least half of feeds', zh:'至少一半餵食次數中,溢出半份至全份奶量' },
+    { value:6, en:'A full feed regurgitated after every feeding', zh:'每次餵食後完全溢出' },
+  ],
+  stools: [
+    { value:'formed', score:0, en:'Formed stools', zh:'成形大便' },
+    { value:'hard', score:4, en:'Hard stools', zh:'硬便' },
+    { value:'loose', score:4, en:'Loose stools', zh:'稀便' },
+    { value:'watery', score:6, en:'Watery stools', zh:'水狀大便' },
+  ],
+  eczemaRegion: [
+    { value:0, en:'Absent', zh:'沒有' },
+    { value:1, en:'Mild', zh:'輕微' },
+    { value:2, en:'Moderate', zh:'中度' },
+    { value:3, en:'Severe', zh:'嚴重' },
+  ],
+  respiratory: [
+    { value:0, en:'No respiratory symptoms', zh:'沒有呼吸道症狀' },
+    { value:1, en:'Slight symptoms', zh:'輕微症狀' },
+    { value:2, en:'Mild symptoms', zh:'輕度症狀' },
+    { value:3, en:'Severe symptoms', zh:'嚴重症狀' },
+  ],
+}
+
 function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const __theme = useContext(ThemeContext)
   const [kidsTab,setKidsTab]=useState('growth')
@@ -5831,13 +5888,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [immunizationChecks,setImmunizationChecks]=useState([])
   const [teethLog,setTeethLog]=useState([])
   const [selectedTooth,setSelectedTooth]=useState(null)
+  const [milkChecks,setMilkChecks]=useState([])
+  const [milkForm,setMilkForm]=useState({ crying:'', regurgitation:'', stools:'', eczemaHeadNeck:'', eczemaArmsLegs:'', urticaria:'', respiratory:'' })
 
   // Same flash fix as BumpHealthScreen - only the first load shows the
   // full "Loading…" screen, not every reload after an add/delete.
   async function load(isInitial=false) {
     if (!patient?.id) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }, { data: imm }, { data: teeth }] = await Promise.all([
+    const [{ data: g }, { data: f }, { data: m }, { data: mchc }, { data: sym }, { data: diaper }, { data: sleep }, { data: imm }, { data: teeth }, { data: milk }] = await Promise.all([
       supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at',{ascending:true}),
       supabase.from('kids_feeding_logs').select('*').eq('patient_id', patient.id).order('fed_at',{ascending:false}).limit(30),
       supabase.from('kids_milestone_checks').select('*').eq('patient_id', patient.id),
@@ -5847,6 +5906,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       supabase.from('kids_sleep_logs').select('*').eq('patient_id', patient.id).order('started_at',{ascending:false}).limit(30),
       supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
       supabase.from('kids_teeth_log').select('*').eq('patient_id', patient.id),
+      supabase.from('kids_milk_symptom_checks').select('*').eq('patient_id', patient.id).order('created_at',{ascending:false}).limit(10),
     ])
     setGrowthLogs(g||[])
     setFeedingLogs(f||[])
@@ -5857,6 +5917,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     setSleepLogs(sleep||[])
     setImmunizationChecks(imm||[])
     setTeethLog(teeth||[])
+    setMilkChecks(milk||[])
     setLoading(false)
   }
   useEffect(() => { load(true) }, [patient?.id])
@@ -6016,6 +6077,28 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     await load(); setSaving(false)
   }
   async function deleteSymptomLog(id) { if (isReadOnly) return; await supabase.from('kids_symptom_logs').delete().eq('id', id); load() }
+
+  const milkFormComplete = ['crying','regurgitation','stools','eczemaHeadNeck','eczemaArmsLegs','urticaria','respiratory'].every(k=>milkForm[k]!=='')
+  async function saveMilkCheck() {
+    if (!patient?.id || isReadOnly || !milkFormComplete || saving) return
+    setSaving(true)
+    const stoolOpt = MILK_SYMPTOM_OPTIONS.stools.find(o=>o.value===milkForm.stools)
+    const scores = {
+      crying_score: Number(milkForm.crying),
+      regurgitation_score: Number(milkForm.regurgitation),
+      stools_score: stoolOpt ? stoolOpt.score : 0,
+      eczema_headneck_score: Number(milkForm.eczemaHeadNeck),
+      eczema_armslegs_score: Number(milkForm.eczemaArmsLegs),
+      urticaria_flag: milkForm.urticaria === 'yes',
+      respiratory_score: Number(milkForm.respiratory),
+    }
+    const total = scores.crying_score + scores.regurgitation_score + scores.stools_score
+      + scores.eczema_headneck_score + scores.eczema_armslegs_score + (scores.urticaria_flag?6:0) + scores.respiratory_score
+    await supabase.from('kids_milk_symptom_checks').insert({ patient_id: patient.id, ...scores, total_score: total })
+    setMilkForm({ crying:'', regurgitation:'', stools:'', eczemaHeadNeck:'', eczemaArmsLegs:'', urticaria:'', respiratory:'' })
+    await load(); setSaving(false)
+  }
+  async function deleteMilkCheck(id) { if (isReadOnly) return; await supabase.from('kids_milk_symptom_checks').delete().eq('id', id); load() }
 
   // kp-02 - AI OCR for a photographed medication label, so "medication
   // given" doesn't have to be typed by hand. Only ever fills the text
@@ -6436,6 +6519,62 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           ))}
         </div>
       </Card>
+
+      {ageInMonths!=null&&ageInMonths<12&&<>
+      <SecLabel>{isEn?"Cow's milk symptom awareness checklist":'牛奶相關症狀意識清單'}</SecLabel>
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>{isEn?"A scoring tool for infants under 1, from a real published clinical instrument (Vandenplas et al., 2022) - not a diagnosis, and this app never names a suspected condition from it. If several symptoms apply, the result is simply a prompt to discuss with your doctor.":'適用於1歲以下嬰兒的評分工具,源自真實已發表的臨床工具(Vandenplas et al., 2022) - 並非診斷,本應用程式不會據此判斷任何疑似病症。若多項符合,結果僅為建議諮詢醫生的提示。'}</div>
+        <div style={{fontSize:'11px',color:C.red,fontWeight:600,marginBottom:'12px',lineHeight:1.5,padding:'8px 10px',background:C.redLight||'#fdecec',borderRadius:'8px'}}>{isEn?"Not for severe/life-threatening symptoms (e.g. anaphylaxis) - seek emergency care immediately. Failure to thrive or blood in the stool also needs urgent medical review, not this checklist.":'不適用於嚴重/危及生命的症狀(如過敏性休克) - 請立即就醫。生長遲緩或大便帶血同樣需要緊急求醫,而非使用此清單。'}</div>
+
+        {[
+          { key:'crying', label:{en:'Crying (no obvious cause, ≥1 week)',zh:'哭鬧(無明顯原因,持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.crying },
+          { key:'regurgitation', label:{en:'Regurgitation (≥1 week)',zh:'吐奶(持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.regurgitation },
+          { key:'stools', label:{en:'Stools (≥1 week)',zh:'大便狀況(持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.stools },
+          { key:'eczemaHeadNeck', label:{en:'Eczema - head/neck/trunk (≥1 week)',zh:'濕疹 - 頭頸軀幹(持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.eczemaRegion },
+          { key:'eczemaArmsLegs', label:{en:'Eczema - arms/hands/legs/feet (≥1 week)',zh:'濕疹 - 手腳(持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.eczemaRegion },
+          { key:'respiratory', label:{en:'Respiratory symptoms (≥1 week)',zh:'呼吸道症狀(持續≥1週)'}, options:MILK_SYMPTOM_OPTIONS.respiratory },
+        ].map(f=>(
+          <div key={f.key} style={{marginBottom:'10px'}}>
+            <div style={{fontSize:'11.5px',fontWeight:600,marginBottom:'4px'}}>{isEn?f.label.en:f.label.zh}</div>
+            <select value={milkForm[f.key]} onChange={e=>setMilkForm({...milkForm,[f.key]:e.target.value})} disabled={isReadOnly} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px',background:'#fff'}}>
+              <option value="">{isEn?'Select…':'請選擇…'}</option>
+              {f.options.map(o=><option key={o.value} value={o.value}>{isEn?o.en:o.zh}</option>)}
+            </select>
+          </div>
+        ))}
+        <div style={{marginBottom:'10px'}}>
+          <div style={{fontSize:'11.5px',fontWeight:600,marginBottom:'4px'}}>{isEn?'Acute urticaria (hives) and/or angioedema':'急性蕁麻疹(風疹)及/或血管性水腫'}</div>
+          <select value={milkForm.urticaria} onChange={e=>setMilkForm({...milkForm,urticaria:e.target.value})} disabled={isReadOnly} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px',background:'#fff'}}>
+            <option value="">{isEn?'Select…':'請選擇…'}</option>
+            <option value="no">{isEn?'No':'沒有'}</option>
+            <option value="yes">{isEn?'Yes':'有'}</option>
+          </select>
+        </div>
+
+        <Btn variant="primary" style={{width:'100%'}} disabled={saving||isReadOnly||!milkFormComplete} onClick={saveMilkCheck}>{isEn?'Save & score':'儲存並計分'}</Btn>
+
+        <div style={{marginTop:'12px'}}>
+          {milkChecks.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No checks on file yet.':'暫無記錄。'}</div>}
+          {milkChecks.map(m=>{
+            const band = m.total_score < 6 ? (isEn?'Symptoms are not likely related to cow\'s milk - look for other causes.':'症狀相信與牛奶無關 - 建議尋找其他原因。')
+              : m.total_score >= 10 ? (isEn?'May be suggestive of cow\'s milk-related symptoms - worth discussing with your doctor.':'可能提示與牛奶相關症狀 - 建議諮詢醫生。')
+              : (isEn?'Source instrument gives no specific guidance in this range - mention it at your next visit if you\'re concerned.':'來源工具對此分數範圍未有特定指引 - 如有疑慮可於下次就診時提及。')
+            return (
+              <div key={m.id} style={{padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontWeight:700}}>{isEn?'Total score':'總分'}: {m.total_score}</span>
+                  <span style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                    <span style={{color:C.textMuted,fontSize:'11px'}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+                    <span onClick={()=>deleteMilkCheck(m.id)} style={{color:C.textMuted,cursor:'pointer'}}>✕</span>
+                  </span>
+                </div>
+                <div style={{color:C.textSub,marginTop:'2px'}}>{band}</div>
+              </div>
+            )
+          })}
+        </div>
+      </Card>
+      </>}
       </>}
 
       {kidsTab==='daily'&&<>
