@@ -8969,6 +8969,7 @@ function MedsaBumpSection({ isEn, patient, onViewBumpHealth }) {
     }).select().maybeSingle()
     if (child) {
       await supabase.from('bump_subscriptions').update({ child_graduated_at: new Date().toISOString(), graduated_child_patient_id: child.id }).eq('id', bump.id)
+      await supabase.from('dependent_guardians').insert({ dependent_patient_id: child.id, guardian_patient_id: patient.id, is_primary: true, relationship: 'child' })
       setGraduationNotice(child)
     }
     await loadBump()
@@ -9275,6 +9276,8 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   const [loading,setLoading]=useState(true)
   const [subscribing,setSubscribing]=useState(false)
   const [subscribeError,setSubscribeError]=useState(null)
+  const [inviteFor,setInviteFor]=useState(null) // the dependent patient row being invited-to, or null
+  const [redeemOpen,setRedeemOpen]=useState(false)
 
   useEffect(() => {
     if (!open || !activePatient?.id) return
@@ -9282,13 +9285,26 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
     async function load() {
       setLoading(true)
       const adultId = activePatient.account_type==='kids' ? activePatient.parent_patient_id : activePatient.id
-      const [{ data: adult }, { data: kids }] = await Promise.all([
+      // Multi-guardian access (Oct 22) - a dependent reaches this adult's
+      // switcher either the original way (patients.parent_patient_id,
+      // untouched) or via dependent_guardians, for a SECOND caregiver who
+      // joined an existing child's profile through an invite code rather
+      // than creating their own duplicate. Both lists are merged and
+      // de-duped below - a primary guardian's own kids already appear in
+      // dependent_guardians too (backfilled + written on every create),
+      // but reading via parent_patient_id as well keeps this correct even
+      // for a row that predates that table for any reason.
+      const [{ data: adult }, { data: kids }, { data: viaInvite }] = await Promise.all([
         supabase.from('patients').select('*').eq('id', adultId).maybeSingle(),
         supabase.from('patients').select('*').eq('parent_patient_id', adultId).order('created_at',{ascending:true}),
+        supabase.from('dependent_guardians').select('patients:dependent_patient_id(*)').eq('guardian_patient_id', adultId).eq('is_primary', false),
       ])
       if (cancelled) return
       setManagingAdult(adult||null)
-      setProfiles([adult, ...(kids||[])].filter(Boolean))
+      const invited = (viaInvite||[]).map(r=>r.patients).filter(Boolean)
+      const seen = new Set()
+      const merged = [adult, ...(kids||[]), ...invited].filter(p => p && !seen.has(p.id) && seen.add(p.id))
+      setProfiles(merged)
       setLoading(false)
     }
     load()
@@ -9355,6 +9371,12 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
                 <div style={{fontSize:'14px',fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.preferred_name||p.full_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted}}>{locked?'Locked - needs Medsa Guardian':isDependentRow?relLabel:'You'}</div>
               </div>
+              {/* Multi-guardian (Oct 22) - any guardian who can see this
+                  dependent can invite another caregiver into it, same way
+                  any of them already has full access once added - no
+                  granular permission tiers exist elsewhere in this app
+                  for dependents, so this doesn't invent one either. */}
+              {!locked&&isDependentRow&&<span onClick={e=>{e.stopPropagation();setInviteFor(p)}} style={{fontSize:'11px',color:__theme.accent,fontWeight:600,flexShrink:0,padding:'4px 8px'}}>Invite</span>}
               {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:__theme.accent,fontSize:'16px',flexShrink:0}}>✓</span>}
             </div>
           )
@@ -9386,7 +9408,108 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
                   {disabilityDiscountEligible&&<div style={{fontSize:'11px',color:C.green,textAlign:'center',marginBottom:'6px'}}>50% disability discount applies to this account</div>}
                   <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
                 </>}
+          <div onClick={()=>setRedeemOpen(true)} style={{textAlign:'center',fontSize:'12px',color:__theme.accent,fontWeight:600,marginTop:'10px',cursor:'pointer'}}>I have a caregiver invite code</div>
         </div>
+      </div>
+      {inviteFor&&<InviteGuardianModal dependent={inviteFor} guardianId={managingAdult?.id} onClose={()=>setInviteFor(null)}/>}
+      {redeemOpen&&<RedeemInviteCodeFlow guardianId={managingAdult?.id} onClose={()=>setRedeemOpen(false)} onRedeemed={()=>{setRedeemOpen(false);onClose()}}/>}
+    </div>
+  )
+}
+
+// Multi-guardian access (Oct 22) - the existing guardian's side: generate
+// a short code tied to this one dependent, share it with whoever should
+// also have access (the other parent, a grandparent helping out). No
+// document verification on the new guardian - they're vouched for by
+// someone who already has legitimate access, same trust model as the
+// clinic claim_code pattern used for adult profiles.
+function InviteGuardianModal({ dependent, guardianId, onClose }) {
+  const __theme = useContext(ThemeContext)
+  const [code,setCode]=useState(null)
+  const [creating,setCreating]=useState(false)
+  const [error,setError]=useState(null)
+  const [copied,setCopied]=useState(false)
+
+  async function generate() {
+    if (!guardianId || !dependent?.id) return
+    setCreating(true); setError(null)
+    const newCode = Math.random().toString(36).slice(2,8).toUpperCase()
+    const { error: insErr } = await supabase.from('dependent_invite_codes').insert({
+      dependent_patient_id: dependent.id, code: newCode, created_by_guardian_id: guardianId,
+      expires_at: new Date(Date.now() + 7*24*60*60*1000).toISOString(),
+    })
+    setCreating(false)
+    if (insErr) { setError('Could not create a code - try again.'); return }
+    setCode(newCode)
+  }
+  useEffect(() => { generate() }, [])
+
+  function copyCode() {
+    if (!code) return
+    navigator.clipboard?.writeText(code).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false), 2000) }).catch(()=>{})
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',width:'100%',maxWidth:360,textAlign:'center'}}>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Invite a caregiver for {dependent.preferred_name||dependent.full_name}</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>Share this code with them - entering it under their own Medsa account gives them full access to this same profile, so nobody ends up with a second, duplicate one.</div>
+        {creating&&<div style={{fontSize:'12px',color:C.textMuted}}>Generating…</div>}
+        {error&&<div style={{fontSize:'12px',color:C.red}}>{error}</div>}
+        {code&&<>
+          <div style={{fontSize:'28px',fontWeight:700,letterSpacing:'4px',color:__theme.accent,background:__theme.accentLight,borderRadius:'10px',padding:'14px',marginBottom:'10px',fontFamily:'monospace'}}>{code}</div>
+          <div onClick={copyCode} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:'pointer',marginBottom:'18px'}}>{copied?'Copied':'Copy code'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'18px'}}>Expires in 7 days.</div>
+        </>}
+        <Btn style={{width:'100%'}} onClick={onClose}>Done</Btn>
+      </div>
+    </div>
+  )
+}
+
+// Multi-guardian access (Oct 22) - the new guardian's side: redeem a code
+// shared by an existing guardian to join their dependent's existing
+// profile, instead of creating a duplicate one of their own.
+function RedeemInviteCodeFlow({ guardianId, onClose, onRedeemed }) {
+  const [code,setCode]=useState('')
+  const [checking,setChecking]=useState(false)
+  const [error,setError]=useState(null)
+  const [success,setSuccess]=useState(null)
+
+  async function handleRedeem() {
+    if (!guardianId || !code.trim()) return
+    setChecking(true); setError(null)
+    const { data, error: qErr } = await supabase.from('dependent_invite_codes').select('*, patients:dependent_patient_id(full_name, preferred_name)').eq('code', code.trim().toUpperCase()).maybeSingle()
+    if (qErr || !data) { setChecking(false); setError('That code doesn\'t match any invite. Double-check it with whoever shared it.'); return }
+    if (data.used_at) { setChecking(false); setError('This code has already been used.'); return }
+    if (new Date(data.expires_at) < new Date()) { setChecking(false); setError('This code has expired - ask for a new one.'); return }
+    if (data.created_by_guardian_id === guardianId) { setChecking(false); setError('This is your own invite code - share it with someone else instead.'); return }
+
+    const { error: linkErr } = await supabase.from('dependent_guardians').insert({
+      dependent_patient_id: data.dependent_patient_id, guardian_patient_id: guardianId, is_primary: false,
+    })
+    if (linkErr) { setChecking(false); setError(linkErr.code === '23505' ? 'You already have access to this profile.' : 'Could not redeem this code - try again.'); return }
+    await supabase.from('dependent_invite_codes').update({ used_at: new Date().toISOString(), used_by_guardian_id: guardianId }).eq('id', data.id)
+    setChecking(false)
+    setSuccess(data.patients?.preferred_name || data.patients?.full_name || 'this profile')
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',width:'100%',maxWidth:360,textAlign:'center'}}>
+        {success
+          ? <>
+              <div style={{fontSize:'28px',marginBottom:'8px'}}>✓</div>
+              <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px'}}>You now have access to {success}</div>
+              <Btn variant="primary" style={{width:'100%'}} onClick={()=>onRedeemed&&onRedeemed()}>Done</Btn>
+            </>
+          : <>
+              <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Enter a caregiver invite code</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Someone already managing this profile shared a code with you - enter it below to get access too.</div>
+              <input value={code} onChange={e=>setCode(e.target.value)} placeholder="e.g. 7K2Q9X" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'16px',letterSpacing:'2px',textAlign:'center',textTransform:'uppercase',marginBottom:'14px',boxSizing:'border-box'}}/>
+              {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+              <Btn variant="primary" style={{width:'100%'}} disabled={checking||!code.trim()} onClick={handleRedeem}>{checking?'Checking…':'Redeem code'}</Btn>
+            </>}
       </div>
     </div>
   )
@@ -9441,6 +9564,15 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
         dependent_relationship: relationship, is_disabled: isDisabled,
       }).select().maybeSingle()
       if (insErr) throw insErr
+      // Multi-guardian access (Oct 22) - the creator always becomes the
+      // primary guardian here. A SECOND caregiver (e.g. the other parent,
+      // or a grandparent helping out) gets added later via an invite
+      // code (see InviteGuardianModal/RedeemInviteCodeFlow below), not by
+      // creating their own separate profile for the same child.
+      await supabase.from('dependent_guardians').insert({
+        dependent_patient_id: child.id, guardian_patient_id: parentPatient.id,
+        is_primary: true, relationship,
+      })
       if (certFile) {
         const path = `${medsaId}/dependent-doc-${Date.now()}-${certFile.name}`
         await supabase.storage.from('id-verification').upload(path, certFile)
