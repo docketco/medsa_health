@@ -6,6 +6,7 @@ import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanRecei
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import { ageDaysBetween, percentileBands, growthPercentile, WHO_MAX_AGE_DAYS } from '../../lib/whoGrowth'
 import { searchPregnancyDrugSafety } from '../../lib/pregnancyDrugSafety'
+import { IAM_SMART_ENABLED } from '../../lib/featureFlags'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -9515,7 +9516,7 @@ function RedeemInviteCodeFlow({ guardianId, onClose, onRedeemed }) {
   )
 }
 
-// Reuses SelfRegisterFlow's step-by-step visual shape, but not its HKID +
+// Reuses AccountFlow's step-by-step visual shape, but not its HKID +
 // selfie identity verification - that exists to prove a STRANGER with no
 // prior anchor really is who they claim, which doesn't apply here: the
 // parent creating this is already signed in, and the child usually has no
@@ -9637,7 +9638,7 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
 }
 
 function SignUpGate({ onComplete, onSkipDemo }) {
-  const [mode,setMode]=useState(null) // null | 'claim' | 'register'
+  const [mode,setMode]=useState(null) // null | 'account'
 
   if (!mode) return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
@@ -9646,16 +9647,12 @@ function SignUpGate({ onComplete, onSkipDemo }) {
         <div style={{fontSize:'14px',color:C.textSub,margin:'16px 0 28px'}}>Get started with your health passport</div>
         <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
           <Card onClick={()=>setMode('login')} style={{padding:'18px',textAlign:'left'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I've already claimed my profile</div>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I've already got an account</div>
             <div style={{fontSize:'12px',color:C.textSub}}>Log back in with your HKID and phone number</div>
           </Card>
-          <Card onClick={()=>setMode('claim')} style={{padding:'18px',textAlign:'left'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>A clinic already has my record</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Claim your existing profile using the code sent to your phone</div>
-          </Card>
-          <Card onClick={()=>setMode('register')} style={{padding:'18px',textAlign:'left'}}>
-            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>I'm new to Medsa</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Register with ID verification</div>
+          <Card onClick={()=>setMode('account')} style={{padding:'18px',textAlign:'left'}}>
+            <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>Create an account</div>
+            <div style={{fontSize:'12px',color:C.textSub}}>Whether or not a clinic already has your record - one flow either way</div>
           </Card>
         </div>
         {onSkipDemo&&<div onClick={onSkipDemo} style={{marginTop:'20px',fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>View demo instead →</div>}
@@ -9664,131 +9661,118 @@ function SignUpGate({ onComplete, onSkipDemo }) {
   )
 
   if (mode==='login') return <LoginFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
-  if (mode==='claim') return <ClaimProfileFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
-  return <SelfRegisterFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
+  return <AccountFlow onBack={()=>setMode(null)} onComplete={onComplete}/>
 }
 
-function ClaimProfileFlow({ onBack, onComplete }) {
+// Every real table that references patient_id - if a new one gets added
+// later, it needs adding here too, or its rows would be silently orphaned
+// (left pointing at a deleted duplicate) rather than merged. Shared by
+// AccountFlow's claim branch, same table list ClaimProfileFlow used to
+// carry on its own before the two flows merged.
+const PATIENT_LINKED_TABLES = [
+  'medical_records','conditions','allergies','medications','appointments',
+  'agent_policies','appointment_intake','clinic_queue','insurance_claims',
+  'order_escalations','patient_messages','patient_share_links',
+  'surgery_bookings','transactions','treatment_plans','verbal_orders',
+]
+
+// Replaces the old ClaimProfileFlow + SelfRegisterFlow split (your call,
+// Oct 22 - "I don't know why there are two flows"). One real-identity
+// pipeline for everyone: pick a verification method, enter basic info,
+// verify, confirm a contact method with a code - the system figures out
+// on its own whether this activates a clinic-created record (the old
+// "claim" case), requests recovery of an existing self-registered one,
+// or creates a new one, rather than making the person pre-sort
+// themselves into the right door.
+//
+// Two verification methods:
+// - iAM Smart (gated by IAM_SMART_ENABLED in lib/featureFlags.js - off
+//   until the DPO/Cyberport Sandbox registration is in hand, a business
+//   step only the account owner can do). Once live, this is the fast
+//   path: biometric auth IS the liveness proof, e-ME auto-fills name/
+//   DOB/gender/contact, no separate HKID photo or selfie needed.
+// - Manual (HKID photo + selfie): real liveness/face-match needs a paid
+//   KYC vendor that isn't contracted yet, so this is reviewed by Medsa
+//   staff for now, same honest gap as the old flow had - not a step
+//   back, just not yet automated.
+//
+// The old claim_code (a secret a clinic had to text out separately) is
+// retired as a requirement: once real HKID + document + selfie
+// verification is mandatory for everyone, that's already stronger proof
+// of identity than a shared code ever was. A clinic-issued code still on
+// an old unclaimed record is simply ignored, not required.
+function AccountFlow({ onBack, onComplete }) {
   const __theme = useContext(ThemeContext)
-  const [hkid,setHkid]=useState('')
-  const [code,setCode]=useState('')
-  const [error,setError]=useState(null)
-  const [checking,setChecking]=useState(false)
-  const [mergedCount,setMergedCount]=useState(0)
-  const [claimedData,setClaimedData]=useState(null)
-
-  // Every real table that references patient_id - if a new one gets added
-  // later, it needs adding here too, or its rows would be silently orphaned
-  // (left pointing at a deleted duplicate) rather than merged.
-  const PATIENT_LINKED_TABLES = [
-    'medical_records','conditions','allergies','medications','appointments',
-    'agent_policies','appointment_intake','clinic_queue','insurance_claims',
-    'order_escalations','patient_messages','patient_share_links',
-    'surgery_bookings','transactions','treatment_plans','verbal_orders',
-  ]
-
-  async function mergeOtherRecords(claimedId, hkidValue) {
-    // Any other row sharing this HKID is the same real person, registered
-    // separately at a different institution before ever claiming.
-    const { data: duplicates } = await supabase.from('patients').select('id')
-      .eq('hkid', hkidValue).neq('id', claimedId).is('claimed_at', null)
-    if (!duplicates || duplicates.length === 0) return 0
-
-    for (const dup of duplicates) {
-      for (const table of PATIENT_LINKED_TABLES) {
-        await supabase.from(table).update({ patient_id: claimedId }).eq('patient_id', dup.id)
-      }
-      await supabase.from('patients').delete().eq('id', dup.id)
-    }
-    return duplicates.length
-  }
-
-  async function handleClaim() {
-    setChecking(true)
-    setError(null)
-    const { data, error: qErr } = await supabase.from('patients').select('*').eq('hkid', hkid).eq('claim_code', code.toUpperCase()).maybeSingle()
-    if (qErr || !data) { setChecking(false); setError('HKID and code do not match any record. Check with the clinic that registered you.'); return }
-    if (data.claimed_at) { setChecking(false); setError('This profile has already been claimed.'); return }
-    if (new Date(data.claim_code_expires_at) < new Date()) { setChecking(false); setError('This claim code has expired. Ask the clinic to issue a new one.'); return }
-
-    await supabase.from('patients').update({
-      registration_path: 'claimed',
-      claimed_at: new Date().toISOString(),
-      claim_code: null, // burn the code so it can't be reused
-    }).eq('id', data.id)
-
-    const merged = await mergeOtherRecords(data.id, hkid)
-    setChecking(false)
-    setMergedCount(merged)
-    setClaimedData(data)
-  }
-
-  if (claimedData) return (
-    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:380,textAlign:'center'}}>
-        <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u2713'}</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>Profile claimed</div>
-        {mergedCount>0
-          ? <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>We also found {mergedCount} other record{mergedCount>1?'s':''} under your HKID from other visits before you claimed - everything's been gathered into this one profile.</div>
-          : <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Your health record is now yours - portable across any Medsa-connected clinic.</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={()=>onComplete(claimedData)}>Continue</Btn>
-      </div>
-    </div>
-  )
-
-  return (
-    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
-      <div style={{width:'100%',maxWidth:380}}>
-        <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Claim your profile</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Enter your HKID and the claim code sent to the phone number your clinic has on file.</div>
-        <input value={hkid} onChange={e=>setHkid(e.target.value)} placeholder="HKID" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'12px',boxSizing:'border-box'}}/>
-        <input value={code} onChange={e=>setCode(e.target.value)} placeholder="Claim code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',marginBottom:'16px',boxSizing:'border-box',textTransform:'uppercase'}}/>
-        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-        <Btn variant="primary" style={{width:'100%'}} onClick={handleClaim} disabled={checking||!hkid||!code}>{checking?'Checking...':'Claim my profile'}</Btn>
-      </div>
-    </div>
-  )
-}
-
-function SelfRegisterFlow({ onBack, onComplete }) {
-  const __theme = useContext(ThemeContext)
-  const [step,setStep]=useState('form') // form | id_upload | selfie | pending
-  const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:''})
-  // Your call: the disability declaration shouldn't only live on
-  // dependent profiles (where it gates the Guardian discount) - it
-  // should be on every new account, including your own, purely as
-  // information on file. No proof required here (unlike the dependent
-  // flow) since nothing is being gated by it.
+  const [step,setStep]=useState('method') // method | iam_smart_pending | form | id_upload | selfie | otp | pending
+  const [form,setForm]=useState({fullName:'',dob:'',hkid:'',phone:'',email:''})
   const [isDisabled,setIsDisabled]=useState(false)
   const [idFile,setIdFile]=useState(null)
   const [selfieFile,setSelfieFile]=useState(null)
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
   const [checkingHkid,setCheckingHkid]=useState(false)
-  // Set once the HKID entered matches a real account that already
-  // exists - the rest of the flow (ID + selfie) is identical either
-  // way, but submitting goes to a recovery request tied to that
-  // account instead of creating a new one.
-  const [recovery,setRecovery]=useState(null) // null | {patientId}
+  // null | {patientId, kind:'claim'} | {patientId, kind:'recovery'}
+  // 'claim' = an unclaimed clinic-created record (used to need
+  // ClaimProfileFlow's separate door + a claim_code). 'recovery' = an
+  // already-claimed/self-registered account (the old SelfRegisterFlow
+  // "recovery" case). Both now discovered the same way, from the same
+  // form, rather than requiring the person to already know which applies.
+  const [matched,setMatched]=useState(null)
+  const [otpChannel,setOtpChannel]=useState(null) // 'sms' | 'email'
+  const [otpSentCode,setOtpSentCode]=useState(null) // demo-visible, no live SMS/email provider yet
+  const [otpInput,setOtpInput]=useState('')
+  const [otpError,setOtpError]=useState(null)
+  const [otpSending,setOtpSending]=useState(false)
+  const [otpVerifying,setOtpVerifying]=useState(false)
+  const [claimResult,setClaimResult]=useState(null) // the record once a claim finishes, before onComplete
 
   async function handleContinueFromForm() {
     setCheckingHkid(true)
     setError(null)
-    const { data: existing } = await supabase.from('patients').select('id')
-      .eq('hkid', form.hkid.trim())
-      .or('claimed_at.not.is.null,registration_path.eq.self_registered')
-      .limit(1).maybeSingle()
+    const hkidValue = form.hkid.trim()
+    const [{ data: unclaimed }, { data: existing }] = await Promise.all([
+      supabase.from('patients').select('id').eq('hkid', hkidValue).is('claimed_at', null).not('registration_path','is',null).limit(1).maybeSingle(),
+      supabase.from('patients').select('id').eq('hkid', hkidValue).or('claimed_at.not.is.null,registration_path.eq.self_registered').limit(1).maybeSingle(),
+    ])
     setCheckingHkid(false)
-    setRecovery(existing ? { patientId: existing.id } : null)
+    if (unclaimed) setMatched({ patientId: unclaimed.id, kind:'claim' })
+    else if (existing) setMatched({ patientId: existing.id, kind:'recovery' })
+    else setMatched(null)
     setStep('id_upload')
   }
 
-  async function handleSubmit() {
+  async function sendOtp() {
+    const contact = otpChannel==='email' ? form.email.trim() : form.phone.trim()
+    if (!contact) return
+    setOtpSending(true); setOtpError(null)
+    const genCode = Math.floor(100000 + Math.random()*900000).toString()
+    const { error: insErr } = await supabase.from('patient_signup_otps').insert({
+      contact, channel: otpChannel, code: genCode,
+      expires_at: new Date(Date.now() + 10*60*1000).toISOString(),
+    })
+    setOtpSending(false)
+    if (insErr) { setOtpError('Could not send a code - try again.'); return }
+    setOtpSentCode(genCode) // no live SMS/email provider connected yet - same honest gap as send_clinic_otp.js
+  }
+
+  async function verifyOtp() {
+    const contact = otpChannel==='email' ? form.email.trim() : form.phone.trim()
+    setOtpVerifying(true); setOtpError(null)
+    const { data, error: qErr } = await supabase.from('patient_signup_otps').select('*')
+      .eq('contact', contact).eq('code', otpInput.trim()).is('verified_at', null)
+      .order('created_at',{ascending:false}).limit(1).maybeSingle()
+    if (qErr || !data) { setOtpVerifying(false); setOtpError('That code doesn\'t match. Check it and try again.'); return }
+    if (new Date(data.expires_at) < new Date()) { setOtpVerifying(false); setOtpError('This code has expired - request a new one.'); return }
+    await supabase.from('patient_signup_otps').update({ verified_at: new Date().toISOString() }).eq('id', data.id)
+    setOtpVerifying(false)
+    await finishSubmit()
+  }
+
+  async function finishSubmit() {
     setSaving(true)
     setError(null)
     try {
-      const idFolder = recovery ? `recovery-${recovery.patientId}` : ('MDS-' + Math.floor(10000+Math.random()*89999) + '-HK')
+      const idFolder = matched ? `${matched.kind}-${matched.patientId}` : ('MDS-' + Math.floor(10000+Math.random()*89999) + '-HK')
       let idPath = null, selfiePath = null
       if (idFile) {
         idPath = `${idFolder}/id-${Date.now()}-${idFile.name}`
@@ -9799,16 +9783,46 @@ function SelfRegisterFlow({ onBack, onComplete }) {
         await supabase.storage.from('id-verification').upload(selfiePath, selfieFile)
       }
 
-      if (recovery) {
+      if (matched?.kind === 'claim') {
+        // Stronger proof than the old claim_code ever was (real HKID +
+        // document + selfie + confirmed contact, not just a shared
+        // secret), so the clinic's claim_code is no longer required -
+        // just overwritten/ignored if one was still sitting on the row.
+        await supabase.from('patients').update({
+          registration_path: 'claimed', claimed_at: new Date().toISOString(), claim_code: null,
+          phone: form.phone.trim() || null, email: form.email.trim() || null,
+          identity_verification_method: 'manual_pending', contact_verified_at: new Date().toISOString(),
+          id_document_path: idPath, selfie_verification_path: selfiePath, is_disabled: isDisabled,
+        }).eq('id', matched.patientId)
+        // Any other row sharing this HKID is the same real person,
+        // registered separately at a different institution before ever
+        // claiming - gather it into the one real profile.
+        const { data: duplicates } = await supabase.from('patients').select('id')
+          .eq('hkid', form.hkid.trim()).neq('id', matched.patientId).is('claimed_at', null)
+        for (const dup of (duplicates||[])) {
+          for (const table of PATIENT_LINKED_TABLES) {
+            await supabase.from(table).update({ patient_id: matched.patientId }).eq('patient_id', dup.id)
+          }
+          await supabase.from('patients').delete().eq('id', dup.id)
+        }
+        const { data: claimed } = await supabase.from('patients').select('*').eq('id', matched.patientId).maybeSingle()
+        setSaving(false)
+        setClaimResult({ record: claimed, mergedCount: (duplicates||[]).length })
+        setStep('pending')
+        return
+      }
+
+      if (matched?.kind === 'recovery') {
         // Doesn't touch the existing account at all yet - a human has to
         // actually compare this against what's on file and approve it
         // first (see medsa-admin's Account Recovery tab). Never signs
         // them into the existing account here.
         const { error: recErr } = await supabase.from('account_recovery_requests').insert({
-          patient_id: recovery.patientId, hkid: form.hkid.trim(), new_phone: form.phone,
+          patient_id: matched.patientId, hkid: form.hkid.trim(), new_phone: form.phone.trim() || null,
           id_document_path: idPath, selfie_verification_path: selfiePath, status: 'pending',
         })
         if (recErr) throw recErr
+        setSaving(false)
         setStep('pending')
         return
       }
@@ -9819,40 +9833,78 @@ function SelfRegisterFlow({ onBack, onComplete }) {
         full_name: form.fullName,
         date_of_birth: form.dob,
         hkid: form.hkid,
-        phone: form.phone,
+        phone: form.phone.trim() || null,
+        email: form.email.trim() || null,
         registration_path: 'self_registered',
         id_verification_status: 'pending',
+        identity_verification_method: 'manual_pending',
+        contact_verified_at: new Date().toISOString(),
         id_document_path: idPath,
         selfie_verification_path: selfiePath,
         is_disabled: isDisabled,
       }).select().single()
-      // 23505 is the backstop database constraint (see migration) catching
-      // a race the check in handleContinueFromForm can't - two signups
-      // for the same HKID at the exact same moment.
-      if (insErr?.code === '23505') { setError('You already have a Medsa account under this HKID. Go back and log in, or claim your profile if a clinic registered you.'); setSaving(false); return }
+      // 23505 is the backstop database constraint catching a race the
+      // check in handleContinueFromForm can't - two signups for the
+      // same HKID at the exact same moment.
+      if (insErr?.code === '23505') { setError('You already have a Medsa account under this HKID. Go back and log in.'); setSaving(false); return }
       if (insErr) throw insErr
+      setSaving(false)
       setStep('pending')
       setTimeout(()=>onComplete(data), 2500) // demo only - real flow waits for actual verification result
     } catch (e) {
-      setError(e.message)
-    } finally {
       setSaving(false)
+      setError(e.message)
     }
   }
 
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
-        {step!=='pending'&&<div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
+        {step!=='pending'&&<div onClick={step==='method'?onBack:()=>setStep('method')} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>}
+
+        {step==='method'&&<>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Verify your identity</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>This protects your medical information - whether this activates a clinic's existing record for you or creates a new one, you'll go through the same real check either way.</div>
+          <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+            <Card onClick={()=>setStep(IAM_SMART_ENABLED ? 'iam_smart_redirect' : 'iam_smart_pending')} style={{padding:'18px',textAlign:'left',opacity:IAM_SMART_ENABLED?1:0.7}}>
+              <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>Continue with iAM Smart{!IAM_SMART_ENABLED&&<span style={{fontWeight:400,color:C.textMuted}}> - coming soon</span>}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>Hong Kong's government digital ID - fastest, no separate photo/selfie needed</div>
+            </Card>
+            <Card onClick={()=>setStep('form')} style={{padding:'18px',textAlign:'left'}}>
+              <div style={{fontSize:'14px',fontWeight:600,marginBottom:'4px'}}>Verify with ID documents</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>A photo of your HKID and a selfie</div>
+            </Card>
+          </div>
+        </>}
+
+        {step==='iam_smart_pending'&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>&#9671;</div>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>iAM Smart isn't connected yet</div>
+          <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6,marginBottom:'20px'}}>Medsa is working on this - for now, please verify with your ID documents instead. It's just as secure, one extra step.</div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('form')}>Verify with ID documents</Btn>
+        </div>}
+
+        {/* Unreachable while IAM_SMART_ENABLED is false (see the Card
+            above) - placeholder for the real OAuth 2.0 redirect once the
+            DPO/Cyberport Sandbox registration is in hand and a real
+            client ID/endpoints are wired in. The callback would land
+            back here with e-ME's name/DOB/gender/contact already
+            verified, skipping straight to the HKID-match check (same
+            handleContinueFromForm logic) with no document photo or
+            selfie needed - the biometric auth that just happened is
+            already the liveness proof. */}
+        {step==='iam_smart_redirect'&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'13px',color:C.textMuted}}>Redirecting to iAM Smart…</div>
+        </div>}
 
         {step==='form'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Register with Medsa</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>Since there's no clinic record to verify against, we'll need your ID and a quick photo to confirm it's really you - this protects your medical information.</div>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Your details</div>
           <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'20px'}}>
             <input value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Full name (as on ID)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.dob} onChange={e=>setForm({...form,dob:e.target.value})} placeholder="Date of birth (YYYY-MM-DD)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.hkid} onChange={e=>setForm({...form,hkid:e.target.value})} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
             <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone number" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
+            <input value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="Email (optional, for the confirmation code)" style={{border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box'}}/>
           </div>
           <div onClick={()=>setIsDisabled(d=>!d)} style={{display:'flex',alignItems:'flex-start',gap:'10px',cursor:'pointer',marginBottom:'20px'}}>
             <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${isDisabled?__theme.accent:C.border}`,background:isDisabled?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{isDisabled?'✓':''}</div>
@@ -9863,8 +9915,9 @@ function SelfRegisterFlow({ onBack, onComplete }) {
         </>}
 
         {step==='id_upload'&&<>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>{recovery?'Verify identity':'Upload your ID'}</div>
-          {recovery&&<div style={{background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>This HKID already has a Medsa account. We'll compare your ID/selfie against what's on file and, once approved, update the phone number on that account to the one you entered - you won't get a new account.</div>}
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>{matched?.kind==='claim'?'A clinic already has your record':matched?.kind==='recovery'?'Verify identity':'Upload your ID'}</div>
+          {matched?.kind==='claim'&&<div style={{background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>This HKID matches a record a clinic already created for you. Verifying below activates it under your own login - your health record is immediately portable across any Medsa-connected clinic.</div>}
+          {matched?.kind==='recovery'&&<div style={{background:C.blueLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.5}}>This HKID already has a Medsa account. We'll compare your ID/selfie against what's on file and, once approved, update the phone number on that account to the one you entered - you won't get a new account.</div>}
           <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>A clear photo of your HKID card, both sides if possible.</div>
           <input type="file" accept="image/*" onChange={e=>setIdFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStep('selfie')} disabled={!idFile}>Continue</Btn>
@@ -9872,23 +9925,49 @@ function SelfRegisterFlow({ onBack, onComplete }) {
 
         {step==='selfie'&&<>
           <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Take a selfie</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person {recovery?'recovering this account':'registering'} matches the ID provided.</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>This confirms the person {matched?.kind==='recovery'?'recovering this account':matched?.kind==='claim'?'activating this record':'registering'} matches the ID provided.</div>
           <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-            {'\u25c7'} Demo note: real liveness/anti-spoofing verification (confirming a live person, not a photo of a photo) requires a dedicated identity verification provider - this step captures the photo, and {recovery?'a Medsa staff member reviews it against the original':"the matching logic isn't live yet"}.
+            &#9671; Real liveness/anti-spoofing matching needs a connected verification vendor - not contracted yet, so this step captures the photo and {matched?'a Medsa staff member reviews it against the original':'is reviewed by Medsa staff for now'}.
           </div>
           <input type="file" accept="image/*" capture="user" onChange={e=>setSelfieFile(e.target.files[0])} style={{width:'100%',marginBottom:'20px'}}/>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-          <Btn variant="primary" style={{width:'100%'}} onClick={handleSubmit} disabled={saving||!selfieFile}>{saving?'Submitting...':recovery?'Submit for review':'Submit for verification'}</Btn>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setOtpChannel(form.email.trim()?'email':'sms');setStep('otp')}} disabled={!selfieFile}>Continue</Btn>
         </>}
 
-        {step==='pending'&&recovery&&<div style={{textAlign:'center'}}>
-          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
+        {step==='otp'&&<>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Confirm it's really you</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>One last step - we'll send a code to confirm you actually own this contact method.</div>
+          {(form.phone.trim()&&form.email.trim())&&<div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+            <Btn style={{flex:1,...(otpChannel==='sms'?{background:__theme.accent,color:'#fff'}:{})}} onClick={()=>{setOtpChannel('sms');setOtpSentCode(null)}}>Text</Btn>
+            <Btn style={{flex:1,...(otpChannel==='email'?{background:__theme.accent,color:'#fff'}:{})}} onClick={()=>{setOtpChannel('email');setOtpSentCode(null)}}>Email</Btn>
+          </div>}
+          {!otpSentCode&&<Btn variant="primary" style={{width:'100%',marginBottom:'14px'}} disabled={otpSending} onClick={sendOtp}>{otpSending?'Sending…':`Send code to my ${otpChannel==='email'?'email':'phone'}`}</Btn>}
+          {otpSentCode&&<>
+            <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'14px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+              &#9671; No live SMS/email provider connected yet - your code is <strong>{otpSentCode}</strong>, shown here instead of actually sent.
+            </div>
+            <input value={otpInput} onChange={e=>setOtpInput(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'18px',letterSpacing:'3px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+            {otpError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{otpError}</div>}
+            <Btn variant="primary" style={{width:'100%'}} disabled={otpVerifying||saving||otpInput.trim().length<6} onClick={verifyOtp}>{otpVerifying||saving?'Confirming…':'Confirm & finish'}</Btn>
+          </>}
+        </>}
+
+        {step==='pending'&&matched?.kind==='claim'&&claimResult&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'✓'}</div>
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'8px'}}>Profile claimed</div>
+          {claimResult.mergedCount>0
+            ? <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>We also found {claimResult.mergedCount} other record{claimResult.mergedCount>1?'s':''} under your HKID from other visits before you claimed - everything's been gathered into this one profile.</div>
+            : <div style={{fontSize:'13px',color:C.textSub,marginBottom:'24px',lineHeight:1.5}}>Your health record is now yours - portable across any Medsa-connected clinic.</div>}
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onComplete(claimResult.record)}>Continue</Btn>
+        </div>}
+        {step==='pending'&&matched?.kind==='recovery'&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>&#9671;</div>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Recovery request submitted</div>
           <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6,marginBottom:'20px'}}>A Medsa staff member will compare this against your account's original ID and selfie. Once approved, you'll be able to log in with your new phone number.</div>
           <Btn variant="primary" style={{width:'100%'}} onClick={onBack}>Back to start</Btn>
         </div>}
-        {step==='pending'&&!recovery&&<div style={{textAlign:'center'}}>
-          <div style={{fontSize:'36px',marginBottom:'12px'}}>{'\u25c7'}</div>
+        {step==='pending'&&!matched&&<div style={{textAlign:'center'}}>
+          <div style={{fontSize:'36px',marginBottom:'12px'}}>&#9671;</div>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'8px'}}>Verification submitted</div>
           <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Your documents are being reviewed. This usually takes a short while - continuing to your account now for this demo.</div>
         </div>}
