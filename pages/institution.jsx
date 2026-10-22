@@ -1,15 +1,32 @@
-import InstitutionApp from '../components/institution/InstitutionApp'
+// pages/institution.jsx
+// ─────────────────────────────────────────────────────────────────────────────
+// ARCHIVED, Oct 22 (correcting an earlier wrong claim this session that
+// this page stayed live after the BeeFintech pivot - it didn't, and the
+// user's own call was that it never should have: this was meant to be
+// shelved very early on, well before the insurer collapse, and stayed
+// reachable by oversight, not intent). InstitutionApp is a big-hospital
+// operations console (staff shift bidding, department coverage,
+// surgery bookings, verbal orders, occupancy/bed management -
+// components/institution/InstitutionApp.jsx, all demo/hardcoded data,
+// a "Queen Elizabeth Hospital" prototype never wired to real tables).
+// Medsa doesn't want to run the inner operational workings of a big
+// hospital - that's a different, much larger product than ClinicOps.
+// The landing page's "Institution & partner portal" tile (pages/
+// index.jsx) is removed alongside this. InstitutionApp itself is left
+// defined (frozen, not deleted), same as every other shelved screen.
+// ─────────────────────────────────────────────────────────────────────────────
 
-// This used to offer a PortalSelector (institution vs. insurance partner)
-// before rendering either InstitutionApp or InsuranceApp. Archived per the
-// BeeFintech pivot: Medsa no longer has a human-facing insurer portal at
-// all - the insurer relationship (where there is one) is a pure backend
-// sync (pull the insurer's own policy/claim decisions in via
-// lib/insuranceAdapter.js, push claim documents out via the claims-plugin
-// webhook), not something an insurer logs into Medsa to use. InsuranceApp
-// itself is left defined (frozen, not deleted), same as every other
-// shelved screen this pivot - see its own file header for the full
-// reasoning. Institutions still have a real portal, so that path stays.
+import C from '../components/shared/colours'
+import MedsaLogo from '../components/shared/MedsaLogo'
+
 export default function InstitutionPage() {
-  return <InstitutionApp/>
+  return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:420,textAlign:'center'}}>
+        <MedsaLogo height={24}/>
+        <div style={{fontSize:'17px',fontWeight:700,color:C.text,marginTop:'16px',marginBottom:'8px'}}>This portal is no longer in use</div>
+        <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>Medsa doesn't manage big-institution operations directly. If you're looking for a clinic's practitioner tools, visit the Practitioner portal instead.</div>
+      </div>
+    </div>
+  )
 }

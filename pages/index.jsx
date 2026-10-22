@@ -4,10 +4,13 @@ import C from '../components/shared/colours'
 
 export default function Home() {
   const router = useRouter()
+  // 'institution' tile removed Oct 22 - the big-hospital-operations portal
+  // it pointed to (/institution) was always meant to be shelved, per the
+  // user's call; see pages/institution.jsx's own header for the full
+  // reasoning. Not something Medsa wants to run.
   const portals = [
     { key:'patient',      icon:'◎', label:'Patient portal',            sub:'Health passport, records, emergency card, insurance, find care', color:C.green, bg:C.greenLight,   path:'/patient' },
     { key:'practitioner', icon:'◈', label:'Practitioner portal',       sub:'Clock in, log patients, schedule — for all healthcare staff',   color:C.blue,  bg:C.blueLight,    path:'/practitioner' },
-    { key:'institution',  icon:'⬡', label:'Institution & partner portal', sub:'Hospital admin, insurance partners, schedule, occupancy',    color:C.navy,  bg:C.navyLight,    path:'/institution' },
   ]
   return (
     <div style={{ background:C.beige, minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'24px 20px' }}>
