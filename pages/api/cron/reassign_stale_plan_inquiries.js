@@ -1,6 +1,13 @@
 // pages/api/cron/reassign_stale_plan_inquiries.js
 // ─────────────────────────────────────────────────────────────────────────────
-// Every 6 hours. The other half of round-robin lead routing (see
+// Once daily (10am HKT) - the account this runs on is on Vercel's Hobby
+// plan, which rejects any cron scheduled more than once a day at deploy
+// time (this is what silently broke every production deploy from PR
+// #342 onward until Oct 22, when the user's live testing surfaced it -
+// see vercel.json's own history). Originally every 6 hours; once-daily
+// is a real degradation (an overdue inquiry can now sit up to ~24h
+// before reassignment instead of ~6h) but not a functional break - the
+// other half of round-robin lead routing (see
 // lib/agentAssignment.js and match_plan_suitability.js's assignment call
 // at creation): an agent who's gone quiet on an assigned lead shouldn't
 // just sit on it forever - "responded" means they actually sent a
