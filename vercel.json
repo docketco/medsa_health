@@ -22,7 +22,7 @@
     },
     {
       "path": "/api/cron/reassign_stale_plan_inquiries",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 10 * * *"
     }
   ]
 }
