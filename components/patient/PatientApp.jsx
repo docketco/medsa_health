@@ -1136,6 +1136,13 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
     }).eq('id', patient.id)
     setTransferSaving(false)
     if (error) { setTransferError(isEn?'Could not complete the transfer - that HKID/phone may already be in use.':'無法完成轉移 - 該身份證號碼/電話可能已被使用。'); return }
+    // This is the actual privacy guarantee a transfer makes - EVERY
+    // guardian (primary and any added later via invite) loses access
+    // the moment this completes, not just the parent_patient_id link
+    // above. Without this, a secondary guardian added through the Oct
+    // 23 invite system would silently keep visibility into a now-adult's
+    // records after they'd transferred specifically to end that access.
+    await supabase.from('dependent_guardians').delete().eq('dependent_patient_id', patient.id)
     setTransferModalOpen(false)
     if (patient.parent_patient_id) {
       const { data: parentRow } = await supabase.from('patients').select('*').eq('id', patient.parent_patient_id).maybeSingle()
