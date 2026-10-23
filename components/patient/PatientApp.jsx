@@ -127,7 +127,39 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
   const __theme = useContext(ThemeContext)
   const p = patient
   const [step, setStep] = useState(consented ? 'view' : 'intro')
+  const [savingConsent, setSavingConsent] = useState(false)
+  const [showAddToHome, setShowAddToHome] = useState(false)
   if (!open) return null
+
+  // Activating for the first time generates a stable, unguessable token
+  // (not rotated on later re-activation - see the migration note on
+  // emergency_card_token) and persists both it and the real
+  // consent/active flags, which previously only ever lived in local
+  // React state and reset on every reload. Deactivating flips
+  // emergency_card_active off, which the public lookup re-checks on
+  // every scan, so it takes effect immediately.
+  async function handleActivate() {
+    if (!p.id) { onConsent(true); setStep('view'); return } // demo/preview mode - no real patient row to persist to
+    setSavingConsent(true)
+    const token = p.emergency_card_token || (typeof crypto!=='undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g,'') : Math.random().toString(36).slice(2)+Date.now().toString(36))
+    await supabase.from('patients').update({
+      emergency_card_consent: true, emergency_card_active: true, emergency_card_token: token,
+    }).eq('id', p.id)
+    setSavingConsent(false)
+    onConsent(true)
+    setStep('view')
+  }
+  async function handleDeactivate() {
+    if (!p.id) { onConsent(false); setStep('intro'); return } // demo/preview mode
+    setSavingConsent(true)
+    await supabase.from('patients').update({ emergency_card_active: false }).eq('id', p.id)
+    setSavingConsent(false)
+    onConsent(false)
+    setStep('intro')
+  }
+  const emergencyUrl = typeof window!=='undefined' && p.emergency_card_token
+    ? `${window.location.origin}/emergency?t=${p.emergency_card_token}`
+    : null
   if (!p) return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center'}}>
       <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',maxWidth:320,textAlign:'center',fontSize:'13px',color:C.textMuted}}>
@@ -171,8 +203,8 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
             · I can deactivate this consent at any time from Settings<br/>
             · Medsa is not liable for information on any physical card I self-complete
           </div>
-          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={()=>{onConsent();setStep('view')}}>I agree — activate my emergency card</Btn>
-          <Btn style={{width:'100%'}} onClick={()=>setStep('intro')}>Back</Btn>
+          <Btn variant="primary" style={{width:'100%',marginBottom:'8px',padding:'14px'}} onClick={handleActivate} disabled={savingConsent}>{savingConsent?'Activating…':'I agree — activate my emergency card'}</Btn>
+          <Btn style={{width:'100%'}} onClick={()=>setStep('intro')} disabled={savingConsent}>Back</Btn>
         </>}
 
         {/* Step 3 — active card view (for patient reference) */}
@@ -228,6 +260,30 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
               ))}
             </div>}
           </div>
+          {emergencyUrl&&<div style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'16px',marginBottom:'14px',textAlign:'center'}}>
+            <div style={{fontSize:'12px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Your emergency QR</div>
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(emergencyUrl)}`}
+              alt="QR code linking to your emergency card" width={200} height={200}
+              style={{borderRadius:'8px',marginBottom:'10px'}}
+            />
+            <div style={{fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>Anyone who scans this sees the same live data above - no login needed. Print it on a physical card, or tap below to pin it to your own home screen for quick access.</div>
+            <Btn style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>setShowAddToHome(true)}>Add to Home Screen</Btn>
+          </div>}
+
+          {showAddToHome&&(
+            <div onClick={()=>setShowAddToHome(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:310,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'22px',maxWidth:340,fontSize:'13px',color:C.text,lineHeight:1.7}}>
+                <div style={{fontWeight:700,marginBottom:'10px'}}>Add to Home Screen</div>
+                <div style={{marginBottom:'12px'}}>Medsa doesn't have a true home-screen widget yet (that needs a native app, not this web app) - but you can pin your emergency page itself as an icon for one-tap access, same speed in practice:</div>
+                <div style={{marginBottom:'8px'}}><strong>iPhone:</strong> open the link below, tap the Share icon, then "Add to Home Screen."</div>
+                <div style={{marginBottom:'14px'}}><strong>Android:</strong> open the link below, tap the ⋮ menu, then "Add to Home Screen" / "Install app."</div>
+                <a href={emergencyUrl} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',background:__theme.accent,color:'#fff',borderRadius:'10px',padding:'12px',fontSize:'13px',fontWeight:600,textDecoration:'none',marginBottom:'10px'}}>Open my emergency page</a>
+                <Btn style={{width:'100%'}} onClick={()=>setShowAddToHome(false)}>Close</Btn>
+              </div>
+            </div>
+          )}
+
           <div style={{background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px',marginBottom:'14px',fontSize:'12px',color:C.brown,lineHeight:1.5}}>
             ◇ <strong>Physical card:</strong> Medsa provides a blank courtesy card with your QR pre-printed. Fill in fields by hand from the information above. Keep it in your wallet. Note: you are responsible for keeping the handwritten fields accurate. Scanning the QR always retrieves live verified data.
           </div>
@@ -243,7 +299,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
           </div>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>alert('Request a physical courtesy card from Medsa — coming soon.')}>Request physical card</Btn>
-            <Btn variant="danger" style={{flex:1,fontSize:'12px'}} onClick={()=>{onConsent(false);setStep('intro')}}>Deactivate card</Btn>
+            <Btn variant="danger" style={{flex:1,fontSize:'12px'}} onClick={handleDeactivate} disabled={savingConsent}>{savingConsent?'…':'Deactivate card'}</Btn>
           </div>
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onClose}>Close</Btn>
         </>}
@@ -10519,7 +10575,6 @@ export default function PatientApp({ liveData={} }) {
   const [shareOpen,setShareOpen]=useState(false)
   const [pendingExternalRequest,setPendingExternalRequest]=useState(null)
   const [shareRecordIds,setShareRecordIds]=useState(null)
-  const [emergencyConsented,setEmergencyConsented]=useState(true) // true = demo state, false = not set up
 
   const [realPatientData,setRealPatientData]=useState(null) // null = not fetched yet, object = real fetched data
   const [autoPurchaseNotice,setAutoPurchaseNotice]=useState(null)
@@ -10644,7 +10699,16 @@ export default function PatientApp({ liveData={} }) {
   // gate/loading state, or React throws "rendered more hooks than
   // during the previous render" the moment that state changes (e.g. the
   // instant sign-up completes and the gate stops returning early).
-  const patient = signedInPatient || liveData.patient || { full_name:'', preferred_name:'', medsa_id:'', date_of_birth:null, blood_type:null, emergency_card_active:false, emergency_contact_name:null, emergency_contact_rel:null, emergency_contact_phone:null, storage_tier:'essential' }
+  const patient = signedInPatient || liveData.patient || { full_name:'', preferred_name:'', medsa_id:'', date_of_birth:null, blood_type:null, emergency_card_active:false, emergency_card_token:null, emergency_contact_name:null, emergency_contact_rel:null, emergency_contact_phone:null, storage_tier:'essential' }
+  // Single source of truth is the real patients.emergency_card_active
+  // column now (see migration add_emergency_card_token) - this used to be
+  // local-only state that defaulted to true and reset on every reload.
+  const emergencyConsented = !!patient.emergency_card_active
+  async function refetchSignedInPatient() {
+    if (!signedInPatient?.id) return
+    const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
+    if (data) setSignedInPatient(data)
+  }
 
   useEffect(() => {
     if (!patient?.id) return
@@ -10897,7 +10961,7 @@ export default function PatientApp({ liveData={} }) {
         open={emergencyOpen}
         onClose={()=>setEmergencyOpen(false)}
         consented={emergencyConsented}
-        onConsent={(val=true)=>setEmergencyConsented(val)}
+        onConsent={()=>refetchSignedInPatient()}
         liveConditions={liveConditions}
         liveAllergies={liveAllergies}
         liveMedications={liveMedications}
