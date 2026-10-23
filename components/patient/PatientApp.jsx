@@ -1410,12 +1410,13 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [selectedClinic,setSelectedClinic]=useState(null)
   const [verifyingClinic,setVerifyingClinic]=useState(false)
   const [uploadOutcome,setUploadOutcome]=useState(null) // {status:'verified'|'pending'|'unverified', clinicName?}
+  const [nameCheck,setNameCheck]=useState(null) // {checked, nameFound, matches} | null
 
   function handlePickFile(file) {
     if (!file) return
     setPendingUploadFile(file)
     setUploadStage('identify_clinic')
-    setClinicSearch(''); setClinicPhone(''); setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null)
+    setClinicSearch(''); setClinicPhone(''); setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null); setNameCheck(null)
   }
 
   async function searchUploadClinic(term) {
@@ -1431,6 +1432,34 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     const digitsA = a.replace(/\D/g,'').slice(-8)
     const digitsB = b.replace(/\D/g,'').slice(-8)
     return digitsA && digitsB ? digitsA === digitsB : null
+  }
+
+  // Not identity verification - real identity matching for a dependent
+  // already happens the real way, every visit, at clinic check-in (see
+  // ClinicOps' CheckInSearchScreen). This only catches an honest
+  // mistake on the one path that doesn't cover: a document uploaded
+  // outside any clinic visit, attached to the wrong profile. Image
+  // uploads only (vision needs a readable image, not a PDF/CSV) - never
+  // blocks the upload, just a propose-don't-block note on the result
+  // screen if the name on the document looks like a different person.
+  async function checkUploadNameMatch(file, expectedName) {
+    if (!file?.type?.startsWith('image/') || !expectedName) { setNameCheck(null); return }
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/patient/check_document_name_match', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileBase64, mediaType: file.type, expectedName }),
+      })
+      const data = await res.json()
+      setNameCheck(data)
+    } catch {
+      setNameCheck(null)
+    }
   }
 
   async function proceedWithUpload({ clinicId=null, verificationStatus, isGovernmentRecord=false }) {
@@ -1453,6 +1482,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     const { data } = await supabase.from('medical_record_attachments').select('*')
       .eq('patient_id', patient.id).order('uploaded_at', { ascending: false })
     setMyUploads(data || [])
+    checkUploadNameMatch(pendingUploadFile, patient.full_name) // fire-and-forget, surfaces on the done screen once it resolves
     setUploading(false)
     setUploadStage('idle')
     setPendingUploadFile(null)
@@ -1514,7 +1544,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
   function resetUploadFlow() {
     setUploadStage('idle'); setPendingUploadFile(null); setClinicSearch(''); setClinicPhone('')
-    setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null)
+    setClinicMatches([]); setSelectedClinic(null); setUploadOutcome(null); setNameCheck(null)
   }
   // Real records only - the honest empty state below handles the
   // no-data case, no demo fallback needed.
@@ -1826,6 +1856,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             : <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>{uploadOutcome.clinicName
                 ? (isEn?`Saved and marked unverified. A matching clinic's own standing on file doesn't verify this specific document - it can still be submitted as a claim, just flagged for the insurer's own review.`:`已儲存並標示為未經核實。即使配對的診所本身已登記核實，亦不等於核實此份文件 - 仍可提交作索償，惟會標記供保險公司覆核。`)
                 : (isEn?"We couldn't automatically match this to a registered clinic. It's saved and marked unverified - still submittable as a claim, flagged for the insurer's own review.":'無法自動配對至已登記的診所。文件已儲存並標示為未經核實 - 仍可提交作索償，惟會標記供保險公司覆核。')}</div>}
+          {nameCheck?.checked&&nameCheck.matches===false&&<div style={{marginTop:'12px',padding:'10px 12px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',fontSize:'11.5px',color:C.amber,lineHeight:1.5,textAlign:'left'}}>
+            {isEn?`The name on this document ("${nameCheck.nameFound}") doesn't look like it matches ${patient.full_name} - double check this was uploaded to the right profile.`:`此文件上的姓名(「${nameCheck.nameFound}」)與${patient.full_name}不符 - 請確認文件已上傳至正確的檔案。`}
+          </div>}
           <Btn variant="primary" style={{width:'100%',marginTop:'14px'}} onClick={resetUploadFlow}>{isEn?'Done':'完成'}</Btn>
         </Card>}
 
