@@ -8799,6 +8799,56 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
     onSaved?.()
   }
 
+  // Import from a document - never auto-adds anything. The API only
+  // returns candidates; the patient reviews/deselects/edits severity
+  // and taps Add, which runs through the same handleAddAllergy-shaped
+  // insert as manual entry (still reported_by:'patient_reported').
+  const [allergyImportBusy,setAllergyImportBusy]=useState(false)
+  const [allergyImportError,setAllergyImportError]=useState(null)
+  const [allergyImportCandidates,setAllergyImportCandidates]=useState(null)
+  const [savingAllergyImport,setSavingAllergyImport]=useState(false)
+
+  async function handleAllergyImportFile(file) {
+    if (!file) return
+    setAllergyImportBusy(true); setAllergyImportError(null); setAllergyImportCandidates(null)
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/patient/extract_allergies', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileBase64, mediaType: file.type }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setAllergyImportError(data.error || (isEn?'Could not read this document.':'無法讀取此文件。')); setAllergyImportBusy(false); return }
+      if (!data.allergies || data.allergies.length === 0) {
+        setAllergyImportError(data.issue || (isEn?'No confirmed allergens found on this document.':'此文件未發現已確認的過敏原。'))
+        setAllergyImportBusy(false); return
+      }
+      setAllergyImportCandidates(data.allergies.map(a => ({ ...a, selected: true })))
+    } catch {
+      setAllergyImportError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
+    }
+    setAllergyImportBusy(false)
+  }
+
+  async function handleConfirmAllergyImport() {
+    const toAdd = (allergyImportCandidates||[]).filter(a => a.selected && a.allergen.trim())
+    if (toAdd.length === 0) { setAllergyImportCandidates(null); return }
+    setSavingAllergyImport(true)
+    await supabase.from('allergies').insert(toAdd.map(a => ({
+      patient_id: patient.id, allergen: a.allergen, severity: a.severity||null,
+      reported_by: 'patient_reported',
+    })))
+    setSavingAllergyImport(false)
+    setAllergyImportCandidates(null)
+    loadMyAllergies()
+    onSaved?.()
+  }
+
   // Family history - your request: so emergency/clinic staff have a real
   // factor to weigh against presenting symptoms (e.g. a parent's early
   // heart disease matters a lot if this patient shows up with chest
@@ -8884,6 +8934,32 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
         {isEn?"Allergies you add here are self-reported by you, not confirmed by a clinician - they're clearly labelled as such wherever shown, including on your emergency card.":'您在此新增的過敏為自行申報，並非由醫護人員確認 - 於所有顯示位置（包括緊急卡）均會清楚標示。'}
       </div>
       {loadingAllergies&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted,padding:'10px'}}>{isEn?'Loading…':'載入中…'}</div>}
+
+      <Card style={{padding:'14px',marginBottom:'12px'}}>
+        <div style={{fontSize:'12.5px',fontWeight:500,marginBottom:'6px'}}>{isEn?'Import from a document':'從文件匯入'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Upload a photo of an allergy test result or clinic letter - we\'ll read it and suggest allergens for you to review before anything is added.':'上傳過敏測試報告或診所信件的照片 - 系統會讀取並建議過敏原,新增前您可先審閱。'}</div>
+        <input type="file" accept="image/*" disabled={allergyImportBusy} onChange={e=>handleAllergyImportFile(e.target.files?.[0]||null)} style={{width:'100%',fontSize:'12px'}}/>
+        {allergyImportBusy&&<div style={{fontSize:'11.5px',color:C.textMuted,marginTop:'8px'}}>{isEn?'Reading document…':'正在讀取文件…'}</div>}
+        {allergyImportError&&<div style={{fontSize:'11.5px',color:C.red,marginTop:'8px'}}>{allergyImportError}</div>}
+      </Card>
+
+      {allergyImportCandidates&&(
+        <Card style={{padding:'14px',marginBottom:'12px'}}>
+          <div style={{fontSize:'12.5px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Found on this document — review before adding':'於此文件發現 — 新增前請審閱'}</div>
+          {allergyImportCandidates.map((a,i)=>(
+            <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
+              <input type="checkbox" checked={a.selected} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,selected:e.target.checked}:p))}/>
+              <input value={a.allergen} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,allergen:e.target.value}:p))} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px'}}/>
+              <input value={a.severity||''} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,severity:e.target.value}:p))} placeholder={isEn?'Severity':'嚴重程度'} style={{width:'90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px'}}/>
+            </div>
+          ))}
+          <div style={{display:'flex',gap:'8px',marginTop:'4px'}}>
+            <Btn style={{flex:1}} onClick={()=>setAllergyImportCandidates(null)} disabled={savingAllergyImport}>{isEn?'Discard':'捨棄'}</Btn>
+            <Btn variant="primary" style={{flex:1}} onClick={handleConfirmAllergyImport} disabled={savingAllergyImport}>{savingAllergyImport?(isEn?'Adding…':'新增中…'):(isEn?'Add selected':'新增所選')}</Btn>
+          </div>
+        </Card>
+      )}
+
       {!loadingAllergies&&myAllergies.map(a=>(
         <Card key={a.id} style={{padding:'10px 14px',marginBottom:'6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div>
