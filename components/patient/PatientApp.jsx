@@ -328,6 +328,14 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   const [homeAccessRequests,setHomeAccessRequests]=useState([])
   const [homeAccessRequestsLoading,setHomeAccessRequestsLoading]=useState(true)
   const [showAccessRequestsModal,setShowAccessRequestsModal]=useState(false)
+  // Multi-guardian handshake, revised Oct 23 per your call - the guardian
+  // who created the invite link is always notified HERE, in real time,
+  // the moment someone opens it and requests access, rather than just
+  // handing out a reusable shared secret up front. The code itself is
+  // never auto-approved - this guardian relays it out of band, their own
+  // channel and judgment, or taps Deny to kill the request outright.
+  const [pendingGuardianRequests,setPendingGuardianRequests]=useState([])
+  const [showGuardianRequestsModal,setShowGuardianRequestsModal]=useState(false)
   const [carouselItems,setCarouselItems]=useState([])
   const [openCarouselItem,setOpenCarouselItem]=useState(null)
   const [carouselIndex,setCarouselIndex]=useState(0)
@@ -421,6 +429,23 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
     const remaining = homeAccessRequests.filter(r=>r.id!==req.id)
     setHomeAccessRequests(remaining)
     if (remaining.length===0) setShowAccessRequestsModal(false)
+  }
+
+  async function loadPendingGuardianRequests(adultPatientId) {
+    if (!adultPatientId) return
+    const { data } = await supabase.from('dependent_invite_codes')
+      .select('*, patients:dependent_patient_id(full_name, preferred_name)')
+      .eq('created_by_guardian_id', adultPatientId).eq('status','requested')
+      .order('claim_requested_at',{ascending:false})
+    setPendingGuardianRequests(data||[])
+  }
+  useEffect(() => { loadPendingGuardianRequests(patient?.id) }, [patient?.id])
+
+  async function handleDenyGuardianRequest(req) {
+    await supabase.from('dependent_invite_codes').update({ status:'denied', denied_at:new Date().toISOString() }).eq('id', req.id)
+    const remaining = pendingGuardianRequests.filter(r=>r.id!==req.id)
+    setPendingGuardianRequests(remaining)
+    if (remaining.length===0) setShowGuardianRequestsModal(false)
   }
 
   // Unread messages on the patient's own insurance inquiries (agent or
@@ -622,6 +647,18 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${homeAccessRequests.length} clinic${homeAccessRequests.length>1?'s':''} requesting record access`:`${homeAccessRequests.length}間診所要求查看記錄`}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{homeAccessRequests[0].requesting_clinic||homeAccessRequests[0].requesting_staff}{homeAccessRequests[0].reason?` · ${homeAccessRequests[0].reason}`:''}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
+        </div>
+      )}
+
+      {/* ── Dependent guardian access requests — the two-stage invite handshake ── */}
+      {pendingGuardianRequests.length>0&&(
+        <div onClick={()=>setShowGuardianRequestsModal(true)} style={{margin:'14px 16px 0',background:C.amber,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+          <span style={{fontSize:'20px'}}>◇</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${pendingGuardianRequests.length} caregiver access request${pendingGuardianRequests.length>1?'s':''}`:`${pendingGuardianRequests.length}項照顧者存取請求`}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{pendingGuardianRequests[0].claim_requested_by_name} - {pendingGuardianRequests[0].patients?.preferred_name||pendingGuardianRequests[0].patients?.full_name}</div>
           </div>
           <span style={{color:'#fff',fontSize:'16px'}}>›</span>
         </div>
@@ -921,6 +958,24 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
                   <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>handleHomeAccessDecision(req,true)}>{isEn?'Approve':'批准'}</Btn>
                   <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>handleHomeAccessDecision(req,false)}>{isEn?'Deny':'拒絕'}</Btn>
                 </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showGuardianRequestsModal&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={()=>setShowGuardianRequestsModal(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'20px 20px 0 0',width:'100%',maxWidth:440,padding:'20px',maxHeight:'85vh',overflowY:'auto'}}>
+            <div onClick={()=>setShowGuardianRequestsModal(false)} style={{fontSize:'12px',color:themeAccent,cursor:'pointer',marginBottom:'14px'}}>{isEn?'← Close':'← 關閉'}</div>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Caregiver access requests':'照顧者存取請求'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{isEn?"Someone opened your invite link and is requesting access. This never grants access by itself - share the code with them yourself, only if you recognise them, or deny the request.":'有人開啟您的邀請連結並要求存取。此操作不會自動授予存取權 - 只有在您確認對方身份後,才親自提供代碼,或拒絕此請求。'}</div>
+            {pendingGuardianRequests.map(req=>(
+              <Card key={req.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+                <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>{req.claim_requested_by_name}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>{isEn?`Requesting access to ${req.patients?.preferred_name||req.patients?.full_name}'s profile`:`要求存取${req.patients?.preferred_name||req.patients?.full_name}的檔案`}</div>
+                <div style={{fontSize:'26px',fontWeight:700,letterSpacing:'4px',color:themeAccent,background:C.card,borderRadius:'8px',padding:'10px',textAlign:'center',marginBottom:'10px',fontFamily:'monospace'}}>{req.confirmation_code}</div>
+                <Btn style={{width:'100%',fontSize:'12px'}} onClick={()=>handleDenyGuardianRequest(req)}>{isEn?'Deny this request':'拒絕此請求'}</Btn>
               </Card>
             ))}
           </div>
@@ -9311,6 +9366,7 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   const [subscribing,setSubscribing]=useState(false)
   const [subscribeError,setSubscribeError]=useState(null)
   const [inviteFor,setInviteFor]=useState(null) // the dependent patient row being invited-to, or null
+  const [manageFor,setManageFor]=useState(null) // the dependent patient row whose guardians are being viewed, or null
   const [redeemOpen,setRedeemOpen]=useState(false)
 
   useEffect(() => {
@@ -9411,6 +9467,7 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
                   granular permission tiers exist elsewhere in this app
                   for dependents, so this doesn't invent one either. */}
               {!locked&&isDependentRow&&<span onClick={e=>{e.stopPropagation();setInviteFor(p)}} style={{fontSize:'11px',color:__theme.accent,fontWeight:600,flexShrink:0,padding:'4px 8px'}}>Invite</span>}
+              {!locked&&isDependentRow&&<span onClick={e=>{e.stopPropagation();setManageFor(p)}} style={{fontSize:'11px',color:C.textMuted,fontWeight:600,flexShrink:0,padding:'4px 8px'}}>Guardians</span>}
               {locked ? <span style={{fontSize:'14px',flexShrink:0}}>🔒</span> : p.id===activePatient.id&&<span style={{color:__theme.accent,fontSize:'16px',flexShrink:0}}>✓</span>}
             </div>
           )
@@ -9442,11 +9499,12 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
                   {disabilityDiscountEligible&&<div style={{fontSize:'11px',color:C.green,textAlign:'center',marginBottom:'6px'}}>50% disability discount applies to this account</div>}
                   <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
                 </>}
-          <div onClick={()=>setRedeemOpen(true)} style={{textAlign:'center',fontSize:'12px',color:__theme.accent,fontWeight:600,marginTop:'10px',cursor:'pointer'}}>I have a caregiver invite code</div>
+          <div onClick={()=>setRedeemOpen(true)} style={{textAlign:'center',fontSize:'12px',color:__theme.accent,fontWeight:600,marginTop:'10px',cursor:'pointer'}}>I have a caregiver invite link</div>
         </div>
       </div>
       {inviteFor&&<InviteGuardianModal dependent={inviteFor} guardianId={managingAdult?.id} onClose={()=>setInviteFor(null)}/>}
-      {redeemOpen&&<RedeemInviteCodeFlow guardianId={managingAdult?.id} onClose={()=>setRedeemOpen(false)} onRedeemed={()=>{setRedeemOpen(false);onClose()}}/>}
+      {manageFor&&<ManageGuardiansModal dependent={manageFor} viewerPatientId={managingAdult?.id} onClose={()=>{setManageFor(null);onClose()}}/>}
+      {redeemOpen&&<RequestDependentAccessFlow guardianId={managingAdult?.id} guardianName={managingAdult?.full_name} initialToken={null} onClose={()=>setRedeemOpen(false)} onRedeemed={()=>{setRedeemOpen(false);onClose()}}/>}
     </div>
   )
 }
@@ -9459,41 +9517,48 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
 // clinic claim_code pattern used for adult profiles.
 function InviteGuardianModal({ dependent, guardianId, onClose }) {
   const __theme = useContext(ThemeContext)
-  const [code,setCode]=useState(null)
+  const [link,setLink]=useState(null)
   const [creating,setCreating]=useState(false)
   const [error,setError]=useState(null)
   const [copied,setCopied]=useState(false)
 
+  // Two-stage handshake (Oct 23) - this link alone never grants access.
+  // Whoever opens it still has to request access (generating a short
+  // confirmation code sent straight to YOU, not them), and you relay
+  // that code yourself, your own channel and judgment, or deny the
+  // request outright. See the Home-screen "Caregiver access requests"
+  // banner for your side of this.
   async function generate() {
     if (!guardianId || !dependent?.id) return
     setCreating(true); setError(null)
-    const newCode = Math.random().toString(36).slice(2,8).toUpperCase()
+    const token = Math.random().toString(36).slice(2,10) + Math.random().toString(36).slice(2,10)
     const { error: insErr } = await supabase.from('dependent_invite_codes').insert({
-      dependent_patient_id: dependent.id, code: newCode, created_by_guardian_id: guardianId,
-      expires_at: new Date(Date.now() + 7*24*60*60*1000).toISOString(),
+      dependent_patient_id: dependent.id, link_token: token, created_by_guardian_id: guardianId,
+      status: 'pending_link', expires_at: new Date(Date.now() + 30*24*60*60*1000).toISOString(),
     })
     setCreating(false)
-    if (insErr) { setError('Could not create a code - try again.'); return }
-    setCode(newCode)
+    if (insErr) { setError('Could not create an invite link - try again.'); return }
+    setLink(token)
   }
   useEffect(() => { generate() }, [])
 
-  function copyCode() {
-    if (!code) return
-    navigator.clipboard?.writeText(code).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false), 2000) }).catch(()=>{})
+  const shareUrl = link && typeof window!=='undefined' ? `${window.location.origin}/patient?invite=${link}` : ''
+  function copyLink() {
+    if (!shareUrl) return
+    navigator.clipboard?.writeText(shareUrl).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false), 2000) }).catch(()=>{})
   }
 
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
       <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',width:'100%',maxWidth:360,textAlign:'center'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Invite a caregiver for {dependent.preferred_name||dependent.full_name}</div>
-        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>Share this code with them - entering it under their own Medsa account gives them full access to this same profile, so nobody ends up with a second, duplicate one.</div>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>Share this link at your own discretion - opening it only lets someone REQUEST access. You'll see who's asking and a code to confirm it, and you decide whether to hand it over.</div>
         {creating&&<div style={{fontSize:'12px',color:C.textMuted}}>Generating…</div>}
         {error&&<div style={{fontSize:'12px',color:C.red}}>{error}</div>}
-        {code&&<>
-          <div style={{fontSize:'28px',fontWeight:700,letterSpacing:'4px',color:__theme.accent,background:__theme.accentLight,borderRadius:'10px',padding:'14px',marginBottom:'10px',fontFamily:'monospace'}}>{code}</div>
-          <div onClick={copyCode} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:'pointer',marginBottom:'18px'}}>{copied?'Copied':'Copy code'}</div>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'18px'}}>Expires in 7 days.</div>
+        {shareUrl&&<>
+          <div style={{fontSize:'11px',wordBreak:'break-all',color:__theme.accent,background:__theme.accentLight,borderRadius:'10px',padding:'12px',marginBottom:'10px',fontFamily:'monospace'}}>{shareUrl}</div>
+          <div onClick={copyLink} style={{fontSize:'12px',fontWeight:600,color:__theme.accent,cursor:'pointer',marginBottom:'18px'}}>{copied?'Copied':'Copy link'}</div>
+          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'18px'}}>Link stays open for 30 days - each access request still needs your approval.</div>
         </>}
         <Btn style={{width:'100%'}} onClick={onClose}>Done</Btn>
       </div>
@@ -9501,54 +9566,177 @@ function InviteGuardianModal({ dependent, guardianId, onClose }) {
   )
 }
 
-// Multi-guardian access (Oct 22) - the new guardian's side: redeem a code
-// shared by an existing guardian to join their dependent's existing
-// profile, instead of creating a duplicate one of their own.
-function RedeemInviteCodeFlow({ guardianId, onClose, onRedeemed }) {
-  const [code,setCode]=useState('')
+// New guardian's side of the two-stage handshake (Oct 23) - opening an
+// invite link only requests access; it never grants it by itself. The
+// existing guardian sees the request in real time (Home screen banner)
+// and relays a confirmation code out of band if they recognise who's
+// asking - entering that code here is what actually completes access.
+function RequestDependentAccessFlow({ guardianId, guardianName, initialToken, onClose, onRedeemed }) {
+  const [stage,setStage]=useState(initialToken ? 'confirm' : 'enter_link') // enter_link | confirm | requested | enter_code | success | denied
+  const [linkInput,setLinkInput]=useState('')
+  const [invite,setInvite]=useState(null)
+  const [codeInput,setCodeInput]=useState('')
   const [checking,setChecking]=useState(false)
   const [error,setError]=useState(null)
-  const [success,setSuccess]=useState(null)
 
-  async function handleRedeem() {
-    if (!guardianId || !code.trim()) return
+  function extractToken(raw) {
+    const trimmed = raw.trim()
+    const match = trimmed.match(/invite=([a-z0-9]+)/i)
+    return match ? match[1] : trimmed
+  }
+
+  async function lookupInvite(token) {
     setChecking(true); setError(null)
-    const { data, error: qErr } = await supabase.from('dependent_invite_codes').select('*, patients:dependent_patient_id(full_name, preferred_name)').eq('code', code.trim().toUpperCase()).maybeSingle()
-    if (qErr || !data) { setChecking(false); setError('That code doesn\'t match any invite. Double-check it with whoever shared it.'); return }
-    if (data.used_at) { setChecking(false); setError('This code has already been used.'); return }
-    if (new Date(data.expires_at) < new Date()) { setChecking(false); setError('This code has expired - ask for a new one.'); return }
-    if (data.created_by_guardian_id === guardianId) { setChecking(false); setError('This is your own invite code - share it with someone else instead.'); return }
+    const { data, error: qErr } = await supabase.from('dependent_invite_codes')
+      .select('*, patients:dependent_patient_id(full_name, preferred_name)').eq('link_token', token).maybeSingle()
+    setChecking(false)
+    if (qErr || !data) { setError("That link doesn't match any invite. Double-check it with whoever shared it."); setStage('enter_link'); return }
+    if (new Date(data.expires_at) < new Date()) { setError('This invite link has expired - ask for a new one.'); setStage('enter_link'); return }
+    if (data.created_by_guardian_id === guardianId) { setError('This is your own invite link - share it with someone else instead.'); setStage('enter_link'); return }
+    setInvite(data)
+    setStage('confirm')
+  }
+
+  useEffect(() => { if (initialToken) lookupInvite(initialToken) }, [initialToken])
+
+  async function handleRequestAccess() {
+    if (!invite || !guardianId) return
+    setChecking(true); setError(null)
+    const genCode = Math.floor(100000 + Math.random()*900000).toString()
+    const { error: updErr } = await supabase.from('dependent_invite_codes').update({
+      status: 'requested', claim_requested_at: new Date().toISOString(),
+      claim_requested_by_name: guardianName || 'Someone', claim_requested_by_guardian_id: guardianId,
+      confirmation_code: genCode, code_expires_at: new Date(Date.now() + 30*60*1000).toISOString(),
+    }).eq('id', invite.id).eq('status', 'pending_link') // only from pending_link - can't re-request over an already-live request
+    setChecking(false)
+    if (updErr) { setError('Could not send the request - it may already be in progress. Try again shortly.'); return }
+    setStage('requested')
+  }
+
+  async function handleEnterCode() {
+    setChecking(true); setError(null)
+    const { data, error: qErr } = await supabase.from('dependent_invite_codes').select('*').eq('id', invite.id).maybeSingle()
+    setChecking(false)
+    if (qErr || !data) { setError('Something went wrong - try again.'); return }
+    if (data.status === 'denied') { setStage('denied'); return }
+    if (data.status === 'approved') { setError('This request was already completed.'); return }
+    if (!data.confirmation_code || data.confirmation_code !== codeInput.trim()) { setError("That code doesn't match. Check it with whoever is sharing it with you."); return }
+    if (new Date(data.code_expires_at) < new Date()) { setError('This code has expired - ask the existing guardian to let you request access again.'); return }
 
     const { error: linkErr } = await supabase.from('dependent_guardians').insert({
       dependent_patient_id: data.dependent_patient_id, guardian_patient_id: guardianId, is_primary: false,
     })
-    if (linkErr) { setChecking(false); setError(linkErr.code === '23505' ? 'You already have access to this profile.' : 'Could not redeem this code - try again.'); return }
-    await supabase.from('dependent_invite_codes').update({ used_at: new Date().toISOString(), used_by_guardian_id: guardianId }).eq('id', data.id)
-    setChecking(false)
-    setSuccess(data.patients?.preferred_name || data.patients?.full_name || 'this profile')
+    if (linkErr) { setError(linkErr.code === '23505' ? 'You already have access to this profile.' : 'Could not complete this - try again.'); return }
+    await supabase.from('dependent_invite_codes').update({ status: 'approved', used_at: new Date().toISOString(), used_by_guardian_id: guardianId }).eq('id', data.id)
+    setStage('success')
   }
+
+  const dependentName = invite?.patients?.preferred_name || invite?.patients?.full_name || 'this profile'
 
   return (
     <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
       <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',width:'100%',maxWidth:360,textAlign:'center'}}>
-        {success
-          ? <>
-              <div style={{fontSize:'28px',marginBottom:'8px'}}>✓</div>
-              <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px'}}>You now have access to {success}</div>
-              <Btn variant="primary" style={{width:'100%'}} onClick={()=>onRedeemed&&onRedeemed()}>Done</Btn>
-            </>
-          : <>
-              <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Enter a caregiver invite code</div>
-              <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Someone already managing this profile shared a code with you - enter it below to get access too.</div>
-              <input value={code} onChange={e=>setCode(e.target.value)} placeholder="e.g. 7K2Q9X" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'16px',letterSpacing:'2px',textAlign:'center',textTransform:'uppercase',marginBottom:'14px',boxSizing:'border-box'}}/>
-              {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-              <Btn variant="primary" style={{width:'100%'}} disabled={checking||!code.trim()} onClick={handleRedeem}>{checking?'Checking…':'Redeem code'}</Btn>
-            </>}
+        {stage==='enter_link'&&<>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Enter a caregiver invite link</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Someone already managing a profile shared a link with you - paste it below to request access.</div>
+          <input value={linkInput} onChange={e=>setLinkInput(e.target.value)} placeholder="Paste the invite link" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} disabled={checking||!linkInput.trim()} onClick={()=>lookupInvite(extractToken(linkInput))}>{checking?'Checking…':'Continue'}</Btn>
+        </>}
+
+        {stage==='confirm'&&invite&&<>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Request access to {dependentName}'s profile?</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>This doesn't grant access yet - the existing guardian will see your request and decide whether to share a confirmation code with you.</div>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} disabled={checking} onClick={handleRequestAccess}>{checking?'Sending…':'Request access'}</Btn>
+        </>}
+
+        {stage==='requested'&&<>
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>{'◇'}</div>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px'}}>Request sent</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>The existing guardian has been notified. Once they share a code with you, enter it below - this screen won't stay open, so come back here from "I have a caregiver invite link" when you have it.</div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setStage('enter_code')}>I have the code</Btn>
+        </>}
+
+        {stage==='enter_code'&&<>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Enter the confirmation code</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>Whoever shared the invite link should give you this separately.</div>
+          <input value={codeInput} onChange={e=>setCodeInput(e.target.value)} placeholder="6-digit code" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'18px',letterSpacing:'3px',textAlign:'center',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <Btn variant="primary" style={{width:'100%'}} disabled={checking||codeInput.trim().length<6} onClick={handleEnterCode}>{checking?'Checking…':'Confirm & get access'}</Btn>
+        </>}
+
+        {stage==='success'&&<>
+          <div style={{fontSize:'28px',marginBottom:'8px'}}>{'✓'}</div>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px'}}>You now have access to {dependentName}</div>
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>onRedeemed&&onRedeemed()}>Done</Btn>
+        </>}
+
+        {stage==='denied'&&<>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px'}}>This request was denied</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'18px',lineHeight:1.5}}>The existing guardian didn't approve this request. If you believe this is a mistake, reach out to them directly.</div>
+          <Btn style={{width:'100%'}} onClick={onClose}>Close</Btn>
+        </>}
       </div>
     </div>
   )
 }
 
+// Revoking guardian access (Oct 23, your call) - only the profile's
+// PRIMARY guardian can remove someone else; any guardian can remove
+// themselves. Keeps a single clear point of authority rather than
+// guardians being able to lock each other out.
+function ManageGuardiansModal({ dependent, viewerPatientId, onClose }) {
+  const __theme = useContext(ThemeContext)
+  const [guardians,setGuardians]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [error,setError]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('dependent_guardians')
+      .select('*, patients:guardian_patient_id(full_name, preferred_name)')
+      .eq('dependent_patient_id', dependent.id).order('is_primary',{ascending:false}).order('added_at',{ascending:true})
+    setGuardians(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [dependent?.id])
+
+  const viewerRow = guardians.find(g=>g.guardian_patient_id===viewerPatientId)
+  const viewerIsPrimary = !!viewerRow?.is_primary
+
+  async function handleRemove(row) {
+    setError(null)
+    const { error: delErr } = await supabase.from('dependent_guardians').delete().eq('id', row.id)
+    if (delErr) { setError('Could not remove - try again.'); return }
+    if (row.guardian_patient_id === viewerPatientId) { onClose(); return } // left themselves - nothing left to show
+    load()
+  }
+
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.4)',zIndex:60,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'16px',padding:'24px',width:'100%',maxWidth:360}}>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'14px'}}>Guardians for {dependent.preferred_name||dependent.full_name}</div>
+        {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
+        {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
+        {!loading&&guardians.map(g=>{
+          const isSelf = g.guardian_patient_id === viewerPatientId
+          const canRemove = isSelf ? !g.is_primary : viewerIsPrimary
+          return (
+            <div key={g.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:'13px',fontWeight:600}}>{g.patients?.preferred_name||g.patients?.full_name}{isSelf?' (you)':''}</div>
+                <div style={{fontSize:'11px',color:C.textMuted}}>{g.is_primary?'Primary guardian':'Guardian'}</div>
+              </div>
+              {canRemove&&<span onClick={()=>handleRemove(g)} style={{fontSize:'12px',fontWeight:600,color:C.red,cursor:'pointer'}}>{isSelf?'Leave':'Revoke'}</span>}
+            </div>
+          )
+        })}
+        <Btn style={{width:'100%',marginTop:'16px'}} onClick={onClose}>Close</Btn>
+      </div>
+    </div>
+  )
+}
 // Reuses AccountFlow's step-by-step visual shape, but not its HKID +
 // selfie identity verification - that exists to prove a STRANGER with no
 // prior anchor really is who they claim, which doesn't apply here: the
@@ -9601,7 +9789,7 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
       // Multi-guardian access (Oct 22) - the creator always becomes the
       // primary guardian here. A SECOND caregiver (e.g. the other parent,
       // or a grandparent helping out) gets added later via an invite
-      // code (see InviteGuardianModal/RedeemInviteCodeFlow below), not by
+      // code (see InviteGuardianModal/RequestDependentAccessFlow below), not by
       // creating their own separate profile for the same child.
       await supabase.from('dependent_guardians').insert({
         dependent_patient_id: child.id, guardian_patient_id: parentPatient.id,
@@ -10204,6 +10392,24 @@ export default function PatientApp({ liveData={} }) {
     }
   }
   const [checkingPersistedSignIn,setCheckingPersistedSignIn]=useState(true)
+  // Lets an invite link (medsa.health/patient?invite=<token>) from
+  // InviteGuardianModal route straight into RequestDependentAccessFlow
+  // once a real signed-in patient exists - works whether that's someone
+  // already logged in, or a brand-new person who has to go through
+  // SignUpGate/AccountFlow first, since this is read once on mount and
+  // only consumed once signedInPatient is actually set.
+  const [pendingInviteToken,setPendingInviteToken]=useState(null)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const invite = params.get('invite')
+    if (invite) {
+      setPendingInviteToken(invite)
+      params.delete('invite')
+      const rest = params.toString()
+      window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+    }
+  }, [])
 
   // Don't trust liveData.patient as proof someone's really signed in - it
   // can be populated with static demo data by the page wrapper regardless
@@ -10509,6 +10715,12 @@ export default function PatientApp({ liveData={} }) {
     return <CreateKidsProfileFlow parentPatient={creatingKid.parent} guardianRequired={creatingKid.guardianRequired}
       onBack={()=>setCreatingKid(null)}
       onComplete={(child)=>{ setCreatingKid(null); switchToPatient(child) }}/>
+  }
+
+  if (pendingInviteToken && signedInPatient) {
+    return <RequestDependentAccessFlow guardianId={signedInPatient.id} guardianName={signedInPatient.full_name}
+      initialToken={pendingInviteToken}
+      onClose={()=>setPendingInviteToken(null)} onRedeemed={()=>setPendingInviteToken(null)}/>
   }
 
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
