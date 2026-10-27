@@ -7321,6 +7321,12 @@ const CONFINEMENT_AVOID = [
   { status:'cultural', en:'Cold & raw foods (salads, raw fruit/veg, ice water, cold desserts) - traditional belief that this stagnates digestion/circulation; not independently proven, but not known to be harmful either.', zh:'生冷食物(沙律、生果生菜、冰水、凍甜品) - 傳統認為會阻滞消化及氣血運行,未有獨立證據證實,但亦非已知有害。' },
   { status:'cultural', en:'Ginger and sesame oil used too early - several sources flag that these can delay wound healing if used before natural birth day 12 / C-section day 21; traditionally held back, not banned outright.', zh:'過早使用薑及麻油 - 多個來源指出,順產12天內、剖腹產21天內使用可能影響傷口癒合;傳統建議延後使用,並非完全禁止。' },
   { status:'cultural', en:'人參 (ginseng) specifically during confinement and while breastfeeding - unlike general tonics, this one is called out on its own: held to overstimulate uterine contraction too early and to suppress milk supply. Not independently proven, but specific enough to flag separately rather than lump in with "cooling/heating foods" in general.', zh:'坐月及哺乳期間使用人參 - 與一般補品不同,此項被特別獨立提出:認為會過早刺激子宮收縮及抑制奶量。未有獨立證據證實,但顧忌具體,故獨立列出,不歸入一般「寒涼/燥熱食物」。' },
+  // Different in kind from the items above - not a traditional belief
+  // being refuted or held as an unproven caution, but one traditional
+  // confinement diets and modern postpartum nutrition actually agree
+  // on, for overlapping but distinct reasons (digestion, fluid
+  // retention, hemorrhoids made worse by pushing during vaginal birth).
+  { status:'advised', en:'Excess oil, salt, and spicy food - traditional confinement diets avoid these, and modern postpartum nutrition agrees for its own reasons: less digestive burden, less fluid retention/edema, and less aggravation of postpartum hemorrhoids (common after vaginal delivery).', zh:'過多油份、鹽份及辛辣食物 - 傳統坐月飲食避免此類食物,現代產後營養學亦因應不同理由認同:減輕腸胃負擔、減少水腫,並避免加重產後痔瘡(順產後常見)。' },
 ]
 // Added from real, cited sources on the 42-day core recovery window,
 // activity/bathing timing, and the day-42 checkup convention (sources:
@@ -8267,7 +8273,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       <SecLabel>{isEn?'To limit or avoid':'需限制或避免'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
         {CONFINEMENT_AVOID.map((a,i)=>{
-          const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight}}[a.status]
+          const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
           return (
             <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_AVOID.length-1?`0.5px solid ${C.border}`:'none'}}>
               <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px'}}>{isEn?tag.en:tag.zh}</span>
