@@ -7355,6 +7355,30 @@ const CONFINEMENT_ACTIVITY_TIMING = [
 ]
 // Not reproduced here (someone else's copyrighted work) - just what each
 // one actually covers, so "I want to go deeper" has a real next step.
+// Day-by-day milestones - the other half of bc-08 that was pinned as
+// not-yet-built. Same posture as the rest of this feature: real, cited
+// cultural practice, never medical guidance - and this genuinely varies
+// by region/family more than the food phases above, so each entry says
+// so rather than presenting one version as THE tradition (sources
+// disagreed with each other on hair-shaving timing specifically).
+// These are events for/about the BABY (first bath, hair-shaving, the
+// full-month celebration) - distinct from the mother's own bathing/
+// activity guidance in CONFINEMENT_ACTIVITY_TIMING above, a different
+// subject under the same 坐月子 umbrella.
+const CONFINEMENT_MILESTONES = [
+  { key:'third_day',
+    day:{en:'Day 3',zh:'第3天'},
+    name:{en:'三朝禮 / 洗三 (Third-day ceremony)',zh:'三朝禮 / 洗三'},
+    detail:{en:"Traditionally the baby's first ceremonial bath, often given by a midwife or elder rather than a parent - symbolic items (pomelo/longan leaves, a stone, a coin) sometimes go into the water for prosperity and a strong body. This is about the baby's bathing, not the mother's - see the showering guidance above for her own recovery timing.",zh:'傳統上為嬰兒首次的儀式性沐浴,多由產婆或長輩主持而非父母親自操刀 - 水中有時會放入柚葉、龍眼葉、石頭、銅錢等象徵物,寓意興旺及體壯。此項是關於嬰兒的沐浴,並非母親 - 母親自身的復原洗澡指引見上文。'} },
+  { key:'hair_shave',
+    day:{en:'Day 24, the full-month day, or day 40 - accounts differ',zh:'第24天、滿月當天或滿40天 - 各家說法不同'},
+    name:{en:'剃頭 / 剃胎毛 (First haircut)',zh:'剃頭 / 剃胎毛'},
+    detail:{en:"Shaving the baby's hair and eyebrows, symbolically clearing away \"old luck\" for new fortune. The cut hair is often kept, sometimes made into a keepsake brush or seal. Timing genuinely varies by family and region - some pick day 24, others the full-month day or day 40.",zh:'剃除嬰兒的頭髮及眉毛,象徵去除「舊運」,迎接新運。剃下的頭髮常被保留,有時製成胎毛筆或胎毛印章作紀念。各家各地做法確實不同 - 有人選第24天,有人選滿月當天或滿40天。'} },
+  { key:'full_month',
+    day:{en:'Day 30 - though many modern families now wait until day 60 ("double full month")',zh:'第30天 - 現代不少家庭延至第60天(雙滿月)'},
+    name:{en:'滿月 / 彌月 (Full-month celebration)',zh:'滿月 / 彌月'},
+    detail:{en:"Historically marked surviving the highest-risk early period, before modern medicine - celebrated with a banquet, thanking ancestors/deities, and sending out 油飯 (oiled rice) and red-dyed eggs to announce the news to family and friends. Many families now wait until day 60 instead, since confinement itself often runs longer than 30 days and a newborn's schedule is still unsettled at exactly one month.",zh:'古時代表嬰兒度過人生首個高風險階段,故設宴慶祝、祭拜祖先神明,並分送油飯及染紅雞蛋向親友報喜。現時不少家庭因坐月子時間已超過30天,加上滿月時嬰兒作息仍未穩定,而選擇延至第60天(雙滿月)舉行。'} },
+]
 const CONFINEMENT_FURTHER_READING = [
   { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
   { title:'Real Food for Pregnancy', author:'Lily Nichols, RDN', focus:{en:'Clinical prenatal/postpartum nutrition, peer-reviewed - the science behind why warm, protein/collagen-rich foods support tissue repair.',zh:'具臨床及同行評審根據的孕產營養書 - 解釋溫熱、高蛋白/膠原質食物如何幫助組織修復的科學原理。'} },
@@ -8281,6 +8305,21 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             </div>
           )
         })}
+      </Card>
+      <SecLabel>{isEn?"Day-by-day milestones (for baby)":'寶寶的里程碑日程'}</SecLabel>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+        {isEn?'Cultural practice, not medical guidance - and these genuinely vary a lot by family and region. Shown as common reference points, not a fixed rule to follow.':'傳統習俗,並非醫療指引 - 各家各地做法差異頗大。此處僅作常見參考,並非必須遵從的規則。'}
+      </div>
+      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
+        {CONFINEMENT_MILESTONES.map((m,i)=>(
+          <div key={m.key} style={{padding:'8px 0',borderBottom:i<CONFINEMENT_MILESTONES.length-1?`0.5px solid ${C.border}`:'none'}}>
+            <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginBottom:'3px',flexWrap:'wrap'}}>
+              <span style={{fontSize:'12.5px',fontWeight:700,color:C.text}}>{isEn?m.name.en:m.name.zh}</span>
+              <span style={{fontSize:'10.5px',color:C.textMuted}}>{isEn?m.day.en:m.day.zh}</span>
+            </div>
+            <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?m.detail.en:m.detail.zh}</div>
+          </div>
+        ))}
       </Card>
       <SecLabel>{isEn?'Want to go deeper?':'想了解更多?'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
