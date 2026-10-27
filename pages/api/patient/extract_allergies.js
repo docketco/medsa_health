@@ -1,14 +1,16 @@
 // pages/api/patient/extract_allergies.js
 // ─────────────────────────────────────────────────────────────────────────────
 // Reads a photo of an allergy test result (skin-prick/IgE panel printout,
-// a clinic letter, etc.) and proposes allergens to add to My allergies.
-// Same posture as every other AI read in this app: this never writes to
-// the database itself and never auto-adds anything - it only returns a
-// list of candidates for the patient to review, edit, deselect, and
-// confirm on the review screen before handleAddAllergy runs per item.
-// Still inserted as reported_by:'patient_reported' (not clinically
-// confirmed) because the account holder is the one choosing to add it,
-// same as typing it in by hand - we only read the document for them.
+// a clinic letter, etc.) for My allergies. Per your call, this is NOT the
+// propose-then-review pattern used by the other AI reads in this app -
+// the caller (handleAllergyImportFile in PatientApp.jsx) inserts whatever
+// this returns straight into the allergies table, no review step. Still
+// only ever the allergens the document actually states as positive/
+// confirmed - negative/untested ones are excluded here, not left for a
+// human to filter out. Recorded as reported_by:'document_scan' (not
+// clinically confirmed, but distinguishable from a hand-typed entry)
+// everywhere allergies are shown. This route itself never writes to the
+// database - it only reads the document and returns structured data.
 // Requires ANTHROPIC_API_KEY.
 // ─────────────────────────────────────────────────────────────────────────────
 

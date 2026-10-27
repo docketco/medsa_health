@@ -242,6 +242,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
                     <div key={i} style={{padding:'3px 0',display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}}>
                       <span style={{fontSize:'13px',fontWeight:700,color:C.red}}>⚠ {a.allergen}{a.severity?` — ${a.severity}`:''}</span>
                       {a.reported_by==='patient_reported'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600}}>Self-reported</span>}
+                      {a.reported_by==='document_scan'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600}}>From a document</span>}
                     </div>
                   ))
                 : <div style={{fontSize:'12px',color:C.textSub,padding:'3px 0'}}>No known allergies on file</div>}
@@ -6071,6 +6072,11 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   const [symptomForm,setSymptomForm]=useState({ temperatureC:'', symptoms:'', medicationGiven:'' })
   const [exportingSymptomPdf,setExportingSymptomPdf]=useState(false)
   const [diaperLogs,setDiaperLogs]=useState([])
+  const [diaperNote,setDiaperNote]=useState('')
+  const [scanningDiaperLabel,setScanningDiaperLabel]=useState(false)
+  const [diaperLabelNotice,setDiaperLabelNotice]=useState(null) // {type:'flag'|'clear'|'error', text}
+  const [scanningFeedLabel,setScanningFeedLabel]=useState(false)
+  const [feedLabelNotice,setFeedLabelNotice]=useState(null)
   const [exportingErPdf,setExportingErPdf]=useState(false)
   const [scanningLabel,setScanningLabel]=useState(false)
   const [labelScanError,setLabelScanError]=useState('')
@@ -6188,10 +6194,71 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
   async function addDiaperLog(diaperType) {
     if (!patient?.id || isReadOnly) return
-    await supabase.from('kids_diaper_logs').insert({ patient_id: patient.id, diaper_type: diaperType })
+    await supabase.from('kids_diaper_logs').insert({ patient_id: patient.id, diaper_type: diaperType, note: diaperNote.trim()||null })
+    setDiaperNote(''); setDiaperLabelNotice(null)
     load()
   }
   async function deleteDiaperLog(id) { if (isReadOnly) return; await supabase.from('kids_diaper_logs').delete().eq('id', id); load() }
+
+  // Formula/diaper brand changes are exactly the kind of thing worth
+  // flagging - a new formula or diaper brand can introduce an allergen
+  // that wasn't a factor before. Reuses the same scan_ingredient_label
+  // endpoint the Ingredient scan screen uses (same subscriber gate, same
+  // check against this patient's own allergies/G6PD conditions on
+  // file) rather than building a second OCR path - the note field is
+  // then where the flag (or the all-clear) actually lands, right next
+  // to the log entry it's about.
+  async function scanProductLabelForAllergies(file) {
+    if (!file || !patient?.id) return { error: isEn?'No patient selected.':'未選擇病人。' }
+    try {
+      const fileBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result.split(',')[1])
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/patient/scan_ingredient_label', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ fileBase64, mediaType: file.type, patientId: patient.id }),
+      })
+      const json = await res.json()
+      if (!res.ok) return { error: json.error || (isEn?'Could not read this label.':'無法讀取此標籤。') }
+      return { flags: json.flags||[] }
+    } catch {
+      return { error: isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。' }
+    }
+  }
+  function flagsToNoteText(flags) {
+    return flags.map(f=>`⚠ ${f.ingredient} (${f.detail})`).join('; ')
+  }
+  async function handleScanFeedLabel(file) {
+    if (!file) return
+    setScanningFeedLabel(true); setFeedLabelNotice(null)
+    const result = await scanProductLabelForAllergies(file)
+    if (result.error) setFeedLabelNotice({ type:'error', text: result.error })
+    else if (result.flags.length>0) {
+      const flagText = flagsToNoteText(result.flags)
+      setFForm(f => ({ ...f, note: f.note ? `${f.note} ${flagText}` : flagText }))
+      setFeedLabelNotice({ type:'flag', text: isEn?'Flagged against your known allergies - added to the note below.':'已對照已知過敏並標記 - 已加入下方備註。' })
+    } else {
+      setFeedLabelNotice({ type:'clear', text: isEn?'No conflicts with known allergies found on this label.':'此標籤未發現與已知過敏衝突。' })
+    }
+    setScanningFeedLabel(false)
+  }
+  async function handleScanDiaperLabel(file) {
+    if (!file) return
+    setScanningDiaperLabel(true); setDiaperLabelNotice(null)
+    const result = await scanProductLabelForAllergies(file)
+    if (result.error) setDiaperLabelNotice({ type:'error', text: result.error })
+    else if (result.flags.length>0) {
+      const flagText = flagsToNoteText(result.flags)
+      setDiaperNote(n => n ? `${n} ${flagText}` : flagText)
+      setDiaperLabelNotice({ type:'flag', text: isEn?'Flagged against your known allergies - added to the note below.':'已對照已知過敏並標記 - 已加入下方備註。' })
+    } else {
+      setDiaperLabelNotice({ type:'clear', text: isEn?'No conflicts with known allergies found on this label.':'此標籤未發現與已知過敏衝突。' })
+    }
+    setScanningDiaperLabel(false)
+  }
 
   // kp-05 - pediatric ER prep package: the same export mechanism as kp-04,
   // just a tighter 24-hour window and pulling in feeding + diaper output
@@ -6541,6 +6608,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       note: fForm.note||null,
     })
     setFForm({ type:'breast', amountMl:'', durationMin:'', note:'' })
+    setFeedLabelNotice(null)
     await load()
     setSaving(false)
   }
@@ -6775,6 +6843,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
       <SecLabel>{isEn?'Diaper log':'尿布記錄'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Why this matters: a sudden drop in wet diapers (possible dehydration) or diarrhea is one of the first things an ER doctor or nurse asks about - tap here as it happens so you have an exact answer, not a guess, under stress.":'為何重要：排尿突然減少(可能脫水)或腹瀉,是急症室醫護最先詢問的事項之一 - 事發時輕觸記錄,緊急時刻就有確實答案,而非憑印象猜測。'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={diaperNote} onChange={e=>{setDiaperNote(e.target.value); setDiaperLabelNotice(null)}} placeholder={isEn?'Note - e.g. switched diaper brand (optional)':'備註 - 例如換了尿布牌子(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <label style={{display:'flex',alignItems:'center',justifyContent:'center',width:40,height:36,flexShrink:0,background:scanningDiaperLabel?C.border:__theme.accent,borderRadius:'8px',cursor:scanningDiaperLabel?'wait':'pointer',fontSize:'16px'}} title={isEn?'Scan diaper/product label for allergy conflicts':'掃描尿布/產品標籤以對照過敏'}>
+            <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={scanningDiaperLabel} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleScanDiaperLabel(f)}}/>
+            📷
+          </label>
+        </div>
+        {scanningDiaperLabel&&<div style={{fontSize:'11px',color:__theme.accent,marginBottom:'8px'}}>{isEn?'Reading label…':'讀取標籤中…'}</div>}
+        {diaperLabelNotice&&<div style={{fontSize:'11px',color:diaperLabelNotice.type==='error'?C.red:diaperLabelNotice.type==='flag'?C.amber:__theme.accent,marginBottom:'8px'}}>{diaperLabelNotice.text}</div>}
         <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
           <div onClick={()=>addDiaperLog('wet')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💧 Wet':'💧 濕'}</div>
           <div onClick={()=>addDiaperLog('dirty')} style={{flex:1,textAlign:'center',padding:'10px',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer',background:C.cream,border:`0.5px solid ${C.border}`}}>{isEn?'💩 Dirty':'💩 大便'}</div>
@@ -6783,9 +6860,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
         <div>
           {diaperLogs.length===0&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center',padding:'8px 0'}}>{isEn?'No diaper changes logged yet.':'暫無尿布記錄。'}</div>}
           {diaperLogs.slice(0,10).map(d=>(
-            <div key={d.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+            <div key={d.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
               <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(d.logged_at).toLocaleString('en-HK',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}</span>
-              <span style={{flex:1,textTransform:'capitalize'}}>{d.diaper_type}</span>
+              <span style={{flex:1}}><span style={{textTransform:'capitalize'}}>{d.diaper_type}</span>{d.note&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{d.note}</div>}</span>
               <span onClick={()=>deleteDiaperLog(d.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
             </div>
           ))}
@@ -7025,7 +7102,15 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           {fForm.type!=='solid'&&<input type="number" value={fForm.amountMl} onChange={e=>setFForm({...fForm,amountMl:e.target.value})} placeholder={isEn?'Amount (ml, optional)':'份量(ml,可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
           {fForm.type==='breast'&&<input type="number" value={fForm.durationMin} onChange={e=>setFForm({...fForm,durationMin:e.target.value})} placeholder={isEn?'Minutes (optional)':'分鐘(可選)'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>}
         </div>
-        <input value={fForm.note} onChange={e=>setFForm({...fForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'10px'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={fForm.note} onChange={e=>{setFForm({...fForm,note:e.target.value}); setFeedLabelNotice(null)}} placeholder={isEn?'Note - e.g. switched formula brand (optional)':'備註 - 例如換了奶粉牌子(可選)'} style={{flex:1,boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          {fForm.type!=='breast'&&<label style={{display:'flex',alignItems:'center',justifyContent:'center',width:40,height:36,flexShrink:0,background:scanningFeedLabel?C.border:__theme.accent,borderRadius:'8px',cursor:scanningFeedLabel?'wait':'pointer',fontSize:'16px'}} title={isEn?'Scan formula/food label for allergy conflicts':'掃描奶粉/食物標籤以對照過敏'}>
+            <input type="file" accept="image/*" capture="environment" style={{display:'none'}} disabled={scanningFeedLabel} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleScanFeedLabel(f)}}/>
+            📷
+          </label>}
+        </div>
+        {scanningFeedLabel&&<div style={{fontSize:'11px',color:__theme.accent,marginBottom:'8px'}}>{isEn?'Reading label…':'讀取標籤中…'}</div>}
+        {feedLabelNotice&&<div style={{fontSize:'11px',color:feedLabelNotice.type==='error'?C.red:feedLabelNotice.type==='flag'?C.amber:__theme.accent,marginBottom:'8px'}}>{feedLabelNotice.text}</div>}
         <Btn variant="primary" style={{width:'100%'}} disabled={saving} onClick={addFeedingLog}>{isEn?'Log feeding':'記錄餵養'}</Btn>
 
         <div style={{fontSize:'12px',fontWeight:600,color:__theme.accent,marginTop:'16px',marginBottom:'6px'}}>{isEn?`Today - ${todaysFeedings.length} feeding${todaysFeedings.length===1?'':'s'}${todaysMl?`, ${todaysMl}ml`:''}`:`今天 - ${todaysFeedings.length}次餵養${todaysMl?`, ${todaysMl}ml`:''}`}</div>
@@ -8855,18 +8940,21 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
     onSaved?.()
   }
 
-  // Import from a document - never auto-adds anything. The API only
-  // returns candidates; the patient reviews/deselects/edits severity
-  // and taps Add, which runs through the same handleAddAllergy-shaped
-  // insert as manual entry (still reported_by:'patient_reported').
+  // Import from a document - per your call, this records straight to
+  // the digital record, no review/approve step. Still only ever the
+  // allergens the document actually states as positive/confirmed (the
+  // API already filters out negative/untested ones) - reported_by:
+  // 'document_scan' keeps it distinguishable from hand-typed entries
+  // and from real clinical confirmation everywhere it's shown (My
+  // allergies, the emergency card, the public /emergency page), and the
+  // patient can still remove anything that was misread.
   const [allergyImportBusy,setAllergyImportBusy]=useState(false)
   const [allergyImportError,setAllergyImportError]=useState(null)
-  const [allergyImportCandidates,setAllergyImportCandidates]=useState(null)
-  const [savingAllergyImport,setSavingAllergyImport]=useState(false)
+  const [allergyImportAdded,setAllergyImportAdded]=useState(null)
 
   async function handleAllergyImportFile(file) {
     if (!file) return
-    setAllergyImportBusy(true); setAllergyImportError(null); setAllergyImportCandidates(null)
+    setAllergyImportBusy(true); setAllergyImportError(null); setAllergyImportAdded(null)
     try {
       const fileBase64 = await new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -8884,25 +8972,17 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
         setAllergyImportError(data.issue || (isEn?'No confirmed allergens found on this document.':'此文件未發現已確認的過敏原。'))
         setAllergyImportBusy(false); return
       }
-      setAllergyImportCandidates(data.allergies.map(a => ({ ...a, selected: true })))
+      await supabase.from('allergies').insert(data.allergies.map(a => ({
+        patient_id: patient.id, allergen: a.allergen, severity: a.severity||null,
+        reported_by: 'document_scan',
+      })))
+      setAllergyImportAdded(data.allergies.map(a=>a.allergen))
+      loadMyAllergies()
+      onSaved?.()
     } catch {
       setAllergyImportError(isEn?'Could not reach the server - try again.':'無法連接伺服器,請重試。')
     }
     setAllergyImportBusy(false)
-  }
-
-  async function handleConfirmAllergyImport() {
-    const toAdd = (allergyImportCandidates||[]).filter(a => a.selected && a.allergen.trim())
-    if (toAdd.length === 0) { setAllergyImportCandidates(null); return }
-    setSavingAllergyImport(true)
-    await supabase.from('allergies').insert(toAdd.map(a => ({
-      patient_id: patient.id, allergen: a.allergen, severity: a.severity||null,
-      reported_by: 'patient_reported',
-    })))
-    setSavingAllergyImport(false)
-    setAllergyImportCandidates(null)
-    loadMyAllergies()
-    onSaved?.()
   }
 
   // Family history - your request: so emergency/clinic staff have a real
@@ -8993,38 +9073,22 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
 
       <Card style={{padding:'14px',marginBottom:'12px'}}>
         <div style={{fontSize:'12.5px',fontWeight:500,marginBottom:'6px'}}>{isEn?'Import from a document':'從文件匯入'}</div>
-        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?'Upload a photo of an allergy test result or clinic letter - we\'ll read it and suggest allergens for you to review before anything is added.':'上傳過敏測試報告或診所信件的照片 - 系統會讀取並建議過敏原,新增前您可先審閱。'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Upload a photo of an allergy test result or clinic letter - confirmed allergens found on it are recorded straight to your record.":'上傳過敏測試報告或診所信件的照片 - 文件上已確認的過敏原將直接記錄到您的記錄中。'}</div>
         <input type="file" accept="image/*" disabled={allergyImportBusy} onChange={e=>handleAllergyImportFile(e.target.files?.[0]||null)} style={{width:'100%',fontSize:'12px'}}/>
         {allergyImportBusy&&<div style={{fontSize:'11.5px',color:C.textMuted,marginTop:'8px'}}>{isEn?'Reading document…':'正在讀取文件…'}</div>}
         {allergyImportError&&<div style={{fontSize:'11.5px',color:C.red,marginTop:'8px'}}>{allergyImportError}</div>}
+        {allergyImportAdded&&<div style={{fontSize:'11.5px',color:__theme.accent,marginTop:'8px'}}>{isEn?`Added: ${allergyImportAdded.join(', ')}`:`已新增：${allergyImportAdded.join('、')}`}</div>}
       </Card>
-
-      {allergyImportCandidates&&(
-        <Card style={{padding:'14px',marginBottom:'12px'}}>
-          <div style={{fontSize:'12.5px',fontWeight:600,marginBottom:'8px'}}>{isEn?'Found on this document — review before adding':'於此文件發現 — 新增前請審閱'}</div>
-          {allergyImportCandidates.map((a,i)=>(
-            <div key={i} style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
-              <input type="checkbox" checked={a.selected} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,selected:e.target.checked}:p))}/>
-              <input value={a.allergen} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,allergen:e.target.value}:p))} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px'}}/>
-              <input value={a.severity||''} onChange={e=>setAllergyImportCandidates(prev=>prev.map((p,pi)=>pi===i?{...p,severity:e.target.value}:p))} placeholder={isEn?'Severity':'嚴重程度'} style={{width:'90px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12.5px'}}/>
-            </div>
-          ))}
-          <div style={{display:'flex',gap:'8px',marginTop:'4px'}}>
-            <Btn style={{flex:1}} onClick={()=>setAllergyImportCandidates(null)} disabled={savingAllergyImport}>{isEn?'Discard':'捨棄'}</Btn>
-            <Btn variant="primary" style={{flex:1}} onClick={handleConfirmAllergyImport} disabled={savingAllergyImport}>{savingAllergyImport?(isEn?'Adding…':'新增中…'):(isEn?'Add selected':'新增所選')}</Btn>
-          </div>
-        </Card>
-      )}
 
       {!loadingAllergies&&myAllergies.map(a=>(
         <Card key={a.id} style={{padding:'10px 14px',marginBottom:'6px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <div>
             <div style={{fontSize:'13px',fontWeight:600}}>{a.allergen}{a.severity?` — ${a.severity}`:''}</div>
-            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',background:a.reported_by==='patient_reported'?C.amberLight:__theme.accentLight,color:a.reported_by==='patient_reported'?C.amber:__theme.accent,fontWeight:600}}>
-              {a.reported_by==='patient_reported'?(isEn?'Self-reported':'自行申報'):(isEn?'Clinically confirmed':'臨床確認')}
+            <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',background:a.reported_by==='patient_reported'||a.reported_by==='document_scan'?C.amberLight:__theme.accentLight,color:a.reported_by==='patient_reported'||a.reported_by==='document_scan'?C.amber:__theme.accent,fontWeight:600}}>
+              {a.reported_by==='patient_reported'?(isEn?'Self-reported':'自行申報'):a.reported_by==='document_scan'?(isEn?'From a document':'來自文件'):(isEn?'Clinically confirmed':'臨床確認')}
             </span>
           </div>
-          {a.reported_by==='patient_reported'&&<span onClick={()=>handleRemoveAllergy(a.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>}
+          {(a.reported_by==='patient_reported'||a.reported_by==='document_scan')&&<span onClick={()=>handleRemoveAllergy(a.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>}
         </Card>
       ))}
       <Card style={{padding:'14px',marginTop:'10px'}}>
