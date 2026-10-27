@@ -69,6 +69,7 @@ export default function EmergencyPage() {
                   <div key={i} style={{padding:'3px 0',display:'flex',alignItems:'center',gap:'6px',flexWrap:'wrap'}}>
                     <span style={{fontSize:'14px',fontWeight:700,color:C.red}}>⚠ {a.allergen}{a.severity?` — ${a.severity}`:''}</span>
                     {a.reported_by==='patient_reported'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600}}>Self-reported</span>}
+                    {a.reported_by==='document_scan'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600}}>From a document</span>}
                   </div>
                 ))
               : <div style={{fontSize:'12.5px',color:C.textSub,padding:'3px 0'}}>None known</div>}
