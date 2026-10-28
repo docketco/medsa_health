@@ -1754,6 +1754,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [referralClinicEmail,setReferralClinicEmail]=useState('')
   const [referralSending,setReferralSending]=useState(false)
   const [referralSent,setReferralSent]=useState(false)
+  const [referralSentId,setReferralSentId]=useState(null)
   const [referralDiagnosis,setReferralDiagnosis]=useState('')
   const [referralConsultationSummary,setReferralConsultationSummary]=useState('')
 
@@ -1788,14 +1789,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   async function handleSendReferral() {
     if (!referralSearch.trim() || !patient?.id) return
     setReferralSending(true)
-    await supabase.from('referrals').insert({
+    // Real gap found going through your own test run: /referral-portal's
+    // own header comment describes "doctor 1's done screen gives a real
+    // link plus a mailto button" - that link was never actually built on
+    // this side. The receiving-doctor portal (?receive=<referralId>)
+    // already expects exactly this id, so capturing it here and showing
+    // the link is the missing half, not a new design.
+    const { data } = await supabase.from('referrals').insert({
       patient_id: patient.id, referring_staff: staffMember?.name, note: referralNote||null,
       diagnosis: referralDiagnosis||null, consultation_summary: referralConsultationSummary||null,
       to_doctor_name: referralSearch,
       to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
       matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
       matched_directory_doctor_id: referralMatched?.source==='directory' ? referralMatched.id : null,
-    })
+    }).select('id').single()
+    setReferralSentId(data?.id||null)
     setReferralSending(false)
     setReferralSent(true)
   }
@@ -2434,7 +2442,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       </div>}
 
       <SecLabel>Refer to another doctor</SecLabel>
-      {!showReferral&&<Btn style={{marginBottom:'20px'}} onClick={()=>setShowReferral(true)}>+ Refer this patient</Btn>}
+      {!showReferral&&<Btn style={{marginBottom:'20px'}} onClick={()=>{setShowReferral(true);setReferralSent(false);setReferralSentId(null)}}>+ Refer this patient</Btn>}
       {showReferral&&!referralSent&&<Card style={{padding:'16px',marginBottom:'20px'}}>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Attach a case note. Search for the receiving doctor - matches from Medsa or the directory auto-fill clinic info; if nothing matches, fill in manually.</div>
         <input value={referralDiagnosis} onChange={e=>setReferralDiagnosis(e.target.value)} placeholder="Diagnosis" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box',marginBottom:'8px'}}/>
@@ -2464,6 +2472,20 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       </Card>}
       {referralSent&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'12px 14px',fontSize:'12px',color:C.green,marginBottom:'20px'}}>
         {'\u2713'} Referral logged for {referralSearch}{referralClinicName?` at ${referralClinicName}`:''}. {referralMatched?.source==='medsa'?"The receiving doctor will see this patient's consented records once they accept.":'Contact the clinic directly using the details provided, since this referral is outside Medsa.'}
+        {referralSentId&&(()=>{
+          const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${referralSentId}`
+          const mailto = `mailto:${referralClinicEmail||''}?subject=${encodeURIComponent(`Referral for ${patient?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nI'm referring ${patient?.full_name||'a patient'} to you via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nThanks.`)}`
+          return (
+            <div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.green}`}}>
+              <div style={{fontSize:'11px',color:C.text,marginBottom:'6px'}}>Send this link to the receiving doctor - no automated email goes out, so forward it yourself:</div>
+              <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+                <input readOnly value={link} onClick={e=>e.target.select()} style={{flex:'1 1 200px',fontSize:'11px',padding:'7px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff',color:C.text}}/>
+                <Btn style={{fontSize:'11px',padding:'7px 10px'}} onClick={()=>navigator.clipboard?.writeText(link)}>Copy link</Btn>
+                <a href={mailto} style={{textDecoration:'none'}}><Btn variant="primary" style={{fontSize:'11px',padding:'7px 10px'}}>\u2709 Open in email</Btn></a>
+              </div>
+            </div>
+          )
+        })()}
       </div>}
 
       {error&&<div style={{fontSize:'13px',color:C.red,marginBottom:'12px'}}>{error}</div>}
