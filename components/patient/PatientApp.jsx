@@ -1508,6 +1508,15 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     }
     loadUploads()
   }, [patient?.id])
+  // Found going through your own test run: "Your uploads" had no way to
+  // remove a mistaken upload at all, only View. Blocked once a file is
+  // tied to a real submitted claim (insurance_claim_id set) - removing
+  // evidence out from under an existing claim would be a real problem,
+  // not a convenience.
+  async function handleRemoveUpload(id) {
+    await supabase.from('medical_record_attachments').delete().eq('id', id)
+    setMyUploads(prev => prev.filter(u => u.id !== id))
+  }
 
   // ── Clinic verification for patient uploads ──────────────────────────────
   // Same underlying design as the out-of-network clinic verification used
@@ -1996,11 +2005,14 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                 {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Unverified':'未經核實')}
               </span>}
             </div>
-            <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={async()=>{
-              const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(u.file_url, 300)
-              if (error) { alert(`Could not open file: ${error.message}`); return }
-              window.open(data.signedUrl,'_blank')
-            }}>{isEn?'View':'查看'}</Btn>
+            <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+              <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={async()=>{
+                const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(u.file_url, 300)
+                if (error) { alert(`Could not open file: ${error.message}`); return }
+                window.open(data.signedUrl,'_blank')
+              }}>{isEn?'View':'查看'}</Btn>
+              {!u.insurance_claim_id&&<span onClick={()=>handleRemoveUpload(u.id)} style={{fontSize:'12px',color:C.red,cursor:'pointer',alignSelf:'center'}}>{isEn?'Remove':'移除'}</span>}
+            </div>
           </Card>
         ))}
       </>}
@@ -8574,13 +8586,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         </div>
       </Card>
 
-      {/* 陪月 (confinement helper) directory - your board idea, built on
-          top of the one real signal Medsa already has that a standalone
-          directory doesn't: predicted_due_date, used to pre-fill an
-          inquiry's requested start date. Medsa never touches the
-          salary/deposit (that's a real employer-employee relationship
-          under HK law) - this just makes the match, same principle as
-          never holding an insurance premium. */}
+      {/* 陪月 (confinement helper) directory - frozen per your call (Oct
+          27): going forward we're not venturing into the confinement-
+          nanny space at all (Parachute already covers that market in
+          HK), so this curated-directory tab - a smaller, different thing
+          from a booking marketplace but still in that space - comes out
+          of the UI too, not just the never-built marketplace idea. Code/
+          state below kept, not deleted, matching the rest of this
+          session's archival convention. */}
+      {false && <>
       <SecLabel>{isEn?'Confinement help (陪月)':'陪月服務'}</SecLabel>
       <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',fontSize:'11px',color:C.navy,lineHeight:1.5}}>
         {isEn?"Medsa introduces you to a helper - the arrangement (salary, deposit, hours) is agreed and paid directly between you and them, same as hiring any domestic helper under HK law. Medsa doesn't hold any of that money.":'Medsa負責為您配對陪月員 - 薪酬、按金、工作時數等安排,由您與對方直接商議及支付,與聘請任何家務助理一樣,受香港法例規範。Medsa不會經手任何款項。'}
@@ -8620,6 +8634,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           </div>
         ))}
       </div>}
+      </>}
       </>}
     </div>
   )
