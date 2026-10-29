@@ -7288,44 +7288,20 @@ function bmiCategory(weightKg, heightCm) {
 // directly. The last item is a plain prompt, not the real EPDS
 // screening instrument - see the note on bc-05 in the QA checklist for
 // why that stays blocked until a verified source is on hand.
-// bc-08 - Chinese postpartum confinement (坐月/月子) guide. Rebuilt from
-// real, cited sources rather than the earlier generic 4-stage version:
-// HK01's 陪月員-sourced weekly recipe guidance (named soups, not just
-// example foods), Cosmopolitan HK's soup roundup, and the TCM herbal-
-// remedy timing literature for Sheng Hua Tang / Du Zhong specifically
-// (which run on their OWN schedules, not the weekly food phases below).
-// Each item is tagged by evidence status - 'supported' (backed by a
-// real study, not just tradition), 'cultural' (real traditional
-// practice, not harmful as described, but not independently proven),
-// or 'refuted' (modern medicine specifically disagrees) - rather than
-// presenting folklore and evidence as the same kind of claim. This is
-// cultural/nutritional practice, not medical advice, and stays separate
-// from the evidence-based recovery checklist below (bc-05).
-const CONFINEMENT_PHASES = [
-  { week:{en:'Week 1 - Appetite & cleansing (開胃排毒)',zh:'第1週 - 開胃排毒'},
-    focus:{en:'Light, easy-to-digest food while lochia clears - not the week for rich tonics.',zh:'惡露排清期間,宜清淡易消化,暫不宜濃補。'},
-    foods:{en:'Yam (淮山), millet congee, potato, plain fish congee.',zh:'淮山、小米粥、薯類、清淡魚粥。'} },
-  { week:{en:'Week 2 - Lactation support (催乳上奶)',zh:'第2週 - 催乳上奶'},
-    focus:{en:"Named soups aimed at milk supply: 淮山杞子石崇魚湯, 木瓜通草章魚湯, 眉豆花生木瓜雞腳湯, 紅豆通草王不留行鯽魚湯.",zh:'主打上奶的湯水:淮山杞子石崇魚湯、木瓜通草章魚湯、眉豆花生木瓜雞腳湯、紅豆通草王不留行鯽魚湯。'},
-    foods:{en:"Pig's feet, crucian carp, green papaya, octopus, peanuts.",zh:'豬手、鯽魚、青木瓜、章魚、花生。'} },
-  { week:{en:'Week 3 - Qi & blood (補氣血)',zh:'第3週 - 補氣血'},
-    focus:{en:'Continue nourishing, but avoid overly cooling ingredients.',zh:'繼續調理,但避免過於寒涼的食材。'},
-    foods:{en:'Red-date/goji soups, warm protein, avoid raw/cold dishes.',zh:'紅棗杞子湯、溫性蛋白質,避免生冷菜式。'} },
-  { week:{en:'Week 4 - Deep nourishment (調理滋補)',zh:'第4週 - 調理滋補'},
-    focus:{en:'Wine-based dishes (麻油煎蛋, 燒酒雞) are traditionally held back until day 14+, not used from week 1.',zh:'酒類菜式(如麻油煎蛋、燒酒雞)傳統上由第14天起才開始,並非第一週使用。'},
-    foods:{en:'Sesame, black beans, lamb, sea cucumber.',zh:'芝麻、黑豆、羊肉、海參。'} },
-]
-// These two run on their OWN timing, independent of the weekly food
-// phases above - a real, sourced distinction the old version missed by
-// just listing "Sheng Hua Tang" under Week 1 as if it were a food.
-const CONFINEMENT_HERBS = [
-  { name:{en:'生化湯 (Sheng Hua Tang)',zh:'生化湯'}, status:'cultural',
-    timing:{en:'Natural birth: from day 2, once daily for 7-10 days. C-section: 5-7 days, and only after checking with your own doctor/TCM practitioner.',zh:'順產:產後第2天起,每日一帖,連服7至10天。剖腹產:約5至7天,並須先諮詢醫生/中醫師。'},
-    note:{en:'Traditionally used to support uterine contraction and lochia clearing. Not for anyone with excess bleeding, pelvic infection, or placenta accreta - a real contraindication, not just a preference.',zh:'傳統用於幫助子宮收縮及排清惡露。產後大出血、骨盆腔感染或植入性胎盤者不適用,屬真正禁忌,並非個人喜好。'} },
-  { name:{en:'杜仲 (Du Zhong / Eucommia bark)',zh:'杜仲'}, status:'cultural',
-    timing:{en:'Starts right after birth, ideally continued daily for 30 days - a different window from Sheng Hua Tang above.',zh:'產後即可開始服用,最好連續30天 - 與上方生化湯的時間窗不同。'},
-    note:{en:'Traditionally associated with uterine recovery and shorter lochia duration.',zh:'傳統認為有助子宮復原及縮短惡露時間。'} },
-]
+// bc-08 - Chinese postpartum confinement (坐月/月子) tool. Redesigned
+// (Oct 29) per your call: Medsa stepping back from authoring the diet/
+// herb-timing content itself (the old CONFINEMENT_PHASES weekly named-
+// soup recipes and CONFINEMENT_HERBS' 生化湯/杜仲 dosing windows were
+// exactly the kind of unverified medical-adjacent prescription you
+// don't want Medsa entangled in giving, even though they were sourced -
+// removed entirely, not just hidden). What's left is: (1) a "bring your
+// own plan" free-text field - whatever her own nanny/TCM practitioner/
+// dietitian actually told her, Medsa never generates or suggests this
+// content, just gives her somewhere to keep it; (2) a daily tracker to
+// log against it; (3) the reference material below that's genuinely
+// safety fact or clearly-labelled cultural reference, not a recipe -
+// the 42-day window, activity/wound/lochia monitoring, the myth-busting
+// avoid-list, and the day-by-day cultural milestones.
 const CONFINEMENT_AVOID = [
   { status:'refuted', en:'"No plain water, only herbal tea/soup" - modern medicine specifically disagrees: under-hydration raises the risk of UTIs and kidney stones. Drink normally; warm water is fine.', zh:'「不喝清水,只喝湯水/茶」- 現代醫學並不認同:水份不足會增加尿道感染及腎結石風險。應正常飲水,溫水即可。' },
   { status:'refuted', en:'捂月子 (bundling up in heavy layers/blankets to "sweat out the wind," windows shut) - this can cause dangerous dehydration or heatstroke, especially in Hong Kong\'s climate. Normal, comfortable clothing and ventilation are fine.', zh:'「捂月子」(穿蓋厚重衣物以「發汗驅風」,緊閉窗戶) - 可能引致脫水或中暑,在香港氣候下更危險。穿著舒適衣物並保持通風即可。' },
@@ -7575,6 +7551,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [journalEntries,setJournalEntries]=useState([])
   const [journalForm,setJournalForm]=useState({ text:'', mood:'' })
   const [journalSaving,setJournalSaving]=useState(false)
+  // Confinement tool (bc-08 redesign) - "bring your own plan" free text
+  // plus a daily tracker, replacing the removed CONFINEMENT_PHASES/
+  // CONFINEMENT_HERBS recipe content.
+  const [confinementPlanDraft,setConfinementPlanDraft]=useState('')
+  const [confinementPlanSaving,setConfinementPlanSaving]=useState(false)
+  const [confinementPlanSaved,setConfinementPlanSaved]=useState(false)
+  const [confinementLogs,setConfinementLogs]=useState([])
+  const [confinementLogForm,setConfinementLogForm]=useState({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
+  const [confinementLogSaving,setConfinementLogSaving]=useState(false)
   // 陪月 (confinement helper) directory - admin-managed listings, free to
   // list (see medsa-admin's new tab). Independent of bumpSubscriptionId's
   // own load() below since the helper list itself isn't pass-specific.
@@ -7611,7 +7596,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   async function load(isInitial=false) {
     if (!bumpSubscriptionId) { setLoading(false); return }
     if (isInitial) setLoading(true)
-    const [{data:sub},{data:bp},{data:g},{data:w},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal},{data:obgyn}] = await Promise.all([
+    const [{data:sub},{data:bp},{data:g},{data:w},{data:k},{data:docs},{data:allergyRows},{data:condRows},{data:medRows},{data:recovery},{data:epds},{data:policies},{data:biometry},{data:contractions},{data:journal},{data:obgyn},{data:confinementLogRows}] = await Promise.all([
       supabase.from('bump_subscriptions').select('*').eq('id',bumpSubscriptionId).maybeSingle(),
       supabase.from('bump_bp_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
       supabase.from('bump_glucose_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('recorded_at',{ascending:false}).limit(30),
@@ -7628,8 +7613,11 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       supabase.from('bump_contraction_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(30),
       supabase.from('bump_journal_entries').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('created_at',{ascending:false}).limit(30),
       patient?.id ? supabase.from('medical_records').select('date_of_record, diagnosis, notes, icd10_code, institutions(name)').eq('patient_id',patient.id).eq('note_template','obgyn').order('date_of_record',{ascending:false}) : Promise.resolve({data:[]}),
+      supabase.from('confinement_daily_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('log_date',{ascending:false}).limit(30),
     ])
     setBumpRow(sub||null)
+    setConfinementLogs(confinementLogRows||[])
+    if (isInitial) setConfinementPlanDraft(sub?.confinement_plan_text || '')
     setBpLogs(bp||[]); setGlucoseLogs(g||[]); setWeightLogs(w||[]); setKickLogs(k||[]); setDocuments(docs||[])
     setAllergies(allergyRows||[]); setConditions(condRows||[]); setMedications(medRows||[])
     setRecoveryChecks(recovery||[])
@@ -8126,6 +8114,34 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   }
   async function deleteJournalEntry(id) { await supabase.from('bump_journal_entries').delete().eq('id', id); load() }
 
+  // "Bring your own plan" - stored verbatim as the patient typed it, on
+  // bump_subscriptions itself (one per pregnancy pass, same as birth_plan
+  // above) rather than a separate table - there's only ever one current
+  // plan per pass, not a log of entries.
+  async function saveConfinementPlan() {
+    if (!bumpSubscriptionId) return
+    setConfinementPlanSaving(true)
+    await supabase.from('bump_subscriptions').update({ confinement_plan_text: confinementPlanDraft||null }).eq('id', bumpSubscriptionId)
+    setConfinementPlanSaving(false)
+    setConfinementPlanSaved(true)
+  }
+  async function saveConfinementLog() {
+    if (!bumpSubscriptionId) return
+    setConfinementLogSaving(true)
+    const today = new Date().toISOString().slice(0,10)
+    await supabase.from('confinement_daily_logs').upsert({
+      bump_subscription_id: bumpSubscriptionId, log_date: today,
+      lochia_status: confinementLogForm.lochiaStatus||null,
+      hydration_cups: confinementLogForm.hydrationCups ? Number(confinementLogForm.hydrationCups) : null,
+      mood: confinementLogForm.mood||null,
+      activity_done: confinementLogForm.activityDone,
+      note: confinementLogForm.note||null,
+    }, { onConflict: 'bump_subscription_id,log_date' })
+    setConfinementLogForm({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
+    await load(); setConfinementLogSaving(false)
+  }
+  async function deleteConfinementLog(id) { await supabase.from('confinement_daily_logs').delete().eq('id', id); load() }
+
   if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
 
   return (
@@ -8272,32 +8288,62 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           stays gated to this pass's own child_dob, since checking off
           "incision healed" before a birth has happened doesn't mean
           anything; the guide itself doesn't need that gate. */}
-      <SecLabel>{isEn?'Confinement (坐月/月子) guide':'坐月/月子指南'}</SecLabel>
+      <SecLabel>{isEn?'Confinement (坐月/月子) tool':'坐月/月子工具'}</SecLabel>
       <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-        {isEn?"Cultural practice, not medical advice. The research on confinement specifically preventing postpartum depression is mixed - what seems to matter more is the quality of support you get, not strict adherence to every rule. Each item below is tagged: supported by a real study, cultural tradition (not harmful as described, not independently proven), or refuted by modern medicine.":'此為文化習俗,並非醫療建議。坐月是否能預防產後抑鬱,研究結果並不一致 - 重要的似乎是支援的質素,而非嚴格遵守每項規條。以下每項均標示:有研究支持、傳統習俗(非已知有害,但未有獨立證據)、或現代醫學不認同。'}
+        {isEn?"Medsa doesn't author a confinement diet/herb plan for you - that's exactly the kind of unverified medical-adjacent advice we don't want to give. Bring whatever plan your own nanny, TCM practitioner, or dietitian gave you below, and use the daily tracker to follow it. The reference material further down is real sourced safety fact or clearly-labelled cultural practice, not a recipe.":'Medsa不會為你編寫坐月飲食/中藥調理方案 - 這正是我們不想提供的未經證實的醫療相關建議。請在下方輸入你自己的陪月、中醫師或營養師給你的方案,並用每日追蹤記錄跟進。下方的參考資料均為有根據的安全資訊或清楚標示的傳統習俗,並非食譜。'}
       </div>
+
+      <Card style={{padding:'14px 16px',marginBottom:'12px'}}>
+        <div style={{fontSize:'12.5px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?'My recovery plan':'我的調理方案'}</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>{isEn?"Whatever your nanny/practitioner/dietitian actually told you - paste or type it here just to keep it in one place. Entirely yours; Medsa doesn't read this to generate advice.":'無論你的陪月/中醫師/營養師跟你說了什麼 - 貼上或輸入於此,方便集中保存。內容完全屬於你,Medsa不會據此生成任何建議。'}</div>
+        <textarea value={confinementPlanDraft} onChange={e=>{setConfinementPlanDraft(e.target.value);setConfinementPlanSaved(false)}} rows={5} placeholder={isEn?"e.g. Week 1: light congee, no cold drinks. Week 2: lactation soups 3x/week…":'例如:第1週:清淡粥水,忌凍飲。第2週:每週3次通乳湯水…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementPlan} disabled={confinementPlanSaving}>{confinementPlanSaving?(isEn?'Saving…':'儲存中…'):confinementPlanSaved?(isEn?'✓ Saved':'✓ 已儲存'):(isEn?'Save':'儲存')}</Btn>
+      </Card>
+
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'12.5px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?"Today's tracker":'今日追蹤'}</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
+          <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
+            <option value="">{isEn?'Lochia today…':'今日惡露…'}</option>
+            <option value="red">{isEn?'Red':'鮮紅'}</option>
+            <option value="pink_brown">{isEn?'Pink/brown':'粉/棕色'}</option>
+            <option value="light_white">{isEn?'Light/white':'淡色/白色'}</option>
+            <option value="concerning">{isEn?'⚠ Fresh red returning / foul smell / fever':'⚠ 再次轉鮮紅/有異味/發燒'}</option>
+          </select>
+          <input type="number" min="0" value={confinementLogForm.hydrationCups} onChange={e=>setConfinementLogForm({...confinementLogForm,hydrationCups:e.target.value})} placeholder={isEn?'Cups of water':'飲水杯數'} style={{flex:'1 1 100px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px'}}/>
+        </div>
+        {confinementLogForm.lochiaStatus==='concerning'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'8px 10px',marginBottom:'8px',fontSize:'11px',color:C.red,lineHeight:1.5}}>{isEn?'This is not normal - contact your doctor. See the monitoring reference below for what to watch for.':'此情況並不正常 - 請聯絡醫生。詳見下方監察參考資料。'}</div>}
+        <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+          {MOOD_OPTIONS.map(m=>(
+            <div key={m.value} onClick={()=>setConfinementLogForm({...confinementLogForm,mood:m.value})} style={{flex:1,textAlign:'center',padding:'7px 2px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:confinementLogForm.mood===m.value?__theme.accent:C.card,color:confinementLogForm.mood===m.value?'#fff':C.textSub}}>{isEn?m.en:m.zh}</div>
+          ))}
+        </div>
+        <div onClick={()=>setConfinementLogForm({...confinementLogForm,activityDone:!confinementLogForm.activityDone})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 2px',cursor:'pointer',marginBottom:'8px'}}>
+          <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${confinementLogForm.activityDone?__theme.accent:C.border}`,background:confinementLogForm.activityDone?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{confinementLogForm.activityDone?'✓':''}</div>
+          <span style={{fontSize:'12.5px',color:C.text}}>{isEn?'Got up and moved a little today':'今日有起床稍作活動'}</span>
+        </div>
+        <input value={confinementLogForm.note} onChange={e=>setConfinementLogForm({...confinementLogForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'10px'}}/>
+        <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementLog} disabled={confinementLogSaving}>{confinementLogSaving?(isEn?'Saving…':'儲存中…'):(isEn?"Save today's entry":'儲存今日記錄')}</Btn>
+        {confinementLogs.length>0&&<div style={{marginTop:'14px'}}>
+          {confinementLogs.map(l=>{
+            const lochiaLabel = {red:isEn?'Red':'鮮紅',pink_brown:isEn?'Pink/brown':'粉/棕色',light_white:isEn?'Light/white':'淡色/白色',concerning:isEn?'⚠ Concerning':'⚠ 異常'}[l.lochia_status]
+            const moodOpt = MOOD_OPTIONS.find(m=>m.value===l.mood)
+            return (
+              <div key={l.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                <span style={{color:C.textMuted,width:70,flexShrink:0}}>{new Date(l.log_date).toLocaleDateString('en-HK',{month:'short',day:'numeric'})}</span>
+                <span style={{flex:1,color:l.lochia_status==='concerning'?C.red:C.text}}>{[lochiaLabel,l.hydration_cups!=null?`${l.hydration_cups}${isEn?' cups':'杯'}`:null,moodOpt?(isEn?moodOpt.en:moodOpt.zh):null,l.activity_done?(isEn?'Active':'有活動'):null].filter(Boolean).join(' · ')}{l.note&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{l.note}</div>}</span>
+                <span onClick={()=>deleteConfinementLog(l.id)} style={{color:C.textMuted,cursor:'pointer',flexShrink:0}}>✕</span>
+              </div>
+            )
+          })}
+        </div>}
+      </Card>
+
+      <SecLabel>{isEn?'What to know':'須知資訊'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'10px',background:C.accentLight||undefined}}>
         <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'How long is the core recovery window?':'核心復原期有多長?'}</div>
         <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>
       </Card>
-      {CONFINEMENT_PHASES.map(phase=>(
-        <Card key={phase.week.en} style={{padding:'12px 14px',marginBottom:'8px'}}>
-          <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?phase.week.en:phase.week.zh}</div>
-          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5,marginBottom:'6px'}}>{isEn?phase.focus.en:phase.focus.zh}</div>
-          <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}><strong>{isEn?'Foods: ':'食物:'}</strong>{isEn?phase.foods.en:phase.foods.zh}</div>
-        </Card>
-      ))}
-      <SecLabel>{isEn?'Herbal remedies (on their own timing)':'中藥調理(獨立時程)'}</SecLabel>
-      {CONFINEMENT_HERBS.map((h,i)=>(
-        <Card key={i} style={{padding:'12px 14px',marginBottom:'8px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px'}}>
-            <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent}}>{isEn?h.name.en:h.name.zh}</div>
-            <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:C.amberLight,color:C.amber}}>{isEn?'Cultural':'傳統習俗'}</span>
-          </div>
-          <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'4px'}}><strong>{isEn?'Timing: ':'時程:'}</strong>{isEn?h.timing.en:h.timing.zh}</div>
-          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?h.note.en:h.note.zh}</div>
-        </Card>
-      ))}
       <SecLabel>{isEn?'Activity, bathing & wound/lochia monitoring':'活動、沐浴及傷口/惡露監察'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
         {CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
@@ -8306,36 +8352,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           </div>
         ))}
       </Card>
-      <SecLabel>{isEn?'To limit or avoid':'需限制或避免'}</SecLabel>
+      <SecLabel>{isEn?'To limit or avoid, and where to read more':'需限制或避免,延伸閱讀'}</SecLabel>
       <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
         {CONFINEMENT_AVOID.map((a,i)=>{
           const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
           return (
-            <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_AVOID.length-1?`0.5px solid ${C.border}`:'none'}}>
+            <div key={i} style={{padding:'6px 0',borderBottom:`0.5px solid ${C.border}`}}>
               <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px'}}>{isEn?tag.en:tag.zh}</span>
               <span style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?a.en:a.zh}</span>
             </div>
           )
         })}
-      </Card>
-      <SecLabel>{isEn?"Day-by-day milestones (for baby)":'寶寶的里程碑日程'}</SecLabel>
-      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-        {isEn?'Cultural practice, not medical guidance - and these genuinely vary a lot by family and region. Shown as common reference points, not a fixed rule to follow.':'傳統習俗,並非醫療指引 - 各家各地做法差異頗大。此處僅作常見參考,並非必須遵從的規則。'}
-      </div>
-      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
-        {CONFINEMENT_MILESTONES.map((m,i)=>(
-          <div key={m.key} style={{padding:'8px 0',borderBottom:i<CONFINEMENT_MILESTONES.length-1?`0.5px solid ${C.border}`:'none'}}>
-            <div style={{display:'flex',alignItems:'baseline',gap:'8px',marginBottom:'3px',flexWrap:'wrap'}}>
-              <span style={{fontSize:'12.5px',fontWeight:700,color:C.text}}>{isEn?m.name.en:m.name.zh}</span>
-              <span style={{fontSize:'10.5px',color:C.textMuted}}>{isEn?m.day.en:m.day.zh}</span>
-            </div>
-            <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?m.detail.en:m.detail.zh}</div>
-          </div>
-        ))}
-      </Card>
-      <SecLabel>{isEn?'Want to go deeper?':'想了解更多?'}</SecLabel>
-      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"These books go into more depth than fits here - referenced, not reproduced.":'以下書籍比本頁更深入 - 僅作參考推薦,並非轉載內容。'}</div>
+        <div style={{fontSize:'10.5px',color:C.textMuted,margin:'10px 0 6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.4px'}}>{isEn?'Want to go deeper? These books go further than fits here - referenced, not reproduced.':'想了解更多?以下書籍比本頁更深入 - 僅作參考推薦,並非轉載內容。'}</div>
         {CONFINEMENT_FURTHER_READING.map((b,i)=>(
           <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_FURTHER_READING.length-1?`0.5px solid ${C.border}`:'none'}}>
             <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{b.title} <span style={{fontWeight:400,color:C.textMuted}}>— {b.author}</span></div>
@@ -8343,6 +8371,19 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
           </div>
         ))}
       </Card>
+      <SecLabel>{isEn?"Fun facts - baby's milestone days":'趣味知識 - 寶寶的里程碑日子'}</SecLabel>
+      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
+        {isEn?'Cultural practice, not medical guidance - and these genuinely vary a lot by family and region.':'傳統習俗,並非醫療指引 - 各家各地做法差異頗大。'}
+      </div>
+      <div style={{display:'flex',gap:'10px',overflowX:'auto',paddingBottom:'6px',marginBottom:'16px'}}>
+        {CONFINEMENT_MILESTONES.map((m,i)=>(
+          <div key={m.key} style={{flex:'0 0 200px',background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px'}}>
+            <div style={{fontSize:'10px',color:__theme.accent,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',marginBottom:'6px'}}>{isEn?m.day.en:m.day.zh}</div>
+            <div style={{fontSize:'13px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?m.name.en:m.name.zh}</div>
+            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5}}>{isEn?m.detail.en:m.detail.zh}</div>
+          </div>
+        ))}
+      </div>
       </>}
 
       {bumpTab==='monitoring'&&<>
