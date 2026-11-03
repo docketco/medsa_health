@@ -475,7 +475,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 
   async function loadHomeAccessRequests(patientRowId) {
     if (!patientRowId) { setHomeAccessRequestsLoading(false); return }
-    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patientRowId).eq('status','pending').order('created_at',{ascending:false})
+    // Real bug found going through your own test run: this table's
+    // timestamp column is requested_at, not created_at - ordering by a
+    // column that doesn't exist made Postgres return an error every
+    // time, which supabase-js surfaces as data:null, so this silently
+    // fell back to an empty list no matter how many real pending
+    // requests existed. The banner never had a chance to render.
+    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patientRowId).eq('status','pending').order('requested_at',{ascending:false})
     setHomeAccessRequests(data||[])
     setHomeAccessRequestsLoading(false)
   }
@@ -1397,7 +1403,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
   async function loadAccessRequests() {
     if (!patient?.id) { setAccessRequestsLoading(false); return }
-    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patient.id).eq('status','pending').order('created_at',{ascending:false})
+    const { data } = await supabase.from('record_access_requests').select('*').eq('patient_id', patient.id).eq('status','pending').order('requested_at',{ascending:false})
     setAccessRequests(data||[])
     setAccessRequestsLoading(false)
   }
@@ -1992,6 +1998,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
 
         {uploadError&&<div style={{margin:'0 16px 10px',fontSize:'12px',color:C.red}}>{uploadError}</div>}
         <SecLabel>{isEn?'Your uploads':'您的上傳'}</SecLabel>
+        <div style={{margin:'0 16px 10px',padding:'10px 14px',background:C.card,borderRadius:'10px',fontSize:'11px',color:C.textMuted,lineHeight:1.5}}>
+          {isEn?"Medsa only helps transfer whatever you upload - we don't check it's the right document or that it's accurate, and the decision on any claim is the insurer's, never ours. A \"Verified\" badge below reflects a clinic's own confirmation, not a guarantee from Medsa.":'Medsa僅協助轉交您上傳的文件 - 我們並不核實文件是否正確或準確,任何索償的決定均由保險公司作出,並非Medsa。以下的「已核實」標示代表診所自行確認,並非Medsa的保證。'}
+        </div>
         {myUploads.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'12px'}}>{isEn?'No files uploaded yet.':'尚未上傳任何文件。'}</div>}
         {myUploads.map(u=>(
           <Card key={u.id} style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'center',marginBottom:'8px'}}>
@@ -2002,7 +2011,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
               {u.is_government_record
                 ? <span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:C.card,color:C.textMuted}}>{isEn?'Government record - not claims-eligible':'政府記錄 - 不可用作索償'}</span>
                 : u.verification_status&&<span style={{fontSize:'10px',padding:'1px 7px',borderRadius:'20px',fontWeight:600,background:u.verification_status==='verified'?__theme.accentLight:u.verification_status==='pending'?C.amberLight:C.card,color:u.verification_status==='verified'?__theme.accent:u.verification_status==='pending'?C.amber:C.textMuted}}>
-                {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Unverified':'未經核實')}
+                {u.verification_status==='verified'?(isEn?'Verified':'已核實'):u.verification_status==='pending'?(isEn?'Pending verification':'核實中'):(isEn?'Uploaded - Unverified':'已上傳 - 未經核實')}
               </span>}
             </div>
             <div style={{display:'flex',gap:'6px',flexShrink:0}}>
