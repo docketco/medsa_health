@@ -383,7 +383,11 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
       const data = await res.json()
       if (data.status !== 'OK') { setError(data.message || 'Something went wrong.'); setPhase('overview'); return }
       setResult({ ...data, declaredConditions: conditions })
-      setPhase('result')
+      // Agent mode never shows the automated verdict (approved/flagged/
+      // declined) - the point of asking for a human instead of an instant
+      // quote is that no automated decision gets surfaced here at all, not
+      // shown alongside a "sent to an agent" note.
+      setPhase(chosenMode === 'agent' ? 'agent_sent' : 'result')
     } catch (e) {
       setError('Could not reach the server - try again.')
       setPhase('overview')
@@ -531,19 +535,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>
           </Card>
 
-          {/* Real gap found live-testing: "Talk to an agent" with a clean
-              (approved, non-pending) verdict showed this exact same
-              self-checkout panel - no mention of an agent anywhere, no way
-              to reach the conversation the mode='agent' inquiry already
-              created behind the scenes. Self-checkout is the auto path's
-              job only; agent mode always hands off to a human instead,
-              same as the declined branch below already did. */}
-          {mode==='agent'&&result.verdict!=='declined'&&!purchasing&&phase!=='purchased'&&(
-            <Card>
-              <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'4px'}}>✓ Sent to an agent</div>
-              <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5}}>An agent will review this and reach out shortly - check "My inquiries" to follow the conversation once they do.</div>
-            </Card>
-          )}
           {mode==='auto'&&result.verdict!=='declined'&&!result.underwriterPending&&!purchasing&&phase!=='purchased'&&(
             <Card>
               <div style={{fontSize:'13px',fontWeight:600,marginBottom:'12px'}}>Complete your purchase</div>
@@ -582,6 +573,27 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             {mode==='auto'&&(agentRequestSent
               ? <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginTop:'8px'}}>✓ Sent - an agent will review this personally and reach out. Check "My inquiries".</div>
               : <Btn style={{width:'100%',marginTop:'8px'}} disabled={requestingAgent} onClick={requestAgentForDecline}>{requestingAgent?'Sending…':'Talk to an agent about this instead'}</Btn>)}
+          </Card>}
+          <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
+        </div>
+      )}
+
+      {/* Skips the automated verdict entirely for "Talk to an agent" - the
+          whole point of asking for a human instead of an instant quote is
+          that no approved/flagged/declined screen shows at all, just the
+          handoff confirmation. Alternatives stay offered if the engine
+          would have declined it, same safety net the auto-declined path
+          has, just without ever saying "declined" to the patient. */}
+      {phase === 'agent_sent' && result && (
+        <div style={{padding:'20px 16px',maxWidth:560,margin:'0 auto'}}>
+          <Card>
+            <div style={{fontSize:'15px',fontWeight:700,color:C.green,marginBottom:'8px'}}>✓ Sent to an agent</div>
+            <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>An agent will review this and reach out shortly - check "My inquiries" to follow the conversation once they do.</div>
+          </Card>
+          {result.verdict==='declined'&&<Card>
+            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>In the meantime</div>
+            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'4px'}}>While you wait to hear back, here's another plan that might work right away.</div>
+            <AlternativePlansPanel inquiryId={result.inquiryId} onViewPlan={onViewPlan}/>
           </Card>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
         </div>

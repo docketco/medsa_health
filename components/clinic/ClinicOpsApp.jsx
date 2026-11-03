@@ -807,7 +807,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
     if (data && staffMember?.institutionId) {
       const { data: existingRequest } = await supabase.from('record_access_requests')
         .select('status').eq('patient_id', data.id).eq('requesting_institution_id', staffMember.institutionId)
-        .order('created_at',{ascending:false}).limit(1).maybeSingle()
+        .order('requested_at',{ascending:false}).limit(1).maybeSingle()
       setAccessRequestStatus(existingRequest?.status || null)
     } else {
       setAccessRequestStatus(null)
@@ -1795,9 +1795,26 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     // this side. The receiving-doctor portal (?receive=<referralId>)
     // already expects exactly this id, so capturing it here and showing
     // the link is the missing half, not a new design.
+    //
+    // Second, deeper gap found right after: the "doctor 1 was a logged-in
+    // Medsa doctor, so doctor 2 skips the out-of-network gate" vouching
+    // check on the receiving side reads referring_staff_medsa_id,
+    // referring_doctor_name, referring_practice_name, and reason - none
+    // of which this insert ever set (it wrote referring_staff/note/
+    // diagnosis/consultation_summary instead, different column names
+    // entirely). Every referral fell into the wrong, out-of-network gate
+    // regardless of the referring doctor actually being a real, logged-
+    // in Medsa staff member, which they always are here.
+    let referringPracticeName = null
+    if (institutionId) {
+      const { data: inst } = await supabase.from('institutions').select('name').eq('id', institutionId).maybeSingle()
+      referringPracticeName = inst?.name || null
+    }
     const { data } = await supabase.from('referrals').insert({
       patient_id: patient.id, referring_staff: staffMember?.name, note: referralNote||null,
       diagnosis: referralDiagnosis||null, consultation_summary: referralConsultationSummary||null,
+      referring_staff_medsa_id: staffMember?.id || null, referring_doctor_name: staffMember?.name || null,
+      referring_practice_name: referringPracticeName, reason: referralDiagnosis||referralNote||null,
       to_doctor_name: referralSearch,
       to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
       matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
@@ -3254,7 +3271,7 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
     if (!patientId || !staffMember?.institutionId) { setAccessRequestStatus(null); return }
     const { data } = await supabase.from('record_access_requests')
       .select('status').eq('patient_id', patientId).eq('requesting_institution_id', staffMember.institutionId)
-      .order('created_at',{ascending:false}).limit(1).maybeSingle()
+      .order('requested_at',{ascending:false}).limit(1).maybeSingle()
     setAccessRequestStatus(data?.status || null)
   }
 
@@ -5128,6 +5145,15 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   const [clinicDoctors,setClinicDoctors]=useState([])
   const [newApptDoctor,setNewApptDoctor]=useState('')
   const [newApptReason,setNewApptReason]=useState('')
+  // Default-on, same as the patient's own booking flow - real gap found
+  // going through your own test run: this screen only ever wrote
+  // `appointments`, never the matching appointment_intake/consent row
+  // the patient-app booking flow does. Nothing here set the clinical-
+  // data access window at all, so a patient booked through this screen
+  // looked "outside their consent window" immediately, even for a visit
+  // happening tomorrow - there was no real consent row, so the check
+  // fell back to whatever OLD (likely expired) row happened to exist.
+  const [newApptConsent,setNewApptConsent]=useState(true)
   const [newApptSaving,setNewApptSaving]=useState(false)
   const [newApptError,setNewApptError]=useState(null)
 
@@ -5236,10 +5262,24 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       status: 'confirmed',
       institution_source: 'clinic_ops',
     })
+    if (insErr) { setNewApptSaving(false); setNewApptError(insErr.message); return }
+    // Same 48-hour window as the patient-app booking flow (12h before the
+    // appointment day starts, the day itself, 12h after it ends) - see
+    // newApptConsent's own comment for why this insert was missing.
+    const { start: apptDayStart, end: apptDayEnd } = hkDayBounds(scheduledAt)
+    await supabase.from('appointment_intake').insert({
+      patient_id: newApptPatient.id,
+      appointment_time: scheduledAt.toISOString(),
+      doctor_name: newApptDoctor,
+      reason_for_visit: newApptReason || null,
+      consent_given: newApptConsent,
+      consent_given_at: new Date().toISOString(),
+      access_window_start: new Date(apptDayStart.getTime() - 12*60*60*1000).toISOString(),
+      access_window_end: new Date(apptDayEnd.getTime() + 12*60*60*1000).toISOString(),
+    })
     setNewApptSaving(false)
-    if (insErr) { setNewApptError(insErr.message); return }
     setShowNewApptForm(false)
-    setNewApptSearch(''); setNewApptPatient(null); setNewApptTime(''); setNewApptReason('')
+    setNewApptSearch(''); setNewApptPatient(null); setNewApptTime(''); setNewApptReason(''); setNewApptConsent(true)
     loadRealAppointments(selectedDay)
   }
 
@@ -5547,7 +5587,11 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
               <div key={t} onClick={()=>setNewApptTime(t)} style={{border:`0.5px solid ${newApptTime===t?C.green:C.border}`,borderRadius:'8px',padding:'7px',textAlign:'center',fontSize:'12px',cursor:'pointer',background:newApptTime===t?C.green:C.card,color:newApptTime===t?'#fff':C.text}}>{t}</div>
             ))}
           </div>}
-          <input value={newApptReason} onChange={e=>setNewApptReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <input value={newApptReason} onChange={e=>setNewApptReason(e.target.value)} placeholder="Reason, e.g. Follow-up" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <div onClick={()=>setNewApptConsent(!newApptConsent)} style={{display:'flex',alignItems:'flex-start',gap:'10px',marginBottom:'14px',cursor:'pointer'}}>
+            <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${newApptConsent?C.green:C.border}`,background:newApptConsent?C.green:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{newApptConsent?'✓':''}</div>
+            <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.4}}>Patient consents to their clinical records being accessible for this visit. Uncheck if this wasn't actually discussed with them.</div>
+          </div>
           {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}>{newApptError}</div>}
           {newApptError&&<div style={{marginBottom:'10px'}}><span onClick={()=>onNavNewPatient?.(newApptSearch)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span></div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmNewAppt} disabled={!newApptPatient||!newApptTime||newApptSaving}>{newApptSaving?'Booking…':'Confirm booking'}</Btn>
