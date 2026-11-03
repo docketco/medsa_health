@@ -1314,7 +1314,15 @@ function PlanInquiriesScreen({ agent, onConvert }) {
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>New Plan Inquiries</div>
       {claimNotice&&<div style={{background:C.amberLight,color:C.amber,borderRadius:'8px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px'}}>{claimNotice}</div>}
 
-      <SecLabel>Unclaimed - first to claim gets the lead</SecLabel>
+      {/* Real gap found live-testing: round-robin now pushes every new
+          inquiry straight to a specific agent's own "Your claimed
+          inquiries" below, the moment it's created - nothing sits here
+          to be raced for any more, except the rare leftover from before
+          that shipped, or a company with no eligible agent at all. Kept
+          (not removed) as a manual fallback for exactly that case, but
+          relabelled so it reads as the exception, not the normal flow. */}
+      <SecLabel>Unclaimed - legacy/manual fallback only</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-8px',marginBottom:'12px',lineHeight:1.5}}>New inquiries are assigned automatically to an eligible agent the moment they're submitted - see "Your claimed inquiries" below. This section only ever holds something left over from before that shipped, or a company with no eligible agent on file.</div>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
       {!loading&&unclaimed.filter(i=>{
         const authTeams = planTeamAuth[i.plan_id]
@@ -1824,10 +1832,19 @@ export default function AgentApp() {
         .select('institutions(name)').eq('agent_id', a.id).eq('status','active')
       myCompanyNames = [...new Set((appts||[]).map(x=>x.institutions?.name).filter(Boolean))]
     }
-    const { count } = myCompanyNames.length===0 ? { count: 0 } : await supabase.from('plan_inquiries')
+    const { count: unclaimedCount } = myCompanyNames.length===0 ? { count: 0 } : await supabase.from('plan_inquiries')
       .select('id, insurance_plans!inner(company_name)', {count:'exact', head:true})
       .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames)
-    setNewInquiryCount(count||0)
+    // Real gap found live-testing: round-robin (lib/agentAssignment.js)
+    // now auto-assigns claimed_by_agent_id at creation, so a genuinely
+    // unclaimed row is now the rare exception (a legacy inquiry from
+    // before that shipped, or a company with no eligible agent at all) -
+    // this badge used to ONLY count that now-rare case, so it sat at 0
+    // for an agent with real new leads sitting in "mine" below, making
+    // the tab look empty even when there was something to act on.
+    const { count: mineNewCount } = await supabase.from('plan_inquiries')
+      .select('id', {count:'exact', head:true}).eq('claimed_by_agent_id', a.id).eq('status', 'new')
+    setNewInquiryCount((unclaimedCount||0) + (mineNewCount||0))
     setLoading(false)
   }
 
