@@ -5251,6 +5251,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0, suitability,
           requiresAgent: !!p.requires_agent,
+          // Off by default on every plan (per your call) - Medsa holds no
+          // underwriting power without a real insurer partnership, so
+          // "Quote immediately" and its health-declaration questionnaire
+          // only exist for a plan whose insurer has specifically opted
+          // into the self-serve matching engine (insurance_plans.
+          // self_declare_enabled, set from Plan Manager). Every other
+          // plan only ever offers "Talk to an agent" - see PlanDetailFlow.
+          selfDeclareEnabled: !!p.self_declare_enabled,
           waitingPeriodDays: p.waiting_period_days ?? null,
           preExistingConditionPolicy: p.pre_existing_condition_policy || null,
           additionalTerms: p.additional_terms || null,
