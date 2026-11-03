@@ -367,7 +367,7 @@ const PLAN_MANAGER_EMPTY_FORM = {
   covered_categories:[], policy_document_path:'',
   commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
   self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
-  patient_facing_description:'',
+  patient_facing_description:'', self_declare_enabled:false,
 }
 // readOnly: the insurer portal passes this - per your call, going back
 // to the original (pre-refinement) decision, adding/editing a plan is a
@@ -493,6 +493,7 @@ export function PlanManager({ company, readOnly=false }) {
       auto_buy_on_clean: !!plan.auto_buy_on_clean,
       logo_url: plan.logo_url||'',
       patient_facing_description: plan.patient_facing_description||'',
+      self_declare_enabled: !!plan.self_declare_enabled,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -601,6 +602,7 @@ export function PlanManager({ company, readOnly=false }) {
       self_serve_checkout_enabled: connectActive ? form.self_serve_checkout_enabled : false,
       logo_url: form.logo_url || null,
       patient_facing_description: form.patient_facing_description || null,
+      self_declare_enabled: form.self_declare_enabled,
     }
     let planId = editingId
     if (editingId) {
@@ -724,12 +726,19 @@ export function PlanManager({ company, readOnly=false }) {
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Set by you, not the agent - it now computes automatically on every quote for this plan, and Medsa's referral fee is capped at 50% of it. Leave blank if not set yet; an agent quoting this plan sees "not set by insurer" until it is.</div>
           </div>
           <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
-            <input type="checkbox" checked={form.requires_agent} onChange={e=>setForm(f=>({...f,requires_agent:e.target.checked}))}/>
+            <input type="checkbox" checked={form.self_declare_enabled} onChange={e=>setForm(f=>({...f,self_declare_enabled:e.target.checked}))}/>
             <div>
-              <div style={{fontSize:'12px',color:C.text}}>Requires talking to an agent</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>When on, patients never see an instant automated quote for this plan - only the option to reach an agent.</div>
+              <div style={{fontSize:'12px',color:C.text}}>Enable self-serve health declaration &amp; instant quote</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Off by default for every plan - Medsa doesn't hold underwriting power without a real partnership, so patients only ever see "Talk to an agent" unless you opt this specific plan in. On: patients can also declare health conditions themselves and get an instant automated verdict. Add your own questions to that declaration below once this is on.</div>
             </div>
           </label>
+          {form.self_declare_enabled&&<label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
+            <input type="checkbox" checked={form.requires_agent} onChange={e=>setForm(f=>({...f,requires_agent:e.target.checked}))}/>
+            <div>
+              <div style={{fontSize:'12px',color:C.text}}>But still require talking to an agent</div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Overrides the above for this plan specifically - keeps the self-serve declaration/quote hidden even though it's enabled on your account generally.</div>
+            </div>
+          </label>}
           <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
             <input type="checkbox" checked={form.auto_buy_on_clean} onChange={e=>setForm(f=>({...f,auto_buy_on_clean:e.target.checked}))}/>
             <div>
@@ -774,7 +783,7 @@ export function PlanManager({ company, readOnly=false }) {
             </div>
             <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={5} placeholder="e.g. exclusions, what counts as a pre-existing condition, how claims are assessed…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
           </div>
-          <CustomQuestionsManager company={company} planId={editingId}/>
+          {form.self_declare_enabled&&<CustomQuestionsManager company={company} planId={editingId}/>}
           {/* Real bug found live-testing: a plan with no pricing tier yet
               (e.g. one created before a tier was added, or where tiers
               got cleared) left Save permanently disabled with zero
@@ -809,7 +818,7 @@ export function PlanManager({ company, readOnly=false }) {
             </div>
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.requires_agent?' · Agent-only':''}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
+            {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.self_declare_enabled?(p.requires_agent?' · Self-declare on, agent-only':' · Self-declare & instant quote on'):' · Agent-only (default)'}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
