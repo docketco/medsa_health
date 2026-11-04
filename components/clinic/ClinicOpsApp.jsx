@@ -1755,6 +1755,7 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
   const [referralSending,setReferralSending]=useState(false)
   const [referralSent,setReferralSent]=useState(false)
   const [referralSentId,setReferralSentId]=useState(null)
+  const [referralAccessCode,setReferralAccessCode]=useState(null)
   const [referralDiagnosis,setReferralDiagnosis]=useState('')
   const [referralConsultationSummary,setReferralConsultationSummary]=useState('')
 
@@ -1810,17 +1811,28 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', institutionId).maybeSingle()
       referringPracticeName = inst?.name || null
     }
+    // Real gap found right after the vouching fix shipped: skipping the
+    // out-of-network ORPHF/BRN gate for a vouched referral is fine (a
+    // real logged-in Medsa doctor already vouches for the relationship),
+    // but the receiving doctor's name was still just free text with
+    // nothing behind it at all - anyone who got hold of the bare link
+    // could claim to be whoever it names. This code travels in the same
+    // email as the link (see the mailto body below), so opening the
+    // vouched flow now proves you actually received THIS referral, not
+    // just that you have a URL.
+    const accessCode = Math.random().toString(36).slice(2,8).toUpperCase()
     const { data } = await supabase.from('referrals').insert({
       patient_id: patient.id, referring_staff: staffMember?.name, note: referralNote||null,
       diagnosis: referralDiagnosis||null, consultation_summary: referralConsultationSummary||null,
       referring_staff_medsa_id: staffMember?.id || null, referring_doctor_name: staffMember?.name || null,
       referring_practice_name: referringPracticeName, reason: referralDiagnosis||referralNote||null,
-      to_doctor_name: referralSearch,
+      to_doctor_name: referralSearch, access_code: accessCode,
       to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
       matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
       matched_directory_doctor_id: referralMatched?.source==='directory' ? referralMatched.id : null,
     }).select('id').single()
     setReferralSentId(data?.id||null)
+    setReferralAccessCode(accessCode)
     setReferralSending(false)
     setReferralSent(true)
   }
@@ -2491,15 +2503,21 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
         {'\u2713'} Referral logged for {referralSearch}{referralClinicName?` at ${referralClinicName}`:''}. {referralMatched?.source==='medsa'?"The receiving doctor will see this patient's consented records once they accept.":'Contact the clinic directly using the details provided, since this referral is outside Medsa.'}
         {referralSentId&&(()=>{
           const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${referralSentId}`
-          const mailto = `mailto:${referralClinicEmail||''}?subject=${encodeURIComponent(`Referral for ${patient?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nI'm referring ${patient?.full_name||'a patient'} to you via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nThanks.`)}`
+          // Real gap found right after vouching shipped: a bare link alone
+          // let anyone who got hold of it claim to be the named receiving
+          // doctor, with nothing to prove they actually got the referral.
+          // The code travels in this same email - the receiving side asks
+          // for it before unlocking the vouched (no-gate) flow.
+          const mailto = `mailto:${referralClinicEmail||''}?subject=${encodeURIComponent(`Referral for ${patient?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nI'm referring ${patient?.full_name||'a patient'} to you via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nYou'll be asked for this access code when you open it: ${referralAccessCode}\n\nThanks.`)}`
           return (
             <div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.green}`}}>
-              <div style={{fontSize:'11px',color:C.text,marginBottom:'6px'}}>Send this link to the receiving doctor - no automated email goes out, so forward it yourself:</div>
+              <div style={{fontSize:'11px',color:C.text,marginBottom:'6px'}}>Send this link and code to the receiving doctor - no automated email goes out, so forward it yourself:</div>
               <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
                 <input readOnly value={link} onClick={e=>e.target.select()} style={{flex:'1 1 200px',fontSize:'11px',padding:'7px 10px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff',color:C.text}}/>
                 <Btn style={{fontSize:'11px',padding:'7px 10px'}} onClick={()=>navigator.clipboard?.writeText(link)}>Copy link</Btn>
                 <a href={mailto} style={{textDecoration:'none'}}><Btn variant="primary" style={{fontSize:'11px',padding:'7px 10px'}}>\u2709 Open in email</Btn></a>
               </div>
+              <div style={{fontSize:'11px',color:C.text,marginTop:'8px'}}>Access code: <span style={{fontFamily:'monospace',fontWeight:700,letterSpacing:'1px'}}>{referralAccessCode}</span> <span onClick={()=>navigator.clipboard?.writeText(referralAccessCode)} style={{color:C.green,cursor:'pointer',fontWeight:600}}>Copy</span></div>
             </div>
           )
         })()}

@@ -1470,7 +1470,7 @@ function PolicyVerificationManager({ company }) {
 // agent sees via their emailed /claim-review link. Tapping a card opens
 // that same real AgentClaimView right here instead of only being reachable
 // via a link, so this dashboard isn't a second, disconnected surface.
-function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
+export function InsuranceAdminClaimsLog({ onOpenClaim, company }) {
   const [filter,setFilter]=useState('All')
   const [search,setSearch]=useState('')
   const [claims,setClaims]=useState([])
