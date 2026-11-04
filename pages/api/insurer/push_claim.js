@@ -56,6 +56,11 @@ export default async function handler(req, res) {
         ...(company.claims_webhook_key ? { Authorization: `Bearer ${company.claims_webhook_key}` } : {}),
       },
       body: JSON.stringify({
+        // Added once push_policy.js started reusing this same webhook for
+        // a second event type - lets one endpoint on the insurer's side
+        // tell a claim push apart from a new-policy push (see
+        // pages/api/agent/push_policy.js).
+        eventType: 'claim',
         claimRef: realClaim.claim_ref,
         patientName: realClaim.patients?.full_name || null,
         medsaId: realClaim.patients?.medsa_id || null,

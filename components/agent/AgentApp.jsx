@@ -207,7 +207,30 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [filter,setFilter]=useState('all')
   const [transferringPolicy,setTransferringPolicy]=useState(null)
   const [confirmingCancelId,setConfirmingCancelId]=useState(null)
+  const [pushingId,setPushingId]=useState(null)
+  const [pushNotice,setPushNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
+
+  // Write-back half of policy issuance - mirrors InsuranceAdminClaimsLog's
+  // "Push to your system" for claims exactly, just for a newly-issued
+  // policy instead. Medsa never decides anything on the other end
+  // (underwriting stays entirely the insurer's job); this only relays
+  // what was entered here.
+  async function handlePushPolicy(policyId) {
+    setPushingId(policyId); setPushNotice(null)
+    try {
+      const res = await fetch('/api/agent/push_policy', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ policyId }),
+      })
+      const data = await res.json()
+      setPushNotice(res.ok ? { id: policyId, ok: true, text: 'Pushed to the insurer.' } : { id: policyId, ok: false, text: data.error || 'Push failed.' })
+      if (res.ok) onReload?.()
+    } catch {
+      setPushNotice({ id: policyId, ok: false, text: 'Could not reach Medsa - try again.' })
+    }
+    setPushingId(null)
+  }
 
   // A patient's cancellation request just marks intent - the actual
   // cancellation still has to be processed with the insurer, so this is
@@ -257,6 +280,12 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                 <Btn style={{fontSize:'11px',padding:'6px 10px',marginTop:'8px'}} disabled={confirmingCancelId===p.id} onClick={()=>confirmCancellation(p)}>{confirmingCancelId===p.id?'Confirming…':'Confirm cancelled'}</Btn>
               </div>}
               {agent.team_id&&<div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to teammate</Btn></div>}
+              <div style={{marginTop:'10px'}}>
+                {p.pushed_to_insurer_at
+                  ? <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>{'✓'} Pushed to insurer {new Date(p.pushed_to_insurer_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
+                  : <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handlePushPolicy(p.id)} disabled={pushingId===p.id}>{pushingId===p.id?'Pushing…':'Push to insurer'}</Btn>}
+                {pushNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:pushNotice.ok?C.green:C.red}}>{pushNotice.text}</div>}
+              </div>
             </Card>
           )
         })}
@@ -307,6 +336,12 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [patientDetails,setPatientDetails]=useState(null) // {date_of_birth, phone, email, hkid} - what an agent actually needs to see to work the case
   const [insurers,setInsurers]=useState([])
   const [policyNumber,setPolicyNumber]=useState('')
+  // Stored the way you'd keep a copy of a signed contract on file - for
+  // the record and to relay to the insurer, never read by Medsa's own
+  // matching/billing logic anywhere. Optional: a quote doesn't need it yet.
+  const [payerBankName,setPayerBankName]=useState('')
+  const [payerAccountNumber,setPayerAccountNumber]=useState('')
+  const [payerAccountHolderName,setPayerAccountHolderName]=useState('')
   const [startDate,setStartDate]=useState('')
   const [renewalDate,setRenewalDate]=useState('')
   const [status,setStatus]=useState('quote')
@@ -581,6 +616,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           brokerCommissionHkd: prefillInquiry && brokerCommission ? commissionNum : null,
           referralFeeHkd: prefillInquiry && referralFee ? referralFeeNum : null,
           wardClass: wardClass||null, paymentFrequency, healthDeclarationAcknowledged: healthDeclarationAck,
+          payerBankName: payerBankName||null, payerAccountNumber: payerAccountNumber||null, payerAccountHolderName: payerAccountHolderName||null,
         }),
       })
       const data = await res.json()
@@ -874,6 +910,23 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       <SecLabel>Policy number</SecLabel>
       <div style={{marginBottom:'16px'}}>
         <input value={policyNumber} onChange={e=>setPolicyNumber(e.target.value)} placeholder="Policy number, once the insurer issues it (optional for quotes)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+      </div>
+
+      {/* Real gap: nothing here ever collected the client's payment
+          details the insurer needs to actually set up premium collection.
+          Kept here, the way you'd keep a copy of a signed contract on
+          file - for the record and to relay to the insurer once this
+          policy is pushed over (see Policies' "Push to insurer" button),
+          never read by Medsa's own matching/billing logic. Optional - a
+          quote doesn't need it yet. */}
+      <SecLabel>Payment details (optional for a quote)</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>Kept on file for your own records and to pass along to the insurer - Medsa never uses this for anything itself.</div>
+      <div style={{marginBottom:'10px'}}>
+        <input value={payerAccountHolderName} onChange={e=>setPayerAccountHolderName(e.target.value)} placeholder="Account holder name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+      </div>
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+        <input value={payerBankName} onChange={e=>setPayerBankName(e.target.value)} placeholder="Bank name" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        <input value={payerAccountNumber} onChange={e=>setPayerAccountNumber(e.target.value)} placeholder="Account number" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
       </div>
 
       <div style={{background:C.blueLight,borderRadius:'8px',padding:'10px 14px',marginBottom:'16px',fontSize:'11px',color:C.blue,lineHeight:1.5}}>

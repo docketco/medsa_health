@@ -34,6 +34,13 @@ export default async function handler(req, res) {
     agentId, patientId, patientName, lineItems, bundleDiscountHkd,
     policyNumber, status, startDate, renewalDate, inquiryId,
     brokerCommissionHkd, referralFeeHkd, wardClass, paymentFrequency, healthDeclarationAcknowledged,
+    // Real gap: nothing in this form ever collected the client's payment
+    // details the insurer actually needs to set up premium collection
+    // (direct debit, etc.) - per your call, Medsa stores this the way an
+    // agent would keep a copy of a signed contract on file: for the
+    // record and to relay to the insurer, never read or acted on by
+    // Medsa's own matching/billing logic anywhere.
+    payerBankName, payerAccountNumber, payerAccountHolderName,
   } = req.body || {}
 
   if (!agentId) return res.status(400).json({ status: 'ERROR', message: 'agentId is required.' })
@@ -83,6 +90,8 @@ export default async function handler(req, res) {
         referral_fee_hkd: inquiryId && referralFeeHkd != null ? referralFeeHkd : null,
         ward_class: wardClass || null, payment_frequency: paymentFrequency,
         health_declaration_acknowledged_at: healthDeclarationAcknowledged ? new Date().toISOString() : null,
+        payer_bank_name: payerBankName || null, payer_account_number: payerAccountNumber || null,
+        payer_account_holder_name: payerAccountHolderName || null,
       }).select().maybeSingle()
       if (pErr) throw pErr
       createdPolicyIds.push(pol.id)
