@@ -54,6 +54,16 @@ export default function ReferralPortalPage() {
   const [gateError, setGateError] = useState(null)
   const [verifying, setVerifying] = useState(false)
   const [verificationResult, setVerificationResult] = useState(null)
+  // Real gap found right after vouching shipped: a bare link alone let
+  // anyone who got hold of it claim to be the receiving doctor it names -
+  // nothing proved they actually received the referral. This code travels
+  // in the same email as the link (see ClinicOpsApp.jsx's handleSendReferral)
+  // and has to be entered before the vouched (no out-of-network-gate) flow
+  // unlocks - verified server-side via an RPC so the real code is never
+  // sent to the browser up front (loadReferral deliberately excludes it).
+  const [accessCode, setAccessCode] = useState('')
+  const [accessCodeError, setAccessCodeError] = useState(null)
+  const [accessCodeVerifying, setAccessCodeVerifying] = useState(false)
   const [otpChannels, setOtpChannels] = useState([])
   const [otpSending, setOtpSending] = useState(false)
   const [otpState, setOtpState] = useState(null)
@@ -87,19 +97,35 @@ export default function ReferralPortalPage() {
   }, [router.isReady, receiveId])
 
   async function loadReferral(id) {
-    const { data } = await supabase.from('referrals').select('*, patients(full_name)').eq('id', id).maybeSingle()
+    // Explicit column list, NOT select('*') - access_code must never reach
+    // the browser before it's actually verified, or the code-entry step
+    // below would be security theatre.
+    const { data } = await supabase.from('referrals')
+      .select('id, patient_id, referred_to_practitioner_name, referring_doctor_name, referring_practice_name, reason, referring_staff_medsa_id, status, patients(full_name)')
+      .eq('id', id).maybeSingle()
     if (!data) { setError('This referral link is no longer valid.'); setStage('error'); return }
     setReferral(data)
     setPatient(data.patients)
     if (data.referring_staff_medsa_id) {
       // Doctor 1 was a logged-in Medsa doctor - that already vouches for
-      // this referral. Skip the gate, just collect doctor 2's own
-      // registration + phone for a real check later.
+      // this referral. Skip the out-of-network gate, but still confirm
+      // whoever's here actually received the referral email (see the
+      // access-code state above) before collecting anything else.
       setReceiverVerificationMethod('vouched_pending')
-      setStage('receive_vouched')
+      setStage('receive_vouched_code')
     } else {
       setStage('receive_gate')
     }
+  }
+
+  async function handleVerifyAccessCode() {
+    if (!accessCode.trim()) return
+    setAccessCodeVerifying(true)
+    setAccessCodeError(null)
+    const { data: ok } = await supabase.rpc('verify_referral_access_code', { p_referral_id: referral.id, p_code: accessCode.trim() })
+    setAccessCodeVerifying(false)
+    if (!ok) { setAccessCodeError("That code doesn't match - check the email the referring doctor sent you."); return }
+    setStage('receive_vouched')
   }
 
   // ── Doctor 1, path A: already a Medsa doctor - real password login ─────
@@ -408,6 +434,14 @@ export default function ReferralPortalPage() {
           if (result.status==='SENT') setStage('receive_otp_challenge')
         }}/>}
         {stage==='receive_otp_challenge' && <OtpChallenge otpState={otpState} otpCode={otpCode} setOtpCode={setOtpCode} verifyResult={otpVerifyResult} verifying={otpVerifying} onVerify={handleReceiveOtpVerify} onBack={()=>setStage('receive_otp_channel_choice')}/>}
+
+        {stage==='receive_vouched_code' && <>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>Referral for {patient?.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Referred by {referral?.referring_doctor_name}, a verified Medsa doctor. No out-of-network check is needed here, but enter the access code from their referral email first, so we know you actually received it.</div>
+          <input value={accessCode} onChange={e=>setAccessCode(e.target.value)} placeholder="Access code from the email" style={{...inputStyle,letterSpacing:'2px',textTransform:'uppercase'}}/>
+          {accessCodeError && <div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{accessCodeError}</div>}
+          <button onClick={handleVerifyAccessCode} disabled={accessCodeVerifying||!accessCode.trim()} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:accessCodeVerifying||!accessCode.trim()?0.6:1}}>{accessCodeVerifying?'Checking...':'Continue'}</button>
+        </>}
 
         {stage==='receive_vouched' && <>
           <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>Referral for {patient?.full_name}</div>

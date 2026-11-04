@@ -16,7 +16,7 @@ import C from '../components/shared/colours'
 import { REFERRAL_FEE_ENABLED } from '../lib/featureFlags'
 import Icon from '../components/shared/Icon'
 import { SecLabel } from '../components/shared/UI'
-import { PlanManager } from '../components/insurance/InsuranceApp'
+import { PlanManager, InsuranceAdminClaimsLog, AgentClaimView } from '../components/insurance/InsuranceApp'
 
 export default function MedsaAdminPage() {
   const [tab, setTab] = useState('carousel')
@@ -39,7 +39,7 @@ export default function MedsaAdminPage() {
         {/* TPA Clinics tab shelved (BeeFintech pivot) - see TpaClinicsTab's
             header comment. Left out of this nav array entirely, same
             pattern as every other shelved tab/screen this pivot. */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -48,6 +48,7 @@ export default function MedsaAdminPage() {
       </div>
       {tab==='carousel' && <CarouselTab/>}
       {tab==='plans' && <AdminPlansTab/>}
+      {tab==='claims' && <AdminClaimsTab/>}
       {tab==='confinement' && <ConfinementHelpersTab/>}
       {tab==='verifiedpros' && <VerifiedProsTab/>}
       {tab==='healthcolumn' && <HealthColumnTab/>}
@@ -1742,6 +1743,71 @@ function AdminPlansTab() {
   return (
     <div>
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick an insurer to add or edit their plan listings - this is the same form the insurer portal's Plans screen shows, just read-only there now.</div>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search insurers…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No insurers found.</div>}
+      {!loading&&filtered.map(c=>(
+        <div key={c.id} onClick={()=>setSelected(c)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'8px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px'}}>
+          {c.logo_url&&<img src={c.logo_url} alt="" style={{width:32,height:32,borderRadius:'8px',objectFit:'contain'}}/>}
+          <div style={{flex:1}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{c.name}</div>
+            {c.status&&<div style={{fontSize:'11px',color:C.textMuted}}>{c.status}</div>}
+          </div>
+          <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Real gap this closes: the manual "approve/decline a claim" UI
+// (InsuranceAdminClaimsLog + AgentClaimView, both in InsuranceApp.jsx)
+// was fully built and working, but only ever reachable through the
+// insurer portal's own login - which was archived in the BeeFintech
+// pivot (#341). An insurer with no real API/webhook of their own (the
+// manual-fallback half of the claims-decision flow) had no way left to
+// actually decide a claim at all. Same move as AdminPlansTab above:
+// reuse the exact same components, just host them here instead of
+// building a second version. Decisions made here write to the same
+// insurance_claims row /api/v1/decide_claim.js writes to, so a claim
+// read the same way regardless of whether an insurer's own system or a
+// Medsa staffer acting on their behalf made the call.
+function AdminClaimsTab() {
+  const [companies, setCompanies] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [openClaimRef, setOpenClaimRef] = useState(null)
+
+  useEffect(() => {
+    supabase.from('insurance_companies').select('id, name, logo_url, status').order('name').then(({data}) => {
+      setCompanies(data||[])
+      setLoading(false)
+    })
+  }, [])
+
+  if (selected && openClaimRef) {
+    return (
+      <div>
+        <button onClick={()=>setOpenClaimRef(null)} style={{marginBottom:'12px',padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>← Back to claims</button>
+        <AgentClaimView claimRef={openClaimRef}/>
+      </div>
+    )
+  }
+  if (selected) {
+    return (
+      <div>
+        <button onClick={()=>setSelected(null)} style={{marginBottom:'12px',padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>← Back to insurers</button>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'12px'}}>{selected.name}</div>
+        <InsuranceAdminClaimsLog company={selected} onOpenClaim={setOpenClaimRef}/>
+      </div>
+    )
+  }
+
+  const filtered = companies.filter(c => !search.trim() || c.name.toLowerCase().includes(search.trim().toLowerCase()))
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick an insurer to view and decide their claims - the manual fallback for one with no real API/webhook of their own yet. An insurer who does have one calls /api/v1/decide_claim.js directly instead; both write to the same record.</div>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search insurers…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No insurers found.</div>}
