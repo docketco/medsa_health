@@ -1392,6 +1392,18 @@ const NOTE_TEMPLATES = [
   { key:'well_child', label:'Well-child visit', skeleton:'Growth & development:\n\nFeeding/nutrition:\n\nImmunization status:\n\nParent/caregiver concerns:\n\nAnticipatory guidance given:\n\nPlan:\n' },
   { key:'follow_up', label:'Follow-up', skeleton:'Reason for follow-up:\n\nInterval history since last visit:\n\nResponse to treatment:\n\nExamination findings:\n\nPlan:\n' },
   { key:'specialist', label:'Specialist consult', skeleton:'Reason for referral:\n\nHistory relevant to referral:\n\nExamination/findings:\n\nImpression:\n\nRecommendation back to referring doctor:\n' },
+  // Real gap: 'specialist' above only fits a visit that started as a
+  // referral (it's framed entirely around "recommendation back to the
+  // referring doctor") - a specialist a patient sees directly, with no
+  // referral at all, had nothing that fit. Deliberately generic rather
+  // than building one more per-specialty template: real specialist
+  // software (e.g. Invisalign's own ClinCheck for orthodontics) already
+  // owns deep per-procedure tracking for the specialties that need it -
+  // Medsa's job is a decent generic structured note any specialty can
+  // use, not re-authoring what a dedicated vendor tool already does
+  // better. Covers dentistry (any, not just paediatric) the same as
+  // everything else - no dentistry-specific template needed on top of this.
+  { key:'specialty_general', label:'Specialist visit (general)', skeleton:'Chief complaint:\n\nRelevant history:\n\nExamination/findings:\n\nAssessment:\n\nTreatment provided this session:\n\nPlan/follow-up:\n' },
   // First specialty-specific template beyond the generic structural ones
   // above - sequenced first (of OBGYN/paediatrics/physio/OT/speech/
   // developmental paeds/dentistry) because it's the one with an existing
