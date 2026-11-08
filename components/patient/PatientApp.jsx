@@ -6907,28 +6907,33 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
   return (
     <div style={{padding:'0 16px 24px'}}>
-      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
-        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
-        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
+        <div style={{width:44,height:44,borderRadius:'50%',background:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+          <KidsMascot accent={__theme.accent}/>
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
+          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
+        </div>
       </div>
 
       <SecLabel>{isEn?"Today at a glance":'今日概覽'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysFeedings.length}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'🍼'} {todaysFeedings.length}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`feeding${todaysFeedings.length===1?'':'s'}${todaysMl?` · ${todaysMl}ml`:''}`:`次餵養${todaysMl?` · ${todaysMl}ml`:''}`}</div>
           </div>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysDiapers.length}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'🧷'} {todaysDiapers.length}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?'diaper changes':'次換尿布'}</div>
           </div>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysSleepMinutes<=0?'—':todaysSleepMinutes<60?`${todaysSleepMinutes}m`:`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'😴'} {todaysSleepMinutes<=0?'—':todaysSleepMinutes<60?`${todaysSleepMinutes}m`:`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`sleep, ${todaysSleep.length} session${todaysSleep.length===1?'':'s'}`:`睡眠, ${todaysSleep.length}次`}</div>
           </div>
           <div style={{background:todaysSymptomCount>0?C.amberLight:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:todaysSymptomCount>0?C.amber:__theme.accent}}>{todaysSymptomCount}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:todaysSymptomCount>0?C.amber:__theme.accent}}>{'🌡️'} {todaysSymptomCount}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`symptom entr${todaysSymptomCount===1?'y':'ies'}`:'次症狀記錄'}</div>
           </div>
         </div>
@@ -6962,8 +6967,13 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           and alert banners above stay outside the tabs since they're an
           at-a-glance overview, not one section's job. */}
       <div style={{display:'flex',gap:'6px',margin:'0 0 16px',padding:'4px',background:C.card,borderRadius:'10px'}}>
-        {[{value:'growth',en:'Growth',zh:'生長'},{value:'daily',en:'Feeding & care',zh:'餵養與照護'},{value:'health',en:'Health',zh:'健康'},{value:'milestones',en:'Immunisations & milestones',zh:'疫苗與里程碑'}].map(t=>(
-          <div key={t.value} onClick={()=>setKidsTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:'8px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:kidsTab===t.value?__theme.accent:'transparent',color:kidsTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
+        {[{value:'growth',icon:'sprout',en:'Growth',zh:'生長'},{value:'daily',icon:'bottle',en:'Feeding & care',zh:'餵養與照護'},{value:'health',icon:'heart',en:'Health',zh:'健康'},{value:'milestones',icon:'star',en:'Immunisations & milestones',zh:'疫苗與里程碑'}].map(t=>(
+          <div key={t.value} onClick={()=>setKidsTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:'8px',cursor:'pointer',background:kidsTab===t.value?__theme.accent:'transparent'}}>
+            <div style={{display:'flex',justifyContent:'center',marginBottom:'3px'}}>
+              <GuideIllustration icon={t.icon} accent={kidsTab===t.value?'#fff':C.textSub} size={16}/>
+            </div>
+            <div style={{fontSize:'11.5px',fontWeight:600,color:kidsTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
+          </div>
         ))}
       </div>
 
@@ -7792,6 +7802,22 @@ function GuideIllustration({ icon, accent, size=60 }) {
       <path d="M60 18 L70 46 L100 46 L76 64 L86 94 L60 76 L34 94 L44 64 L20 46 L50 46 Z"/>
     </svg>
   )
+  if (icon==='sprout') return (
+    <svg {...svgProps}>
+      <path d="M60 100 L60 50"/>
+      <path d="M60 68 C 42 68, 30 54, 30 38 C 46 38, 60 52, 60 68 Z"/>
+      <path d="M60 78 C 78 78, 90 64, 90 48 C 74 48, 60 62, 60 78 Z"/>
+    </svg>
+  )
+  if (icon==='bottle') return (
+    <svg {...svgProps}>
+      <rect x="46" y="18" width="16" height="12" rx="3"/>
+      <path d="M42 30 L78 30 L74 100 C74 104 70 108 66 108 L54 108 C50 108 46 104 46 100 Z"/>
+      <line x1="46" y1="54" x2="74" y2="54"/>
+      <line x1="47" y1="70" x2="73" y2="70"/>
+      <line x1="48" y1="86" x2="72" y2="86"/>
+    </svg>
+  )
   return (
     <svg {...svgProps}>
       <rect x="24" y="30" width="72" height="66" rx="8"/>
@@ -7799,6 +7825,25 @@ function GuideIllustration({ icon, accent, size=60 }) {
       <line x1="42" y1="20" x2="42" y2="38"/>
       <line x1="78" y1="20" x2="78" y2="38"/>
       <circle cx="60" cy="70" r="12"/>
+    </svg>
+  )
+}
+// Real gap from your feedback: Growth & feeding was entirely plain -
+// generic white cards, no illustration anywhere besides the existing
+// tooth-arch diagram and the two celebration-confetti moments. A simple
+// bear-cub face, same stroke-icon style as everything else, gives the
+// screen a bit of personality without touching the WHO percentile chart
+// or any of the real tracking data underneath it.
+function KidsMascot({ accent, size=44 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-hidden="true">
+      <circle cx="34" cy="30" r="12"/>
+      <circle cx="86" cy="30" r="12"/>
+      <circle cx="60" cy="64" r="38"/>
+      <circle cx="44" cy="60" r="3" fill={accent} stroke="none"/>
+      <circle cx="76" cy="60" r="3" fill={accent} stroke="none"/>
+      <path d="M52 78 C 56 82, 64 82, 68 78" strokeWidth="2.5"/>
+      <circle cx="60" cy="70" r="4" fill={accent} stroke="none"/>
     </svg>
   )
 }
