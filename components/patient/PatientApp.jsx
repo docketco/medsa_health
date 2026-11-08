@@ -7616,22 +7616,109 @@ function MilestoneIllustration({ icon, accent, accentSoft }) {
 }
 // The postpartum "book" - cover + table of contents + chapters, wrapping
 // every existing postpartum section (previously one long continuous
-// scroll) in page-flip chrome instead. Three preset themes, reusing the
-// exact same accent colors the milestone pages already use so the whole
-// book reads as one consistent palette.
+// scroll) in page-flip chrome instead. Six preset themes: the original 3
+// reuse the exact accent colors the milestone pages already use, the 3
+// added after your feedback (fairytale/dinosaur/galaxy) each carry their
+// own cartoon default-cover icon below, not just a different color - and
+// each theme now also carries the paper-texture/divider/dot colors that
+// used to be hardcoded brown, so a non-brown theme like galaxy doesn't
+// end up with brown ruled lines.
 const JOURNAL_THEMES = {
-  peach: { accent:'#C9594A', accentSoft:'#F3DAD3', paper:'#F7EFE2', ink:'#4A3B32', inkSoft:'#9C7456' },
-  sage: { accent:'#7D8F6C', accentSoft:'#DEE6D4', paper:'#F2F1E8', ink:'#3E4538', inkSoft:'#7D8A6E' },
-  sand: { accent:'#B07D4F', accentSoft:'#EBDCC6', paper:'#F8F0E3', ink:'#4A3B2E', inkSoft:'#A1805A' },
+  peach: { accent:'#C9594A', accentSoft:'#F3DAD3', paper:'#F7EFE2', ink:'#4A3B32', inkSoft:'#9C7456', ruleColor:'rgba(154,116,86,0.08)', marginColor:'rgba(201,140,122,0.35)', dotTrack:'#D9C9B4' },
+  sage: { accent:'#7D8F6C', accentSoft:'#DEE6D4', paper:'#F2F1E8', ink:'#3E4538', inkSoft:'#7D8A6E', ruleColor:'rgba(125,143,108,0.1)', marginColor:'rgba(125,143,108,0.32)', dotTrack:'#D3DACB' },
+  sand: { accent:'#B07D4F', accentSoft:'#EBDCC6', paper:'#F8F0E3', ink:'#4A3B2E', inkSoft:'#A1805A', ruleColor:'rgba(176,125,79,0.09)', marginColor:'rgba(176,125,79,0.32)', dotTrack:'#E3D2B8' },
+  fairytale: { accent:'#5B7FC7', accentSoft:'#DCE6F7', paper:'#F3F6FC', ink:'#36406E', inkSoft:'#7A89B8', ruleColor:'rgba(91,127,199,0.09)', marginColor:'rgba(91,127,199,0.3)', dotTrack:'#CBD6EE' },
+  dinosaur: { accent:'#5B8C3E', accentSoft:'#DCEBC7', paper:'#F3F6EA', ink:'#3E4A2A', inkSoft:'#79885E', ruleColor:'rgba(91,140,62,0.09)', marginColor:'rgba(91,140,62,0.3)', dotTrack:'#CEDFBA' },
+  galaxy: { accent:'#B18CF0', accentSoft:'#4A3E7A', paper:'#241F42', ink:'#EAE4FB', inkSoft:'#A79BD1', ruleColor:'rgba(255,255,255,0.07)', marginColor:'rgba(177,140,240,0.35)', dotTrack:'#473C70' },
 }
-function DefaultJournalCoverArt({ accent }) {
+function DefaultJournalCoverArt({ accent, themeKey, size=96 }) {
+  const svgProps = { width:size, height:size, viewBox:'0 0 120 120', fill:'none', stroke:accent, strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round', role:'img', 'aria-label':'Journal cover illustration' }
+  if (themeKey==='sage') return (
+    <svg {...svgProps}>
+      <path d="M60 102 L60 34"/>
+      <path d="M60 58 C 40 58, 26 42, 26 24 C 44 24, 60 40, 60 58 Z"/>
+      <path d="M60 74 C 82 74, 96 58, 96 40 C 78 40, 60 56, 60 74 Z"/>
+    </svg>
+  )
+  if (themeKey==='sand') return (
+    <svg {...svgProps}>
+      <path d="M20 68 C 20 46, 38 30, 60 30 C 82 30, 100 46, 100 68"/>
+      <path d="M24 82 Q 33 73, 42 82 T 60 82 T 78 82 T 96 82"/>
+      <circle cx="60" cy="18" r="2" fill={accent} stroke="none"/>
+    </svg>
+  )
+  if (themeKey==='fairytale') return (
+    <svg {...svgProps}>
+      <path d="M30 98 L34 54 L44 66 L50 36 L60 58 L70 36 L76 66 L86 54 L90 98 Z"/>
+      <path d="M30 98 L90 98"/>
+      <circle cx="60" cy="22" r="3" fill={accent} stroke="none"/>
+      <circle cx="42" cy="32" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="78" cy="32" r="1.8" fill={accent} stroke="none"/>
+    </svg>
+  )
+  if (themeKey==='dinosaur') return (
+    <svg {...svgProps}>
+      <path d="M18 90 C18 74, 27 65, 40 65 C40 50, 48 36, 62 30 C59 39, 61 46, 68 48 C84 51, 98 60, 99 76 C100 85, 95 90, 87 90 L87 100 L79 100 L79 91 L42 91 L42 100 L34 100 L34 90 Z"/>
+      <path d="M62 30 L68 21 M66 38 L73 31 M71 45 L78 39"/>
+      <circle cx="88" cy="74" r="1.8" fill={accent} stroke="none"/>
+    </svg>
+  )
+  if (themeKey==='galaxy') return (
+    <svg {...svgProps}>
+      <path d="M74 20 C 54 20, 38 36, 38 56 C 38 76, 54 92, 74 92 C 60 92, 48 76, 48 56 C 48 36, 60 20, 74 20 Z"/>
+      <path d="M26 34 L28 41 L35 43 L28 45 L26 52 L24 45 L17 43 L24 41 Z" fill={accent} stroke="none"/>
+      <circle cx="90" cy="78" r="2.2" fill={accent} stroke="none"/>
+      <circle cx="22" cy="76" r="1.6" fill={accent} stroke="none"/>
+    </svg>
+  )
   return (
-    <svg width="96" height="96" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Journal cover illustration">
+    <svg {...svgProps}>
       <path d="M78 28 C 58 28, 44 46, 44 65 C 44 84, 58 100, 78 100 C 67 93, 58 80, 58 65 C 58 50, 67 35, 78 28 Z"/>
       <circle cx="30" cy="38" r="1.8" fill={accent} stroke="none"/>
       <circle cx="42" cy="24" r="1.8" fill={accent} stroke="none"/>
       <circle cx="22" cy="58" r="1.8" fill={accent} stroke="none"/>
       <circle cx="34" cy="80" r="1.8" fill={accent} stroke="none"/>
+    </svg>
+  )
+}
+// The confinement guide chapter used to be one long scroll of text - split
+// into its own mini flip-pages (same prev/next + dot pattern as the
+// milestones chapter) with a simple cartoon badge per page, so it's not
+// just a wall of words.
+const CONFINEMENT_GUIDE_PAGES = [
+  { key:'core', icon:'calendar', title:{en:'How long is the core recovery window?',zh:'核心復原期有多長?'} },
+  { key:'activity', icon:'bath', title:{en:'Activity, bathing & monitoring',zh:'活動、沐浴及監察'} },
+  { key:'avoid', icon:'avoid', title:{en:'To limit or avoid',zh:'需限制或避免'} },
+  { key:'reading', icon:'book', title:{en:'Want to read more?',zh:'想了解更多?'} },
+]
+function GuideIllustration({ icon, accent }) {
+  const svgProps = { width:'60', height:'60', viewBox:'0 0 120 120', fill:'none', stroke:accent, strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round', role:'img', 'aria-hidden':'true' }
+  if (icon==='bath') return (
+    <svg {...svgProps}>
+      <path d="M20 70 L100 70 C100 86 88 96 72 96 L48 96 C32 96 20 86 20 70 Z"/>
+      <path d="M28 70 L28 46 C28 38 34 32 42 32"/>
+      <path d="M60 24 C60 30 54 30 54 36 C54 42 60 42 60 48"/>
+    </svg>
+  )
+  if (icon==='avoid') return (
+    <svg {...svgProps}>
+      <circle cx="60" cy="60" r="38"/>
+      <line x1="34" y1="34" x2="86" y2="86"/>
+    </svg>
+  )
+  if (icon==='book') return (
+    <svg {...svgProps}>
+      <path d="M60 34 C52 26 36 26 24 30 L24 92 C36 88 52 88 60 96 C68 88 84 88 96 92 L96 30 C84 26 68 26 60 34 Z"/>
+      <line x1="60" y1="34" x2="60" y2="96"/>
+    </svg>
+  )
+  return (
+    <svg {...svgProps}>
+      <rect x="24" y="30" width="72" height="66" rx="8"/>
+      <line x1="24" y1="48" x2="96" y2="48"/>
+      <line x1="42" y1="20" x2="42" y2="38"/>
+      <line x1="78" y1="20" x2="78" y2="38"/>
+      <circle cx="60" cy="70" r="12"/>
     </svg>
   )
 }
@@ -7835,6 +7922,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [confinementPlanSaving,setConfinementPlanSaving]=useState(false)
   const [confinementPlanSaved,setConfinementPlanSaved]=useState(false)
   const [milestonePage,setMilestonePage]=useState(0)
+  const [guidePage,setGuidePage]=useState(0)
   // The postpartum book - defaults to the cover every time this tab is
   // entered (not remembered across visits), per your call.
   const [postpartumBookView,setPostpartumBookView]=useState('cover')
@@ -7844,7 +7932,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [coverPhotoUrl,setCoverPhotoUrl]=useState(null)
 
   useEffect(() => {
-    if (bumpTab==='postpartum') { setPostpartumBookView('cover'); setDiaryViewDate(new Date().toISOString().slice(0,10)) }
+    if (bumpTab==='postpartum') { setPostpartumBookView('cover'); setDiaryViewDate(new Date().toISOString().slice(0,10)); setGuidePage(0) }
   }, [bumpTab])
 
   useEffect(() => {
@@ -8565,7 +8653,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             <div style={{width:150,height:150,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px',overflow:'hidden',position:'relative'}}>
               {coverPhotoUrl
                 ? <img src={coverPhotoUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
-                : <DefaultJournalCoverArt accent={theme.accent}/>}
+                : <DefaultJournalCoverArt accent={theme.accent} themeKey={bumpRow?.journal_cover_theme||'peach'}/>}
             </div>
             <label style={{display:'inline-block',fontSize:'13px',color:theme.inkSoft,textDecoration:'underline',cursor:'pointer',marginBottom:'20px'}}>
               {coverUploading?(isEn?'Uploading…':'上傳中…'):(coverPhotoUrl?(isEn?'Change photo':'更換照片'):(isEn?'Add your own photo':'新增您的照片'))}
@@ -8573,9 +8661,11 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             </label>
             <div style={{fontSize:'28px',color:theme.ink,marginBottom:'4px'}}>{isEn?'My Postpartum Journal':'我的產後日記'}</div>
             <div style={{fontSize:'15px',color:theme.inkSoft,marginBottom:'26px'}}>{bumpRow?.child_full_name||(isEn?"Baby's first weeks":'寶寶的頭幾週')}</div>
-            <div style={{display:'flex',justifyContent:'center',gap:'10px',marginBottom:'24px'}}>
+            <div style={{display:'flex',flexWrap:'wrap',justifyContent:'center',gap:'10px',marginBottom:'24px'}}>
               {Object.entries(JOURNAL_THEMES).map(([key,t])=>(
-                <div key={key} onClick={()=>setCoverTheme(key)} aria-label={key} style={{width:26,height:26,borderRadius:'50%',background:t.accent,cursor:'pointer',border:(bumpRow?.journal_cover_theme||'peach')===key?`2.5px solid ${theme.ink}`:'2.5px solid transparent',boxSizing:'border-box'}}/>
+                <div key={key} onClick={()=>setCoverTheme(key)} aria-label={key} style={{width:36,height:36,borderRadius:'50%',background:t.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',border:(bumpRow?.journal_cover_theme||'peach')===key?`2.5px solid ${theme.ink}`:'2.5px solid transparent',boxSizing:'border-box'}}>
+                  <DefaultJournalCoverArt accent={t.accent} themeKey={key} size={18}/>
+                </div>
               ))}
             </div>
             <button onClick={()=>setPostpartumBookView('toc')} style={{all:'unset',cursor:'pointer',background:theme.accent,color:'#fff',padding:'12px 32px',borderRadius:'999px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive"}}>{isEn?'Open ▸':'打開 ▸'}</button>
@@ -8592,7 +8682,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             </div>
             <div style={{fontSize:'24px',marginBottom:'16px'}}>{isEn?'Contents':'目錄'}</div>
             {POSTPARTUM_CHAPTERS.map((c,i)=>(
-              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'13px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed rgba(154,116,86,0.3)`:'none',cursor:'pointer'}}>
+              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'13px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed ${theme.marginColor}`:'none',cursor:'pointer'}}>
                 <span style={{fontSize:'19px'}}>{isEn?c.title.en:c.title.zh}</span>
                 <span style={{color:theme.inkSoft}}>▸</span>
               </div>
@@ -8605,8 +8695,8 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         return (
           <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px'}}>
             <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
-            <div style={{position:'absolute',inset:0,backgroundImage:'repeating-linear-gradient(to bottom, transparent, transparent 35px, rgba(154,116,86,0.08) 35px, rgba(154,116,86,0.08) 36px)',pointerEvents:'none'}}/>
-            <div style={{position:'absolute',left:34,top:0,bottom:0,width:1,background:'rgba(201,140,122,0.35)',pointerEvents:'none'}}/>
+            <div style={{position:'absolute',inset:0,backgroundImage:`repeating-linear-gradient(to bottom, transparent, transparent 35px, ${theme.ruleColor} 35px, ${theme.ruleColor} 36px)`,pointerEvents:'none'}}/>
+            <div style={{position:'absolute',left:34,top:0,bottom:0,width:1,background:theme.marginColor,pointerEvents:'none'}}/>
             <div style={{position:'relative',padding:'18px 18px 18px 40px'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
                 <div onClick={()=>setPostpartumBookView('cover')} style={{display:'inline-flex',alignItems:'center',gap:'5px',fontSize:'13px',color:theme.inkSoft,cursor:'pointer'}}>
@@ -8698,7 +8788,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                   {isEn?"Medsa doesn't author a confinement diet/herb plan for you - that's exactly the kind of unverified medical-adjacent advice we don't want to give. Bring whatever plan your own nanny, TCM practitioner, or dietitian gave you below.":'Medsa不會為你編寫坐月飲食/中藥調理方案 - 這正是我們不想提供的未經證實的醫療相關建議。請在下方輸入你自己的陪月、中醫師或營養師給你的方案。'}
                 </div>
                 <div style={{fontSize:'13px',color:theme.inkSoft,marginBottom:'8px',lineHeight:1.5}}>{isEn?"Whatever your nanny/practitioner/dietitian actually told you - paste or type it here just to keep it in one place. Entirely yours; Medsa doesn't read this to generate advice.":'無論你的陪月/中醫師/營養師跟你說了什麼 - 貼上或輸入於此,方便集中保存。內容完全屬於你,Medsa不會據此生成任何建議。'}</div>
-                <textarea value={confinementPlanDraft} onChange={e=>{setConfinementPlanDraft(e.target.value);setConfinementPlanSaved(false)}} rows={7} placeholder={isEn?"e.g. Week 1: light congee, no cold drinks. Week 2: lactation soups 3x/week…":'例如:第1週:清淡粥水,忌凍飲。第2週:每週3次通乳湯水…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'10px 12px',fontSize:'17px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px',background:'#fff'}}/>
+                <textarea value={confinementPlanDraft} onChange={e=>{setConfinementPlanDraft(e.target.value);setConfinementPlanSaved(false)}} rows={7} placeholder={isEn?"e.g. Week 1: light congee, no cold drinks. Week 2: lactation soups 3x/week…":'例如:第1週:清淡粥水,忌凍飲。第2週:每週3次通乳湯水…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${theme.marginColor}`,borderRadius:'8px',padding:'10px 12px',fontSize:'17px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px',background:'#fff'}}/>
                 <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementPlan} disabled={confinementPlanSaving}>{confinementPlanSaving?(isEn?'Saving…':'儲存中…'):confinementPlanSaved?(isEn?'✓ Saved':'✓ 已儲存'):(isEn?'Save':'儲存')}</Btn>
               </div>}
 
@@ -8706,6 +8796,14 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                 const dayNumber = bumpRow?.child_dob ? Math.floor((new Date(diaryViewDate) - new Date(bumpRow.child_dob.slice(0,10)))/(1000*60*60*24))+1 : null
                 const todayStr = new Date().toISOString().slice(0,10)
                 const earliestStr = bumpRow?.child_dob ? bumpRow.child_dob.slice(0,10) : null
+                // Real gap from your feedback: milestone days (三朝禮/剃頭/滿月)
+                // only ever showed up on their own separate chapter - landing
+                // on the diary entry for that specific day showed nothing.
+                // estimateDay is still just the earliest-cited soft estimate
+                // (see CONFINEMENT_MILESTONE_VISUALS), so this only lights up
+                // on that one specific day, worded as "may be" not a fact.
+                const milestoneIdxToday = bumpRow?.child_dob ? CONFINEMENT_MILESTONES.findIndex(m=>CONFINEMENT_MILESTONE_VISUALS[m.key].estimateDay===dayNumber) : -1
+                const milestoneToday = milestoneIdxToday>=0 ? CONFINEMENT_MILESTONES[milestoneIdxToday] : null
                 return (
                   <div>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
@@ -8721,23 +8819,35 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
                       </button>
                     </div>
+                    {milestoneToday&&(()=>{
+                      const v = CONFINEMENT_MILESTONE_VISUALS[milestoneToday.key]
+                      return (
+                        <div onClick={()=>{setMilestonePage(milestoneIdxToday);setPostpartumBookView('milestones')}} style={{display:'flex',alignItems:'center',gap:'10px',background:v.accentSoft,border:`1.5px dashed ${v.accent}`,borderRadius:'10px',padding:'9px 12px',marginBottom:'12px',cursor:'pointer'}}>
+                          <div style={{width:38,height:38,borderRadius:'50%',background:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,overflow:'hidden'}}>
+                            <MilestoneIllustration icon={v.icon} accent={v.accent} accentSoft={v.accentSoft}/>
+                          </div>
+                          <div style={{flex:1,fontSize:'14px',color:theme.ink,lineHeight:1.3}}>{isEn?`Today may be ${milestoneToday.name.en.split(' (')[0]} - tap to read more`:`今天可能是${milestoneToday.name.zh} - 點按了解更多`}</div>
+                          <span style={{color:v.accent,fontSize:'16px',flexShrink:0}}>›</span>
+                        </div>
+                      )
+                    })()}
                     {diaryDateLoading
                       ? <div style={{textAlign:'center',padding:'30px',fontSize:'13px',color:theme.inkSoft,fontFamily:'system-ui, sans-serif'}}>{isEn?'Loading…':'載入中…'}</div>
                       : <div style={{fontFamily:'system-ui, sans-serif'}}>
                           <div style={{display:'flex',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
-                            <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
+                            <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid ${theme.marginColor}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
                               <option value="">{isEn?'Lochia…':'惡露…'}</option>
                               <option value="red">{isEn?'Red':'鮮紅'}</option>
                               <option value="pink_brown">{isEn?'Pink/brown':'粉/棕色'}</option>
                               <option value="light_white">{isEn?'Light/white':'淡色/白色'}</option>
                               <option value="concerning">{isEn?'⚠ Fresh red returning / foul smell / fever':'⚠ 再次轉鮮紅/有異味/發燒'}</option>
                             </select>
-                            <input type="number" min="0" value={confinementLogForm.hydrationCups} onChange={e=>setConfinementLogForm({...confinementLogForm,hydrationCups:e.target.value})} placeholder={isEn?'Cups of water':'飲水杯數'} style={{flex:'1 1 100px',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px'}}/>
+                            <input type="number" min="0" value={confinementLogForm.hydrationCups} onChange={e=>setConfinementLogForm({...confinementLogForm,hydrationCups:e.target.value})} placeholder={isEn?'Cups of water':'飲水杯數'} style={{flex:'1 1 100px',border:`0.5px solid ${theme.marginColor}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px'}}/>
                           </div>
                           {confinementLogForm.lochiaStatus==='concerning'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'8px 10px',marginBottom:'8px',fontSize:'11px',color:C.red,lineHeight:1.5}}>{isEn?'This is not normal - contact your doctor.':'此情況並不正常 - 請聯絡醫生。'}</div>}
                           <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
                             {MOOD_OPTIONS.map(m=>(
-                              <div key={m.value} onClick={()=>setConfinementLogForm({...confinementLogForm,mood:m.value})} style={{flex:1,textAlign:'center',padding:'7px 2px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:confinementLogForm.mood===m.value?theme.accent:'#fff',color:confinementLogForm.mood===m.value?'#fff':C.textSub,border:`0.5px solid rgba(154,116,86,0.3)`}}>{isEn?m.en:m.zh}</div>
+                              <div key={m.value} onClick={()=>setConfinementLogForm({...confinementLogForm,mood:m.value})} style={{flex:1,textAlign:'center',padding:'7px 2px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:confinementLogForm.mood===m.value?theme.accent:'#fff',color:confinementLogForm.mood===m.value?'#fff':C.textSub,border:`0.5px solid ${theme.marginColor}`}}>{isEn?m.en:m.zh}</div>
                             ))}
                           </div>
                           <div onClick={()=>setConfinementLogForm({...confinementLogForm,activityDone:!confinementLogForm.activityDone})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 2px',cursor:'pointer',marginBottom:'8px'}}>
@@ -8745,7 +8855,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                             <span style={{fontSize:'12.5px',color:C.text}}>{isEn?'Got up and moved a little today':'今日有起床稍作活動'}</span>
                           </div>
                           <div style={{fontSize:'11px',color:theme.inkSoft,marginBottom:'4px',textTransform:'uppercase',letterSpacing:'0.4px'}}>{isEn?"Today's entry":'今日記事'}</div>
-                          <textarea value={confinementLogForm.note} onChange={e=>setConfinementLogForm({...confinementLogForm,note:e.target.value})} rows={4} placeholder={isEn?'How did today go?':'今天過得如何？'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 12px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive",marginBottom:'10px',background:'#fff',color:theme.ink}}/>
+                          <textarea value={confinementLogForm.note} onChange={e=>setConfinementLogForm({...confinementLogForm,note:e.target.value})} rows={4} placeholder={isEn?'How did today go?':'今天過得如何？'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${theme.marginColor}`,borderRadius:'8px',padding:'9px 12px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive",marginBottom:'10px',background:'#fff',color:theme.ink}}/>
                           <div style={{display:'flex',gap:'8px'}}>
                             <Btn variant="primary" style={{flex:1}} onClick={saveConfinementLog} disabled={confinementLogSaving}>{confinementLogSaving?(isEn?'Saving…':'儲存中…'):(isEn?'Save this day':'儲存')}</Btn>
                             <Btn style={{flex:1}} onClick={clearDiaryDay} disabled={confinementLogSaving}>{isEn?'Clear':'清除'}</Btn>
@@ -8755,34 +8865,56 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                 )
               })()}
 
-              {postpartumBookView==='guide'&&<div style={{fontFamily:'inherit'}}>
-                <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5,fontFamily:'system-ui, sans-serif'}}>
-                  {isEn?'Real sourced safety fact or clearly-labelled cultural practice - not medical guidance, and these genuinely vary a lot by family and region.':'均為有根據的安全資訊或清楚標示的傳統習俗 - 並非醫療指引,各家各地做法差異頗大。'}
-                </div>
-                <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'How long is the core recovery window?':'核心復原期有多長?'}</div>
-                <div style={{fontSize:'14px',lineHeight:1.5,marginBottom:'16px'}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>
-                <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Activity, bathing & wound/lochia monitoring':'活動、沐浴及傷口/惡露監察'}</div>
-                {CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
-                  <div key={a.key} style={{padding:'5px 0',fontSize:'14px',lineHeight:1.5}}>{isEn?a.en:a.zh}</div>
-                ))}
-                <div style={{fontSize:'15px',fontWeight:700,margin:'16px 0 4px'}}>{isEn?'To limit or avoid':'需限制或避免'}</div>
-                {CONFINEMENT_AVOID.map((a,i)=>{
-                  const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
-                  return (
-                    <div key={i} style={{padding:'5px 0'}}>
-                      <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px',fontFamily:'system-ui, sans-serif'}}>{isEn?tag.en:tag.zh}</span>
-                      <span style={{fontSize:'14px',lineHeight:1.5}}>{isEn?a.en:a.zh}</span>
+              {postpartumBookView==='guide'&&(()=>{
+                const g = CONFINEMENT_GUIDE_PAGES[guidePage]
+                return (
+                  <div>
+                    {guidePage===0&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5,fontFamily:'system-ui, sans-serif'}}>
+                      {isEn?'Real sourced safety fact or clearly-labelled cultural practice - not medical guidance, and these genuinely vary a lot by family and region.':'均為有根據的安全資訊或清楚標示的傳統習俗 - 並非醫療指引,各家各地做法差異頗大。'}
+                    </div>}
+                    <div style={{display:'flex',justifyContent:'center',marginBottom:'14px'}}>
+                      <div style={{width:88,height:88,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <GuideIllustration icon={g.icon} accent={theme.accent}/>
+                      </div>
                     </div>
-                  )
-                })}
-                <div style={{fontSize:'11px',color:theme.inkSoft,margin:'16px 0 6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.4px',fontFamily:'system-ui, sans-serif'}}>{isEn?'Want to go deeper? Referenced, not reproduced.':'想了解更多?僅作參考推薦,並非轉載內容。'}</div>
-                {CONFINEMENT_FURTHER_READING.map((b,i)=>(
-                  <div key={i} style={{padding:'6px 0',fontFamily:'system-ui, sans-serif'}}>
-                    <div style={{fontSize:'12px',fontWeight:600}}>{b.title} <span style={{fontWeight:400,color:theme.inkSoft}}>— {b.author}</span></div>
-                    <div style={{fontSize:'11px',color:theme.inkSoft,marginTop:'2px',lineHeight:1.5}}>{isEn?b.focus.en:b.focus.zh}</div>
+                    <div style={{fontSize:'19px',color:theme.accent,textAlign:'center',marginBottom:'16px'}}>{isEn?g.title.en:g.title.zh}</div>
+                    <div style={{fontFamily:'system-ui, sans-serif'}}>
+                      {g.key==='core'&&<div style={{fontSize:'14px',lineHeight:1.6,color:theme.ink}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>}
+                      {g.key==='activity'&&CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
+                        <div key={a.key} style={{padding:'8px 0',fontSize:'14px',lineHeight:1.55,color:theme.ink,borderBottom:i<CONFINEMENT_ACTIVITY_TIMING.length-1?`0.5px dashed ${theme.marginColor}`:'none'}}>{isEn?a.en:a.zh}</div>
+                      ))}
+                      {g.key==='avoid'&&CONFINEMENT_AVOID.map((a,i)=>{
+                        const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
+                        return (
+                          <div key={i} style={{padding:'8px 0',borderBottom:i<CONFINEMENT_AVOID.length-1?`0.5px dashed ${theme.marginColor}`:'none'}}>
+                            <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px',fontFamily:'system-ui, sans-serif'}}>{isEn?tag.en:tag.zh}</span>
+                            <span style={{fontSize:'14px',lineHeight:1.5,color:theme.ink}}>{isEn?a.en:a.zh}</span>
+                          </div>
+                        )
+                      })}
+                      {g.key==='reading'&&CONFINEMENT_FURTHER_READING.map((b,i)=>(
+                        <div key={i} style={{padding:'8px 0',borderBottom:i<CONFINEMENT_FURTHER_READING.length-1?`0.5px dashed ${theme.marginColor}`:'none'}}>
+                          <div style={{fontSize:'13px',fontWeight:600,color:theme.ink}}>{b.title} <span style={{fontWeight:400,color:theme.inkSoft}}>— {b.author}</span></div>
+                          <div style={{fontSize:'12px',color:theme.inkSoft,marginTop:'3px',lineHeight:1.5}}>{isEn?b.focus.en:b.focus.zh}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:'20px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                      <button onClick={()=>setGuidePage((guidePage-1+CONFINEMENT_GUIDE_PAGES.length)%CONFINEMENT_GUIDE_PAGES.length)} aria-label={isEn?'Previous page':'上一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+                      </button>
+                      <div style={{display:'flex',gap:'7px'}}>
+                        {CONFINEMENT_GUIDE_PAGES.map((gg,i)=>(
+                          <div key={gg.key} style={{width:i===guidePage?16:6,height:6,borderRadius:'999px',background:i===guidePage?theme.accent:theme.dotTrack,transition:'background .2s,width .2s'}}/>
+                        ))}
+                      </div>
+                      <button onClick={()=>setGuidePage((guidePage+1)%CONFINEMENT_GUIDE_PAGES.length)} aria-label={isEn?'Next page':'下一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
+                      </button>
+                    </div>
                   </div>
-                ))}
-              </div>}
+                )
+              })()}
 
               {postpartumBookView==='milestones'&&(()=>{
                 const m = CONFINEMENT_MILESTONES[milestonePage]
@@ -8806,7 +8938,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                       </div>
                     </div>
                     <div style={{fontSize:'19px',lineHeight:1.55}}>{isEn?m.detail.en:m.detail.zh}</div>
-                    <div style={{marginTop:'16px',display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',color:theme.inkSoft,border:'1px solid rgba(154,116,86,0.4)',borderRadius:'999px',padding:'4px 12px'}}>
+                    <div style={{marginTop:'16px',display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',color:theme.inkSoft,border:`1px solid ${theme.marginColor}`,borderRadius:'999px',padding:'4px 12px'}}>
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
                       {isEn?'Cultural tradition, not medical guidance':'傳統習俗,並非醫療指引'}
                     </div>
@@ -8816,7 +8948,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                       </button>
                       <div style={{display:'flex',gap:'7px'}}>
                         {CONFINEMENT_MILESTONES.map((mm,i)=>(
-                          <div key={mm.key} style={{width:i===milestonePage?20:7,height:7,borderRadius:'999px',background:i===milestonePage?v.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
+                          <div key={mm.key} style={{width:i===milestonePage?20:7,height:7,borderRadius:'999px',background:i===milestonePage?v.accent:theme.dotTrack,transition:'background .2s,width .2s'}}/>
                         ))}
                       </div>
                       <button onClick={()=>setMilestonePage((milestonePage+1)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Next entry':'下一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -8827,13 +8959,13 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                 )
               })()}
 
-              {postpartumBookView!=='diary'&&postpartumBookView!=='milestones'&&<div style={{marginTop:'22px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+              {postpartumBookView!=='diary'&&postpartumBookView!=='milestones'&&postpartumBookView!=='guide'&&<div style={{marginTop:'22px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                 <button onClick={()=>flipChapter(-1)} aria-label={isEn?'Previous chapter':'上一章'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
                 </button>
                 <div style={{display:'flex',gap:'5px'}}>
                   {POSTPARTUM_CHAPTERS.map((c,i)=>(
-                    <div key={c.key} style={{width:i===chapterIndex?16:6,height:6,borderRadius:'999px',background:i===chapterIndex?theme.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
+                    <div key={c.key} style={{width:i===chapterIndex?16:6,height:6,borderRadius:'999px',background:i===chapterIndex?theme.accent:theme.dotTrack,transition:'background .2s,width .2s'}}/>
                   ))}
                 </div>
                 <button onClick={()=>flipChapter(1)} aria-label={isEn?'Next chapter':'下一章'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
