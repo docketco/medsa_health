@@ -51,6 +51,15 @@ async function checkApprovedAccessRequest(patientId, institutionId, targetTime) 
   return !!data
 }
 
+// Shared by every "Referrals" view that shows a receiving practitioner's
+// uploaded materials (x-rays, lab results, the referral letter itself) -
+// same signed-url pattern already used for every other private bucket
+// in this app, just pointed at the one referral-portal.jsx uploads into.
+async function openReferralAttachment(path) {
+  const { data } = await supabase.storage.from('external-clinic-uploads').createSignedUrl(path, 300)
+  if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+}
+
 // Doctors, nurses, and the 5 Core Statutory Board allied health
 // professions (Allied Health Professions Ordinance) get a real,
 // government-issued e-PC with a secured e-signature and encrypted QR -
@@ -2309,8 +2318,12 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                   <div key={cons.id} style={{marginTop:j===0?'4px':'8px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
                     <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>RESULT - {cons.practitioner_name || 'Receiving practitioner'} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
                     {cons.findings&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>Findings:</strong> {cons.findings}</div>}
-                    {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub}}><strong style={{color:C.text}}>Interventions:</strong> {cons.interventions}</div>}
+                    {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>Interventions:</strong> {cons.interventions}</div>}
+                    {cons.session_duration_minutes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>Session duration:</strong> {cons.session_duration_minutes} min</div>}
                     {!cons.findings&&!cons.interventions&&<div style={{fontSize:'12px',color:C.textMuted}}>No detail on file.</div>}
+                    {(cons.document_paths||[]).map((p,k)=>(
+                      <div key={k} onClick={(e)=>{e.stopPropagation();openReferralAttachment(p)}} style={{fontSize:'12px',color:C.blue,cursor:'pointer',marginTop:'2px'}}>{'📄'} {p.split('/').pop()}</div>
+                    ))}
                   </div>
                 ))}
               </div>}
@@ -5942,7 +5955,18 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
               {r.reason&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Reason:</strong> {r.reason}</div>}
               {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
               {r.clinical_status==='declined'&&r.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}><strong>Decline reason:</strong> {r.decline_reason}</div>}
-              {hasResults&&<div style={{fontSize:'12px',color:C.green,marginBottom:'6px'}}><strong>✓ Results received</strong> - {r.referral_consultations[0].findings||'see consultation record'}</div>}
+              {hasResults&&r.referral_consultations.map((cons,j)=>(
+                <div key={cons.id} style={{marginBottom:'6px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
+                  <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'3px'}}>✓ Results from {cons.practitioner_name||'the receiving practitioner'} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
+                  {cons.findings&&<div style={{fontSize:'12px',marginBottom:'3px'}}><strong>Findings:</strong> {cons.findings}</div>}
+                  {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'3px'}}><strong style={{color:C.text}}>Interventions:</strong> {cons.interventions}</div>}
+                  {cons.session_duration_minutes&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'3px'}}><strong style={{color:C.text}}>Session duration:</strong> {cons.session_duration_minutes} min</div>}
+                  {!cons.findings&&!cons.interventions&&<div style={{fontSize:'12px',color:C.textMuted}}>No detail on file.</div>}
+                  {(cons.document_paths||[]).map((p,k)=>(
+                    <div key={k} onClick={(e)=>{e.stopPropagation();openReferralAttachment(p)}} style={{fontSize:'12px',color:C.blue,cursor:'pointer',marginTop:'2px'}}>📄 {p.split('/').pop()}</div>
+                  ))}
+                </div>
+              ))}
 
               {tab==='received'&&r.clinical_status==='pending_review'&&decliningId!==r.id&&<div style={{display:'flex',gap:'8px',marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
                 <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={actingId===r.id} onClick={()=>handleAccept(r)}>{actingId===r.id?'Saving…':'Accept'}</Btn>
