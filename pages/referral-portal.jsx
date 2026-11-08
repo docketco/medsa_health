@@ -86,6 +86,15 @@ export default function ReferralPortalPage() {
   const [receiverVerifiedPractitionerId, setReceiverVerifiedPractitionerId] = useState(null)
   const [treatmentLog, setTreatmentLog] = useState({ findings: '', interventions: '', sessionDurationMinutes: '' })
   const [receiverFiles, setReceiverFiles] = useState([])
+  // Review/accept/decline (Stage A - happens here, independent of the
+  // actual visit) vs. scan+record-results (Stage B, further down) are two
+  // separate moments for an out-of-network receiving doctor, same split
+  // ClinicOpsApp.jsx's ReferralsManagementScreen gives a matched Medsa
+  // doctor in-app. Verification (gate/vouched above) still comes first -
+  // decided_by should name someone who's actually proven to be this
+  // practice, not just whoever typed a name into a box.
+  const [declineReason, setDeclineReason] = useState('')
+  const [decisionActing, setDecisionActing] = useState(false)
 
   useEffect(() => {
     if (!router.isReady) return
@@ -101,11 +110,17 @@ export default function ReferralPortalPage() {
     // the browser before it's actually verified, or the code-entry step
     // below would be security theatre.
     const { data } = await supabase.from('referrals')
-      .select('id, patient_id, referred_to_practitioner_name, referring_doctor_name, referring_practice_name, reason, referring_staff_medsa_id, status, patients(full_name)')
+      .select('id, patient_id, referred_to_practitioner_name, referring_doctor_name, referring_practice_name, reason, diagnosis, referring_staff_medsa_id, status, clinical_status, decline_reason, patients(full_name)')
       .eq('id', id).maybeSingle()
     if (!data) { setError('This referral link is no longer valid.'); setStage('error'); return }
     setReferral(data)
     setPatient(data.patients)
+    // A decision already made (by this portal or by a matched doctor
+    // in-app) is final here - no reason to make a declining doctor sit
+    // through a registry/OTP check, and a completed one has nothing left
+    // to decide.
+    if (data.clinical_status === 'declined') { setStage('receive_declined'); return }
+    if (data.clinical_status === 'completed') { setStage('receive_already_completed'); return }
     if (data.referring_staff_medsa_id) {
       // Doctor 1 was a logged-in Medsa doctor - that already vouches for
       // this referral. Skip the out-of-network gate, but still confirm
@@ -116,6 +131,39 @@ export default function ReferralPortalPage() {
     } else {
       setStage('receive_gate')
     }
+  }
+
+  // Shared landing point once doctor 2 is verified (vouched-code or
+  // gate+OTP) - replaces the old unconditional setStage('receive_scan'):
+  // that assumed review/accept and the actual visit were the same
+  // moment, which real referrals aren't. 'accepted' means the decision's
+  // already made (maybe weeks ago) and this is now the actual visit.
+  function goToReceiveNextStage() {
+    if (referral?.clinical_status === 'accepted') { setStage('receive_scan') } else { setStage('receive_decision') }
+  }
+
+  async function handleAcceptReferral() {
+    if (!receiverName.trim() || decisionActing) return
+    setDecisionActing(true)
+    const { error: updErr } = await supabase.from('referrals').update({
+      clinical_status: 'accepted', decided_by: receiverName.trim(), decided_at: new Date().toISOString(),
+    }).eq('id', referral.id)
+    setDecisionActing(false)
+    if (updErr) { setError(updErr.message); setStage('error'); return }
+    setReferral(prev => ({ ...prev, clinical_status: 'accepted' }))
+    setStage('receive_scan')
+  }
+
+  async function handleDeclineReferralSubmit() {
+    if (!declineReason.trim() || decisionActing) return
+    setDecisionActing(true)
+    const { error: updErr } = await supabase.from('referrals').update({
+      clinical_status: 'declined', decline_reason: declineReason.trim(),
+      decided_by: receiverName.trim() || null, decided_at: new Date().toISOString(),
+    }).eq('id', referral.id)
+    setDecisionActing(false)
+    if (updErr) { setError(updErr.message); setStage('error'); return }
+    setStage('receive_declined')
   }
 
   async function handleVerifyAccessCode() {
@@ -256,7 +304,7 @@ export default function ReferralPortalPage() {
       setVerifying(false)
       if (result.status === 'REMEMBERED' && result.contact_verified) {
         setReceiverVerificationMethod('clinic_otp')
-        setStage('receive_scan')
+        goToReceiveNextStage()
         return
       }
       if (result.id) {
@@ -283,12 +331,12 @@ export default function ReferralPortalPage() {
     const result = await res.json()
     setOtpVerifyResult(result)
     setOtpVerifying(false)
-    if (result.status === 'VERIFIED') { setReceiverVerificationMethod('clinic_otp'); setStage('receive_scan') }
+    if (result.status === 'VERIFIED') { setReceiverVerificationMethod('clinic_otp'); goToReceiveNextStage() }
   }
 
   async function handleVouchedContinue() {
     if (!receiverName.trim()) return
-    setStage('receive_scan')
+    goToReceiveNextStage()
   }
 
   // Same scan step doctor 1 goes through - not skipped just because the
@@ -342,6 +390,11 @@ export default function ReferralPortalPage() {
       document_paths: documentPaths.length > 0 ? documentPaths : null,
     })
     if (insErr) { setError(insErr.message); setStage('error'); return }
+    // Clearing referrer_viewed_at (even though it was already cleared by
+    // 'accepted' never touching it) is what flips the referring doctor's
+    // Sent-tab badge back to unread - that's the "results are in, go
+    // check" notification they're waiting on.
+    await supabase.from('referrals').update({ clinical_status: 'completed', referrer_viewed_at: null }).eq('id', referral.id)
     setStage('receive_done')
   }
 
@@ -454,6 +507,38 @@ export default function ReferralPortalPage() {
             <div style={{fontSize:'11px',color:C.amber,marginTop:'-4px',marginBottom:'10px'}}>{'◇'} Got a {receiverPhone.trim()?'email':'phone number'} too? Having both means we can reach you whichever way works when this is next needed.</div>}
           <button onClick={handleVouchedContinue} disabled={!receiverName.trim()} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',opacity:!receiverName.trim()?0.6:1}}>Continue</button>
           <div style={{fontSize:'10px',color:C.textMuted,marginTop:'10px',textAlign:'center'}}>Powered by Medsa - a health record platform for Hong Kong clinics.</div>
+        </>}
+
+        {stage==='receive_decision' && <>
+          <div style={{fontSize:'17px',fontWeight:700,marginBottom:'6px'}}>Referral for {patient?.full_name}</div>
+          <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+            <div style={{fontSize:'12px',marginBottom:'6px'}}><strong>From:</strong> {referral?.referring_doctor_name || referral?.referring_practice_name}</div>
+            {referral?.reason && <div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Reason:</strong> {referral.reason}</div>}
+            {referral?.diagnosis && <div style={{fontSize:'12px'}}><strong>Diagnosis:</strong> {referral.diagnosis}</div>}
+          </div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>This is just the review step - you're not expected to have the patient in front of you right now. Accepting means you'll schedule and see them later; the actual visit (scan + record results) happens separately when they come in.</div>
+          <input value={receiverName} onChange={e=>setReceiverName(e.target.value)} placeholder="Your full name" style={inputStyle}/>
+          <button onClick={handleAcceptReferral} disabled={!receiverName.trim()||decisionActing} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px',opacity:(!receiverName.trim()||decisionActing)?0.6:1}}>{decisionActing?'Saving...':'Accept referral'}</button>
+          <button onClick={()=>setStage('receive_decline_reason')} disabled={decisionActing} style={{width:'100%',padding:'12px',background:'none',border:`0.5px solid ${C.border}`,borderRadius:'10px',fontWeight:600,cursor:'pointer',color:C.textSub}}>Decline</button>
+        </>}
+
+        {stage==='receive_decline_reason' && <>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Decline this referral</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px'}}>{referral?.referring_doctor_name || referral?.referring_practice_name} will see this reason.</div>
+          <textarea value={declineReason} onChange={e=>setDeclineReason(e.target.value)} rows={3} placeholder="Reason for declining" style={{...inputStyle,resize:'none',fontFamily:'inherit'}}/>
+          <button onClick={handleDeclineReferralSubmit} disabled={!declineReason.trim()||decisionActing} style={{width:'100%',padding:'12px',background:C.red,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px',opacity:(!declineReason.trim()||decisionActing)?0.6:1}}>{decisionActing?'Saving...':'Confirm decline'}</button>
+          <button onClick={()=>setStage('receive_decision')} disabled={decisionActing} style={{width:'100%',padding:'10px',background:'none',border:'none',color:C.textSub,fontSize:'12px',cursor:'pointer'}}>Back</button>
+        </>}
+
+        {stage==='receive_declined' && <>
+          <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Referral declined</div>
+          <div style={{fontSize:'13px',color:C.textSub,textAlign:'center'}}>You've declined this referral for {patient?.full_name}. The referring doctor has been notified.</div>
+        </>}
+
+        {stage==='receive_already_completed' && <>
+          <div style={{fontSize:'32px',textAlign:'center',marginBottom:'10px'}}>✓</div>
+          <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Already completed</div>
+          <div style={{fontSize:'13px',color:C.textSub,textAlign:'center'}}>Results for this referral have already been submitted for {patient?.full_name}.</div>
         </>}
 
         {stage==='receive_scan' && <>
