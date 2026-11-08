@@ -488,7 +488,17 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   useEffect(() => { loadHomeAccessRequests(homePatientId) }, [homePatientId])
 
   async function handleHomeAccessDecision(req, approve) {
-    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
+    // Real gap found live-testing: approving this request only ever
+    // flipped status to 'approved' - nothing translated that into an
+    // actual access grant anywhere, so a doctor who got approved still
+    // couldn't see anything (ClinicOps checks appointment_intake's own
+    // window, which this table was never wired into). expires_at gives
+    // the approval a real 48h window ClinicOps can now actually check
+    // against (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
+    await supabase.from('record_access_requests').update({
+      status: approve?'approved':'denied', resolved_at:new Date().toISOString(),
+      expires_at: approve ? new Date(Date.now()+48*60*60*1000).toISOString() : null,
+    }).eq('id', req.id)
     const remaining = homeAccessRequests.filter(r=>r.id!==req.id)
     setHomeAccessRequests(remaining)
     if (remaining.length===0) setShowAccessRequestsModal(false)
@@ -1410,7 +1420,17 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   useEffect(() => { loadAccessRequests() }, [patient?.id])
 
   async function handleAccessDecision(req, approve) {
-    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
+    // Real gap found live-testing: approving this request only ever
+    // flipped status to 'approved' - nothing translated that into an
+    // actual access grant anywhere, so a doctor who got approved still
+    // couldn't see anything (ClinicOps checks appointment_intake's own
+    // window, which this table was never wired into). expires_at gives
+    // the approval a real 48h window ClinicOps can now actually check
+    // against (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
+    await supabase.from('record_access_requests').update({
+      status: approve?'approved':'denied', resolved_at:new Date().toISOString(),
+      expires_at: approve ? new Date(Date.now()+48*60*60*1000).toISOString() : null,
+    }).eq('id', req.id)
     setAccessRequests(prev=>prev.filter(r=>r.id!==req.id))
   }
 

@@ -8,6 +8,25 @@ import { broadcastIncomingCall } from '../../lib/videoCallSignal'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
 
+// Real gap found live-testing: approving a "Request record access ahead
+// of visit" request only ever flipped record_access_requests.status to
+// 'approved' - nothing checked that anywhere access actually gets
+// granted (appointment_intake's own window is the only thing every
+// consent check below reads), so an approved request still left a
+// doctor locked out, with the button just reappearing on the next
+// check. Shared by both places that gate "can this doctor see this
+// patient's history right now" - the Schedule screen's data-window
+// check and CheckInSearchScreen's own, so an approval unlocks the same
+// way regardless of which screen a doctor requested it from.
+async function checkApprovedAccessRequest(patientId, institutionId) {
+  if (!patientId || !institutionId) return false
+  const { data } = await supabase.from('record_access_requests')
+    .select('id').eq('patient_id', patientId).eq('requesting_institution_id', institutionId)
+    .eq('status', 'approved').gt('expires_at', new Date().toISOString())
+    .order('resolved_at', { ascending: false }).limit(1).maybeSingle()
+  return !!data
+}
+
 // Doctors, nurses, and the 5 Core Statutory Board allied health
 // professions (Allied Health Professions Ordinance) get a real,
 // government-issued e-PC with a secured e-signature and encrypted QR -
@@ -1920,7 +1939,8 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
           .select('access_window_start, access_window_end, consent_given').eq('patient_id', p.id)
           .order('created_at', { ascending: false }).limit(1).maybeSingle()
         const now = new Date()
-        const pastStart = !!intake && intake.consent_given && now >= new Date(intake.access_window_start)
+        let pastStart = !!intake && intake.consent_given && now >= new Date(intake.access_window_start)
+        if (!pastStart && await checkApprovedAccessRequest(p.id, staffMember?.institutionId)) pastStart = true
         setConsentWindow({ checked: true, allowed: pastStart })
         if (pastStart) {
           const { data: r } = await supabase.from('medical_records').select('*,institutions(name)').eq('patient_id',p.id).order('date_of_record',{ascending:false})
@@ -2176,8 +2196,14 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
                 </div>
                 {isOpen&&<div style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
                   {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
-                  {r.notes&&<div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'10px'}}><strong style={{color:C.text}}>Report detail:</strong> {r.notes}</div>}
-                  {!r.notes&&!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
+                  {/* Real gap: this used to also show the full r.notes
+                      here - every field from whichever template was used
+                      (e.g. the OBGYN skeleton's full gestational-age/
+                      fundal-height/etc. text), too much to take in on a
+                      quick tap-to-expand card. Per your call, the full
+                      notes stay on the receipt only - this card is just
+                      the diagnosis at a glance. */}
+                  {!r.diagnosis&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further detail on file for this record.</div>}
                   {/* Real bug: this "request from originating provider,
                       patient must approve release" flow showed for EVERY
                       record, including ones from this exact clinic - a
@@ -2291,6 +2317,13 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       {!saved&&<div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'8px'}}>
         {NOTE_TEMPLATES.map(t=>(
           <div key={t.key} onClick={()=>{
+            // Real gap found live-testing: clicking the same template
+            // twice (or clicking it again after switching away and back)
+            // appended its skeleton again on top of what was already
+            // there, every time, with nothing to stop it - a second click
+            // just duplicated the whole block of fields. Only insert when
+            // this is actually a different template than the one already applied.
+            if (noteTemplate===t.key) return
             setNoteTemplate(t.key)
             if (t.skeleton) setNotes(prev => prev.trim() ? prev + (prev.endsWith('\n')?'':'\n') + '\n' + t.skeleton : t.skeleton)
           }} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:noteTemplate===t.key?C.green:C.card,color:noteTemplate===t.key?'#fff':C.textSub}}>{t.label}</div>
@@ -5387,10 +5420,16 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     // long as an older, still-in-window "Yes" existed - that older
     // consent kept being honoured over their actual, more recent choice.
     const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false}).limit(1).maybeSingle()
-    if (!data || !data.consent_given) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
+    if (!data || !data.consent_given) {
+      const approvedAhead = await checkApprovedAccessRequest(patientRow.id, institutionId)
+      setDataWindows(prev=>({...prev,[medsaId]:{allowed:approvedAhead,checked:true,reason:approvedAhead?null:'no_consent',patientId:patientRow.id}}))
+      return
+    }
     const now = new Date()
-    const allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
-    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,reason:allowed?null:'outside_window',patientId:patientRow.id}}))
+    let allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
+    let reason = allowed ? null : 'outside_window'
+    if (!allowed && await checkApprovedAccessRequest(patientRow.id, institutionId)) { allowed = true; reason = null }
+    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,reason,patientId:patientRow.id}}))
   }
 
   useEffect(() => { appointments.forEach(a=>checkDataWindow(a.medsaId)) }, [appointments])
