@@ -7629,7 +7629,7 @@ const JOURNAL_THEMES = {
   sand: { accent:'#B07D4F', accentSoft:'#EBDCC6', paper:'#F8F0E3', ink:'#4A3B2E', inkSoft:'#A1805A', ruleColor:'rgba(176,125,79,0.09)', marginColor:'rgba(176,125,79,0.32)', dotTrack:'#E3D2B8' },
   fairytale: { accent:'#5B7FC7', accentSoft:'#DCE6F7', paper:'#F3F6FC', ink:'#36406E', inkSoft:'#7A89B8', ruleColor:'rgba(91,127,199,0.09)', marginColor:'rgba(91,127,199,0.3)', dotTrack:'#CBD6EE' },
   dinosaur: { accent:'#5B8C3E', accentSoft:'#DCEBC7', paper:'#F3F6EA', ink:'#3E4A2A', inkSoft:'#79885E', ruleColor:'rgba(91,140,62,0.09)', marginColor:'rgba(91,140,62,0.3)', dotTrack:'#CEDFBA' },
-  galaxy: { accent:'#B18CF0', accentSoft:'#4A3E7A', paper:'#241F42', ink:'#EAE4FB', inkSoft:'#A79BD1', ruleColor:'rgba(255,255,255,0.07)', marginColor:'rgba(177,140,240,0.35)', dotTrack:'#473C70' },
+  galaxy: { accent:'#8E7FC9', accentSoft:'#E8E3F7', paper:'#F5F3FB', ink:'#4A4570', inkSoft:'#8D86B3', ruleColor:'rgba(142,127,201,0.09)', marginColor:'rgba(142,127,201,0.3)', dotTrack:'#D9D3EF' },
 }
 function DefaultJournalCoverArt({ accent, themeKey, size=96 }) {
   const svgProps = { width:size, height:size, viewBox:'0 0 120 120', fill:'none', stroke:accent, strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round', role:'img', 'aria-label':'Journal cover illustration' }
@@ -7691,8 +7691,8 @@ const CONFINEMENT_GUIDE_PAGES = [
   { key:'avoid', icon:'avoid', title:{en:'To limit or avoid',zh:'需限制或避免'} },
   { key:'reading', icon:'book', title:{en:'Want to read more?',zh:'想了解更多?'} },
 ]
-function GuideIllustration({ icon, accent }) {
-  const svgProps = { width:'60', height:'60', viewBox:'0 0 120 120', fill:'none', stroke:accent, strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round', role:'img', 'aria-hidden':'true' }
+function GuideIllustration({ icon, accent, size=60 }) {
+  const svgProps = { width:size, height:size, viewBox:'0 0 120 120', fill:'none', stroke:accent, strokeWidth:3, strokeLinecap:'round', strokeLinejoin:'round', role:'img', 'aria-hidden':'true' }
   if (icon==='bath') return (
     <svg {...svgProps}>
       <path d="M20 70 L100 70 C100 86 88 96 72 96 L48 96 C32 96 20 86 20 70 Z"/>
@@ -7712,6 +7712,49 @@ function GuideIllustration({ icon, accent }) {
       <line x1="60" y1="34" x2="60" y2="96"/>
     </svg>
   )
+  if (icon==='alert') return (
+    <svg {...svgProps}>
+      <path d="M60 22 L104 94 L16 94 Z"/>
+      <line x1="60" y1="48" x2="60" y2="72"/>
+      <circle cx="60" cy="82" r="2" fill={accent} stroke="none"/>
+    </svg>
+  )
+  if (icon==='heart') return (
+    <svg {...svgProps}>
+      <path d="M60 96 C 30 74, 16 54, 16 36 C 16 22, 28 14, 40 18 C 50 21, 56 30, 60 36 C 64 30, 70 21, 80 18 C 92 14, 104 22, 104 36 C 104 54, 90 74, 60 96 Z"/>
+      <path d="M34 42 L48 42 L54 32 L62 56 L70 42 L86 42" strokeWidth="2.2"/>
+    </svg>
+  )
+  if (icon==='checklist') return (
+    <svg {...svgProps}>
+      <rect x="28" y="20" width="64" height="88" rx="8"/>
+      <rect x="46" y="14" width="28" height="14" rx="4"/>
+      <path d="M38 48 L46 56 L60 40" strokeWidth="2.4"/>
+      <line x1="68" y1="50" x2="84" y2="50"/>
+      <path d="M38 72 L46 80 L60 64" strokeWidth="2.4"/>
+      <line x1="68" y1="74" x2="84" y2="74"/>
+    </svg>
+  )
+  if (icon==='notebook') return (
+    <svg {...svgProps}>
+      <rect x="26" y="22" width="68" height="84" rx="6"/>
+      <line x1="26" y1="40" x2="94" y2="40"/>
+      <line x1="40" y1="56" x2="80" y2="56"/>
+      <line x1="40" y1="70" x2="80" y2="70"/>
+      <line x1="40" y1="84" x2="66" y2="84"/>
+    </svg>
+  )
+  if (icon==='pencil') return (
+    <svg {...svgProps}>
+      <path d="M32 88 L80 40 L92 52 L44 100 L30 102 Z"/>
+      <line x1="72" y1="48" x2="84" y2="60"/>
+    </svg>
+  )
+  if (icon==='star') return (
+    <svg {...svgProps}>
+      <path d="M60 18 L70 46 L100 46 L76 64 L86 94 L60 76 L34 94 L44 64 L20 46 L50 46 Z"/>
+    </svg>
+  )
   return (
     <svg {...svgProps}>
       <rect x="24" y="30" width="72" height="66" rx="8"/>
@@ -7723,13 +7766,13 @@ function GuideIllustration({ icon, accent }) {
   )
 }
 const POSTPARTUM_CHAPTERS = [
-  { key:'warnings', title:{en:'Urgent Warning Signs',zh:'緊急警號'} },
-  { key:'epds', title:{en:'Mental Health Check-in',zh:'情緒健康檢視'} },
-  { key:'checklist', title:{en:'Recovery Checklist',zh:'產後復原清單'} },
-  { key:'plan', title:{en:'My Recovery Plan',zh:'我的調理方案'} },
-  { key:'diary', title:{en:'Daily Diary',zh:'每日日記'} },
-  { key:'guide', title:{en:'Confinement Guide',zh:'坐月指南'} },
-  { key:'milestones', title:{en:"Baby's Milestone Days",zh:'寶寶的里程碑日子'} },
+  { key:'warnings', icon:'alert', title:{en:'Urgent Warning Signs',zh:'緊急警號'} },
+  { key:'epds', icon:'heart', title:{en:'Mental Health Check-in',zh:'情緒健康檢視'} },
+  { key:'checklist', icon:'checklist', title:{en:'Recovery Checklist',zh:'產後復原清單'} },
+  { key:'plan', icon:'notebook', title:{en:'My Recovery Plan',zh:'我的調理方案'} },
+  { key:'diary', icon:'pencil', title:{en:'Daily Diary',zh:'每日日記'} },
+  { key:'guide', icon:'book', title:{en:'Confinement Guide',zh:'坐月指南'} },
+  { key:'milestones', icon:'star', title:{en:"Baby's Milestone Days",zh:'寶寶的里程碑日子'} },
 ]
 const CONFINEMENT_FURTHER_READING = [
   { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
@@ -8650,6 +8693,9 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         if (postpartumBookView==='cover') return (
           <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px',padding:'36px 24px 28px',textAlign:'center'}}>
             <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',top:18,left:20,opacity:0.5}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',top:24,right:24,opacity:0.4}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',bottom:20,left:30,opacity:0.3}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
             <div style={{width:150,height:150,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px',overflow:'hidden',position:'relative'}}>
               {coverPhotoUrl
                 ? <img src={coverPhotoUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
@@ -8669,6 +8715,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
               ))}
             </div>
             <button onClick={()=>setPostpartumBookView('toc')} style={{all:'unset',cursor:'pointer',background:theme.accent,color:'#fff',padding:'12px 32px',borderRadius:'999px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive"}}>{isEn?'Open ▸':'打開 ▸'}</button>
+            <div style={{fontSize:'11px',color:theme.inkSoft,marginTop:'18px',lineHeight:1.5,opacity:0.85,fontFamily:'system-ui, sans-serif'}}>{isEn?'General guidance only, not medical advice - always check anything important with your own doctor.':'僅供一般參考,並非醫療建議 - 任何重要事項請諮詢您的醫生。'}</div>
           </div>
         )
 
@@ -8682,11 +8729,15 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             </div>
             <div style={{fontSize:'24px',marginBottom:'16px'}}>{isEn?'Contents':'目錄'}</div>
             {POSTPARTUM_CHAPTERS.map((c,i)=>(
-              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'13px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed ${theme.marginColor}`:'none',cursor:'pointer'}}>
-                <span style={{fontSize:'19px'}}>{isEn?c.title.en:c.title.zh}</span>
+              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',gap:'12px',padding:'11px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed ${theme.marginColor}`:'none',cursor:'pointer'}}>
+                <div style={{width:34,height:34,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <GuideIllustration icon={c.icon} accent={theme.accent} size={18}/>
+                </div>
+                <span style={{fontSize:'19px',flex:1}}>{isEn?c.title.en:c.title.zh}</span>
                 <span style={{color:theme.inkSoft}}>▸</span>
               </div>
             ))}
+            <div style={{fontSize:'11px',color:theme.inkSoft,marginTop:'14px',lineHeight:1.5,opacity:0.85,fontFamily:'system-ui, sans-serif'}}>{isEn?'General guidance only, not medical advice.':'僅供一般參考,並非醫療建議。'}</div>
           </div>
         )
 
@@ -8708,7 +8759,12 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
                 </div>
               </div>
-              <div style={{fontSize:'22px',color:theme.accent,marginBottom:'16px'}}>{isEn?chapterTitle?.en:chapterTitle?.zh}</div>
+              <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
+                <div style={{width:32,height:32,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <GuideIllustration icon={POSTPARTUM_CHAPTERS[chapterIndex]?.icon} accent={theme.accent} size={17}/>
+                </div>
+                <div style={{fontSize:'22px',color:theme.accent}}>{isEn?chapterTitle?.en:chapterTitle?.zh}</div>
+              </div>
 
               {postpartumBookView==='warnings'&&<div style={{fontFamily:'inherit'}}>
                 <div style={{background:'#fff',border:`1px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
@@ -8802,8 +8858,18 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                 // estimateDay is still just the earliest-cited soft estimate
                 // (see CONFINEMENT_MILESTONE_VISUALS), so this only lights up
                 // on that one specific day, worded as "may be" not a fact.
+                // Exact-day-only turned out too easy to miss entirely while
+                // testing (you'd have to land on literally day 3/24/30 out
+                // of the whole diary) - so days leading up to one now also
+                // get a lighter "coming up" version, same 14-day lead the
+                // Milestones chapter's own reminder ribbon already uses.
                 const milestoneIdxToday = bumpRow?.child_dob ? CONFINEMENT_MILESTONES.findIndex(m=>CONFINEMENT_MILESTONE_VISUALS[m.key].estimateDay===dayNumber) : -1
                 const milestoneToday = milestoneIdxToday>=0 ? CONFINEMENT_MILESTONES[milestoneIdxToday] : null
+                const milestoneIdxUpcoming = (!milestoneToday&&dayNumber!=null) ? CONFINEMENT_MILESTONES.findIndex(m=>{
+                  const d = CONFINEMENT_MILESTONE_VISUALS[m.key].estimateDay-dayNumber
+                  return d>0&&d<=14
+                }) : -1
+                const milestoneUpcoming = milestoneIdxUpcoming>=0 ? CONFINEMENT_MILESTONES[milestoneIdxUpcoming] : null
                 return (
                   <div>
                     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
@@ -8831,9 +8897,27 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                         </div>
                       )
                     })()}
-                    {diaryDateLoading
-                      ? <div style={{textAlign:'center',padding:'30px',fontSize:'13px',color:theme.inkSoft,fontFamily:'system-ui, sans-serif'}}>{isEn?'Loading…':'載入中…'}</div>
-                      : <div style={{fontFamily:'system-ui, sans-serif'}}>
+                    {milestoneUpcoming&&(()=>{
+                      const v = CONFINEMENT_MILESTONE_VISUALS[milestoneUpcoming.key]
+                      const daysAway = v.estimateDay-dayNumber
+                      return (
+                        <div onClick={()=>{setMilestonePage(milestoneIdxUpcoming);setPostpartumBookView('milestones')}} style={{display:'flex',alignItems:'center',gap:'8px',background:v.accentSoft,borderRadius:'10px',padding:'7px 12px',marginBottom:'12px',cursor:'pointer',opacity:0.8}}>
+                          <div style={{width:26,height:26,borderRadius:'50%',background:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,overflow:'hidden'}}>
+                            <MilestoneIllustration icon={v.icon} accent={v.accent} accentSoft={v.accentSoft}/>
+                          </div>
+                          <div style={{flex:1,fontSize:'12.5px',color:theme.ink}}>{isEn?`${milestoneUpcoming.name.en.split(' (')[0]} - around ${daysAway} day${daysAway===1?'':'s'} away`:`${milestoneUpcoming.name.zh} - 約${daysAway}天後`}</div>
+                          <span style={{color:v.accent,fontSize:'14px',flexShrink:0}}>›</span>
+                        </div>
+                      )
+                    })()}
+                    {/* Real bug from your feedback: swapping this whole form
+                        out for a tiny "Loading…" line every time the prev/
+                        next day arrow fired collapsed the chapter's height
+                        for a moment, which reads as the page jumping to the
+                        top. Keeping the form mounted (just dimmed/disabled
+                        while its own day's data loads) keeps the height -
+                        and the scroll position - stable across every click. */}
+                    <div style={{fontFamily:'system-ui, sans-serif',opacity:diaryDateLoading?0.4:1,pointerEvents:diaryDateLoading?'none':'auto',transition:'opacity .15s'}}>
                           <div style={{display:'flex',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
                             <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid ${theme.marginColor}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
                               <option value="">{isEn?'Lochia…':'惡露…'}</option>
@@ -8860,7 +8944,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                             <Btn variant="primary" style={{flex:1}} onClick={saveConfinementLog} disabled={confinementLogSaving}>{confinementLogSaving?(isEn?'Saving…':'儲存中…'):(isEn?'Save this day':'儲存')}</Btn>
                             <Btn style={{flex:1}} onClick={clearDiaryDay} disabled={confinementLogSaving}>{isEn?'Clear':'清除'}</Btn>
                           </div>
-                        </div>}
+                        </div>
                   </div>
                 )
               })()}
