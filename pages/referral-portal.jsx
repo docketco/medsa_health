@@ -96,6 +96,11 @@ export default function ReferralPortalPage() {
   // practice, not just whoever typed a name into a box.
   const [declineReason, setDeclineReason] = useState('')
   const [decisionActing, setDecisionActing] = useState(false)
+  // Fetched only once accepted (never part of loadReferral's own select,
+  // which deliberately stays viewable pre-verification) - a patient's
+  // phone/email has no business reaching the browser before this doctor
+  // has actually committed to taking the referral.
+  const [patientContact, setPatientContact] = useState(null)
 
   useEffect(() => {
     if (!router.isReady) return
@@ -152,7 +157,13 @@ export default function ReferralPortalPage() {
     setDecisionActing(false)
     if (updErr) { setError(updErr.message); setStage('error'); return }
     setReferral(prev => ({ ...prev, clinical_status: 'accepted' }))
-    setStage('receive_scan')
+    // Straightforward call-to-schedule beats building a separate patient-
+    // facing booking flow - the receiving doctor just needs a real way to
+    // reach the patient themselves, once they've actually committed to
+    // taking the referral (not before).
+    const { data: contact } = await supabase.from('patients').select('phone, email').eq('id', referral.patient_id).maybeSingle()
+    setPatientContact(contact || null)
+    setStage('receive_accepted')
   }
 
   async function handleDeclineReferralSubmit() {
@@ -532,6 +543,20 @@ export default function ReferralPortalPage() {
             : <input value={receiverName} onChange={e=>setReceiverName(e.target.value)} placeholder="Your full name" style={inputStyle}/>}
           <button onClick={handleAcceptReferral} disabled={!receiverName.trim()||decisionActing} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px',opacity:(!receiverName.trim()||decisionActing)?0.6:1}}>{decisionActing?'Saving...':'Accept referral'}</button>
           <button onClick={()=>setStage('receive_decline_reason')} disabled={decisionActing} style={{width:'100%',padding:'12px',background:'none',border:`0.5px solid ${C.border}`,borderRadius:'10px',fontWeight:600,cursor:'pointer',color:C.textSub}}>Decline</button>
+        </>}
+
+        {stage==='receive_accepted' && <>
+          <div style={{fontSize:'32px',textAlign:'center',marginBottom:'10px'}}>✓</div>
+          <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Referral accepted</div>
+          <div style={{fontSize:'13px',color:C.textSub,textAlign:'center',marginBottom:'16px'}}>Call {patient?.full_name} directly to confirm and schedule their visit - that's the fastest way to do both at once.</div>
+          <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'16px'}}>
+            <div style={{fontSize:'11px',color:C.textMuted,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:'6px'}}>Contact for {patient?.full_name}</div>
+            {patientContact?.phone && <div style={{fontSize:'14px',fontWeight:600,marginBottom:'2px'}}>{patientContact.phone}</div>}
+            {patientContact?.email && <div style={{fontSize:'13px',color:C.textSub}}>{patientContact.email}</div>}
+            {!patientContact?.phone && !patientContact?.email && <div style={{fontSize:'13px',color:C.textMuted}}>No phone or email on file for this patient.</div>}
+          </div>
+          <button onClick={()=>setStage('receive_scan')} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px'}}>Patient is here now - check them in</button>
+          <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center'}}>Otherwise, just come back to this same link once they're actually in for their visit.</div>
         </>}
 
         {stage==='receive_decline_reason' && <>

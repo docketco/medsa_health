@@ -1427,7 +1427,7 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
   return y + 10
 }
 
-function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
+function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], referrals=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
   const __theme = useContext(ThemeContext)
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
@@ -1435,6 +1435,12 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [generatingPdf,setGeneratingPdf]=useState(false)
   const [accessRequests,setAccessRequests]=useState([])
   const [accessRequestsLoading,setAccessRequestsLoading]=useState(true)
+  const [expandedReferral,setExpandedReferral]=useState(null)
+
+  async function openReferralAttachment(path) {
+    const { data } = await supabase.storage.from('external-clinic-uploads').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   async function loadAccessRequests() {
     if (!patient?.id) { setAccessRequestsLoading(false); return }
@@ -1899,6 +1905,42 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>}
           </Card>
         ))}
+        {referrals.length>0&&<>
+          <SecLabel>{isEn?'Referrals':'轉介'}</SecLabel>
+          {referrals.map(ref=>{
+            const isOpen = expandedReferral===ref.id
+            const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || (isEn?'Unnamed receiving practitioner':'未具名接收醫療人員')
+            const consults = ref.referral_consultations||[]
+            return (
+              <Card key={ref.id} onClick={()=>setExpandedReferral(isOpen?null:ref.id)}>
+                <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+                  <div>
+                    <div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Referred to':'轉介至'} {toWho}</div>
+                    <div style={{fontSize:'12px',color:C.textSub}}>{new Date(ref.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+                  </div>
+                  <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:ref.clinical_status==='completed'?__theme.accentLight:ref.clinical_status==='declined'?C.redLight:C.brownLight,color:ref.clinical_status==='completed'?__theme.accent:ref.clinical_status==='declined'?C.red:C.brown}}>{ref.clinical_status==='completed'?(isEn?'Results in':'已有結果'):ref.clinical_status==='declined'?(isEn?'Declined':'已拒絕'):ref.clinical_status==='accepted'?(isEn?'Accepted':'已接受'):(isEn?'Awaiting decision':'待決定')}</span>
+                </div>
+                {isOpen&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+                  <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'REFERRING VISIT':'轉介診症'}</div>
+                  {ref.reason&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Reason':'原因'}:</strong> {ref.reason}</div>}
+                  {ref.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {ref.diagnosis}</div>}
+                  {ref.clinical_status==='declined'&&ref.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}><strong>{isEn?'Decline reason':'拒絕原因'}:</strong> {ref.decline_reason}</div>}
+                  {consults.length===0&&ref.clinical_status!=='declined'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'No result yet from the receiving practitioner.':'尚未收到接收醫療人員的結果。'}</div>}
+                  {consults.map((cons,j)=>(
+                    <div key={cons.id} style={{marginTop:j===0?'8px':'8px',paddingTop:'8px',borderTop:`0.5px dashed ${C.border}`}}>
+                      <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'RESULT':'結果'} - {cons.practitioner_name||(isEn?'Receiving practitioner':'接收醫療人員')} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
+                      {cons.findings&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Findings':'檢查結果'}:</strong> {cons.findings}</div>}
+                      {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>{isEn?'Interventions':'處理方式'}:</strong> {cons.interventions}</div>}
+                      {(cons.document_paths||[]).map((p,k)=>(
+                        <div key={k} onClick={(e)=>{e.stopPropagation();openReferralAttachment(p)}} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',marginTop:'2px'}}>📄 {p.split('/').pop()}</div>
+                      ))}
+                    </div>
+                  ))}
+                </div>}
+              </Card>
+            )
+          })}
+        </>}
       </>}
       {tab==='vax'&&<>
         <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
@@ -10872,7 +10914,7 @@ export default function PatientApp({ liveData={} }) {
   // that mismatch is why pull-to-refresh looked "fake."
   const loadRealData = useCallback(async () => {
     if (!signedInPatient?.id) return
-    const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes, fhRes] = await Promise.all([
+    const [condRes, allergyRes, medRes, recRes, apptRes, claimRes, vaxRes, txnRes, fhRes, referralRes] = await Promise.all([
       supabase.from('conditions').select('*').eq('patient_id', signedInPatient.id).eq('active', true),
       supabase.from('allergies').select('*').eq('patient_id', signedInPatient.id),
       supabase.from('medications').select('*').eq('patient_id', signedInPatient.id),
@@ -10887,6 +10929,13 @@ export default function PatientApp({ liveData={} }) {
       supabase.from('vaccinations').select('*').eq('patient_id', signedInPatient.id).order('administered_date',{ascending:true}),
       supabase.from('transactions').select('*').eq('patient_id', signedInPatient.id),
       supabase.from('family_history').select('*').eq('patient_id', signedInPatient.id).order('created_at',{ascending:false}),
+      // Referrals never showed up under Records at all before - the
+      // receiving doctor's own result (referral_consultations) lived only
+      // in a separate table nothing on this side ever read, so the
+      // referring visit and the outside result stayed two disconnected
+      // things instead of one threaded record, same join ClinicOpsApp's
+      // own staff-side consultation screen already does.
+      supabase.from('referrals').select('*, referral_consultations(*)').eq('patient_id', signedInPatient.id).order('created_at',{ascending:false}),
     ])
     setRealPatientData({
       conditions: condRes.data||[], allergies: allergyRes.data||[], medications: medRes.data||[],
@@ -10897,7 +10946,7 @@ export default function PatientApp({ liveData={} }) {
       records: (recRes.data||[]).filter(r => r.record_status !== 'draft' && r.record_status !== 'submitted'),
       appointments: apptRes.data||[], claims: claimRes.data||[],
       vaccinations: vaxRes.data||[], transactions: txnRes.data||[],
-      familyHistory: fhRes.data||[],
+      familyHistory: fhRes.data||[], referrals: referralRes.data||[],
     })
   }, [signedInPatient?.id])
 
@@ -11104,6 +11153,7 @@ export default function PatientApp({ liveData={} }) {
   }
 
   const liveRecords = signedInPatient ? (realPatientData?.records||[]) : (liveData.records || [])
+  const liveReferrals = signedInPatient ? (realPatientData?.referrals||[]) : []
   const liveTransactions = signedInPatient ? (realPatientData?.transactions||[]) : []
   const liveConditions = signedInPatient ? (realPatientData?.conditions||[]) : (liveData.conditions || [])
   const liveAllergies = signedInPatient ? (realPatientData?.allergies||[]) : (liveData.allergies || [])
@@ -11158,7 +11208,7 @@ export default function PatientApp({ liveData={} }) {
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
           if (data) setSignedInPatient(data)
         }}/>}
-        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
+        {screen==='records'&&<RecordsScreen isEn={isEn} records={liveRecords} conditions={liveConditions} vaccinations={liveVaccinations} patient={patient} transactions={liveTransactions} referrals={liveReferrals} onShareBundle={(ids)=>{setShareRecordIds(ids);setShareOpen(true)}} deepLinkRecordId={deepLinkRecordId} onConsumeDeepLink={()=>setDeepLinkRecordId(null)}/>}
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='healthcolumn'&&<HealthColumnScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
         {screen==='ingredientscan'&&<IngredientScanScreen isEn={isEn} patient={patient}/>}
