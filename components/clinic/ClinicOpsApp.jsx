@@ -252,6 +252,30 @@ async function cancelAppointmentSideEffects(appointmentId) {
   }
 }
 
+// A rescheduled/reassigned appointment got no notification at all, even
+// though booking one now does (notify_booking) and cancelling one
+// already did (notify_cancellation) - same best-effort, respects-the-
+// toggles pattern, just by appointment id instead of a full patient row
+// since the reschedule/switch-doctor modal only ever has that.
+async function notifyAppointmentChanged(appointmentId) {
+  if (!appointmentId) return
+  const { data: appt } = await supabase.from('appointments').select('doctor_name, scheduled_at, patients(email, full_name, notify_email, phone, notify_sms)').eq('id', appointmentId).maybeSingle()
+  const patient = appt?.patients
+  const wantsEmail = patient?.notify_email !== false && patient?.email
+  const wantsSms = patient?.notify_sms !== false && patient?.phone
+  if (wantsEmail || wantsSms) {
+    fetch('/api/appointments/notify_booking', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        email: wantsEmail ? patient.email : null,
+        phone: wantsSms ? patient.phone : null,
+        patientName: patient.full_name,
+        doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
+      }),
+    }).catch(()=>{})
+  }
+}
+
 // Builds the actual, plain-language Frequency text from the structured
 // dosing controls (mode, times/day, which times of day, every-X-hours,
 // duration) - this is what shows up on the medication label, the
@@ -738,6 +762,17 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   const [checkInDoctors,setCheckInDoctors]=useState([])
   const [selectedCheckInDoctor,setSelectedCheckInDoctor]=useState('')
   useEffect(() => { loadClinicDoctors(institutionId).then(setCheckInDoctors) }, [institutionId])
+  // Real gap found live-testing: this picker was purely optional, so a
+  // walk-in checked in by front desk with no doctor chosen and no
+  // existing booking silently landed on doctor_name:'Unassigned' -
+  // invisible under every doctor's own "My Patients" (that list filters
+  // by exact doctor name match), with nothing on screen explaining why.
+  // A doctor checking in their own patient still needs no picker - that
+  // case already resolves to themselves (see handleCheckedIn's
+  // resolvedDoctorName). A real booked appointment also still wins over
+  // whatever's picked here regardless, so requiring a pick never
+  // overrides it - this only closes the one case nothing else covers.
+  const needsDoctorPick = staffMember?.role!=='doctor' && checkInDoctors.length>0 && !selectedCheckInDoctor
 
   // Which queue this clinic runs, if more than one - lets front desk
   // route a check-in to the right line (e.g. General vs Chinese
@@ -975,7 +1010,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
               {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
             </div>
             {checkInDoctors.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px'}}>
-              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor - a real booking's own doctor is used automatically if there is one, but pick one here too so this patient shows up correctly either way</div>
               {/* Real fix: this used to group doctors under a department
                   header first (e.g. "GENERAL MEDICINE" / "CHINESE
                   MEDICINE"), with the doctor's own name as a small chip
@@ -1003,9 +1038,10 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
                 ))}
               </div>
             </div>}
+            {needsDoctorPick&&<div style={{fontSize:'11px',color:C.amber}}>{'⚠'} Pick a doctor above before checking in, so this patient actually shows up on someone's "My Patients".</div>}
             <div style={{display:'flex',gap:'10px'}}>
               <Btn onClick={()=>setStage('idle')} disabled={checkingIn}>Cancel</Btn>
-              <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn||alreadyInQueue}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in patient'}</Btn>
+              <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>handleCheckInClick(false)} disabled={checkingIn||alreadyInQueue||needsDoctorPick}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in patient'}</Btn>
             </div>
             {alreadyInQueue&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in again (testing)</Btn>}
             {checkInError&&checkInError.includes('already checked in')&&<Btn style={{width:'100%'}} onClick={()=>handleCheckInClick(true)} disabled={checkingIn}>Check in anyway (testing)</Btn>}
@@ -1048,7 +1084,7 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             {!walkInConsent&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>Check-in still proceeds - records just won't be visible to this clinic today.</div>}
           </div>
           {checkInDoctors.length>0&&<div style={{background:C.card,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor (only needed if not already booked - a booking's own doctor is used automatically)</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Doctor - a real booking's own doctor is used automatically if there is one, but pick one here too so this patient shows up correctly either way</div>
             <div style={{display:'flex',gap:'6px',flexWrap:'wrap'}}>
               {checkInDoctors.map(d=>(
                 <div key={d.name} onClick={()=>setSelectedCheckInDoctor(selectedCheckInDoctor===d.name?'':d.name)} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'12px',cursor:'pointer',background:selectedCheckInDoctor===d.name?C.green:'#fff',color:selectedCheckInDoctor===d.name?'#fff':C.textSub,border:`1px solid ${C.border}`}}>{d.name}{d.department&&<span style={{opacity:0.65,marginLeft:'5px'}}>· {d.department}</span>}</div>
@@ -1059,8 +1095,9 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Note for the doctor/queue (optional) - e.g. "limping", "priority"</div>
             <input value={checkinNote} onChange={e=>setCheckinNote(e.target.value)} placeholder="Heads-up note..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'8px',fontSize:'12px',boxSizing:'border-box'}}/>
           </div>
+          {needsDoctorPick&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'8px'}}>{'⚠'} Pick a doctor above before checking in, so this patient actually shows up on someone's "My Patients".</div>}
           <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
-            <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn||alreadyInQueue}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in now'}</Btn>
+            <Btn variant={alreadyInQueue?'secondary':'primary'} style={{flex:1}} onClick={()=>doCheckIn(searchResult,false)} disabled={checkingIn||alreadyInQueue||needsDoctorPick}>{checkingIn?'Checking in...':alreadyInQueue?'✓ Checked in':'Check in now'}</Btn>
             <Btn style={{flex:1}} onClick={onNavSchedule}>Schedule instead</Btn>
           </div>
           {alreadyInQueue&&<Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>doCheckIn(searchResult,true)} disabled={checkingIn}>Check in again (testing)</Btn>}
@@ -5690,6 +5727,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       if (clash) return { ok:false, error:`${original.doctor} already has another appointment at ${updated.time}. Pick a different time.` }
       const { error } = await supabase.from('appointments').update({ scheduled_at: scheduledAt.toISOString() }).eq('id', updated.id)
       if (error) return { ok:false, error: error.message }
+      notifyAppointmentChanged(updated.id)
       loadRealAppointments(selectedDay)
       return { ok: true }
     }
@@ -5724,6 +5762,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       if (clash) return { ok:false, error:`${updated.doctor} already has another appointment at ${original.time}. Pick a different doctor.` }
       const { error } = await supabase.from('appointments').update({ doctor_name: updated.doctor }).eq('id', updated.id)
       if (error) return { ok:false, error: error.message }
+      notifyAppointmentChanged(updated.id)
       loadRealAppointments(selectedDay)
       return { ok: true }
     }
@@ -5879,6 +5918,54 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
   const [declineReason,setDeclineReason]=useState('')
   const [actingId,setActingId]=useState(null)
   const [resendingId,setResendingId]=useState(null)
+  // Re-referring a declined referral to a different specialist - same
+  // match-search pattern ConsultationScreen's own referral panel uses,
+  // just reachable from here instead of requiring a live consultation.
+  const [reReferId,setReReferId]=useState(null)
+  const [reReferSearch,setReReferSearch]=useState('')
+  const [reReferMatches,setReReferMatches]=useState([])
+  const [reReferMatched,setReReferMatched]=useState(null)
+  const [reReferSending,setReReferSending]=useState(false)
+
+  useEffect(() => {
+    if (!reReferSearch.trim()) { setReReferMatches([]); return }
+    const timeout = setTimeout(async () => {
+      const [medsaRes, dirRes] = await Promise.all([
+        supabase.from('staff_credentials').select('id,full_name,department')
+          .eq('role','doctor').eq('status','active').ilike('full_name', `%${reReferSearch}%`).limit(5),
+        supabase.from('directory_doctors').select('*, directory_clinics(*)')
+          .ilike('full_name', `%${reReferSearch}%`).limit(5),
+      ])
+      setReReferMatches([
+        ...(medsaRes.data||[]).map(d=>({ source:'medsa', id:d.id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' })),
+        ...(dirRes.data||[]).map(d=>({ source:'directory', id:d.id, name:d.full_name, clinicLabel:d.directory_clinics?.name, phone:d.directory_clinics?.contact_phone, email:d.directory_clinics?.contact_email })),
+      ])
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [reReferSearch])
+
+  async function handleReRefer(r) {
+    if (!reReferSearch.trim()) return
+    setReReferSending(true)
+    const accessCode = Math.random().toString(36).slice(2,8).toUpperCase()
+    await supabase.from('referrals').insert({
+      patient_id: r.patient_id, referring_staff: r.referring_staff, note: r.note,
+      diagnosis: r.diagnosis, consultation_summary: r.consultation_summary, clinical_notes: r.clinical_notes,
+      referring_staff_medsa_id: r.referring_staff_medsa_id, referring_doctor_name: r.referring_doctor_name,
+      referring_practice_name: r.referring_practice_name, reason: r.reason,
+      to_doctor_name: reReferSearch, access_code: accessCode,
+      to_clinic_name: reReferMatched?.clinicLabel||null, to_clinic_phone: reReferMatched?.phone||null, to_clinic_email: reReferMatched?.email||null,
+      matched_staff_credential_id: reReferMatched?.source==='medsa' ? reReferMatched.id : null,
+      matched_directory_doctor_id: reReferMatched?.source==='directory' ? reReferMatched.id : null,
+      // Carries the same originating visit forward - this is still the
+      // same patient encounter, just redirected to a different
+      // specialist after the first one declined, not a brand new one.
+      source_appointment_id: r.source_appointment_id || null,
+    })
+    setReReferSending(false)
+    setReReferId(null); setReReferSearch(''); setReReferMatches([]); setReReferMatched(null)
+    load()
+  }
 
   async function load() {
     setLoading(true)
@@ -5999,8 +6086,12 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
               </div>}
               {/* No automated email ever goes out for this - the original
                   send screen is the only place the link+code ever showed,
-                  so a doctor who lost that message had no way back in. */}
-              {tab==='sent'&&!r.matched_staff_credential_id&&r.clinical_status==='pending_review'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
+                  so a doctor who lost that message had no way back in.
+                  Shown for any sent referral, matched or not - a matched
+                  doctor can still use this same link, and narrowing it
+                  by match status just made it hard to find/confusing
+                  about when it would even show up. */}
+              {tab==='sent'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
                 {resendingId!==r.id&&<span onClick={()=>setResendingId(r.id)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Resend invitation {'→'}</span>}
                 {resendingId===r.id&&(()=>{
                   const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${r.id}`
@@ -6018,6 +6109,21 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
                 })()}
               </div>}
               {r.clinical_status==='declined'&&r.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}><strong>Decline reason:</strong> {r.decline_reason}</div>}
+              {tab==='sent'&&r.clinical_status==='declined'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
+                {reReferId!==r.id&&<span onClick={()=>{setReReferId(r.id);setReReferSearch('');setReReferMatched(null)}} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Refer to another specialist {'→'}</span>}
+                {reReferId===r.id&&<div style={{background:C.cream,borderRadius:'8px',padding:'10px',position:'relative'}}>
+                  <input value={reReferSearch} onChange={e=>{setReReferSearch(e.target.value);setReReferMatched(null)}} placeholder="Doctor name..." style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',marginBottom:'8px'}}/>
+                  {reReferMatches.length>0&&!reReferMatched&&<div style={{background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+                    {reReferMatches.map(m=>(
+                      <div key={m.source+m.id} onClick={()=>{setReReferMatched(m);setReReferSearch(m.name)}} style={{padding:'8px 10px',fontSize:'12px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>{m.name} <span style={{color:C.textMuted}}>· {m.clinicLabel||(m.source==='medsa'?'Medsa doctor':'Directory')}</span></div>
+                    ))}
+                  </div>}
+                  <div style={{display:'flex',gap:'8px'}}>
+                    <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setReReferId(null)}>Cancel</Btn>
+                    <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={!reReferSearch.trim()||reReferSending} onClick={()=>handleReRefer(r)}>{reReferSending?'Sending…':'Send referral'}</Btn>
+                  </div>
+                </div>}
+              </div>}
               {hasResults&&r.referral_consultations.map((cons,j)=>(
                 <div key={cons.id} style={{marginBottom:'6px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
                   <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'3px'}}>✓ Results from {cons.practitioner_name||'the receiving practitioner'} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>

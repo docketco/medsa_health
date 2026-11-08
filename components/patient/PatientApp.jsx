@@ -1866,7 +1866,12 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             merge-sorted by real date so recency actually means recency,
             not "whichever list this item happened to live in". */}
         {(()=>{
-          const recordItems = records.map(r=>{
+          // The originating visit now threads inside its referral card
+          // (title/diagnosis/receipt, see referralItems below) - without
+          // this filter the exact same consultation also kept showing as
+          // its own separate top-level card, duplicated.
+          const sourceApptIds = new Set(referrals.map(r=>r.source_appointment_id).filter(Boolean))
+          const recordItems = records.filter(r=>!sourceApptIds.has(r.appointment_id)).map(r=>{
             const receipt = transactions.find(t => t.medical_record_id === r.id)
             return { kind:'record', sortDate: new Date(r.date_of_record),
               id: r.id,
