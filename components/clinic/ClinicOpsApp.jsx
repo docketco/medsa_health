@@ -26,15 +26,25 @@ import Icon from '../shared/Icon'
 // appointment silently unlocked every OTHER visit that happened to fall
 // in that same 48h too. access_window_start/expires_at are now set by
 // the staff side AT REQUEST TIME, scoped to that one appointment's own
-// window (see handleRequestAccess) - this just checks "now" falls
-// inside that specific window, the same way appointment_intake's own
-// check already does.
-async function checkApprovedAccessRequest(patientId, institutionId) {
+// window (see handleRequestAccess).
+//
+// Third real gap, found right after THAT: still checking "now" here
+// meant every OTHER appointment this same patient has, viewed on the
+// Schedule screen at the same moment, asked this exact same question
+// and got the exact same true/false answer - the approval still read
+// as granted for every one of them, just for a different reason now
+// (the shared "now", not a shared 48h window). The real fix had to be
+// at the caller too (checkDataWindow is now keyed per appointment, not
+// per patient) - this is asked about the SPECIFIC appointment's own
+// scheduled time, never a bare "now", so two different appointments for
+// the same patient essentially never both fall inside one approval's
+// window.
+async function checkApprovedAccessRequest(patientId, institutionId, targetTime) {
   if (!patientId || !institutionId) return false
-  const now = new Date().toISOString()
+  const t = (targetTime instanceof Date ? targetTime : new Date()).toISOString()
   const { data } = await supabase.from('record_access_requests')
     .select('id').eq('patient_id', patientId).eq('requesting_institution_id', institutionId)
-    .eq('status', 'approved').lte('access_window_start', now).gte('expires_at', now)
+    .eq('status', 'approved').lte('access_window_start', t).gte('expires_at', t)
     .order('resolved_at', { ascending: false }).limit(1).maybeSingle()
   return !!data
 }
@@ -5440,12 +5450,25 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   // Real per-patient check against the consent window set at booking time
   // (schema_intake_consent.sql) - this is what actually gates data access
   // on the schedule now, not just whether they're physically checked in.
-  const [dataWindows,setDataWindows]=useState({}) // medsaId -> {allowed, checked, reason}
+  // Real gap found live-testing: this used to be keyed by medsaId alone
+  // - fine when checkApprovedAccessRequest just asked "is now within
+  // SOME approved window for this patient," but that meant an approval
+  // scoped to ONE specific appointment (see handleRequestAccess) still
+  // read as granted for every OTHER appointment this same patient has,
+  // since they all shared the one cached result under the one medsaId
+  // key. Keyed by the appointment's own id now, and the access-request
+  // check below is asked about THIS appointment's own scheduled time,
+  // not just "now" - two different appointments for the same patient
+  // essentially never share a window, so one being approved no longer
+  // bleeds into the other.
+  const [dataWindows,setDataWindows]=useState({}) // appointment id -> {allowed, checked, reason}
 
-  async function checkDataWindow(medsaId, force=false) {
-    if (!medsaId || (dataWindows[medsaId]?.checked && !force)) return
-    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
-    if (!patientRow) { setDataWindows(prev=>({...prev,[medsaId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
+  async function checkDataWindow(appt, force=false) {
+    const apptId = appt?.id
+    if (!apptId || !appt?.medsaId || (dataWindows[apptId]?.checked && !force)) return
+    const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', appt.medsaId).maybeSingle()
+    if (!patientRow) { setDataWindows(prev=>({...prev,[apptId]:{allowed:false,checked:true,reason:'no_consent'}})); return }
+    const targetTime = appt.scheduledAt ? new Date(appt.scheduledAt) : new Date()
     // Most recent intake row overall, regardless of what it says - not
     // just the most recent one that happens to say consent_given:true.
     // Filtering to consent_given:true before ordering meant a patient's
@@ -5454,21 +5477,27 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     // consent kept being honoured over their actual, more recent choice.
     const { data } = await supabase.from('appointment_intake').select('*').eq('patient_id', patientRow.id).order('created_at',{ascending:false}).limit(1).maybeSingle()
     if (!data || !data.consent_given) {
-      const approvedAhead = await checkApprovedAccessRequest(patientRow.id, institutionId)
-      setDataWindows(prev=>({...prev,[medsaId]:{allowed:approvedAhead,checked:true,reason:approvedAhead?null:'no_consent',patientId:patientRow.id}}))
+      const approvedAhead = await checkApprovedAccessRequest(patientRow.id, institutionId, targetTime)
+      setDataWindows(prev=>({...prev,[apptId]:{allowed:approvedAhead,checked:true,reason:approvedAhead?null:'no_consent',patientId:patientRow.id}}))
       return
     }
+    // This part stays "now" deliberately - appointment_intake's own
+    // window already answers "is it currently an okay TIME to view
+    // this" (the pre/post-visit grace period), unlike the access-request
+    // fallback below, which has to be asked about THIS appointment's own
+    // scheduled time specifically (that's the actual fix for the bug
+    // above - see checkApprovedAccessRequest's own comment).
     const now = new Date()
     let allowed = now >= new Date(data.access_window_start) && now <= new Date(data.access_window_end)
     let reason = allowed ? null : 'outside_window'
-    if (!allowed && await checkApprovedAccessRequest(patientRow.id, institutionId)) { allowed = true; reason = null }
-    setDataWindows(prev=>({...prev,[medsaId]:{allowed,checked:true,reason,patientId:patientRow.id}}))
+    if (!allowed && await checkApprovedAccessRequest(patientRow.id, institutionId, targetTime)) { allowed = true; reason = null }
+    setDataWindows(prev=>({...prev,[apptId]:{allowed,checked:true,reason,patientId:patientRow.id}}))
   }
 
-  useEffect(() => { appointments.forEach(a=>checkDataWindow(a.medsaId)) }, [appointments])
+  useEffect(() => { appointments.forEach(a=>checkDataWindow(a)) }, [appointments])
 
-  function withinDataWindow(medsaId) {
-    return dataWindows[medsaId]?.allowed || false
+  function withinDataWindow(apptId) {
+    return dataWindows[apptId]?.allowed || false
   }
 
   // Clinic-side consent confirmation - for when a patient consents
@@ -5499,8 +5528,8 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     // batches the update) - without force, checkDataWindow would just
     // see the stale checked:true and silently no-op, leaving the button
     // looking like it did nothing even though the insert above succeeded.
-    setDataWindows(prev=>{ const next={...prev}; delete next[appt.medsaId]; return next })
-    checkDataWindow(appt.medsaId, true)
+    setDataWindows(prev=>{ const next={...prev}; delete next[appt.id]; return next })
+    checkDataWindow(appt, true)
   }
 
   // Reschedule, switch-doctor and notes edits used to only ever update
@@ -5626,7 +5655,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
               <div style={{fontSize:'13px',fontWeight:500,color:isCancelled?C.red:isDone?C.textMuted:C.text,textDecoration:isMuted?'line-through':'none'}}>{a.patient}</div>
               <div style={{fontSize:'12px',color:C.textMuted}}>{a.doctor} - {a.type}{a.consultType==='video'&&<span style={{color:C.blue,fontWeight:600}}> · ◈ Video</span>}</div>
             </div>
-            {a.status!=='open'&&!isMuted&&<Badge text={withinDataWindow(a.medsaId)?'Data available':'Outside consent window'} type={withinDataWindow(a.medsaId)?'ok':'due'}/>}
+            {a.status!=='open'&&!isMuted&&<Badge text={withinDataWindow(a.id)?'Data available':'Outside consent window'} type={withinDataWindow(a.id)?'ok':'due'}/>}
             {a.status==='open'
               ?<Btn style={{fontSize:'12px',padding:'6px 12px'}} onClick={()=>setShowNewApptForm(true)}>+ Book</Btn>
               :isCancelled
@@ -5642,8 +5671,8 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
         appt={activeAppt}
         onClose={()=>setActiveAppt(null)}
         onSave={handleSaveAppt}
-        withinDataWindow={activeAppt ? withinDataWindow(activeAppt.medsaId) : false}
-        consentReason={activeAppt ? dataWindows[activeAppt.medsaId]?.reason : null}
+        withinDataWindow={activeAppt ? withinDataWindow(activeAppt.id) : false}
+        consentReason={activeAppt ? dataWindows[activeAppt.id]?.reason : null}
         onConfirmConsent={handleConfirmConsent}
         onGoToConsultation={onGoToConsultation}
         role={staffMember?.role}
