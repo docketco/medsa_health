@@ -1819,20 +1819,19 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     if (!referralSearch.trim()) { setReferralMatches([]); return }
     const timeout = setTimeout(async () => {
       const [medsaRes, dirRes] = await Promise.all([
-        supabase.from('staff_credentials').select('medsa_id,full_name,department')
+        supabase.from('staff_credentials').select('id,full_name,department')
           .eq('role','doctor').eq('status','active').ilike('full_name', `%${referralSearch}%`).limit(5),
         supabase.from('directory_doctors').select('*, directory_clinics(*)')
           .ilike('full_name', `%${referralSearch}%`).limit(5),
       ])
-      // id here must be medsa_id, not staff_credentials' own row id - every
-      // staff identity elsewhere in this file (staffMember.id, the
-      // referring_staff_medsa_id column) is keyed on medsa_id, since
-      // ClinicOps never loads a staff member's raw row id at all (see
-      // StaffLogin's own query above). Storing the row id here silently
-      // broke ReferralsManagementScreen's Received tab, which queries
-      // matched_staff_credential_id against staffMember.id (= medsa_id) -
-      // a real match would simply never be found.
-      const medsaMatches = (medsaRes.data||[]).map(d => ({ source:'medsa', id:d.medsa_id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' }))
+      // id here is staff_credentials' own row id (a real uuid) - that's
+      // what matched_staff_credential_id's column type actually is.
+      // Storing medsa_id here instead (a tried fix, reverted) would throw
+      // "invalid input syntax for type uuid" on every insert - the real
+      // bug was on the READ side (ReferralsManagementScreen comparing this
+      // uuid column against staffMember.id, which is a medsa_id string),
+      // now fixed there instead - see the comment on ReferralsManagementScreen's load().
+      const medsaMatches = (medsaRes.data||[]).map(d => ({ source:'medsa', id:d.id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' }))
       const dirMatches = (dirRes.data||[]).map(d => ({ source:'directory', id:d.id, name:d.full_name, clinicLabel:d.directory_clinics?.name, phone:d.directory_clinics?.contact_phone, email:d.directory_clinics?.contact_email }))
       setReferralMatches([...medsaMatches, ...dirMatches])
     }, 300)
@@ -5765,9 +5764,18 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
 
   async function load() {
     setLoading(true)
+    // matched_staff_credential_id is a real uuid column holding
+    // staff_credentials' own row id, not staffMember.id (which is that
+    // row's medsa_id - the only identity ClinicOps ever loads client-side,
+    // see StaffLogin's own query). Comparing a uuid column directly
+    // against a medsa_id string either errors or just matches nothing -
+    // resolve this staff member's real row id first.
+    const { data: myCred } = await supabase.from('staff_credentials').select('id').eq('medsa_id', staffMember.id).maybeSingle()
     const [sentRes, receivedRes] = await Promise.all([
       supabase.from('referrals').select('*, patients(full_name), referral_consultations(*)').eq('referring_staff_medsa_id', staffMember.id).order('created_at',{ascending:false}),
-      supabase.from('referrals').select('*, patients(full_name), referral_consultations(*)').eq('matched_staff_credential_id', staffMember.id).order('created_at',{ascending:false}),
+      myCred?.id
+        ? supabase.from('referrals').select('*, patients(full_name), referral_consultations(*)').eq('matched_staff_credential_id', myCred.id).order('created_at',{ascending:false})
+        : Promise.resolve({ data: [] }),
     ])
     setSent(sentRes.data||[])
     setReceived(receivedRes.data||[])
@@ -8709,8 +8717,13 @@ export default function ClinicOpsApp() {
   useEffect(() => {
     async function loadReferralBadge() {
       if (!staffMember?.id) { setReferralBadgeCount(0); return }
+      // Same uuid-vs-medsa_id resolution ReferralsManagementScreen's own
+      // load() needs - see the comment there.
+      const { data: myCred } = await supabase.from('staff_credentials').select('id').eq('medsa_id', staffMember.id).maybeSingle()
       const [receivedRes, sentRes] = await Promise.all([
-        supabase.from('referrals').select('id', {count:'exact', head:true}).eq('matched_staff_credential_id', staffMember.id).eq('clinical_status','pending_review'),
+        myCred?.id
+          ? supabase.from('referrals').select('id', {count:'exact', head:true}).eq('matched_staff_credential_id', myCred.id).eq('clinical_status','pending_review')
+          : Promise.resolve({ count: 0 }),
         supabase.from('referrals').select('id, clinical_status, referrer_viewed_at').eq('referring_staff_medsa_id', staffMember.id),
       ])
       const unreadSent = (sentRes.data||[]).filter(r => r.clinical_status!=='pending_review' && !r.referrer_viewed_at).length

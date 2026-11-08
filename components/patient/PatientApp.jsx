@@ -473,6 +473,21 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 
   useEffect(() => { loadDoctorMessages() }, [patient?.medsa_id])
 
+  // The hero QR below and the Emergency Card are deliberately the SAME
+  // code (emergency_card_token), not two separate ones - a plain camera
+  // opens it as a URL and lands on the public emergency page; Medsa's own
+  // scanners (ClinicOps/referral/share) read the same text and resolve it
+  // straight to the patient instead (see lib/scannedPatientCode.js). That
+  // only works if every patient has a token on file, not just the ones
+  // who opted into the Emergency Card - generate one lazily here,
+  // independent of emergency_card_active/consent, which still (and only)
+  // gate whether the public page actually shows anything for it.
+  useEffect(() => {
+    if (!patient?.id || patient?.emergency_card_token) return
+    const token = typeof crypto!=='undefined' && crypto.randomUUID ? crypto.randomUUID().replace(/-/g,'') : Math.random().toString(36).slice(2)+Date.now().toString(36)
+    supabase.from('patients').update({ emergency_card_token: token }).eq('id', patient.id).then(() => onPatientUpdated && onPatientUpdated())
+  }, [patient?.id, patient?.emergency_card_token])
+
   async function loadHomeAccessRequests(patientRowId) {
     if (!patientRowId) { setHomeAccessRequestsLoading(false); return }
     // Real bug found going through your own test run: this table's
@@ -782,16 +797,17 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           </div>
         </div>
         {/* QR Code — large and centred, the hero. Real and scannable - NOT
-            decorative. This used to be a static SVG mockup that encoded
-            nothing, which quietly broke every flow that expects to scan a
-            patient's real Medsa ID (ClinicOps check-in search aside, both
-            /share and /referral-portal's QrScanner steps compare the
-            scanned value against patients.medsa_id directly). Same
-            api.qrserver.com pattern already used for the emergency-card
-            and /share codes elsewhere in this file - no new dependency. */}
+            decorative (it used to be a static SVG mockup encoding
+            nothing). Same code as the Emergency Card, not a second one -
+            a plain camera opens it as a URL and lands on the public
+            emergency page; Medsa's own scanners (ClinicOps/share/
+            referral-portal) read the same text and resolve it straight
+            to this patient instead (lib/scannedPatientCode.js). Same
+            api.qrserver.com pattern already used for the emergency card
+            elsewhere in this file - no new dependency. */}
         <div style={{background:'#fff',borderRadius:'14px',padding:'20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'12px'}}>
-          {patient?.medsa_id
-            ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(patient.medsa_id)}`} alt="Your Medsa ID QR code" width={140} height={140}/>
+          {patient?.emergency_card_token && typeof window!=='undefined'
+            ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.origin}/emergency?t=${patient.emergency_card_token}`)}`} alt="Your Medsa QR code" width={140} height={140}/>
             : <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
                 <rect x="2" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
                 <rect x="28" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>

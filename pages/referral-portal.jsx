@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { supabase } from '../lib/supabase'
+import { resolveScannedPatient } from '../lib/scannedPatientCode'
 import C from '../components/shared/colours'
 import QrScanner from '../components/QrScanner'
 
@@ -255,7 +256,7 @@ export default function ReferralPortalPage() {
   }
 
   async function handleScan(qrData) {
-    const { data } = await supabase.from('patients').select('id, full_name, medsa_id').eq('medsa_id', qrData).maybeSingle()
+    const data = await resolveScannedPatient(qrData)
     if (!data) { setError('Could not find a patient for this QR code.'); setStage('error'); return }
     setPatient(data)
     setStage('form')
@@ -344,7 +345,12 @@ export default function ReferralPortalPage() {
   // patient in front of them (or the patient's own QR in hand), and
   // catches a stale/mistargeted link before anything gets uploaded.
   async function handleReceiveScan(qrData) {
-    if (qrData !== patient?.medsa_id) {
+    // Resolve by id, not by comparing the raw scanned text against
+    // patient.medsa_id directly - patient here only ever carries
+    // full_name (loadReferral's patients(full_name) join), and the
+    // scanned text is now a URL wrapping a token, not a bare medsa_id.
+    const scanned = await resolveScannedPatient(qrData, 'id')
+    if (!scanned || scanned.id !== referral?.patient_id) {
       setError("That QR code doesn't match this referral's patient.")
       setStage('error')
       return
