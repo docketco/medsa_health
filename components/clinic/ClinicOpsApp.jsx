@@ -6099,23 +6099,18 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
               {/* No automated email ever goes out for this - the original
                   send screen is the only place the link+code ever showed,
                   so a doctor who lost that message had no way back in.
-                  Shown for any sent referral, matched or not - a matched
-                  doctor can still use this same link, and narrowing it
-                  by match status just made it hard to find/confusing
-                  about when it would even show up. */}
+                  Shown for any sent referral, matched or not - no live
+                  email provider is connected yet, so even a matched
+                  doctor's link is still the only real way to test/act as
+                  the receiving side right now, not just a fallback. */}
               {tab==='sent'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
                 {resendingId!==r.id&&<span onClick={()=>setResendingId(r.id)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Resend invitation {'→'}</span>}
-                {/* A matched doctor has nothing to actually resend - they
-                    already see this directly in their own Received tab,
-                    no link/code involved. Showing that same link+code
-                    box here anyway was confusing (there's nothing to
-                    send it TO), so this branch just confirms instead. */}
-                {resendingId===r.id&&r.matched_staff_credential_id&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',fontSize:'12px',color:C.green}}>✓ Resend confirmed - they're matched to a real Medsa account, so this already shows in their own Received tab, no link needed.</div>}
-                {resendingId===r.id&&!r.matched_staff_credential_id&&(()=>{
+                {resendingId===r.id&&(()=>{
                   const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${r.id}`
                   const mailto = `mailto:${r.to_clinic_email||''}?subject=${encodeURIComponent(`Referral for ${r.patients?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nFollowing up on the referral for ${r.patients?.full_name||'a patient'} via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nYou'll be asked for this access code when you open it: ${r.access_code}\n\nThanks.`)}`
                   return (
                     <div style={{background:C.cream,borderRadius:'8px',padding:'10px'}}>
+                      <div style={{fontSize:'11px',color:C.green,fontWeight:600,marginBottom:'8px'}}>{'✓'} Resend confirmed</div>
                       <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'8px'}}>
                         <input readOnly value={link} onClick={e=>e.target.select()} style={{flex:'1 1 160px',fontSize:'11px',padding:'6px 8px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff',color:C.text}}/>
                         <Btn style={{fontSize:'11px',padding:'6px 8px'}} onClick={()=>navigator.clipboard?.writeText(link)}>Copy link</Btn>
