@@ -492,13 +492,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
     // flipped status to 'approved' - nothing translated that into an
     // actual access grant anywhere, so a doctor who got approved still
     // couldn't see anything (ClinicOps checks appointment_intake's own
-    // window, which this table was never wired into). expires_at gives
-    // the approval a real 48h window ClinicOps can now actually check
-    // against (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
-    await supabase.from('record_access_requests').update({
-      status: approve?'approved':'denied', resolved_at:new Date().toISOString(),
-      expires_at: approve ? new Date(Date.now()+48*60*60*1000).toISOString() : null,
-    }).eq('id', req.id)
+    // window, which this table was never wired into). access_window_start/
+    // expires_at are set by the STAFF side at request time now (scoped to
+    // the specific appointment this was actually requested for - see
+    // handleRequestAccess in ClinicOpsApp.jsx), not here - approving just
+    // flips status, same as before; it's what makes that pre-set window
+    // actually count (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
+    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
     const remaining = homeAccessRequests.filter(r=>r.id!==req.id)
     setHomeAccessRequests(remaining)
     if (remaining.length===0) setShowAccessRequestsModal(false)
@@ -1424,13 +1424,13 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
     // flipped status to 'approved' - nothing translated that into an
     // actual access grant anywhere, so a doctor who got approved still
     // couldn't see anything (ClinicOps checks appointment_intake's own
-    // window, which this table was never wired into). expires_at gives
-    // the approval a real 48h window ClinicOps can now actually check
-    // against (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
-    await supabase.from('record_access_requests').update({
-      status: approve?'approved':'denied', resolved_at:new Date().toISOString(),
-      expires_at: approve ? new Date(Date.now()+48*60*60*1000).toISOString() : null,
-    }).eq('id', req.id)
+    // window, which this table was never wired into). access_window_start/
+    // expires_at are set by the STAFF side at request time now (scoped to
+    // the specific appointment this was actually requested for - see
+    // handleRequestAccess in ClinicOpsApp.jsx), not here - approving just
+    // flips status, same as before; it's what makes that pre-set window
+    // actually count (see checkApprovedAccessRequest in ClinicOpsApp.jsx).
+    await supabase.from('record_access_requests').update({ status: approve?'approved':'denied', resolved_at:new Date().toISOString() }).eq('id', req.id)
     setAccessRequests(prev=>prev.filter(r=>r.id!==req.id))
   }
 
@@ -1809,8 +1809,14 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
           sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
           date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
           src: r.source==='synced'?'Synced':'Manual',
+          // Real gap: this used to also show the full r.notes here, as
+          // one inline label/value row with no line-break support at all
+          // - a structured note (one field per line) ran together as a
+          // single illegible string. Per your call, full notes stay on
+          // the receipt (lib/receiptPdf.js, which does respect line
+          // breaks) - this card is diagnosis/department at a glance.
           details: [
-            ['Diagnosis',r.diagnosis||'—'], ['Notes',r.notes||'—'], ['Department',r.department||'—'],
+            ['Diagnosis',r.diagnosis||'—'], ['Department',r.department||'—'],
             ...(receipt ? [['Receipt', `HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`]] : []),
           ],
           receiptTxn: receipt,

@@ -18,11 +18,23 @@ import Icon from '../shared/Icon'
 // patient's history right now" - the Schedule screen's data-window
 // check and CheckInSearchScreen's own, so an approval unlocks the same
 // way regardless of which screen a doctor requested it from.
+//
+// Second real gap found right after shipping the first fix: an earlier
+// version of this granted a flat 48h window from whenever the patient
+// approved - technically worked, but had nothing to do with the actual
+// visit the request named, so approving one request ahead of a specific
+// appointment silently unlocked every OTHER visit that happened to fall
+// in that same 48h too. access_window_start/expires_at are now set by
+// the staff side AT REQUEST TIME, scoped to that one appointment's own
+// window (see handleRequestAccess) - this just checks "now" falls
+// inside that specific window, the same way appointment_intake's own
+// check already does.
 async function checkApprovedAccessRequest(patientId, institutionId) {
   if (!patientId || !institutionId) return false
+  const now = new Date().toISOString()
   const { data } = await supabase.from('record_access_requests')
     .select('id').eq('patient_id', patientId).eq('requesting_institution_id', institutionId)
-    .eq('status', 'approved').gt('expires_at', new Date().toISOString())
+    .eq('status', 'approved').lte('access_window_start', now).gte('expires_at', now)
     .order('resolved_at', { ascending: false }).limit(1).maybeSingle()
   return !!data
 }
@@ -2317,15 +2329,22 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       {!saved&&<div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'8px'}}>
         {NOTE_TEMPLATES.map(t=>(
           <div key={t.key} onClick={()=>{
-            // Real gap found live-testing: clicking the same template
-            // twice (or clicking it again after switching away and back)
-            // appended its skeleton again on top of what was already
-            // there, every time, with nothing to stop it - a second click
-            // just duplicated the whole block of fields. Only insert when
-            // this is actually a different template than the one already applied.
-            if (noteTemplate===t.key) return
             setNoteTemplate(t.key)
-            if (t.skeleton) setNotes(prev => prev.trim() ? prev + (prev.endsWith('\n')?'':'\n') + '\n' + t.skeleton : t.skeleton)
+            if (!t.skeleton) return
+            // Real gap found live-testing: this used to guard on
+            // noteTemplate state alone (don't re-insert if this template
+            // is already the selected one) - but that state doesn't
+            // survive navigating away from this consultation and back,
+            // so a re-click after "going back" no longer matched and
+            // appended the skeleton again. Checking the actual TEXT
+            // already in the notes field instead is immune to that -
+            // this template's exact skeleton already being present is
+            // what actually means "already inserted," regardless of
+            // whatever state did or didn't persist.
+            setNotes(prev => {
+              if (prev.includes(t.skeleton)) return prev
+              return prev.trim() ? prev + (prev.endsWith('\n')?'':'\n') + '\n' + t.skeleton : t.skeleton
+            })
           }} style={{padding:'6px 12px',borderRadius:'16px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:noteTemplate===t.key?C.green:C.card,color:noteTemplate===t.key?'#fff':C.textSub}}>{t.label}</div>
         ))}
       </div>}
@@ -3346,10 +3365,24 @@ function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, co
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', staffMember.institutionId).maybeSingle()
       clinicName = inst?.name || null
     }
+    // Real gap found live-testing: approving this used to grant a flat
+    // 48h window from whenever the patient happened to approve it -
+    // technically "worked" but had nothing to do with the actual visit
+    // this was requested for, so approving one request ahead of a
+    // specific appointment quietly unlocked the record for every OTHER
+    // visit that fell inside that same 48h too. Scoped to the real
+    // appointment's own window now instead - same 12h-before/12h-after
+    // formula appointment_intake already uses - computed here at
+    // request time (the only place that actually knows which
+    // appointment this is for), not at approval time.
+    const { start: apptDayStart, end: apptDayEnd } = hkDayBounds(appt.scheduledAt ? new Date(appt.scheduledAt) : new Date())
+    const accessWindowStart = new Date(apptDayStart.getTime() - 12*60*60*1000).toISOString()
+    const accessWindowEnd = new Date(apptDayEnd.getTime() + 12*60*60*1000).toISOString()
     const { error } = await supabase.from('record_access_requests').insert({
       patient_id: fullPatient.id, requesting_staff: staffMember?.name || 'Unknown',
       requesting_clinic: clinicName, requesting_institution_id: staffMember?.institutionId || null,
       reason: 'Ahead of scheduled visit', status: 'pending',
+      access_window_start: accessWindowStart, expires_at: accessWindowEnd,
     })
     setSendingAccessRequest(false)
     if (error) { alert(`Could not send request: ${error.message}`); return }
