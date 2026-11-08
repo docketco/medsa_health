@@ -5732,6 +5732,151 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   )
 }
 
+// ── REFERRALS (doctor-to-doctor accept/decline/results) ───────────────────
+// Separate concern from AgentApp.jsx's own ReferralsScreen, which reviews
+// the SAME table for insurer-claim-eligibility purposes (status column,
+// 'submitted'/'approved'/'rejected') - this is the actual clinical
+// handoff between two doctors, tracked on clinical_status instead so the
+// two never collide. Real gap this closes: /referral-portal used to go
+// straight from reviewing a referral into scanning the patient's QR and
+// recording results, as if the receiving doctor already had the patient
+// in front of them the moment they opened the link - in reality that's
+// two separate moments (review/accept, then the actual visit later), and
+// a doctor matched to a real Medsa account shouldn't need the public
+// link at all to manage that first moment when they're already logged
+// in here.
+function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSchedule }) {
+  const [tab,setTab]=useState('received')
+  const [sent,setSent]=useState([])
+  const [received,setReceived]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [expandedId,setExpandedId]=useState(null)
+  const [decliningId,setDecliningId]=useState(null)
+  const [declineReason,setDeclineReason]=useState('')
+  const [actingId,setActingId]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const [sentRes, receivedRes] = await Promise.all([
+      supabase.from('referrals').select('*, patients(full_name), referral_consultations(*)').eq('referring_staff_medsa_id', staffMember.id).order('created_at',{ascending:false}),
+      supabase.from('referrals').select('*, patients(full_name), referral_consultations(*)').eq('matched_staff_credential_id', staffMember.id).order('created_at',{ascending:false}),
+    ])
+    setSent(sentRes.data||[])
+    setReceived(receivedRes.data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [staffMember.id])
+
+  // Opening a SENT referral is what "reading" its latest update means -
+  // same pattern the doctor-message/inquiry threads elsewhere already
+  // use for clearing an unread badge the moment it's actually seen.
+  async function handleToggleExpand(r, isSent) {
+    const opening = expandedId !== r.id
+    setExpandedId(opening ? r.id : null)
+    if (opening && isSent && r.clinical_status !== 'pending_review') {
+      await supabase.from('referrals').update({ referrer_viewed_at: new Date().toISOString() }).eq('id', r.id)
+      setSent(prev => prev.map(x => x.id===r.id ? {...x, referrer_viewed_at: new Date().toISOString()} : x))
+    }
+  }
+
+  async function handleAccept(r) {
+    setActingId(r.id)
+    await supabase.from('referrals').update({
+      clinical_status: 'accepted', decided_by: staffMember.name, decided_at: new Date().toISOString(),
+    }).eq('id', r.id)
+    setActingId(null)
+    load()
+  }
+
+  async function handleDeclineSubmit(r) {
+    if (!declineReason.trim()) return
+    setActingId(r.id)
+    await supabase.from('referrals').update({
+      clinical_status: 'declined', decline_reason: declineReason.trim(),
+      decided_by: staffMember.name, decided_at: new Date().toISOString(),
+    }).eq('id', r.id)
+    setActingId(null); setDecliningId(null); setDeclineReason('')
+    load()
+  }
+
+  // Reuses the exact same preselect mechanism "register a new walk-in"
+  // and "schedule a follow-up" already use on the Schedule screen - the
+  // patient's already known here, no reason to make the receiving doctor
+  // search for them again.
+  async function handleScheduleVisit(r) {
+    const { data: patientRow } = await supabase.from('patients').select('*').eq('id', r.patient_id).maybeSingle()
+    if (patientRow) onScheduleFollowup?.(patientRow)
+    onNavSchedule?.()
+  }
+
+  const STATUS_META = {
+    pending_review: {label:'Awaiting decision', type:'due'},
+    accepted: {label:'Accepted', type:'ok'},
+    declined: {label:'Declined', type:'full'},
+    completed: {label:'Results in', type:'waiting'},
+  }
+
+  const list = tab==='received' ? received : sent
+  const unreadSentCount = sent.filter(r => r.clinical_status!=='pending_review' && !r.referrer_viewed_at).length
+  const pendingReceivedCount = received.filter(r => r.clinical_status==='pending_review').length
+
+  return (
+    <PageWrap maxWidth={680}>
+      <h2 style={{fontSize:'22px',fontWeight:700,marginBottom:'16px'}}>Referrals</h2>
+      <div style={{display:'flex',gap:'8px',marginBottom:'18px'}}>
+        <div onClick={()=>setTab('received')} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab==='received'?C.green:C.card,color:tab==='received'?'#fff':C.text,position:'relative'}}>
+          Received{pendingReceivedCount>0&&<span style={{marginLeft:'6px',background:tab==='received'?'#fff':C.red,color:tab==='received'?C.green:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',padding:'1px 7px'}}>{pendingReceivedCount}</span>}
+        </div>
+        <div onClick={()=>setTab('sent')} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab==='sent'?C.green:C.card,color:tab==='sent'?'#fff':C.text,position:'relative'}}>
+          Sent{unreadSentCount>0&&<span style={{marginLeft:'6px',background:tab==='sent'?'#fff':C.red,color:tab==='sent'?C.green:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',padding:'1px 7px'}}>{unreadSentCount}</span>}
+        </div>
+      </div>
+      {tab==='received'&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Referrals sent to you directly, matched to your Medsa account - accept or decline here, no need to go through the public referral link.</div>}
+      {tab==='sent'&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Referrals you've sent out. You'll see here once the receiving doctor accepts, declines, or sends results back.</div>}
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&list.length===0&&<div style={{textAlign:'center',padding:'30px 20px',color:C.textMuted,fontSize:'13px'}}>{tab==='received'?'No referrals waiting on you.':"You haven't sent any referrals yet."}</div>}
+      {!loading&&list.map(r=>{
+        const meta = STATUS_META[r.clinical_status] || {label:r.clinical_status, type:'due'}
+        const hasResults = (r.referral_consultations||[]).length > 0
+        const isOpen = expandedId===r.id
+        return (
+          <Card key={r.id} style={{padding:'14px 16px',marginBottom:'8px',cursor:'pointer'}}>
+            <div onClick={()=>handleToggleExpand(r, tab==='sent')} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
+              <div>
+                <div style={{fontSize:'14px',fontWeight:600}}>{r.patients?.full_name||'Unknown patient'}</div>
+                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{tab==='received'?`From ${r.referring_doctor_name||r.referring_staff||'Unknown'}`:`To ${r.to_doctor_name||r.referred_to_practitioner_name||'Unknown'}`}</div>
+                <div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>{new Date(r.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+              </div>
+              <Badge text={meta.label} type={meta.type}/>
+            </div>
+            {isOpen&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.border}`}}>
+              {r.reason&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Reason:</strong> {r.reason}</div>}
+              {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
+              {r.clinical_status==='declined'&&r.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}><strong>Decline reason:</strong> {r.decline_reason}</div>}
+              {hasResults&&<div style={{fontSize:'12px',color:C.green,marginBottom:'6px'}}><strong>✓ Results received</strong> - {r.referral_consultations[0].findings||'see consultation record'}</div>}
+
+              {tab==='received'&&r.clinical_status==='pending_review'&&decliningId!==r.id&&<div style={{display:'flex',gap:'8px',marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={actingId===r.id} onClick={()=>handleAccept(r)}>{actingId===r.id?'Saving…':'Accept'}</Btn>
+                <Btn style={{flex:1,fontSize:'12px'}} disabled={actingId===r.id} onClick={()=>setDecliningId(r.id)}>Decline</Btn>
+              </div>}
+              {tab==='received'&&decliningId===r.id&&<div style={{marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
+                <textarea value={declineReason} onChange={e=>setDeclineReason(e.target.value)} rows={2} placeholder="Reason for declining (shown to the referring doctor)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'8px',resize:'vertical'}}/>
+                <div style={{display:'flex',gap:'8px'}}>
+                  <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={!declineReason.trim()||actingId===r.id} onClick={()=>handleDeclineSubmit(r)}>{actingId===r.id?'Saving…':'Confirm decline'}</Btn>
+                  <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setDecliningId(null);setDeclineReason('')}}>Cancel</Btn>
+                </div>
+              </div>}
+              {tab==='received'&&r.clinical_status==='accepted'&&!hasResults&&<div style={{marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
+                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>handleScheduleVisit(r)}>Schedule this patient's visit</Btn>
+              </div>}
+            </div>}
+          </Card>
+        )
+      })}
+    </PageWrap>
+  )
+}
+
 function PaymentScreen({ staffMember, institutionId, preselectClaimRef, onConsumedPreselect, preselectRecordId, onConsumedRecordPreselect }) {
   // Guards the loaders below against a slow in-flight request from a
   // PREVIOUS institutionId (e.g. this staff member switched clinics
@@ -8548,6 +8693,23 @@ export default function ClinicOpsApp() {
   const [newPatientOrigin,setNewPatientOrigin]=useState('checkin') // 'checkin' | 'schedule'
   const [newPatientPrefillName,setNewPatientPrefillName]=useState('')
   const [schedulePreselectPatient,setSchedulePreselectPatient]=useState(null)
+  const [referralBadgeCount,setReferralBadgeCount]=useState(0)
+  // Nav badge for the Referrals tab - received referrals still awaiting
+  // this doctor's decision, plus sent referrals with an update (decided
+  // or results in) they haven't opened yet. Cheap enough to just re-run
+  // on every staff login/switch rather than wiring real-time updates.
+  useEffect(() => {
+    async function loadReferralBadge() {
+      if (!staffMember?.id) { setReferralBadgeCount(0); return }
+      const [receivedRes, sentRes] = await Promise.all([
+        supabase.from('referrals').select('id', {count:'exact', head:true}).eq('matched_staff_credential_id', staffMember.id).eq('clinical_status','pending_review'),
+        supabase.from('referrals').select('id, clinical_status, referrer_viewed_at').eq('referring_staff_medsa_id', staffMember.id),
+      ])
+      const unreadSent = (sentRes.data||[]).filter(r => r.clinical_status!=='pending_review' && !r.referrer_viewed_at).length
+      setReferralBadgeCount((receivedRes.count||0) + unreadSent)
+    }
+    loadReferralBadge()
+  }, [staffMember?.id, screen])
   const [payPreselectClaimRef,setPayPreselectClaimRef]=useState(null)
   const [payPreselectRecordId,setPayPreselectRecordId]=useState(null)
   const [checkedInQueue,setCheckedInQueue]=useState([])
@@ -9157,6 +9319,7 @@ export default function ClinicOpsApp() {
     {key:'mypatients', icon:'patients', label:'My Patients', roles:['doctor']},
     {key:'checkin', icon:'scan', label:'Check-in / Search', roles:['admin','clinic_assistant','doctor']},
     {key:'schedule', icon:'calendar', label:'Schedule', roles:['admin','clinic_assistant','doctor']},
+    {key:'referrals', icon:'doctors', label:'Referrals', roles:['admin','clinic_assistant','doctor'], badge: referralBadgeCount},
     {key:'prescriptions', icon:'prescriptions', label:'Consultation Confirmation / Prescription', roles:['admin','clinic_assistant'], badge: pendingCount},
     {key:'inventory', icon:'inventory', label:'Inventory', roles:['admin','clinic_assistant']},
     {key:'ordersets', icon:'orderset', label:'Order Sets', roles:['admin','doctor']},
@@ -9262,6 +9425,7 @@ export default function ClinicOpsApp() {
             }
           }}
         />}
+        {screen==='referrals'&&<ReferralsManagementScreen staffMember={staffMember} onScheduleFollowup={setSchedulePreselectPatient} onNavSchedule={()=>setScreen('schedule')}/>}
         {screen==='prescriptions'&&<PrescriptionsQueueScreen pending={pendingPrescriptions} onConfirm={handleConfirmPrescription} medicineType={medicineType} onReload={loadTaskBoard} institutionName={institutionName} institutionId={institutionId} onPrinted={(p)=>{setPayPreselectRecordId(p.recordId);setScreen('payment')}}/>}
         {screen==='inventory'&&<InventoryScreen staffMember={staffMember} institutionId={institutionId} medicineType={medicineType}/>}
         {screen==='ordersets'&&<OrderSetsScreen institutionId={institutionId} staffMember={staffMember}/>}
