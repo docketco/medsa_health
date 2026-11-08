@@ -781,17 +781,26 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             }
           </div>
         </div>
-        {/* QR Code — large and centred, the hero */}
+        {/* QR Code — large and centred, the hero. Real and scannable - NOT
+            decorative. This used to be a static SVG mockup that encoded
+            nothing, which quietly broke every flow that expects to scan a
+            patient's real Medsa ID (ClinicOps check-in search aside, both
+            /share and /referral-portal's QrScanner steps compare the
+            scanned value against patients.medsa_id directly). Same
+            api.qrserver.com pattern already used for the emergency-card
+            and /share codes elsewhere in this file - no new dependency. */}
         <div style={{background:'#fff',borderRadius:'14px',padding:'20px',display:'flex',flexDirection:'column',alignItems:'center',gap:'12px'}}>
-          <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
-            <rect x="2" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
-            <rect x="2" y="28" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
-            <rect x="28" y="28" width="4" height="4" fill={themeAccent}/><rect x="34" y="28" width="4" height="4" fill={themeAccent}/>
-            <rect x="40" y="28" width="6" height="4" fill={themeAccent}/><rect x="28" y="34" width="6" height="4" fill={themeAccent}/>
-            <rect x="36" y="34" width="4" height="4" fill={themeAccent}/><rect x="28" y="40" width="4" height="6" fill={themeAccent}/>
-            <rect x="34" y="42" width="12" height="4" fill={themeAccent}/>
-          </svg>
+          {patient?.medsa_id
+            ? <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(patient.medsa_id)}`} alt="Your Medsa ID QR code" width={140} height={140}/>
+            : <svg width="140" height="140" viewBox="0 0 48 48" fill="none">
+                <rect x="2" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="6" width="10" height="10" rx="1" fill="white"/>
+                <rect x="28" y="2" width="18" height="18" rx="2" fill={themeAccent}/><rect x="32" y="6" width="10" height="10" rx="1" fill="white"/>
+                <rect x="2" y="28" width="18" height="18" rx="2" fill={themeAccent}/><rect x="6" y="32" width="10" height="10" rx="1" fill="white"/>
+                <rect x="28" y="28" width="4" height="4" fill={themeAccent}/><rect x="34" y="28" width="4" height="4" fill={themeAccent}/>
+                <rect x="40" y="28" width="6" height="4" fill={themeAccent}/><rect x="28" y="34" width="6" height="4" fill={themeAccent}/>
+                <rect x="36" y="34" width="4" height="4" fill={themeAccent}/><rect x="28" y="40" width="4" height="6" fill={themeAccent}/>
+                <rect x="34" y="42" width="12" height="4" fill={themeAccent}/>
+              </svg>}
           <div style={{textAlign:'center'}}>
             <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{isEn?'Show this to any Medsa-registered provider':'向任何Medsa註冊醫療人員出示'}</div>
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{isEn?'They see what their role permits · You control the rest':'他們只看到其職責所允許的內容'}</div>
