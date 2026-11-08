@@ -3382,6 +3382,13 @@ function OverviewScreen({ queue, pendingCount, onRemoveFromQueue, onCancelAppoin
 // access should be able to make these changes, not just reception staff.
 function ClinicScheduleActionModal({ appt, onClose, onSave, withinDataWindow, consentReason, onConfirmConsent, onGoToConsultation, onCancelCheckIn, role, onCheckedIn, onScheduleFollowup, staffMember, onRefreshAppointments, checkInError, clinicQueues=[], institutionId }) {
   const [mode,setMode]=useState(null) // null | 'reschedule' | 'switch' | 'cancel' | 'notes'
+  // Opening straight into a specific mode (e.g. the Referrals tab's
+  // "Already scheduled" banner jumping right to rescheduling) instead of
+  // the general action card, which would otherwise show irrelevant
+  // options like Check-in alongside it. appt is a new object every time
+  // a different appointment opens, so this needs to re-fire per appt,
+  // not just on first mount.
+  useEffect(() => { setMode(appt?.__initialMode || null) }, [appt])
   const [checkingIn,setCheckingIn]=useState(false)
   const [saveError,setSaveError]=useState(null)
   const [savingChange,setSavingChange]=useState(false)
@@ -5367,9 +5374,13 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     setExistingUpcomingAppt(data || null)
   }
 
-  // Jumps straight to the real reschedule picker on the existing
-  // appointment, rather than building a second one here - same shape
-  // loadRealAppointments maps its rows to, since that's what
+  // Jumps straight to the real reschedule DATE/TIME picker on the
+  // existing appointment, not the general action card - real gap found
+  // live-testing: opening the plain action card here showed a "Check in"
+  // option alongside everything else, which doesn't belong in a
+  // rescheduling flow at all (it's only "book this as a separate visit
+  // vs. move the existing one", not "check someone in right now"). Same
+  // shape loadRealAppointments maps its rows to, since that's what
   // ClinicScheduleActionModal (via activeAppt/handleSaveAppt) expects.
   function handleRescheduleInstead() {
     const a = existingUpcomingAppt
@@ -5381,6 +5392,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       medsaId: a.patients?.medsa_id || null, doctor: a.doctor_name || 'Unassigned',
       department: a.department || 'Internal Medicine', type: a.appointment_type || 'Consultation',
       status: a.status || 'confirmed', notes: a.reason_for_visit || '', consultType: a.consult_type || 'in-person', isReal: true,
+      __initialMode: 'reschedule',
     })
   }
 
@@ -5857,7 +5869,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
             <div style={{fontSize:'13px',fontWeight:700,color:C.amber,marginBottom:'4px'}}>⚠ Already scheduled</div>
             <div style={{fontSize:'12.5px',color:C.text,marginBottom:'12px',lineHeight:1.5}}>{newApptPatient?.full_name} already has an appointment on <strong>{new Date(existingUpcomingAppt.scheduled_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} at {hkHHMM(existingUpcomingAppt.scheduled_at)}</strong> with {existingUpcomingAppt.doctor_name||'a doctor'}. Need to reschedule that instead of booking a separate one?</div>
             <div style={{display:'flex',gap:'8px'}}>
-              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={handleRescheduleInstead}>Reschedule that one</Btn>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={handleRescheduleInstead}>Reschedule instead</Btn>
               <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExistingApptDismissed(true)}>Book a separate visit</Btn>
             </div>
           </div>}
@@ -6093,7 +6105,13 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
                   about when it would even show up. */}
               {tab==='sent'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
                 {resendingId!==r.id&&<span onClick={()=>setResendingId(r.id)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Resend invitation {'→'}</span>}
-                {resendingId===r.id&&(()=>{
+                {/* A matched doctor has nothing to actually resend - they
+                    already see this directly in their own Received tab,
+                    no link/code involved. Showing that same link+code
+                    box here anyway was confusing (there's nothing to
+                    send it TO), so this branch just confirms instead. */}
+                {resendingId===r.id&&r.matched_staff_credential_id&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',fontSize:'12px',color:C.green}}>✓ Resend confirmed - they're matched to a real Medsa account, so this already shows in their own Received tab, no link needed.</div>}
+                {resendingId===r.id&&!r.matched_staff_credential_id&&(()=>{
                   const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${r.id}`
                   const mailto = `mailto:${r.to_clinic_email||''}?subject=${encodeURIComponent(`Referral for ${r.patients?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nFollowing up on the referral for ${r.patients?.full_name||'a patient'} via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nYou'll be asked for this access code when you open it: ${r.access_code}\n\nThanks.`)}`
                   return (

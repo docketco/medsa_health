@@ -785,7 +785,7 @@ function ShiftBiddingScreen({ role, doctorName, department }) {
   )
 }
 
-function CheckInScreen() {
+function CheckInScreen({ doctorName }) {
   const [mode,setMode]=useState('scan') // 'scan' | 'search'
   const [scanChoices,setScanChoices]=useState([])
   const [found,setFound]=useState(null)
@@ -802,11 +802,17 @@ function CheckInScreen() {
   // Real check-in: finds today's appointment for this patient and marks
   // it checked_in, so the doctor's Today's Patients view can correctly
   // gate full diagnosis access on actual arrival, not just being
-  // scheduled. Previously this button only set local state and never
-  // touched the real appointment at all.
+  // scheduled. Real gap found live-testing: a genuine walk-in (no
+  // matching appointment) used to only set local state and leave the
+  // database completely untouched - the UI said "checked in" but nothing
+  // backing that existed anywhere, so the patient could never show up
+  // under anyone's Today's Patients/schedule. Now creates a real walk-in
+  // appointment row for that case instead, same as ClinicOpsApp.jsx's
+  // own check-in does for its walk-ins. Also scoped to the real Hong
+  // Kong clinic day (hkDayBounds), not the browser's own local midnight -
+  // same class of bug already fixed everywhere else in this codebase.
   async function handleRealCheckIn() {
-    const dayStart = new Date(); dayStart.setHours(0,0,0,0)
-    const dayEnd = new Date(); dayEnd.setHours(23,59,59,999)
+    const { start: dayStart, end: dayEnd } = hkDayBounds(new Date())
     const { data: todaysAppt } = await supabase.from('appointments').select('id')
       .eq('patient_id', found.id)
       .eq('institution_source', 'practitioner')
@@ -817,7 +823,13 @@ function CheckInScreen() {
       await supabase.from('appointments').update({ status: 'checked_in', checked_in_at: new Date().toISOString() }).eq('id', todaysAppt.id)
       setCheckInNote(null)
     } else {
-      setCheckInNote('No scheduled appointment found for today - checked in as a walk-in, not linked to a specific appointment.')
+      const now = new Date()
+      const { error } = await supabase.from('appointments').insert({
+        patient_id: found.id, doctor_name: doctorName || null,
+        institution_source: 'practitioner', appointment_type: 'Consultation',
+        scheduled_at: now.toISOString(), status: 'checked_in', checked_in_at: now.toISOString(),
+      })
+      setCheckInNote(error ? `Could not check in: ${error.message}` : 'No scheduled appointment found for today - checked in as a walk-in.')
     }
     setCheckedIn(true)
   }
@@ -3982,7 +3994,7 @@ export default function PractitionerApp({ liveData={} }) {
       </div>
       <div style={{flex:1,overflowY:'auto'}}>
         {screen==='id'&&<PractitionerIDScreen role={role} doctorName={doctorName} specialtyType={specialtyType}/>}
-        {screen==='checkin'&&<CheckInScreen/>}
+        {screen==='checkin'&&<CheckInScreen doctorName={doctorName}/>}
         {screen==='patients'&&<PatientSearchScreen role={role} liveData={liveData} autoOpenLog={jumpToLog} autoOpenRecord={jumpToRecord} doctorName={doctorName}/>}
         {screen==='schedule'&&<ScheduleScreen role={role} department={department} doctorName={doctorName} onGoToFullDiagnosis={()=>{setJumpToLog(true);setScreen('patients')}} onViewFullRecord={()=>{setJumpToRecord(true);setScreen('patients')}}/>}
         {screen==='messages'&&<MessagesScreen role={role}/>}

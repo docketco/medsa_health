@@ -1894,21 +1894,35 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
               receiptTxn: receipt,
             }
           })
-          const referralItems = referrals.map(ref=>{
+          // Multiple referrals can share one originating visit - a
+          // second referral sent from the same consultation, or a
+          // "Refer to another specialist" chain after a decline. Each
+          // used to render as its own full card, repeating the same
+          // REFERRING VISIT section every time. Grouped by
+          // source_appointment_id instead, so that section shows once
+          // and every referral against it nests underneath as its own
+          // "Referred to X" entry.
+          const referralGroups = {}
+          referrals.forEach(ref=>{
             const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || (isEn?'Unnamed receiving practitioner':'未具名接收醫療人員')
-            // The real originating visit (title/diagnosis/receipt), not
-            // just the free-text reason/diagnosis the referring doctor
-            // happened to type into the referral panel itself - this is
-            // what makes the thread open to a real record even while the
-            // referred doctor's result is still outstanding, per your
-            // call that the first visit shouldn't wait on the second.
             const sourceRecord = ref.source_appointment_id ? referralSourceRecords[ref.source_appointment_id] : null
-            return { kind:'referral', sortDate: new Date(ref.created_at), ref, toWho,
+            const key = ref.source_appointment_id || `standalone:${ref.id}`
+            if (!referralGroups[key]) referralGroups[key] = { key, sourceRecord, entries: [] }
+            referralGroups[key].entries.push({ ref, toWho,
               consults: ref.referral_consultations||[],
-              sourceRecord,
-              sourceReceipt: sourceRecord ? transactions.find(t=>t.medical_record_id===sourceRecord.id) : null,
               followup: ref.followup_appointment_id ? referralFollowups[ref.followup_appointment_id] : null,
-              cardTitle: sourceRecord?.title || (isEn?'Referred to':'轉介至')+' '+toWho,
+            })
+          })
+          const referralItems = Object.values(referralGroups).map(g=>{
+            // Oldest first - the original attempt, then any "Refer to
+            // another specialist" tries after it, in the order sent.
+            g.entries.sort((a,b)=>new Date(a.ref.created_at)-new Date(b.ref.created_at))
+            const firstRef = g.entries[0].ref
+            const sourceReceipt = g.sourceRecord ? transactions.find(t=>t.medical_record_id===g.sourceRecord.id) : null
+            return { kind:'referral', key:g.key,
+              sortDate: g.sourceRecord ? new Date(g.sourceRecord.date_of_record) : new Date(firstRef.created_at),
+              sourceRecord: g.sourceRecord, sourceReceipt, entries: g.entries, firstRef,
+              cardTitle: g.sourceRecord?.title || (isEn?'Referred to':'轉介至')+' '+g.entries[0].toWho,
             }
           })
           const feedItems = [...recordItems, ...referralItems].sort((a,b)=>b.sortDate-a.sortDate)
@@ -1967,16 +1981,19 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>}
           </Card>
           ) : (()=>{
-            const { ref, toWho, consults, sourceRecord, sourceReceipt, followup, cardTitle } = item
-            const isOpen = expandedReferral===ref.id
+            const { key, sourceRecord, sourceReceipt, entries, firstRef, cardTitle } = item
+            const isOpen = expandedReferral===key
+            const lastEntry = entries[entries.length-1]
+            const statusOf = (ref) => ref.clinical_status==='completed'?(isEn?'Results in':'已有結果'):ref.clinical_status==='declined'?(isEn?'Declined':'已拒絕'):ref.clinical_status==='accepted'?(isEn?'Accepted':'已接受'):(isEn?'Awaiting decision':'待決定')
+            const badgeStyle = (ref) => ({ background: ref.clinical_status==='completed'?__theme.accentLight:ref.clinical_status==='declined'?C.redLight:C.brownLight, color: ref.clinical_status==='completed'?__theme.accent:ref.clinical_status==='declined'?C.red:C.brown })
             return (
-              <Card key={ref.id} onClick={()=>setExpandedReferral(isOpen?null:ref.id)}>
+              <Card key={key} onClick={()=>setExpandedReferral(isOpen?null:key)}>
                 <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                   <div>
                     <div style={{fontSize:'14px',fontWeight:500}}>{cardTitle}</div>
-                    <div style={{fontSize:'12px',color:C.textSub}}>{sourceRecord?(isEn?'Referred to':'轉介至')+' '+toWho+' · ':''}{new Date(ref.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+                    <div style={{fontSize:'12px',color:C.textSub}}>{sourceRecord||entries.length>1?'':(isEn?'Referred to':'轉介至')+' '+entries[0].toWho+' · '}{new Date(sourceRecord?.date_of_record||firstRef.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
                   </div>
-                  <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:ref.clinical_status==='completed'?__theme.accentLight:ref.clinical_status==='declined'?C.redLight:C.brownLight,color:ref.clinical_status==='completed'?__theme.accent:ref.clinical_status==='declined'?C.red:C.brown}}>{ref.clinical_status==='completed'?(isEn?'Results in':'已有結果'):ref.clinical_status==='declined'?(isEn?'Declined':'已拒絕'):ref.clinical_status==='accepted'?(isEn?'Accepted':'已接受'):(isEn?'Awaiting decision':'待決定')}</span>
+                  <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,...badgeStyle(lastEntry.ref)}}>{statusOf(lastEntry.ref)}</span>
                 </div>
                 {isOpen&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
                   <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'REFERRING VISIT':'轉介診症'}</div>
@@ -1985,24 +2002,32 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                     {sourceRecord.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {sourceRecord.diagnosis}</div>}
                     {sourceReceipt&&<div onClick={async(e)=>{e.stopPropagation();await fetchAndDownloadConsultationReceipt(supabase, sourceReceipt)}} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',marginBottom:'4px'}}>{isEn?'Download receipt':'下載收據'} ({isEn?'ready now':'現已可用'})</div>}
                   </>}
-                  {!sourceRecord&&ref.reason&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Reason':'原因'}:</strong> {ref.reason}</div>}
-                  {!sourceRecord&&ref.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {ref.diagnosis}</div>}
-                  {ref.clinical_status==='declined'&&ref.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}><strong>{isEn?'Decline reason':'拒絕原因'}:</strong> {ref.decline_reason}</div>}
-                  {consults.length===0&&ref.clinical_status!=='declined'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'No result yet from the receiving practitioner.':'尚未收到接收醫療人員的結果。'}</div>}
-                  {consults.map((cons,j)=>(
-                    <div key={cons.id} style={{marginTop:j===0?'8px':'8px',paddingTop:'8px',borderTop:`0.5px dashed ${C.border}`}}>
-                      <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'RESULT':'結果'} - {cons.practitioner_name||(isEn?'Receiving practitioner':'接收醫療人員')} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
-                      {cons.findings&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Findings':'檢查結果'}:</strong> {cons.findings}</div>}
-                      {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>{isEn?'Interventions':'處理方式'}:</strong> {cons.interventions}</div>}
-                      {(cons.document_paths||[]).map((p,k)=>(
-                        <div key={k} onClick={(e)=>{e.stopPropagation();openReferralAttachment(p)}} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',marginTop:'2px'}}>📄 {p.split('/').pop()}</div>
+                  {!sourceRecord&&firstRef.reason&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Reason':'原因'}:</strong> {firstRef.reason}</div>}
+                  {!sourceRecord&&firstRef.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {firstRef.diagnosis}</div>}
+                  {entries.map((entry,ei)=>(
+                    <div key={entry.ref.id} style={{marginTop:'10px',paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'4px'}}>
+                        <div style={{fontSize:'12px',fontWeight:600}}>{isEn?'Referred to':'轉介至'} {entry.toWho}</div>
+                        <span style={{fontSize:'9px',padding:'2px 7px',borderRadius:'20px',fontWeight:500,...badgeStyle(entry.ref)}}>{statusOf(entry.ref)}</span>
+                      </div>
+                      {entry.ref.clinical_status==='declined'&&entry.ref.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'4px'}}><strong>{isEn?'Decline reason':'拒絕原因'}:</strong> {entry.ref.decline_reason}</div>}
+                      {entry.consults.length===0&&entry.ref.clinical_status!=='declined'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'No result yet from the receiving practitioner.':'尚未收到接收醫療人員的結果。'}</div>}
+                      {entry.consults.map((cons,j)=>(
+                        <div key={cons.id} style={{marginTop:j===0?'4px':'8px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
+                          <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'RESULT':'結果'} - {cons.practitioner_name||(isEn?'Receiving practitioner':'接收醫療人員')} ({new Date(cons.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})})</div>
+                          {cons.findings&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Findings':'檢查結果'}:</strong> {cons.findings}</div>}
+                          {cons.interventions&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}><strong style={{color:C.text}}>{isEn?'Interventions':'處理方式'}:</strong> {cons.interventions}</div>}
+                          {(cons.document_paths||[]).map((p,k)=>(
+                            <div key={k} onClick={(e)=>{e.stopPropagation();openReferralAttachment(p)}} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',marginTop:'2px'}}>📄 {p.split('/').pop()}</div>
+                          ))}
+                        </div>
                       ))}
+                      {entry.followup&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:`0.5px dashed ${C.border}`}}>
+                        <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'FOLLOW-UP':'跟進預約'}</div>
+                        <div style={{fontSize:'12px'}}>{new Date(entry.followup.scheduled_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - {entry.followup.doctor_name||entry.toWho}{entry.followup.status==='cancelled'?(isEn?' (cancelled)':'（已取消）'):entry.followup.status==='completed'?(isEn?' (completed)':'（已完成）'):''}</div>
+                      </div>}
                     </div>
                   ))}
-                  {followup&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:`0.5px dashed ${C.border}`}}>
-                    <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'FOLLOW-UP':'跟進預約'}</div>
-                    <div style={{fontSize:'12px'}}>{new Date(followup.scheduled_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - {followup.doctor_name||toWho}{followup.status==='cancelled'?(isEn?' (cancelled)':'（已取消）'):followup.status==='completed'?(isEn?' (completed)':'（已完成）'):''}</div>
-                  </div>}
                 </div>}
               </Card>
             )
