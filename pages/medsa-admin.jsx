@@ -1426,7 +1426,7 @@ function ClinicsTab() {
 
 // Same upload-or-URL choice used on the public sponsor-submit.jsx form -
 // duplicated here rather than shared since one's a page and one's a tab.
-function AdminImagePicker({ label, value, onChange }) {
+function AdminImagePicker({ label, value, onChange, bucket='carousel-images' }) {
   const [mode, setMode] = useState('url')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
@@ -1435,9 +1435,9 @@ function AdminImagePicker({ label, value, onChange }) {
     setUploading(true)
     setUploadError(null)
     const path = `admin/${Date.now()}-${file.name}`
-    const { error } = await supabase.storage.from('carousel-images').upload(path, file)
+    const { error } = await supabase.storage.from(bucket).upload(path, file)
     if (error) { setUploadError(error.message); setUploading(false); return }
-    const { data } = supabase.storage.from('carousel-images').getPublicUrl(path)
+    const { data } = supabase.storage.from(bucket).getPublicUrl(path)
     onChange(data.publicUrl)
     setUploading(false)
   }
@@ -2100,11 +2100,62 @@ function ForumModerationTab() {
   const [loading, setLoading] = useState(true)
   const [sponsorSearch, setSponsorSearch] = useState('')
   const [sponsorResults, setSponsorResults] = useState([])
-  const [sponsorName, setSponsorName] = useState('')
   const [rescanning, setRescanning] = useState(false)
   const [rescanResult, setRescanResult] = useState(null)
   const [editingPhotoFor, setEditingPhotoFor] = useState(null)
   const [bulkProductResult, setBulkProductResult] = useState(null)
+  // Real gap from your feedback: "brand/sponsor partnership features"
+  // needed building out - sponsored_by used to be a free-text field
+  // retyped per product with no guarantee of consistent spelling, no
+  // logo, no bio, no way to see every product one sponsor backs. Brands
+  // are now their own row (forum_brands), referenced by
+  // forum_products.sponsor_brand_id, so a brand's identity (logo/name/
+  // bio/verified badge) is set once and shows consistently everywhere
+  // it sponsors.
+  const [brands, setBrands] = useState([])
+  const [brandForm, setBrandForm] = useState({ name:'', logo_url:'', short_bio:'', verified:false })
+  const [editingBrandId, setEditingBrandId] = useState(null)
+  const [brandSaving, setBrandSaving] = useState(false)
+  const [brandError, setBrandError] = useState(null)
+
+  async function loadBrands() {
+    const { data } = await supabase.from('forum_brands').select('*').order('name')
+    setBrands(data||[])
+  }
+  useEffect(() => { loadBrands() }, [])
+
+  function startEditBrand(b) {
+    setEditingBrandId(b.id)
+    setBrandForm({ name:b.name, logo_url:b.logo_url||'', short_bio:b.short_bio||'', verified:b.verified })
+    setBrandError(null)
+  }
+  function cancelBrandEdit() {
+    setEditingBrandId(null)
+    setBrandForm({ name:'', logo_url:'', short_bio:'', verified:false })
+    setBrandError(null)
+  }
+  async function saveBrand() {
+    if (!brandForm.name.trim()) return
+    setBrandSaving(true)
+    setBrandError(null)
+    const payload = { name: brandForm.name.trim(), logo_url: brandForm.logo_url.trim()||null, short_bio: brandForm.short_bio.trim()||null, verified: brandForm.verified }
+    const { error } = editingBrandId
+      ? await supabase.from('forum_brands').update(payload).eq('id', editingBrandId)
+      : await supabase.from('forum_brands').insert(payload)
+    setBrandSaving(false)
+    if (error) { setBrandError(error.message); return }
+    await loadBrands()
+    cancelBrandEdit()
+    searchProductsForSponsor()
+  }
+  // A brand still sponsoring a product is kept by the FK's own default
+  // (no action) rather than silently orphaning those products - the
+  // error surfaces so the admin unsponsors it from them first.
+  async function deleteBrand(b) {
+    const { error } = await supabase.from('forum_brands').delete().eq('id', b.id)
+    if (error) { setBrandError(`Can't delete "${b.name}" - ${error.message}`); return }
+    loadBrands()
+  }
 
   // One-off (and repeatable) catch-up scan across every existing
   // product pair - needed because the duplicate check only ever ran
@@ -2183,12 +2234,12 @@ function ForumModerationTab() {
 
   async function searchProductsForSponsor() {
     if (!sponsorSearch.trim()) { setSponsorResults([]); return }
-    const { data } = await supabase.from('forum_products').select('*').ilike('canonical_name', `%${sponsorSearch.trim()}%`)
+    const { data } = await supabase.from('forum_products').select('*, forum_brands(id,name,verified)').ilike('canonical_name', `%${sponsorSearch.trim()}%`)
     setSponsorResults(data||[])
   }
 
-  async function setSponsor(product) {
-    await supabase.from('forum_products').update({ sponsored_by: sponsorName.trim()||null }).eq('id', product.id)
+  async function setSponsorBrand(product, brandId) {
+    await supabase.from('forum_products').update({ sponsor_brand_id: brandId||null }).eq('id', product.id)
     searchProductsForSponsor()
   }
   // Your call: Kids commerce/brand affiliates should be the same model
@@ -2227,12 +2278,27 @@ function ForumModerationTab() {
       const normalized = normalizeProductName(row.canonical_name)
       const { data: existing } = await supabase.from('forum_products').select('id').eq('normalized_name', normalized).maybeSingle()
       if (existing) { skipped.push(`${row.canonical_name} - already exists`); continue }
+      // sponsored_by in the CSV is still just a brand name - looked up
+      // (or created, logo/bio left blank for the admin to fill in later
+      // from the brand list below) rather than kept as its own free-text
+      // field, same as setting it by hand now does.
+      let sponsorBrandId = null
+      const sponsorName = row.sponsored_by?.trim()
+      if (sponsorName) {
+        const { data: existingBrand } = await supabase.from('forum_brands').select('id').ilike('name', sponsorName).maybeSingle()
+        if (existingBrand) sponsorBrandId = existingBrand.id
+        else {
+          const { data: newBrand } = await supabase.from('forum_brands').insert({ name: sponsorName }).select('id').maybeSingle()
+          sponsorBrandId = newBrand?.id || null
+        }
+      }
       await supabase.from('forum_products').insert({
         canonical_name: row.canonical_name.trim(), normalized_name: normalized,
-        image_url: row.image_url?.trim() || null, sponsored_by: row.sponsored_by?.trim() || null,
+        image_url: row.image_url?.trim() || null, sponsor_brand_id: sponsorBrandId,
       })
       imported++
     }
+    if (rows.some(r=>r.sponsored_by?.trim())) loadBrands()
     setBulkProductResult({ imported, skipped, total: rows.length })
   }
 
@@ -2271,9 +2337,39 @@ function ForumModerationTab() {
         </div>
       ))}
 
+      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Brands ({brands.length})</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>A brand's logo/bio/verified badge is set once here and shows consistently on every product thread it sponsors, instead of retyping a name per product.</div>
+      {brandError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{brandError}</div>}
+      {brands.map(b=>(
+        <div key={b.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
+          {b.logo_url
+            ? <img src={b.logo_url} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',flexShrink:0}}/>
+            : <div style={{width:32,height:32,borderRadius:'50%',background:C.card,flexShrink:0}}/>}
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{b.name}{b.verified&&<span style={{color:C.green}}> ✓</span>}</div>
+            {b.short_bio&&<div style={{fontSize:'11px',color:C.textSub,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{b.short_bio}</div>}
+          </div>
+          <button onClick={()=>startEditBrand(b)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer',flexShrink:0}}>Edit</button>
+          <button onClick={()=>deleteBrand(b)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer',flexShrink:0}}>Delete</button>
+        </div>
+      ))}
+      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px',marginTop:'10px',marginBottom:'24px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>{editingBrandId?'Edit brand':'+ New brand'}</div>
+        <input value={brandForm.name} onChange={e=>setBrandForm(f=>({...f,name:e.target.value}))} placeholder="Brand name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        <AdminImagePicker label="Logo" value={brandForm.logo_url} onChange={url=>setBrandForm(f=>({...f,logo_url:url}))} bucket="forum-brand-logos"/>
+        <textarea value={brandForm.short_bio} onChange={e=>setBrandForm(f=>({...f,short_bio:e.target.value}))} rows={2} placeholder="Short bio (one or two sentences, shown wherever this brand sponsors)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
+        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'10px',cursor:'pointer'}}>
+          <input type="checkbox" checked={brandForm.verified} onChange={e=>setBrandForm(f=>({...f,verified:e.target.checked}))}/>
+          Verified brand
+        </label>
+        <div style={{display:'flex',gap:'8px'}}>
+          {editingBrandId&&<button onClick={cancelBrandEdit} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>}
+          <button onClick={saveBrand} disabled={brandSaving||!brandForm.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{brandSaving?'Saving…':editingBrandId?'Save changes':'Add brand'}</button>
+        </div>
+      </div>
+
       <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Sponsor a product thread & set its photo</div>
       <input value={sponsorSearch} onChange={e=>setSponsorSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&searchProductsForSponsor()} placeholder="Search a product…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-      <input value={sponsorName} onChange={e=>setSponsorName(e.target.value)} placeholder="Sponsor / brand name (leave blank to remove sponsorship)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       <button onClick={searchProductsForSponsor} style={{width:'100%',padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer',marginBottom:'12px'}}>Search</button>
       {sponsorResults.map(p=>(
         <div key={p.id} style={{padding:'10px 0',borderBottom:`0.5px solid ${C.border}`}}>
@@ -2282,12 +2378,15 @@ function ForumModerationTab() {
               {p.image_url&&<img src={p.image_url} alt="" style={{width:32,height:32,objectFit:'cover',borderRadius:'6px'}}/>}
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored_by?`Sponsored by ${p.sponsored_by}`:'Not sponsored'}{p.category?` · ${p.category}`:''}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{p.forum_brands?.name?`Sponsored by ${p.forum_brands.name}${p.forum_brands.verified?' ✓':''}`:'Not sponsored'}{p.category?` · ${p.category}`:''}</div>
               </div>
             </div>
-            <div style={{display:'flex',gap:'6px',flexShrink:0}}>
+            <div style={{display:'flex',gap:'6px',flexShrink:0,alignItems:'center'}}>
+              <select value={p.sponsor_brand_id||''} onChange={e=>setSponsorBrand(p, e.target.value||null)} style={{padding:'6px 8px',borderRadius:'8px',border:`0.5px solid ${C.border}`,fontSize:'11px',maxWidth:120}}>
+                <option value="">Not sponsored</option>
+                {brands.map(b=>(<option key={b.id} value={b.id}>{b.name}</option>))}
+              </select>
               <button onClick={()=>setEditingPhotoFor(editingPhotoFor===p.id?null:p.id)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Photo</button>
-              <button onClick={()=>setSponsor(p)} style={{padding:'6px 12px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Set sponsor</button>
             </div>
           </div>
           <div style={{display:'flex',gap:'6px',marginTop:'8px',flexWrap:'wrap'}}>
