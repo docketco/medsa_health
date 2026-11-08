@@ -3250,11 +3250,32 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
   )
 }
 
-function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload, onViewRecord }) {
+function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload, onViewRecord, onNav }) {
   const __theme = useContext(ThemeContext)
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
   const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
+
+  // Real gap from your feedback: "I don't know what the MCHC appointment
+  // there is for, they could just put it into the calendar" - it was
+  // only ever visible as its own small card inside Growth & feeding.
+  // Kept storing it in its own table (kids_mchc_appointments) rather
+  // than the real appointments table - unlike a medsa-side booking it
+  // has no doctor/institution to join a video call with or check in
+  // for, so forcing it into that shape would be more confusing, not
+  // less - but it now merges into this same day-by-day list, with its
+  // own detail view that points back to Growth & feeding to edit it.
+  const [mchcAppointments,setMchcAppointments]=useState([])
+  useEffect(() => {
+    if (!patient?.id) { setMchcAppointments([]); return }
+    supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).then(({data})=>setMchcAppointments(data||[]))
+  }, [patient?.id])
+  const allAppointments = [...appointments, ...mchcAppointments.map(m => ({
+    id: `mchc-${m.id}`, scheduled_at: m.appointment_at, status: 'confirmed',
+    doctor_name: null, appointment_type: isEn?'MCHC appointment':'母嬰健康院預約',
+    institutions: { name: isEn?'Maternal & Child Health Centre':'母嬰健康院' },
+    patient_pays: 0, consult_type: null, _mchc: true, _mchcNote: m.note,
+  }))]
 
   // A patient previously had no way to cancel a booking from the app at
   // all - this screen only ever displayed appointments, with no click
@@ -3348,8 +3369,8 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
 
   // Days that have something scheduled - marked with a dot, pulled from
   // real appointment data when available.
-  const markedDays = new Set(appointments.map(a=>new Date(a.scheduled_at).getDate()).filter(d=>{
-    const apptDate = new Date(appointments.find(a=>new Date(a.scheduled_at).getDate()===d)?.scheduled_at)
+  const markedDays = new Set(allAppointments.map(a=>new Date(a.scheduled_at).getDate()).filter(d=>{
+    const apptDate = new Date(allAppointments.find(a=>new Date(a.scheduled_at).getDate()===d)?.scheduled_at)
     return apptDate.getMonth()===viewMonth.getMonth() && apptDate.getFullYear()===viewMonth.getFullYear()
   }))
 
@@ -3398,7 +3419,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
         // appointment on the wrong day for anyone browsing outside Hong
         // Kong (an HKT-morning appointment can fall on the previous local
         // calendar day several timezones west).
-        const dayAppts = appointments.filter(a => a.status!=='cancelled' && isSameHkDay(new Date(a.scheduled_at), selectedDate))
+        const dayAppts = allAppointments.filter(a => a.status!=='cancelled' && isSameHkDay(new Date(a.scheduled_at), selectedDate))
           .sort((a,b)=>new Date(a.scheduled_at)-new Date(b.scheduled_at))
         if (dayAppts.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No appointments this day.':'這天沒有預約。'}</div>
         return dayAppts.map((appt,i)=>{
@@ -3440,8 +3461,13 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
               ? <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{onViewRecord?.(rec.id);setActiveAppt(null)}}>{isEn?'View record':'查看記錄'}</Btn>
               : <div style={{fontSize:'11px',color:C.textMuted,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No consultation record on file yet.':'暫無此次診症的記錄。'}</div>
           })()}
-          {activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
-          {activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
+          {activeAppt._mchc&&<>
+            {activeAppt._mchcNote&&<div style={{fontSize:'13px',color:C.text,background:C.card,borderRadius:'10px',padding:'10px 12px',marginBottom:'12px',lineHeight:1.5}}>{activeAppt._mchcNote}</div>}
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"MCHC checkups are self-tracked, not booked through Medsa - manage this date from Growth & feeding.":'母嬰健康院檢查由您自行記錄,並非透過Medsa預約 - 請於「生長與餵養」頁面管理此日期。'}</div>
+            <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{onNav?.();setActiveAppt(null)}}>{isEn?'Manage in Growth & feeding':'前往「生長與餵養」管理'}</Btn>
+          </>}
+          {!activeAppt._mchc&&activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
+          {!activeAppt._mchc&&activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
@@ -11777,7 +11803,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='doctors'&&<DoctorsScreen isEn={isEn} patient={patient}/>}
         {screen==='healthcolumn'&&<HealthColumnScreen isEn={isEn} patient={patient} onNav={setScreen}/>}
         {screen==='ingredientscan'&&<IngredientScanScreen isEn={isEn} patient={patient}/>}
-        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
+        {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}} onNav={()=>setScreen('kidsgrowth')}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
         {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
         {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen} onSwitchToPatient={switchToPatient} onPatientUpdated={async()=>{

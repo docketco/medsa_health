@@ -68,6 +68,30 @@ const ROLES = {
   hr:           {label:'Human Resources',     color:C.navy,   bg:C.navyLight,   icon:'⬢'},
 }
 
+// Real gap from your feedback: a reschedule or doctor-switch done from this
+// portal never told the patient at all - ClinicOpsApp's own reschedule save
+// already does this (see its own notifyAppointmentChanged), this portal's
+// handleReceptionSave below just never called anything equivalent. Same
+// best-effort, opt-in/no-op-safe pattern: never blocks the save that already
+// succeeded above it.
+async function notifyAppointmentChanged(appointmentId) {
+  if (!appointmentId) return
+  const { data: appt } = await supabase.from('appointments').select('doctor_name, scheduled_at, patients(email, full_name, notify_email, phone, notify_sms)').eq('id', appointmentId).maybeSingle()
+  const patient = appt?.patients
+  const wantsEmail = patient?.notify_email !== false && patient?.email
+  const wantsSms = patient?.notify_sms !== false && patient?.phone
+  if (wantsEmail || wantsSms) {
+    fetch('/api/appointments/notify_booking', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        email: wantsEmail ? patient.email : null,
+        phone: wantsSms ? patient.phone : null,
+        patientName: patient.full_name,
+        doctorName: appt.doctor_name, scheduledAt: appt.scheduled_at,
+      }),
+    }).catch(()=>{})
+  }
+}
 // ── CLINICAL ACCESS — on-duty vs off-duty ────────────────────────────────────
 // Doctors keep full clinical data access at all times, on or off duty - they
 // legitimately need to think through a case after their shift ends. Nurses
@@ -3476,6 +3500,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
         if (clash) return { ok:false, error:`${updated.doctor} already has another appointment at ${original.time}. Pick a different doctor.` }
         const { error } = await supabase.from('appointments').update({ doctor_name: updated.doctor }).eq('id', original.id)
         if (error) return { ok:false, error: error.message }
+        notifyAppointmentChanged(original.id)
         loadAppointmentsForDay(selectedDay)
         return { ok: true }
       }
@@ -3514,6 +3539,7 @@ function ScheduleScreen({ role, department, doctorName, onGoToFullDiagnosis, onV
       if (clash) return { ok:false, error:`${original.doctor} already has another appointment at ${updated.time}. Pick a different time.` }
       const { error } = await supabase.from('appointments').update({ scheduled_at: scheduledAt.toISOString() }).eq('id', original.id)
       if (error) return { ok:false, error: error.message }
+      notifyAppointmentChanged(original.id)
       loadAppointmentsForDay(selectedDay)
       return { ok: true }
     }
