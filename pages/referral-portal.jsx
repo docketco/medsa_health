@@ -101,6 +101,11 @@ export default function ReferralPortalPage() {
   // phone/email has no business reaching the browser before this doctor
   // has actually committed to taking the referral.
   const [patientContact, setPatientContact] = useState(null)
+  // Surfaces a real upload failure instead of silently dropping the
+  // attachment with no sign anything went wrong - the actual bug that
+  // hid a missing storage policy on external-clinic-uploads for as long
+  // as it went undetected.
+  const [uploadWarning, setUploadWarning] = useState(null)
 
   useEffect(() => {
     if (!router.isReady) return
@@ -277,11 +282,13 @@ export default function ReferralPortalPage() {
     if (!form.referredToPractitionerName.trim() || !form.reason.trim()) return
     setStage('uploading')
     const documentPaths = []
+    let failedUploads = 0
     for (const file of files) {
       const path = `referrals/${patient.medsa_id}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('external-clinic-uploads').upload(path, file)
-      if (!upErr) documentPaths.push(path)
+      if (!upErr) documentPaths.push(path); else failedUploads++
     }
+    setUploadWarning(failedUploads>0 ? `${failedUploads} attachment${failedUploads>1?'s':''} failed to upload - the referral itself still saved.` : null)
     const { data: inserted, error: insErr } = await supabase.from('referrals').insert({
       patient_id: patient.id,
       referring_doctor_name: referrerIdentity.name || staffMedsaId || null,
@@ -372,11 +379,13 @@ export default function ReferralPortalPage() {
   async function handleReceiveSubmit() {
     setStage('uploading')
     const documentPaths = []
+    let failedUploads = 0
     for (const file of receiverFiles) {
       const path = `referrals/${referral.patient_id}/${Date.now()}-${file.name}`
       const { error: upErr } = await supabase.storage.from('external-clinic-uploads').upload(path, file)
-      if (!upErr) documentPaths.push(path)
+      if (!upErr) documentPaths.push(path); else failedUploads++
     }
+    setUploadWarning(failedUploads>0 ? `${failedUploads} attachment${failedUploads>1?'s':''} failed to upload - your consultation notes still saved.` : null)
 
     // Remember the receiving practitioner's contact for a real OTP check
     // later - not sent now, just kept on file with the same shape (and
@@ -478,6 +487,7 @@ export default function ReferralPortalPage() {
           <div style={{fontSize:'32px',textAlign:'center',marginBottom:'10px'}}>✓</div>
           <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Referral submitted</div>
           <div style={{fontSize:'13px',color:C.textSub,textAlign:'center',marginBottom:'18px'}}>Medsa will review this referral. Once approved, it's on file for {patient?.full_name}'s record.</div>
+          {uploadWarning&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'12px',color:C.amber}}>{'⚠'} {uploadWarning}</div>}
           <div style={{background:C.card,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
             <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>Invite {form.referredToPractitionerName} to add their own consultation record</div>
             <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Whether they use this link at all is up to them - but if they do, it's their real consultation record (findings, diagnosis, materials like x-rays), not just an extra step. Send them this link:</div>
@@ -597,7 +607,8 @@ export default function ReferralPortalPage() {
         {stage==='receive_done' && <>
           <div style={{fontSize:'32px',textAlign:'center',marginBottom:'10px'}}>✓</div>
           <div style={{fontSize:'15px',fontWeight:700,textAlign:'center',marginBottom:'6px'}}>Submitted</div>
-          <div style={{fontSize:'13px',color:C.textSub,textAlign:'center'}}>Your treatment log is on file against this referral for {patient?.full_name}.</div>
+          <div style={{fontSize:'13px',color:C.textSub,textAlign:'center',marginBottom:uploadWarning?'12px':0}}>Your treatment log is on file against this referral for {patient?.full_name}.</div>
+          {uploadWarning&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} {uploadWarning}</div>}
         </>}
 
         {stage==='error' && <div style={{textAlign:'center',fontSize:'13px',color:C.red}}>{error}</div>}
