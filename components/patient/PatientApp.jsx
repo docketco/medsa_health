@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext, createContext, isValidElement, cloneElement, Children } from 'react'
+import Head from 'next/head'
 import { supabase } from '../../lib/supabase'
 import { STAFF_CREDENTIALS_SAFE_COLUMNS } from '../../lib/staffCredentialsColumns'
 import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds, isSameHkDay } from '../../lib/hkTime'
@@ -7569,6 +7570,50 @@ const CONFINEMENT_MILESTONES = [
     name:{en:'滿月 / 彌月 (Full-month celebration)',zh:'滿月 / 彌月'},
     detail:{en:"Historically marked surviving the highest-risk early period, before modern medicine - celebrated with a banquet, thanking ancestors/deities, and sending out 油飯 (oiled rice) and red-dyed eggs to announce the news to family and friends. Many families now wait until day 60 instead, since confinement itself often runs longer than 30 days and a newborn's schedule is still unsettled at exactly one month.",zh:'古時代表嬰兒度過人生首個高風險階段,故設宴慶祝、祭拜祖先神明,並分送油飯及染紅雞蛋向親友報喜。現時不少家庭因坐月子時間已超過30天,加上滿月時嬰兒作息仍未穩定,而選擇延至第60天(雙滿月)舉行。'} },
 ]
+// Visual metadata for the diary-page redesign of the milestones above -
+// kept separate from CONFINEMENT_MILESTONES itself since estimateDay is
+// only ever used to decide whether to show an upcoming-reminder ribbon,
+// never shown as if it were a confirmed date (real timing genuinely
+// varies by family, as each entry's own detail text already says) -
+// the earliest day each entry itself cites.
+const CONFINEMENT_MILESTONE_VISUALS = {
+  third_day: { icon:'peach', accent:'#C9594A', accentSoft:'#F3DAD3', estimateDay:3 },
+  hair_shave: { icon:'comb', accent:'#7D8F6C', accentSoft:'#DEE6D4', estimateDay:24 },
+  full_month: { icon:'moon', accent:'#B07D4F', accentSoft:'#EBDCC6', estimateDay:30 },
+}
+function MilestoneIllustration({ icon, accent, accentSoft }) {
+  if (icon==='peach') return (
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Peach illustration">
+      <path d="M60 30 C 45 10, 20 20, 22 48 C 24 78, 45 100, 60 108 C 75 100, 96 78, 98 48 C 100 20, 75 10, 60 30 Z"/>
+      <path d="M60 30 L 60 18"/>
+      <path d="M60 22 C 68 14, 80 16, 82 26 C 72 28, 64 28, 60 22 Z" fill={accentSoft}/>
+      <path d="M60 68 C 50 72, 42 80, 44 92" strokeWidth="2" opacity="0.55"/>
+    </svg>
+  )
+  if (icon==='comb') return (
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Comb illustration">
+      <path d="M30 52 C 28 30, 48 18, 60 18 C 72 18, 92 30, 90 52 C 89 64, 80 70, 70 68"/>
+      <path d="M30 52 C 27 70, 34 88, 45 98" strokeWidth="2.5"/>
+      <rect x="38" y="86" width="44" height="14" rx="3"/>
+      <line x1="45" y1="86" x2="45" y2="100"/>
+      <line x1="53" y1="86" x2="53" y2="100"/>
+      <line x1="61" y1="86" x2="61" y2="100"/>
+      <line x1="69" y1="86" x2="69" y2="100"/>
+      <line x1="77" y1="86" x2="77" y2="100"/>
+    </svg>
+  )
+  return (
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Full moon illustration">
+      <circle cx="60" cy="44" r="30"/>
+      <path d="M46 34 C 44 25, 51 19, 55 24" strokeWidth="2.5"/>
+      <path d="M65 24 C 69 19, 76 25, 74 34" strokeWidth="2.5"/>
+      <circle cx="52" cy="40" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="68" cy="40" r="1.8" fill={accent} stroke="none"/>
+      <path d="M54 50 C 58 53, 62 53, 66 50" strokeWidth="2.2"/>
+      <ellipse cx="60" cy="98" rx="13" ry="17" fill="#C9594A" fillOpacity="0.18" stroke="#C9594A"/>
+    </svg>
+  )
+}
 const CONFINEMENT_FURTHER_READING = [
   { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
   { title:'Real Food for Pregnancy', author:'Lily Nichols, RDN', focus:{en:'Clinical prenatal/postpartum nutrition, peer-reviewed - the science behind why warm, protein/collagen-rich foods support tissue repair.',zh:'具臨床及同行評審根據的孕產營養書 - 解釋溫熱、高蛋白/膠原質食物如何幫助組織修復的科學原理。'} },
@@ -7759,6 +7804,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [confinementPlanDraft,setConfinementPlanDraft]=useState('')
   const [confinementPlanSaving,setConfinementPlanSaving]=useState(false)
   const [confinementPlanSaved,setConfinementPlanSaved]=useState(false)
+  const [milestonePage,setMilestonePage]=useState(0)
   const [confinementLogs,setConfinementLogs]=useState([])
   const [confinementLogForm,setConfinementLogForm]=useState({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
   const [confinementLogSaving,setConfinementLogSaving]=useState(false)
@@ -8577,15 +8623,54 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
         {isEn?'Cultural practice, not medical guidance - and these genuinely vary a lot by family and region.':'傳統習俗,並非醫療指引 - 各家各地做法差異頗大。'}
       </div>
-      <div style={{display:'flex',gap:'10px',overflowX:'auto',paddingBottom:'6px',marginBottom:'16px'}}>
-        {CONFINEMENT_MILESTONES.map((m,i)=>(
-          <div key={m.key} style={{flex:'0 0 200px',background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px'}}>
-            <div style={{fontSize:'10px',color:__theme.accent,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',marginBottom:'6px'}}>{isEn?m.day.en:m.day.zh}</div>
-            <div style={{fontSize:'13px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?m.name.en:m.name.zh}</div>
-            <div style={{fontSize:'11px',color:C.textSub,lineHeight:1.5}}>{isEn?m.detail.en:m.detail.zh}</div>
+      {(()=>{
+        const m = CONFINEMENT_MILESTONES[milestonePage]
+        const v = CONFINEMENT_MILESTONE_VISUALS[m.key]
+        const daysSinceBirth = bumpRow?.child_dob ? Math.floor((Date.now()-new Date(bumpRow.child_dob))/(1000*60*60*24)) : null
+        const daysUntil = daysSinceBirth!=null ? v.estimateDay-daysSinceBirth : null
+        const showReminder = daysUntil!=null && daysUntil>0 && daysUntil<=14
+        return (
+          <div style={{position:'relative',overflow:'hidden',background:'#F7EFE2',fontFamily:"'Patrick Hand',cursive",color:'#4A3B32',borderRadius:'14px',marginBottom:'16px'}}>
+            <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
+            {/* notebook ruled lines + left margin, same "diary page" feel as the mockup */}
+            <div style={{position:'absolute',inset:0,backgroundImage:'repeating-linear-gradient(to bottom, transparent, transparent 35px, rgba(154,116,86,0.08) 35px, rgba(154,116,86,0.08) 36px)',pointerEvents:'none'}}/>
+            <div style={{position:'absolute',left:34,top:0,bottom:0,width:1,background:'rgba(201,140,122,0.35)',pointerEvents:'none'}}/>
+            <div style={{position:'relative',padding:'20px 18px 18px 40px'}}>
+              {showReminder&&<div style={{background:v.accentSoft,border:`1.5px dashed ${v.accent}`,borderRadius:'10px',padding:'10px 14px',display:'flex',alignItems:'flex-start',gap:'10px',marginBottom:'16px'}}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={v.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,marginTop:2}} aria-hidden="true"><path d="M12 2 L12 8"/><path d="M7 8 L17 8 L19 14 L5 14 Z"/><path d="M12 14 L12 22"/></svg>
+                <div style={{fontSize:'15px',lineHeight:1.35}}>{isEn
+                  ? <>{'Around '}<strong>{daysUntil} day{daysUntil===1?'':'s'}</strong>{' away - '}{m.name.en}{'. Worth keeping in mind (exact timing varies by family).'}</>
+                  : <>{'約'}<strong>{daysUntil}天</strong>{'後 - '}{m.name.zh}{'。可記在心上(確實時間因各家而異)。'}</>}</div>
+              </div>}
+              <div style={{marginBottom:'4px',fontSize:'15px',color:'#9C7456'}}>{isEn?m.day.en:m.day.zh}</div>
+              <div style={{fontSize:'20px',color:v.accent,marginBottom:'18px'}}>{isEn?m.name.en:m.name.zh}</div>
+              <div style={{display:'flex',justifyContent:'center',marginBottom:'18px'}}>
+                <div style={{width:120,height:120,borderRadius:'50%',background:v.accentSoft,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <MilestoneIllustration icon={v.icon} accent={v.accent} accentSoft={v.accentSoft}/>
+                </div>
+              </div>
+              <div style={{fontSize:'19px',lineHeight:1.55,color:'#4A3B32'}}>{isEn?m.detail.en:m.detail.zh}</div>
+              <div style={{marginTop:'16px',display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',color:'#9C7456',border:'1px solid rgba(154,116,86,0.4)',borderRadius:'999px',padding:'4px 12px'}}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
+                {isEn?'Cultural tradition, not medical guidance':'傳統習俗,並非醫療指引'}
+              </div>
+              <div style={{marginTop:'18px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <button onClick={()=>setMilestonePage((milestonePage-1+CONFINEMENT_MILESTONES.length)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Previous entry':'上一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+                </button>
+                <div style={{display:'flex',gap:'7px'}}>
+                  {CONFINEMENT_MILESTONES.map((mm,i)=>(
+                    <div key={mm.key} style={{width:i===milestonePage?20:7,height:7,borderRadius:'999px',background:i===milestonePage?v.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
+                  ))}
+                </div>
+                <button onClick={()=>setMilestonePage((milestonePage+1)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Next entry':'下一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
+                </button>
+              </div>
+            </div>
           </div>
-        ))}
-      </div>
+        )
+      })()}
       </>}
 
       {bumpTab==='monitoring'&&<>
