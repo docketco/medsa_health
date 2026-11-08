@@ -5,6 +5,8 @@ import { hkWallTimeToUTC, hkParts, hkHHMM, hkDayBounds } from '../../lib/hkTime'
 import { getInsuranceAdapter, calculatePlatformClaimFee, calculatePaymentProcessingFee, findEligiblePlans, buildFeeBreakdown } from '../../lib/insuranceAdapter'
 import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanReceipt } from '../../lib/receiptPdf'
 import { broadcastIncomingCall } from '../../lib/videoCallSignal'
+import { resolveScannedPatient } from '../../lib/scannedPatientCode'
+import QrScanner from '../QrScanner'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
 
@@ -798,25 +800,40 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
   }
 
   const [scanChoices,setScanChoices]=useState([])
+  const [scanError,setScanError]=useState(null)
 
   async function loadScanChoices() {
     const { data } = await supabase.from('patients').select('*').limit(10)
     setScanChoices(data || [])
   }
 
-  async function simulateScan(chosenPatient) {
-    setStage('scanning')
+  function openFoundPatient(found) {
     setWalkInConsent(true)
     setCheckinNote(''); setVitalsWeight(''); setVitalsHeight(''); setVitalsSaved(false)
-    loadLastVitals(chosenPatient.id)
-    checkAlreadyInQueue(chosenPatient.id)
-    // Real scan hardware isn't wired up yet - this simulates it by letting
-    // you pick which patient's card is being "scanned," pulled from real
-    // Supabase data, rather than always fetching one fixed demo patient.
-    setTimeout(() => {
-      setPatient(chosenPatient)
-      setStage('found')
-    }, 600)
+    loadLastVitals(found.id)
+    checkAlreadyInQueue(found.id)
+    setPatient(found)
+    setStage('found')
+  }
+
+  async function simulateScan(chosenPatient) {
+    setStage('scanning')
+    // No camera handy (demo/testing) - skip straight to the same found
+    // state a real scan below lands on, using a real patient picked from
+    // Supabase rather than one fixed fake record.
+    setTimeout(() => openFoundPatient(chosenPatient), 600)
+  }
+
+  // Real scan - same unified QR every patient's home screen and
+  // Emergency Card use (see lib/scannedPatientCode.js). A plain camera
+  // would open it as a URL; this reads the raw text back out of the
+  // QrScanner component instead and resolves it straight to the patient.
+  async function handleRealScan(qrData) {
+    setStage('scanning')
+    setScanError(null)
+    const found = await resolveScannedPatient(qrData, '*')
+    if (!found) { setScanError("Couldn't find a patient for that QR code."); setStage('idle'); return }
+    openFoundPatient(found)
   }
 
   const [searched,setSearched]=useState(false)
@@ -885,23 +902,26 @@ function CheckInSearchScreen({ onCheckedIn, onNewPatient, onNavSchedule, checkIn
 
       {mode==='scan'&&<>
         {stage==='idle'&&<>
-          {scanChoices.length===0&&<div onClick={loadScanChoices} style={{background:C.cream,border:`1.5px dashed ${C.border}`,borderRadius:'14px',padding:'44px 20px',textAlign:'center',cursor:'pointer',marginBottom:'16px'}}>
-            <div style={{fontSize:'36px',color:C.green,marginBottom:'10px'}}>{'\u2b21'}</div>
-            <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>Scan patient QR code</div>
-            <div style={{fontSize:'12px',color:C.textSub}}>Tap to simulate scanning a patient's card</div>
-          </div>}
-          {scanChoices.length>0&&<div style={{marginBottom:'16px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',textAlign:'center'}}>Demo: tap the patient whose card is being scanned</div>
-            <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-              {scanChoices.map(p=>(
-                <div key={p.id} onClick={()=>simulateScan(p)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <span style={{fontSize:'14px',fontWeight:500}}>{p.full_name}</span>
-                  <span style={{fontSize:'11px',color:C.textMuted}}>{p.medsa_id}</span>
-                </div>
-              ))}
-            </div>
-          </div>}
-          <div style={{textAlign:'center'}}>
+          <QrScanner onScan={handleRealScan} onCancel={()=>{}}/>
+          {scanError&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginTop:'12px',fontSize:'12px',color:C.amber}}>{'\u26a0'} {scanError}</div>}
+          <div style={{marginTop:'18px',paddingTop:'16px',borderTop:`0.5px solid ${C.border}`}}>
+            {scanChoices.length===0&&<div onClick={loadScanChoices} style={{textAlign:'center',cursor:'pointer'}}>
+              <span style={{fontSize:'12px',color:C.textSub}}>No camera handy? </span>
+              <span style={{fontSize:'12px',color:C.green,fontWeight:600}}>Pick a patient to simulate a scan {'\u2192'}</span>
+            </div>}
+            {scanChoices.length>0&&<div style={{marginBottom:'16px'}}>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',textAlign:'center'}}>Demo: tap the patient whose card is being scanned</div>
+              <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+                {scanChoices.map(p=>(
+                  <div key={p.id} onClick={()=>simulateScan(p)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 16px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <span style={{fontSize:'14px',fontWeight:500}}>{p.full_name}</span>
+                    <span style={{fontSize:'11px',color:C.textMuted}}>{p.medsa_id}</span>
+                  </div>
+                ))}
+              </div>
+            </div>}
+          </div>
+          <div style={{textAlign:'center',marginTop:'12px'}}>
             <span style={{fontSize:'12px',color:C.textSub}}>New patient, not yet on Medsa? </span>
             <span onClick={onNewPatient} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them {'\u2192'}</span>
           </div>
@@ -5270,6 +5290,46 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
   const [newApptSaving,setNewApptSaving]=useState(false)
   const [newApptError,setNewApptError]=useState(null)
 
+  // Real gap found live-testing: this form let you book a second
+  // appointment for a patient who already has one upcoming, with no
+  // warning at all - easy to hit via the Referrals tab's "Schedule this
+  // patient's visit" button especially, since that one opens straight
+  // into this form already pre-filled. Checked the moment a patient
+  // lands in the form (preselect or search), not only on submit.
+  const [existingUpcomingAppt,setExistingUpcomingAppt]=useState(null)
+  const [existingApptDismissed,setExistingApptDismissed]=useState(false)
+
+  async function checkExistingUpcomingAppt(patientId) {
+    setExistingApptDismissed(false)
+    if (!patientId) { setExistingUpcomingAppt(null); return }
+    // Real appointment statuses in this file are just confirmed/cancelled/
+    // completed - checked-in is tracked separately via checked_in_at, not
+    // a status value of its own.
+    const { data } = await supabase.from('appointments').select('*, patients(full_name, medsa_id)')
+      .eq('patient_id', patientId).eq('institution_source','clinic_ops')
+      .eq('status', 'confirmed')
+      .gte('scheduled_at', new Date().toISOString())
+      .order('scheduled_at', { ascending: true }).limit(1).maybeSingle()
+    setExistingUpcomingAppt(data || null)
+  }
+
+  // Jumps straight to the real reschedule picker on the existing
+  // appointment, rather than building a second one here - same shape
+  // loadRealAppointments maps its rows to, since that's what
+  // ClinicScheduleActionModal (via activeAppt/handleSaveAppt) expects.
+  function handleRescheduleInstead() {
+    const a = existingUpcomingAppt
+    setShowNewApptForm(false)
+    setSelectedDay(new Date(a.scheduled_at))
+    setActiveAppt({
+      id: a.id, time: hkHHMM(a.scheduled_at), scheduledAt: a.scheduled_at,
+      patient: a.patients?.full_name || 'Unknown patient', patientId: a.patient_id || null,
+      medsaId: a.patients?.medsa_id || null, doctor: a.doctor_name || 'Unassigned',
+      department: a.department || 'Internal Medicine', type: a.appointment_type || 'Consultation',
+      status: a.status || 'confirmed', notes: a.reason_for_visit || '', consultType: a.consult_type || 'in-person', isReal: true,
+    })
+  }
+
   // Real working-hours-based slots for the new-appointment form too - this
   // is the actual point of Working Hours syncing to booking: it should be
   // impossible to book outside a doctor's real hours from here, not just
@@ -5328,6 +5388,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     if (!preselectPatient) return
     setNewApptPatient(preselectPatient)
     setShowNewApptForm(true)
+    checkExistingUpcomingAppt(preselectPatient.id)
     onConsumedPreselect?.()
   }, [preselectPatient])
 
@@ -5339,6 +5400,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       .or(`medsa_id.ilike.%${pattern}%,full_name.ilike.%${pattern}%`).limit(1).maybeSingle()
     setNewApptPatient(data || null)
     setNewApptError(data ? null : 'No patient found matching that name or Medsa ID.')
+    checkExistingUpcomingAppt(data?.id)
   }
 
   async function handleConfirmNewAppt() {
@@ -5393,6 +5455,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
     setNewApptSaving(false)
     setShowNewApptForm(false)
     setNewApptSearch(''); setNewApptPatient(null); setNewApptTime(''); setNewApptReason(''); setNewApptConsent(true)
+    setExistingUpcomingAppt(null); setExistingApptDismissed(false)
     loadRealAppointments(selectedDay)
   }
 
@@ -5707,6 +5770,15 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
             <Btn onClick={handleNewApptSearch}>Search</Btn>
           </div>
           {newApptPatient&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px',marginBottom:'12px',fontSize:'12px',color:C.green}}>✓ {newApptPatient.full_name} ({newApptPatient.medsa_id})</div>}
+          {existingUpcomingAppt&&!existingApptDismissed&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'14px',marginBottom:'14px'}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:C.amber,marginBottom:'4px'}}>⚠ Already scheduled</div>
+            <div style={{fontSize:'12.5px',color:C.text,marginBottom:'12px',lineHeight:1.5}}>{newApptPatient?.full_name} already has an appointment on <strong>{new Date(existingUpcomingAppt.scheduled_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} at {hkHHMM(existingUpcomingAppt.scheduled_at)}</strong> with {existingUpcomingAppt.doctor_name||'a doctor'}. Need to reschedule that instead of booking a separate one?</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={handleRescheduleInstead}>Reschedule that one</Btn>
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setExistingApptDismissed(true)}>Book a separate visit</Btn>
+            </div>
+          </div>}
+          {(!existingUpcomingAppt||existingApptDismissed)&&<>
           {/* Date was previously only implicit (whatever day the schedule
               screen happened to be showing behind the modal) - front desk
               had no way to see or change it while booking. */}
@@ -5733,6 +5805,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
           {newApptError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}>{newApptError}</div>}
           {newApptError&&<div style={{marginBottom:'10px'}}><span onClick={()=>onNavNewPatient?.(newApptSearch)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Register them as a new patient {'\u2192'}</span></div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleConfirmNewAppt} disabled={!newApptPatient||!newApptTime||newApptSaving}>{newApptSaving?'Booking…':'Confirm booking'}</Btn>
+          </>}
         </div>
       </div>}
     </PageWrap>
