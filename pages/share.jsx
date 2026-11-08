@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { resolveScannedPatient } from '../lib/scannedPatientCode'
 import C from '../components/shared/colours'
 import QrScanner from '../components/QrScanner'
 
@@ -114,7 +115,7 @@ export default function SharePage() {
   }
 
   async function handleQrScanned(qrData, direction) {
-    const { data: patient } = await supabase.from('patients').select('id, full_name, medsa_id').eq('medsa_id', qrData).maybeSingle()
+    const patient = await resolveScannedPatient(qrData)
     if (!patient) { setError('Could not find a patient for this QR code.'); setStage('error'); return }
 
     if (direction === 'upload') {
