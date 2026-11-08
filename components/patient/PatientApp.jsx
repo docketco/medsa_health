@@ -1858,42 +1858,70 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             </div>
           </Card>}
         </div>}
-        {!hasLiveData&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No records yet - these appear once a clinic logs a visit.':'暫無記錄 - 診所記錄就診後將顯示於此。'}</div>}
-        {hasLiveData&&records.map(r=>{
-          const receipt = transactions.find(t => t.medical_record_id === r.id)
-          return {
-          id: r.id,
-          icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
-          bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:__theme.accentLight,
-          title: r.title,
-          sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
-          date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
-          src: r.source==='synced'?'Synced':'Manual',
-          // Real gap: this used to also show the full r.notes here, as
-          // one inline label/value row with no line-break support at all
-          // - a structured note (one field per line) ran together as a
-          // single illegible string. Per your call, full notes stay on
-          // the receipt (lib/receiptPdf.js, which does respect line
-          // breaks) - this card is diagnosis/department at a glance.
-          details: [
-            ['Diagnosis',r.diagnosis||'—'], ['Department',r.department||'—'],
-            ...(receipt ? [['Receipt', `HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`]] : []),
-          ],
-          receiptTxn: receipt,
-        }}).map(r=>(
-          <Card key={r.id} onClick={()=>bundleMode?toggleSelect(r.id):setExpanded(expanded===r.id?null:r.id)}>
+        {/* A referral used to be a permanently-second-class section stuck
+            below every record regardless of actual date - an old
+            referral always read as older than a brand-new record even
+            when it wasn't, and a new referral never surfaced near the
+            top. Both record and referral cards are now one single feed,
+            merge-sorted by real date so recency actually means recency,
+            not "whichever list this item happened to live in". */}
+        {(()=>{
+          const recordItems = records.map(r=>{
+            const receipt = transactions.find(t => t.medical_record_id === r.id)
+            return { kind:'record', sortDate: new Date(r.date_of_record),
+              id: r.id,
+              icon: r.record_type==='lab'?'◉':r.record_type==='imaging'?'▣':r.record_type==='procedure'?'◇':'◎',
+              bg: r.record_type==='lab'?C.blueLight:r.record_type==='imaging'?C.amberLight:r.record_type==='procedure'?C.brownLight:__theme.accentLight,
+              title: r.title,
+              sub: `${r.institutions?.name||'Unknown'} · ${r.record_type}`,
+              date: new Date(r.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'}),
+              src: r.source==='synced'?'Synced':'Manual',
+              // Real gap: this used to also show the full r.notes here, as
+              // one inline label/value row with no line-break support at
+              // all - a structured note (one field per line) ran together
+              // as a single illegible string. Per your call, full notes
+              // stay on the receipt (lib/receiptPdf.js, which does respect
+              // line breaks) - this card is diagnosis/department at a glance.
+              details: [
+                ['Diagnosis',r.diagnosis||'—'], ['Department',r.department||'—'],
+                ...(receipt ? [['Receipt', `HK$${(receipt.patient_pays||0).toFixed(2)} paid via ${receipt.payment_method} on ${new Date(receipt.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`]] : []),
+              ],
+              receiptTxn: receipt,
+            }
+          })
+          const referralItems = referrals.map(ref=>{
+            const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || (isEn?'Unnamed receiving practitioner':'未具名接收醫療人員')
+            // The real originating visit (title/diagnosis/receipt), not
+            // just the free-text reason/diagnosis the referring doctor
+            // happened to type into the referral panel itself - this is
+            // what makes the thread open to a real record even while the
+            // referred doctor's result is still outstanding, per your
+            // call that the first visit shouldn't wait on the second.
+            const sourceRecord = ref.source_appointment_id ? referralSourceRecords[ref.source_appointment_id] : null
+            return { kind:'referral', sortDate: new Date(ref.created_at), ref, toWho,
+              consults: ref.referral_consultations||[],
+              sourceRecord,
+              sourceReceipt: sourceRecord ? transactions.find(t=>t.medical_record_id===sourceRecord.id) : null,
+              followup: ref.followup_appointment_id ? referralFollowups[ref.followup_appointment_id] : null,
+              cardTitle: sourceRecord?.title || (isEn?'Referred to':'轉介至')+' '+toWho,
+            }
+          })
+          const feedItems = [...recordItems, ...referralItems].sort((a,b)=>b.sortDate-a.sortDate)
+          if (feedItems.length===0) return <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No records yet - these appear once a clinic logs a visit.':'暫無記錄 - 診所記錄就診後將顯示於此。'}</div>
+          return feedItems.map(item => item.kind==='record' ? (
+          <Card key={item.id} onClick={()=>bundleMode?toggleSelect(item.id):setExpanded(expanded===item.id?null:item.id)}>
             <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-              {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(r.id)?__theme.accent:C.border}`,background:selectedIds.has(r.id)?__theme.accent:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(r.id)?'\u2713':''}</div>}
-              <div style={{width:38,height:38,borderRadius:'10px',background:r.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:__theme.accent,flexShrink:0}}>{r.icon}</div>
-              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{mt(r.title)}</div><div style={{fontSize:'12px',color:C.textSub}}>{mt(r.sub)}</div></div>
-              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{r.date}</div><span style={{fontSize:'10px',background:r.src==='Synced'?__theme.accentLight:C.brownLight,color:r.src==='Synced'?__theme.accent:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(r.src)}</span></div>
+              {bundleMode&&<div style={{width:20,height:20,borderRadius:5,border:`1.5px solid ${selectedIds.has(item.id)?__theme.accent:C.border}`,background:selectedIds.has(item.id)?__theme.accent:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'2px',color:'#fff',fontSize:'12px'}}>{selectedIds.has(item.id)?'✓':''}</div>}
+              <div style={{width:38,height:38,borderRadius:'10px',background:item.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'18px',color:__theme.accent,flexShrink:0}}>{item.icon}</div>
+              <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{mt(item.title)}</div><div style={{fontSize:'12px',color:C.textSub}}>{mt(item.sub)}</div></div>
+              <div style={{textAlign:'right',flexShrink:0}}><div style={{fontSize:'11px',color:C.textMuted}}>{item.date}</div><span style={{fontSize:'10px',background:item.src==='Synced'?__theme.accentLight:C.brownLight,color:item.src==='Synced'?__theme.accent:C.brown,padding:'2px 8px',borderRadius:'20px',fontWeight:500}}>{mt(item.src)}</span></div>
             </div>
-            {expanded===r.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
-              {r.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{mt(l)}</span><span style={{fontWeight:500}}>{mt(v)}</span></div>)}
+            {expanded===item.id&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
+              {item.details.map(([l,v])=><div key={l} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}><span style={{color:C.textSub}}>{mt(l)}</span><span style={{fontWeight:500}}>{mt(v)}</span></div>)}
               <div style={{display:'flex',gap:'8px',marginTop:'12px'}}>
                 <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{
-                  const text = `${r.title}\n${r.details.map(([l,v])=>`${l}: ${v}`).join('\n')}`
-                  if (navigator.share) navigator.share({title:r.title, text})
+                  const text = `${item.title}\n${item.details.map(([l,v])=>`${l}: ${v}`).join('\n')}`
+                  if (navigator.share) navigator.share({title:item.title, text})
                   else { navigator.clipboard.writeText(text); alert(isEn?'Copied to clipboard':'已複製到剪貼簿') }
                 }}>Share</Btn>
                 <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={async ()=>{
@@ -1905,8 +1933,8 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   // billed - e.g. a manually-added record) falls back to
                   // the simpler record-only PDF, since there's no payment
                   // data to build a real receipt from.
-                  if (r.receiptTxn) {
-                    await fetchAndDownloadConsultationReceipt(supabase, r.receiptTxn)
+                  if (item.receiptTxn) {
+                    await fetchAndDownloadConsultationReceipt(supabase, item.receiptTxn)
                     return
                   }
                   const { jsPDF } = await import('jspdf')
@@ -1916,9 +1944,9 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   const subtitle = `${patient.full_name || ''} · ${patient.medsa_id || ''} · Patient Record`
                   drawPdfHeader(doc, pageWidth, subtitle)
                   drawPdfRecordCard(doc, 40, pageWidth, pageHeight, {
-                    title: r.title || 'Consultation',
-                    dateInstitution: `${r.date || ''}${r.sub?` · ${r.sub}`:''}`,
-                    details: r.details.filter(([l])=>l!=='Receipt'),
+                    title: item.title || 'Consultation',
+                    dateInstitution: `${item.date || ''}${item.sub?` · ${item.sub}`:''}`,
+                    details: item.details.filter(([l])=>l!=='Receipt'),
                     receiptText: null,
                     subtitle,
                   })
@@ -1926,30 +1954,16 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                   const blob = doc.output('blob')
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
-                  a.href = url; a.download = `${r.title.replace(/[^a-z0-9]/gi,'_')}.pdf`
+                  a.href = url; a.download = `${item.title.replace(/[^a-z0-9]/gi,'_')}.pdf`
                   document.body.appendChild(a); a.click(); document.body.removeChild(a)
                   URL.revokeObjectURL(url)
                 }}>Download</Btn>
               </div>
             </div>}
           </Card>
-        ))}
-        {referrals.length>0&&<>
-          <SecLabel>{isEn?'Referrals':'轉介'}</SecLabel>
-          {referrals.map(ref=>{
+          ) : (()=>{
+            const { ref, toWho, consults, sourceRecord, sourceReceipt, followup, cardTitle } = item
             const isOpen = expandedReferral===ref.id
-            const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || (isEn?'Unnamed receiving practitioner':'未具名接收醫療人員')
-            const consults = ref.referral_consultations||[]
-            // The real originating visit (title/diagnosis/receipt), not
-            // just the free-text reason/diagnosis the referring doctor
-            // happened to type into the referral panel itself - this is
-            // what makes the thread open to a real record even while the
-            // referred doctor's result is still outstanding, per your
-            // call that the first visit shouldn't wait on the second.
-            const sourceRecord = ref.source_appointment_id ? referralSourceRecords[ref.source_appointment_id] : null
-            const sourceReceipt = sourceRecord ? transactions.find(t=>t.medical_record_id===sourceRecord.id) : null
-            const followup = ref.followup_appointment_id ? referralFollowups[ref.followup_appointment_id] : null
-            const cardTitle = sourceRecord?.title || (isEn?'Referred to':'轉介至')+' '+toWho
             return (
               <Card key={ref.id} onClick={()=>setExpandedReferral(isOpen?null:ref.id)}>
                 <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
@@ -1987,8 +2001,8 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                 </div>}
               </Card>
             )
-          })}
-        </>}
+          })())
+        })()}
       </>}
       {tab==='vax'&&<>
         <SecLabel>{isEn?'Vaccination passport':'疫苗接種護照'}</SecLabel>
