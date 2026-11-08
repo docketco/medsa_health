@@ -1819,12 +1819,20 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
     if (!referralSearch.trim()) { setReferralMatches([]); return }
     const timeout = setTimeout(async () => {
       const [medsaRes, dirRes] = await Promise.all([
-        supabase.from('staff_credentials').select('id,full_name,department')
+        supabase.from('staff_credentials').select('medsa_id,full_name,department')
           .eq('role','doctor').eq('status','active').ilike('full_name', `%${referralSearch}%`).limit(5),
         supabase.from('directory_doctors').select('*, directory_clinics(*)')
           .ilike('full_name', `%${referralSearch}%`).limit(5),
       ])
-      const medsaMatches = (medsaRes.data||[]).map(d => ({ source:'medsa', id:d.id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' }))
+      // id here must be medsa_id, not staff_credentials' own row id - every
+      // staff identity elsewhere in this file (staffMember.id, the
+      // referring_staff_medsa_id column) is keyed on medsa_id, since
+      // ClinicOps never loads a staff member's raw row id at all (see
+      // StaffLogin's own query above). Storing the row id here silently
+      // broke ReferralsManagementScreen's Received tab, which queries
+      // matched_staff_credential_id against staffMember.id (= medsa_id) -
+      // a real match would simply never be found.
+      const medsaMatches = (medsaRes.data||[]).map(d => ({ source:'medsa', id:d.medsa_id, name:d.full_name, clinicLabel:d.department||'Medsa Clinic' }))
       const dirMatches = (dirRes.data||[]).map(d => ({ source:'directory', id:d.id, name:d.full_name, clinicLabel:d.directory_clinics?.name, phone:d.directory_clinics?.contact_phone, email:d.directory_clinics?.contact_email }))
       setReferralMatches([...medsaMatches, ...dirMatches])
     }, 300)

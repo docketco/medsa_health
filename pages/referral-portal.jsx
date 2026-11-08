@@ -517,7 +517,13 @@ export default function ReferralPortalPage() {
             {referral?.diagnosis && <div style={{fontSize:'12px'}}><strong>Diagnosis:</strong> {referral.diagnosis}</div>}
           </div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>This is just the review step - you're not expected to have the patient in front of you right now. Accepting means you'll schedule and see them later; the actual visit (scan + record results) happens separately when they come in.</div>
-          <input value={receiverName} onChange={e=>setReceiverName(e.target.value)} placeholder="Your full name" style={inputStyle}/>
+          {/* The vouched path (receive_vouched, above) already asked for
+              this - re-asking would just repeat the same question right
+              after answering it. Only the gate+OTP path reaches here
+              without a name on file yet. */}
+          {receiverName.trim()
+            ? <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px'}}>Deciding as <strong>{receiverName.trim()}</strong></div>
+            : <input value={receiverName} onChange={e=>setReceiverName(e.target.value)} placeholder="Your full name" style={inputStyle}/>}
           <button onClick={handleAcceptReferral} disabled={!receiverName.trim()||decisionActing} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:'pointer',marginBottom:'8px',opacity:(!receiverName.trim()||decisionActing)?0.6:1}}>{decisionActing?'Saving...':'Accept referral'}</button>
           <button onClick={()=>setStage('receive_decline_reason')} disabled={decisionActing} style={{width:'100%',padding:'12px',background:'none',border:`0.5px solid ${C.border}`,borderRadius:'10px',fontWeight:600,cursor:'pointer',color:C.textSub}}>Decline</button>
         </>}
