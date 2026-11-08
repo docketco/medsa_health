@@ -678,8 +678,15 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 
   useEffect(() => {
     loadQueueStatus()
-    const interval = setInterval(loadQueueStatus, 30000) // refresh every 30s while on this screen
-    return () => clearInterval(interval)
+    // Tightened from 30s - a 30s-stale "people ahead of you" banner right
+    // after the doctor actually submits the consultation reads as stuck,
+    // even though the underlying data is already correct by then. Also
+    // refetch the moment the tab/app comes back to the foreground,
+    // instead of waiting out whatever's left of the current interval.
+    const interval = setInterval(loadQueueStatus, 10000)
+    const onVisible = () => { if (document.visibilityState==='visible') loadQueueStatus() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', onVisible) }
   }, [patient?.medsa_id])
 
   return (
@@ -1436,6 +1443,28 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   const [accessRequests,setAccessRequests]=useState([])
   const [accessRequestsLoading,setAccessRequestsLoading]=useState(true)
   const [expandedReferral,setExpandedReferral]=useState(null)
+  // Keyed by appointment id, not referral id - source_appointment_id/
+  // followup_appointment_id are what actually tie a referral to a real
+  // visit on either side of it (see the migration comment), so the
+  // whole thread (originating consultation + receipt, referral, result,
+  // follow-up) reads as one record even while the referred doctor's
+  // result is still outstanding.
+  const [referralSourceRecords,setReferralSourceRecords]=useState({})
+  const [referralFollowups,setReferralFollowups]=useState({})
+
+  useEffect(() => {
+    async function loadThreadLinks() {
+      const sourceIds = [...new Set(referrals.map(r=>r.source_appointment_id).filter(Boolean))]
+      const followupIds = [...new Set(referrals.map(r=>r.followup_appointment_id).filter(Boolean))]
+      const [srcRes, fuRes] = await Promise.all([
+        sourceIds.length ? supabase.from('medical_records').select('id, title, record_type, diagnosis, notes, date_of_record, department, appointment_id').in('appointment_id', sourceIds) : Promise.resolve({data:[]}),
+        followupIds.length ? supabase.from('appointments').select('id, scheduled_at, doctor_name, status').in('id', followupIds) : Promise.resolve({data:[]}),
+      ])
+      setReferralSourceRecords(Object.fromEntries((srcRes.data||[]).map(rec=>[rec.appointment_id, rec])))
+      setReferralFollowups(Object.fromEntries((fuRes.data||[]).map(a=>[a.id, a])))
+    }
+    if (referrals.length>0) loadThreadLinks()
+  }, [referrals])
 
   async function openReferralAttachment(path) {
     const { data } = await supabase.storage.from('external-clinic-uploads').createSignedUrl(path, 300)
@@ -1911,19 +1940,34 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
             const isOpen = expandedReferral===ref.id
             const toWho = ref.to_doctor_name || ref.referred_to_practitioner_name || (isEn?'Unnamed receiving practitioner':'未具名接收醫療人員')
             const consults = ref.referral_consultations||[]
+            // The real originating visit (title/diagnosis/receipt), not
+            // just the free-text reason/diagnosis the referring doctor
+            // happened to type into the referral panel itself - this is
+            // what makes the thread open to a real record even while the
+            // referred doctor's result is still outstanding, per your
+            // call that the first visit shouldn't wait on the second.
+            const sourceRecord = ref.source_appointment_id ? referralSourceRecords[ref.source_appointment_id] : null
+            const sourceReceipt = sourceRecord ? transactions.find(t=>t.medical_record_id===sourceRecord.id) : null
+            const followup = ref.followup_appointment_id ? referralFollowups[ref.followup_appointment_id] : null
+            const cardTitle = sourceRecord?.title || (isEn?'Referred to':'轉介至')+' '+toWho
             return (
               <Card key={ref.id} onClick={()=>setExpandedReferral(isOpen?null:ref.id)}>
                 <div style={{padding:'14px 16px',display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
                   <div>
-                    <div style={{fontSize:'14px',fontWeight:500}}>{isEn?'Referred to':'轉介至'} {toWho}</div>
-                    <div style={{fontSize:'12px',color:C.textSub}}>{new Date(ref.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+                    <div style={{fontSize:'14px',fontWeight:500}}>{cardTitle}</div>
+                    <div style={{fontSize:'12px',color:C.textSub}}>{sourceRecord?(isEn?'Referred to':'轉介至')+' '+toWho+' · ':''}{new Date(ref.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
                   </div>
                   <span style={{fontSize:'10px',padding:'2px 8px',borderRadius:'20px',fontWeight:500,background:ref.clinical_status==='completed'?__theme.accentLight:ref.clinical_status==='declined'?C.redLight:C.brownLight,color:ref.clinical_status==='completed'?__theme.accent:ref.clinical_status==='declined'?C.red:C.brown}}>{ref.clinical_status==='completed'?(isEn?'Results in':'已有結果'):ref.clinical_status==='declined'?(isEn?'Declined':'已拒絕'):ref.clinical_status==='accepted'?(isEn?'Accepted':'已接受'):(isEn?'Awaiting decision':'待決定')}</span>
                 </div>
                 {isOpen&&<div style={{borderTop:`0.5px solid ${C.border}`,padding:'14px 16px'}}>
                   <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'REFERRING VISIT':'轉介診症'}</div>
-                  {ref.reason&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Reason':'原因'}:</strong> {ref.reason}</div>}
-                  {ref.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {ref.diagnosis}</div>}
+                  {sourceRecord&&<>
+                    <div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Visit':'診症'}:</strong> {sourceRecord.title} ({new Date(sourceRecord.date_of_record).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})})</div>
+                    {sourceRecord.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {sourceRecord.diagnosis}</div>}
+                    {sourceReceipt&&<div onClick={async(e)=>{e.stopPropagation();await fetchAndDownloadConsultationReceipt(supabase, sourceReceipt)}} style={{fontSize:'12px',color:__theme.accent,cursor:'pointer',marginBottom:'4px'}}>{isEn?'Download receipt':'下載收據'} ({isEn?'ready now':'現已可用'})</div>}
+                  </>}
+                  {!sourceRecord&&ref.reason&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Reason':'原因'}:</strong> {ref.reason}</div>}
+                  {!sourceRecord&&ref.diagnosis&&<div style={{fontSize:'12px',marginBottom:'4px'}}><strong>{isEn?'Diagnosis':'診斷'}:</strong> {ref.diagnosis}</div>}
                   {ref.clinical_status==='declined'&&ref.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}><strong>{isEn?'Decline reason':'拒絕原因'}:</strong> {ref.decline_reason}</div>}
                   {consults.length===0&&ref.clinical_status!=='declined'&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'4px'}}>{isEn?'No result yet from the receiving practitioner.':'尚未收到接收醫療人員的結果。'}</div>}
                   {consults.map((cons,j)=>(
@@ -1936,6 +1980,10 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
                       ))}
                     </div>
                   ))}
+                  {followup&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:`0.5px dashed ${C.border}`}}>
+                    <div style={{fontSize:'11px',fontWeight:600,color:C.textMuted,marginBottom:'4px'}}>{isEn?'FOLLOW-UP':'跟進預約'}</div>
+                    <div style={{fontSize:'12px'}}>{new Date(followup.scheduled_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - {followup.doctor_name||toWho}{followup.status==='cancelled'?(isEn?' (cancelled)':'（已取消）'):followup.status==='completed'?(isEn?' (completed)':'（已完成）'):''}</div>
+                  </div>}
                 </div>}
               </Card>
             )
