@@ -7614,6 +7614,36 @@ function MilestoneIllustration({ icon, accent, accentSoft }) {
     </svg>
   )
 }
+// The postpartum "book" - cover + table of contents + chapters, wrapping
+// every existing postpartum section (previously one long continuous
+// scroll) in page-flip chrome instead. Three preset themes, reusing the
+// exact same accent colors the milestone pages already use so the whole
+// book reads as one consistent palette.
+const JOURNAL_THEMES = {
+  peach: { accent:'#C9594A', accentSoft:'#F3DAD3', paper:'#F7EFE2', ink:'#4A3B32', inkSoft:'#9C7456' },
+  sage: { accent:'#7D8F6C', accentSoft:'#DEE6D4', paper:'#F2F1E8', ink:'#3E4538', inkSoft:'#7D8A6E' },
+  sand: { accent:'#B07D4F', accentSoft:'#EBDCC6', paper:'#F8F0E3', ink:'#4A3B2E', inkSoft:'#A1805A' },
+}
+function DefaultJournalCoverArt({ accent }) {
+  return (
+    <svg width="96" height="96" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Journal cover illustration">
+      <path d="M78 28 C 58 28, 44 46, 44 65 C 44 84, 58 100, 78 100 C 67 93, 58 80, 58 65 C 58 50, 67 35, 78 28 Z"/>
+      <circle cx="30" cy="38" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="42" cy="24" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="22" cy="58" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="34" cy="80" r="1.8" fill={accent} stroke="none"/>
+    </svg>
+  )
+}
+const POSTPARTUM_CHAPTERS = [
+  { key:'warnings', title:{en:'Urgent Warning Signs',zh:'緊急警號'} },
+  { key:'epds', title:{en:'Mental Health Check-in',zh:'情緒健康檢視'} },
+  { key:'checklist', title:{en:'Recovery Checklist',zh:'產後復原清單'} },
+  { key:'plan', title:{en:'My Recovery Plan',zh:'我的調理方案'} },
+  { key:'diary', title:{en:'Daily Diary',zh:'每日日記'} },
+  { key:'guide', title:{en:'Confinement Guide',zh:'坐月指南'} },
+  { key:'milestones', title:{en:"Baby's Milestone Days",zh:'寶寶的里程碑日子'} },
+]
 const CONFINEMENT_FURTHER_READING = [
   { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
   { title:'Real Food for Pregnancy', author:'Lily Nichols, RDN', focus:{en:'Clinical prenatal/postpartum nutrition, peer-reviewed - the science behind why warm, protein/collagen-rich foods support tissue repair.',zh:'具臨床及同行評審根據的孕產營養書 - 解釋溫熱、高蛋白/膠原質食物如何幫助組織修復的科學原理。'} },
@@ -7805,6 +7835,67 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
   const [confinementPlanSaving,setConfinementPlanSaving]=useState(false)
   const [confinementPlanSaved,setConfinementPlanSaved]=useState(false)
   const [milestonePage,setMilestonePage]=useState(0)
+  // The postpartum book - defaults to the cover every time this tab is
+  // entered (not remembered across visits), per your call.
+  const [postpartumBookView,setPostpartumBookView]=useState('cover')
+  const [diaryViewDate,setDiaryViewDate]=useState(()=>new Date().toISOString().slice(0,10))
+  const [diaryDateLoading,setDiaryDateLoading]=useState(false)
+  const [coverUploading,setCoverUploading]=useState(false)
+  const [coverPhotoUrl,setCoverPhotoUrl]=useState(null)
+
+  useEffect(() => {
+    if (bumpTab==='postpartum') { setPostpartumBookView('cover'); setDiaryViewDate(new Date().toISOString().slice(0,10)) }
+  }, [bumpTab])
+
+  useEffect(() => {
+    if (!bumpRow?.journal_cover_photo_path) { setCoverPhotoUrl(null); return }
+    supabase.storage.from('bump-journal-covers').createSignedUrl(bumpRow.journal_cover_photo_path, 3600).then(({data})=>setCoverPhotoUrl(data?.signedUrl||null))
+  }, [bumpRow?.journal_cover_photo_path])
+
+  // Loads whichever day is being viewed into the same confinementLogForm
+  // the tracker always used - one shared form, just re-pointed at
+  // whatever date the diary chapter's prev/next day arrows land on,
+  // instead of always meaning "today."
+  useEffect(() => {
+    if (postpartumBookView!=='diary' || !bumpSubscriptionId) return
+    let cancelled=false
+    async function loadDay() {
+      setDiaryDateLoading(true)
+      const { data } = await supabase.from('confinement_daily_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).eq('log_date',diaryViewDate).maybeSingle()
+      if (cancelled) return
+      setConfinementLogForm(data ? {
+        lochiaStatus: data.lochia_status||'', hydrationCups: data.hydration_cups!=null?String(data.hydration_cups):'',
+        mood: data.mood||'', activityDone: !!data.activity_done, note: data.note||'',
+      } : { lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
+      setDiaryDateLoading(false)
+    }
+    loadDay()
+    return () => { cancelled=true }
+  }, [postpartumBookView, diaryViewDate, bumpSubscriptionId])
+
+  async function handleCoverUpload(file) {
+    if (!file || !bumpSubscriptionId) return
+    setCoverUploading(true)
+    const path = `${bumpSubscriptionId}/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('bump-journal-covers').upload(path, file)
+    if (!error) await supabase.from('bump_subscriptions').update({ journal_cover_photo_path: path }).eq('id', bumpSubscriptionId)
+    await load()
+    setCoverUploading(false)
+  }
+  async function setCoverTheme(theme) {
+    await supabase.from('bump_subscriptions').update({ journal_cover_theme: theme }).eq('id', bumpSubscriptionId)
+    await load()
+  }
+  function shiftDiaryDate(deltaDays) {
+    const d = new Date(diaryViewDate+'T00:00:00')
+    d.setDate(d.getDate()+deltaDays)
+    const next = d.toISOString().slice(0,10)
+    const todayStr = new Date().toISOString().slice(0,10)
+    const earliestStr = bumpRow?.child_dob ? bumpRow.child_dob.slice(0,10) : null
+    if (next > todayStr) return
+    if (earliestStr && next < earliestStr) return
+    setDiaryViewDate(next)
+  }
   const [confinementLogs,setConfinementLogs]=useState([])
   const [confinementLogForm,setConfinementLogForm]=useState({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
   const [confinementLogSaving,setConfinementLogSaving]=useState(false)
@@ -8373,22 +8464,32 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
     setConfinementPlanSaving(false)
     setConfinementPlanSaved(true)
   }
+  // Saves against whichever date the diary chapter is currently showing
+  // (defaults to today, but the prev/next day arrows can point this at
+  // any earlier postpartum day) - one shared form/save path for the
+  // whole diary, not a separate "today only" flow.
   async function saveConfinementLog() {
     if (!bumpSubscriptionId) return
     setConfinementLogSaving(true)
-    const today = new Date().toISOString().slice(0,10)
     await supabase.from('confinement_daily_logs').upsert({
-      bump_subscription_id: bumpSubscriptionId, log_date: today,
+      bump_subscription_id: bumpSubscriptionId, log_date: diaryViewDate,
       lochia_status: confinementLogForm.lochiaStatus||null,
       hydration_cups: confinementLogForm.hydrationCups ? Number(confinementLogForm.hydrationCups) : null,
       mood: confinementLogForm.mood||null,
       activity_done: confinementLogForm.activityDone,
       note: confinementLogForm.note||null,
     }, { onConflict: 'bump_subscription_id,log_date' })
-    setConfinementLogForm({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
     await load(); setConfinementLogSaving(false)
   }
   async function deleteConfinementLog(id) { await supabase.from('confinement_daily_logs').delete().eq('id', id); load() }
+  async function clearDiaryDay() {
+    const existing = confinementLogs.find(l=>l.log_date===diaryViewDate)
+    if (!existing) { setConfinementLogForm({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' }); return }
+    setConfinementLogSaving(true)
+    await deleteConfinementLog(existing.id)
+    setConfinementLogForm({ lochiaStatus:'', hydrationCups:'', mood:'', activityDone:false, note:'' })
+    setConfinementLogSaving(false)
+  }
 
   if (loading) return <div style={{padding:'40px',textAlign:'center',fontSize:'12px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>
 
@@ -8448,230 +8549,301 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         ))}
       </div>
 
-      {bumpTab==='postpartum'&&<>
-      {/* Real gap found from your feedback: tapping into Postpartum on
-          the CURRENT pass (still pregnant, no child_dob yet) used to show
-          only EPDS - the recovery CHECKLIST is genuinely tied to this
-          pass's own birth (checking off "incision healed" means nothing
-          before one has happened), so it stays gated and needs this
-          pointer to the other pass. The confinement guide below it is
-          reference content now, not gated - it's always here regardless
-          of which pass you're viewing, per your call. */}
-      {!bumpRow?.child_dob&&otherBumpPass?.child_dob&&<div onClick={()=>onSwitchBumpSubscription&&onSwitchBumpSubscription(otherBumpPass.id)} style={{margin:'0 0 16px',padding:'12px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'12px',cursor:onSwitchBumpSubscription?'pointer':'default',display:'flex',alignItems:'center',gap:'10px'}}>
-        <div style={{flex:1,fontSize:'12px',color:C.amber,lineHeight:1.5}}>{isEn?`The postpartum recovery checklist is under ${otherBumpPass.child_full_name||'your other baby'}'s own pass, not this pregnancy's. Tap to switch. (The confinement guide below works for either pass.)`:`產後復原清單屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。請點按切換。(下方坐月指南適用於任何一方。)`}</div>
-        {onSwitchBumpSubscription&&<span style={{color:C.amber,fontSize:'18px'}}>›</span>}
-      </div>}
-      <SecLabel>{isEn?'Urgent warning signs':'緊急警號'}</SecLabel>
-      <Card style={{padding:'14px 16px',marginBottom:'16px',border:`1px solid ${C.red}`}}>
-        <div style={{fontSize:'12px',fontWeight:700,color:C.red,marginBottom:'8px',lineHeight:1.6}}>{isEn?"If you have any of these, contact your provider immediately. If you can't reach them, go to the ER or call 999 - don't wait. Applies during pregnancy and up to a year after birth.":'若出現以下任何情況,請立即聯絡您的醫護人員。如無法聯絡,請前往急症室或致電999 - 切勿等待。適用於懷孕期間及產後一年內。'}</div>
-        {URGENT_WARNING_SIGNS.map((s,i)=>(
-          <div key={i} style={{display:'flex',gap:'8px',alignItems:'flex-start',padding:'5px 0'}}>
-            <span style={{color:C.red,fontSize:'12px',marginTop:'1px'}}>●</span>
-            <span style={{fontSize:'12.5px',color:C.text,lineHeight:1.4}}>{isEn?s.en:s.zh}</span>
-          </div>
-        ))}
-        <div style={{fontSize:'10.5px',color:C.textMuted,marginTop:'10px',lineHeight:1.5}}>{isEn?"Not an exhaustive list - if something feels wrong and isn't here, contact your provider anyway. Based on ACOG/AIM's Urgent Maternal Warning Signs resource.":'此清單並非詳盡無遺 - 若感覺不適但未列於上述項目,仍應聯絡您的醫護人員。內容參考ACOG/AIM的緊急孕產警號資源。'}</div>
-      </Card>
+      {bumpTab==='postpartum'&&(()=>{
+        const theme = JOURNAL_THEMES[bumpRow?.journal_cover_theme||'peach']
+        const chapterIndex = POSTPARTUM_CHAPTERS.findIndex(c=>c.key===postpartumBookView)
+        function flipChapter(delta) {
+          const n = POSTPARTUM_CHAPTERS.length
+          const idx = (chapterIndex+delta+n)%n
+          setPostpartumBookView(POSTPARTUM_CHAPTERS[idx].key)
+        }
 
-      <SecLabel>{isEn?'Mental health check-in (EPDS)':'情緒健康檢視（EPDS）'}</SecLabel>
-      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
-
-        {epdsResult&&<div style={{margin:'0 0 14px',padding:'12px 14px',background:epdsResult.item10Flagged?C.redLight:__theme.accentXLight,border:`0.5px solid ${epdsResult.item10Flagged?C.red:__theme.accentLight}`,borderRadius:'10px'}}>
-          <div style={{fontSize:'13px',fontWeight:700,color:epdsResult.item10Flagged?C.red:__theme.accent}}>{isEn?`Score: ${epdsResult.totalScore} / 30`:`分數：${epdsResult.totalScore} / 30`}</div>
-          <div style={{fontSize:'11.5px',color:C.textSub,marginTop:'4px',lineHeight:1.6}}>{isEn?'Talk about your answers to these questions with your health care provider.':'請與您的醫護人員討論您的答案。'}</div>
-          {epdsResult.item10Flagged&&<div style={{fontSize:'12px',color:C.red,fontWeight:600,marginTop:'8px',lineHeight:1.6}}>{isEn?"You answered that thoughts of harming yourself have occurred to you. Please talk to someone now - contact your OBGYN, midwife, or GP today, or if you're in immediate danger, call 999 or go to your nearest A&E.":'您回答曾出現傷害自己的想法。請立即向人求助 - 今天聯絡您的婦產科醫生、助產士或家庭醫生,若有即時危險,請致電999或前往最近的急症室。'}</div>}
-        </div>}
-
-        {!epdsResult&&!epdsFormOpen&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>setEpdsFormOpen(true)}>{isEn?'Start the check-in (10 questions) ▸':'開始檢視（10個問題） ▸'}</Btn>}
-        {!epdsResult&&epdsFormOpen&&<>
-          {EPDS_ITEMS.map(item=>(
-            <div key={item.key} style={{marginBottom:'14px'}}>
-              <div style={{fontSize:'12.5px',fontWeight:600,color:C.text,marginBottom:'6px'}}>{item.key}. {item.en}</div>
-              {item.options.map((opt,i)=>(
-                <div key={i} onClick={()=>setEpdsAnswers({...epdsAnswers,[item.key]:opt.points})} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
-                  <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${epdsAnswers[item.key]===opt.points?__theme.accent:C.border}`,background:epdsAnswers[item.key]===opt.points?__theme.accent:'#fff',flexShrink:0}}/>
-                  <div style={{fontSize:'12.5px',color:C.text}}>{opt.en}</div>
-                </div>
+        // ── Cover ──────────────────────────────────────────────────────
+        if (postpartumBookView==='cover') return (
+          <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px',padding:'36px 24px 28px',textAlign:'center'}}>
+            <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
+            <div style={{width:150,height:150,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px',overflow:'hidden',position:'relative'}}>
+              {coverPhotoUrl
+                ? <img src={coverPhotoUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                : <DefaultJournalCoverArt accent={theme.accent}/>}
+            </div>
+            <label style={{display:'inline-block',fontSize:'13px',color:theme.inkSoft,textDecoration:'underline',cursor:'pointer',marginBottom:'20px'}}>
+              {coverUploading?(isEn?'Uploading…':'上傳中…'):(coverPhotoUrl?(isEn?'Change photo':'更換照片'):(isEn?'Add your own photo':'新增您的照片'))}
+              <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files?.[0]&&handleCoverUpload(e.target.files[0])}/>
+            </label>
+            <div style={{fontSize:'28px',color:theme.ink,marginBottom:'4px'}}>{isEn?'My Postpartum Journal':'我的產後日記'}</div>
+            <div style={{fontSize:'15px',color:theme.inkSoft,marginBottom:'26px'}}>{bumpRow?.child_full_name||(isEn?"Baby's first weeks":'寶寶的頭幾週')}</div>
+            <div style={{display:'flex',justifyContent:'center',gap:'10px',marginBottom:'24px'}}>
+              {Object.entries(JOURNAL_THEMES).map(([key,t])=>(
+                <div key={key} onClick={()=>setCoverTheme(key)} aria-label={key} style={{width:26,height:26,borderRadius:'50%',background:t.accent,cursor:'pointer',border:(bumpRow?.journal_cover_theme||'peach')===key?`2.5px solid ${theme.ink}`:'2.5px solid transparent',boxSizing:'border-box'}}/>
               ))}
             </div>
-          ))}
-          <Btn variant="primary" style={{width:'100%'}} disabled={epdsSaving||EPDS_ITEMS.some(item=>epdsAnswers[item.key]==null)} onClick={submitEpds}>{epdsSaving?(isEn?'Saving…':'儲存中…'):(isEn?'See my score':'查看分數')}</Btn>
-          <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setEpdsFormOpen(false)}>{isEn?'Collapse':'收起'}</Btn>
-        </>}
-        {epdsResult&&<Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>{setEpdsResult(null);setEpdsFormOpen(false)}}>{isEn?'Take it again':'重新進行'}</Btn>}
-
-        {epdsScreens.length>0&&<div style={{marginTop:'16px'}}>
-          <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Past check-ins':'過往記錄'}</div>
-          {epdsScreens.map(e=>(
-            <div key={e.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-              <span style={{color:C.textMuted,width:100,flexShrink:0}}>{new Date(e.completed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</span>
-              <span style={{flex:1,fontWeight:e.item10_flagged?700:400,color:e.item10_flagged?C.red:C.text}}>{e.total_score} / 30{e.item10_flagged?(isEn?' ⚠ self-harm item flagged':' ⚠ 已標示傷害自己項目'):''}</span>
-              <span onClick={()=>deleteEpdsScreen(e.id)} style={{color:C.textMuted,cursor:'pointer',fontSize:'13px'}}>✕</span>
-            </div>
-          ))}
-        </div>}
-      </Card>
-
-      {bumpRow?.child_dob&&<>
-        <SecLabel>{isEn?'Postpartum recovery':'產後復原'}</SecLabel>
-        <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Based on WHO's 2022 postnatal care guideline and ACOG's \"Fourth Trimester\" recommendation - contact with a provider within 3 weeks, a comprehensive check by 12 weeks, covering physical, feeding, and emotional wellbeing. Check off what's been addressed; the last item is a feelings check-in, not a clinical depression screen.":'根據世衛2022年產後護理指引及美國婦產科學會「第四孕期」建議 - 產後3週內應與醫護聯繫,並於12週內完成全面檢查,涵蓋身體、餵養及情緒健康。請勾選已處理項目;最後一項為情緒自我檢視,並非臨床抑鬱症篩查。'}</div>
-          {POSTPARTUM_RECOVERY_ITEMS.map(item=>{
-            const checked = recoveryChecks.some(r=>r.item_key===item.key)
-            return (
-              <div key={item.key} onClick={()=>toggleRecoveryItem(item.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'6px 0',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?__theme.accent:C.border}`,background:checked?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
-                <div style={{fontSize:'12.5px',color:C.text,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:C.textMuted}}>{isEn?item.en:item.zh}</div>
-              </div>
-            )
-          })}
-        </Card>
-      </>}
-
-      {/* Your call: this is reference content, not clinical data tied to
-          one specific pregnancy pass - it should always be here whether
-          or not you've used it yet, not vanish depending on which Bump
-          pass you're currently viewing. Only the recovery CHECKLIST above
-          stays gated to this pass's own child_dob, since checking off
-          "incision healed" before a birth has happened doesn't mean
-          anything; the guide itself doesn't need that gate. */}
-      <SecLabel>{isEn?'Confinement (坐月/月子) tool':'坐月/月子工具'}</SecLabel>
-      <div style={{margin:'0 0 10px',padding:'10px 14px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-        {isEn?"Medsa doesn't author a confinement diet/herb plan for you - that's exactly the kind of unverified medical-adjacent advice we don't want to give. Bring whatever plan your own nanny, TCM practitioner, or dietitian gave you below, and use the daily tracker to follow it. The reference material further down is real sourced safety fact or clearly-labelled cultural practice, not a recipe.":'Medsa不會為你編寫坐月飲食/中藥調理方案 - 這正是我們不想提供的未經證實的醫療相關建議。請在下方輸入你自己的陪月、中醫師或營養師給你的方案,並用每日追蹤記錄跟進。下方的參考資料均為有根據的安全資訊或清楚標示的傳統習俗,並非食譜。'}
-      </div>
-
-      <Card style={{padding:'14px 16px',marginBottom:'12px'}}>
-        <div style={{fontSize:'12.5px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?'My recovery plan':'我的調理方案'}</div>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>{isEn?"Whatever your nanny/practitioner/dietitian actually told you - paste or type it here just to keep it in one place. Entirely yours; Medsa doesn't read this to generate advice.":'無論你的陪月/中醫師/營養師跟你說了什麼 - 貼上或輸入於此,方便集中保存。內容完全屬於你,Medsa不會據此生成任何建議。'}</div>
-        <textarea value={confinementPlanDraft} onChange={e=>{setConfinementPlanDraft(e.target.value);setConfinementPlanSaved(false)}} rows={5} placeholder={isEn?"e.g. Week 1: light congee, no cold drinks. Week 2: lactation soups 3x/week…":'例如:第1週:清淡粥水,忌凍飲。第2週:每週3次通乳湯水…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px'}}/>
-        <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementPlan} disabled={confinementPlanSaving}>{confinementPlanSaving?(isEn?'Saving…':'儲存中…'):confinementPlanSaved?(isEn?'✓ Saved':'✓ 已儲存'):(isEn?'Save':'儲存')}</Btn>
-      </Card>
-
-      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'12.5px',fontWeight:700,color:C.text,marginBottom:'6px'}}>{isEn?"Today's tracker":'今日追蹤'}</div>
-        <div style={{display:'flex',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
-          <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
-            <option value="">{isEn?'Lochia today…':'今日惡露…'}</option>
-            <option value="red">{isEn?'Red':'鮮紅'}</option>
-            <option value="pink_brown">{isEn?'Pink/brown':'粉/棕色'}</option>
-            <option value="light_white">{isEn?'Light/white':'淡色/白色'}</option>
-            <option value="concerning">{isEn?'⚠ Fresh red returning / foul smell / fever':'⚠ 再次轉鮮紅/有異味/發燒'}</option>
-          </select>
-          <input type="number" min="0" value={confinementLogForm.hydrationCups} onChange={e=>setConfinementLogForm({...confinementLogForm,hydrationCups:e.target.value})} placeholder={isEn?'Cups of water':'飲水杯數'} style={{flex:'1 1 100px',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px'}}/>
-        </div>
-        {confinementLogForm.lochiaStatus==='concerning'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'8px 10px',marginBottom:'8px',fontSize:'11px',color:C.red,lineHeight:1.5}}>{isEn?'This is not normal - contact your doctor. See the monitoring reference below for what to watch for.':'此情況並不正常 - 請聯絡醫生。詳見下方監察參考資料。'}</div>}
-        <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
-          {MOOD_OPTIONS.map(m=>(
-            <div key={m.value} onClick={()=>setConfinementLogForm({...confinementLogForm,mood:m.value})} style={{flex:1,textAlign:'center',padding:'7px 2px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:confinementLogForm.mood===m.value?__theme.accent:C.card,color:confinementLogForm.mood===m.value?'#fff':C.textSub}}>{isEn?m.en:m.zh}</div>
-          ))}
-        </div>
-        <div onClick={()=>setConfinementLogForm({...confinementLogForm,activityDone:!confinementLogForm.activityDone})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 2px',cursor:'pointer',marginBottom:'8px'}}>
-          <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${confinementLogForm.activityDone?__theme.accent:C.border}`,background:confinementLogForm.activityDone?__theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{confinementLogForm.activityDone?'✓':''}</div>
-          <span style={{fontSize:'12.5px',color:C.text}}>{isEn?'Got up and moved a little today':'今日有起床稍作活動'}</span>
-        </div>
-        <input value={confinementLogForm.note} onChange={e=>setConfinementLogForm({...confinementLogForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註(可選)'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'10px'}}/>
-        <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementLog} disabled={confinementLogSaving}>{confinementLogSaving?(isEn?'Saving…':'儲存中…'):(isEn?"Save today's entry":'儲存今日記錄')}</Btn>
-        {confinementLogs.length>0&&<div style={{marginTop:'14px'}}>
-          {confinementLogs.map(l=>{
-            const lochiaLabel = {red:isEn?'Red':'鮮紅',pink_brown:isEn?'Pink/brown':'粉/棕色',light_white:isEn?'Light/white':'淡色/白色',concerning:isEn?'⚠ Concerning':'⚠ 異常'}[l.lochia_status]
-            const moodOpt = MOOD_OPTIONS.find(m=>m.value===l.mood)
-            return (
-              <div key={l.id} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
-                <span style={{color:C.textMuted,width:70,flexShrink:0}}>{new Date(l.log_date).toLocaleDateString('en-HK',{month:'short',day:'numeric'})}</span>
-                <span style={{flex:1,color:l.lochia_status==='concerning'?C.red:C.text}}>{[lochiaLabel,l.hydration_cups!=null?`${l.hydration_cups}${isEn?' cups':'杯'}`:null,moodOpt?(isEn?moodOpt.en:moodOpt.zh):null,l.activity_done?(isEn?'Active':'有活動'):null].filter(Boolean).join(' · ')}{l.note&&<div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>{l.note}</div>}</span>
-                <span onClick={()=>deleteConfinementLog(l.id)} style={{color:C.textMuted,cursor:'pointer',flexShrink:0}}>✕</span>
-              </div>
-            )
-          })}
-        </div>}
-      </Card>
-
-      <SecLabel>{isEn?'What to know':'須知資訊'}</SecLabel>
-      <Card style={{padding:'12px 14px',marginBottom:'10px',background:C.accentLight||undefined}}>
-        <div style={{fontSize:'12.5px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'How long is the core recovery window?':'核心復原期有多長?'}</div>
-        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>
-      </Card>
-      <SecLabel>{isEn?'Activity, bathing & wound/lochia monitoring':'活動、沐浴及傷口/惡露監察'}</SecLabel>
-      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
-        {CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
-          <div key={a.key} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_ACTIVITY_TIMING.length-1?`0.5px solid ${C.border}`:'none'}}>
-            <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5}}>{isEn?a.en:a.zh}</div>
+            <button onClick={()=>setPostpartumBookView('toc')} style={{all:'unset',cursor:'pointer',background:theme.accent,color:'#fff',padding:'12px 32px',borderRadius:'999px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive"}}>{isEn?'Open ▸':'打開 ▸'}</button>
           </div>
-        ))}
-      </Card>
-      <SecLabel>{isEn?'To limit or avoid, and where to read more':'需限制或避免,延伸閱讀'}</SecLabel>
-      <Card style={{padding:'12px 14px',marginBottom:'16px'}}>
-        {CONFINEMENT_AVOID.map((a,i)=>{
-          const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
-          return (
-            <div key={i} style={{padding:'6px 0',borderBottom:`0.5px solid ${C.border}`}}>
-              <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px'}}>{isEn?tag.en:tag.zh}</span>
-              <span style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.5}}>{isEn?a.en:a.zh}</span>
-            </div>
-          )
-        })}
-        <div style={{fontSize:'10.5px',color:C.textMuted,margin:'10px 0 6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.4px'}}>{isEn?'Want to go deeper? These books go further than fits here - referenced, not reproduced.':'想了解更多?以下書籍比本頁更深入 - 僅作參考推薦,並非轉載內容。'}</div>
-        {CONFINEMENT_FURTHER_READING.map((b,i)=>(
-          <div key={i} style={{padding:'6px 0',borderBottom:i<CONFINEMENT_FURTHER_READING.length-1?`0.5px solid ${C.border}`:'none'}}>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.text}}>{b.title} <span style={{fontWeight:400,color:C.textMuted}}>— {b.author}</span></div>
-            <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.5}}>{isEn?b.focus.en:b.focus.zh}</div>
-          </div>
-        ))}
-      </Card>
-      <SecLabel>{isEn?"Fun facts - baby's milestone days":'趣味知識 - 寶寶的里程碑日子'}</SecLabel>
-      <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'12px',fontSize:'11px',color:C.amber,lineHeight:1.5}}>
-        {isEn?'Cultural practice, not medical guidance - and these genuinely vary a lot by family and region.':'傳統習俗,並非醫療指引 - 各家各地做法差異頗大。'}
-      </div>
-      {(()=>{
-        const m = CONFINEMENT_MILESTONES[milestonePage]
-        const v = CONFINEMENT_MILESTONE_VISUALS[m.key]
-        const daysSinceBirth = bumpRow?.child_dob ? Math.floor((Date.now()-new Date(bumpRow.child_dob))/(1000*60*60*24)) : null
-        const daysUntil = daysSinceBirth!=null ? v.estimateDay-daysSinceBirth : null
-        const showReminder = daysUntil!=null && daysUntil>0 && daysUntil<=14
-        return (
-          <div style={{position:'relative',overflow:'hidden',background:'#F7EFE2',fontFamily:"'Patrick Hand',cursive",color:'#4A3B32',borderRadius:'14px',marginBottom:'16px'}}>
+        )
+
+        // ── Table of contents ─────────────────────────────────────────
+        if (postpartumBookView==='toc') return (
+          <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px',padding:'22px 20px'}}>
             <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
-            {/* notebook ruled lines + left margin, same "diary page" feel as the mockup */}
+            <div onClick={()=>setPostpartumBookView('cover')} style={{display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'14px',color:theme.inkSoft,cursor:'pointer',marginBottom:'18px'}}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+              {isEn?'Cover':'封面'}
+            </div>
+            <div style={{fontSize:'24px',marginBottom:'16px'}}>{isEn?'Contents':'目錄'}</div>
+            {POSTPARTUM_CHAPTERS.map((c,i)=>(
+              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'13px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed rgba(154,116,86,0.3)`:'none',cursor:'pointer'}}>
+                <span style={{fontSize:'19px'}}>{isEn?c.title.en:c.title.zh}</span>
+                <span style={{color:theme.inkSoft}}>▸</span>
+              </div>
+            ))}
+          </div>
+        )
+
+        // ── One chapter ────────────────────────────────────────────────
+        const chapterTitle = POSTPARTUM_CHAPTERS[chapterIndex]?.title
+        return (
+          <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px'}}>
+            <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
             <div style={{position:'absolute',inset:0,backgroundImage:'repeating-linear-gradient(to bottom, transparent, transparent 35px, rgba(154,116,86,0.08) 35px, rgba(154,116,86,0.08) 36px)',pointerEvents:'none'}}/>
             <div style={{position:'absolute',left:34,top:0,bottom:0,width:1,background:'rgba(201,140,122,0.35)',pointerEvents:'none'}}/>
-            <div style={{position:'relative',padding:'20px 18px 18px 40px'}}>
-              {showReminder&&<div style={{background:v.accentSoft,border:`1.5px dashed ${v.accent}`,borderRadius:'10px',padding:'10px 14px',display:'flex',alignItems:'flex-start',gap:'10px',marginBottom:'16px'}}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={v.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,marginTop:2}} aria-hidden="true"><path d="M12 2 L12 8"/><path d="M7 8 L17 8 L19 14 L5 14 Z"/><path d="M12 14 L12 22"/></svg>
-                <div style={{fontSize:'15px',lineHeight:1.35}}>{isEn
-                  ? <>{'Around '}<strong>{daysUntil} day{daysUntil===1?'':'s'}</strong>{' away - '}{m.name.en}{'. Worth keeping in mind (exact timing varies by family).'}</>
-                  : <>{'約'}<strong>{daysUntil}天</strong>{'後 - '}{m.name.zh}{'。可記在心上(確實時間因各家而異)。'}</>}</div>
-              </div>}
-              <div style={{marginBottom:'4px',fontSize:'15px',color:'#9C7456'}}>{isEn?m.day.en:m.day.zh}</div>
-              <div style={{fontSize:'20px',color:v.accent,marginBottom:'18px'}}>{isEn?m.name.en:m.name.zh}</div>
-              <div style={{display:'flex',justifyContent:'center',marginBottom:'18px'}}>
-                <div style={{width:120,height:120,borderRadius:'50%',background:v.accentSoft,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                  <MilestoneIllustration icon={v.icon} accent={v.accent} accentSoft={v.accentSoft}/>
+            <div style={{position:'relative',padding:'18px 18px 18px 40px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
+                <div onClick={()=>setPostpartumBookView('cover')} style={{display:'inline-flex',alignItems:'center',gap:'5px',fontSize:'13px',color:theme.inkSoft,cursor:'pointer'}}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/></svg>
+                  {isEn?'Cover':'封面'}
+                </div>
+                <div onClick={()=>setPostpartumBookView('toc')} style={{display:'inline-flex',alignItems:'center',gap:'5px',fontSize:'13px',color:theme.inkSoft,cursor:'pointer'}}>
+                  {isEn?'Contents':'目錄'}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
                 </div>
               </div>
-              <div style={{fontSize:'19px',lineHeight:1.55,color:'#4A3B32'}}>{isEn?m.detail.en:m.detail.zh}</div>
-              <div style={{marginTop:'16px',display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',color:'#9C7456',border:'1px solid rgba(154,116,86,0.4)',borderRadius:'999px',padding:'4px 12px'}}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
-                {isEn?'Cultural tradition, not medical guidance':'傳統習俗,並非醫療指引'}
-              </div>
-              <div style={{marginTop:'18px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                <button onClick={()=>setMilestonePage((milestonePage-1+CONFINEMENT_MILESTONES.length)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Previous entry':'上一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+              <div style={{fontSize:'22px',color:theme.accent,marginBottom:'16px'}}>{isEn?chapterTitle?.en:chapterTitle?.zh}</div>
+
+              {postpartumBookView==='warnings'&&<div style={{fontFamily:'inherit'}}>
+                <div style={{background:'#fff',border:`1px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
+                  <div style={{fontSize:'13px',fontWeight:700,color:C.red,marginBottom:'8px',lineHeight:1.6,fontFamily:'system-ui, sans-serif'}}>{isEn?"If you have any of these, contact your provider immediately. If you can't reach them, go to the ER or call 999 - don't wait. Applies during pregnancy and up to a year after birth.":'若出現以下任何情況,請立即聯絡您的醫護人員。如無法聯絡,請前往急症室或致電999 - 切勿等待。適用於懷孕期間及產後一年內。'}</div>
+                  {URGENT_WARNING_SIGNS.map((s,i)=>(
+                    <div key={i} style={{display:'flex',gap:'8px',alignItems:'flex-start',padding:'5px 0'}}>
+                      <span style={{color:C.red,fontSize:'13px',marginTop:'1px'}}>●</span>
+                      <span style={{fontSize:'14px',color:theme.ink,lineHeight:1.4}}>{isEn?s.en:s.zh}</span>
+                    </div>
+                  ))}
+                  <div style={{fontSize:'11px',color:theme.inkSoft,marginTop:'10px',lineHeight:1.5,fontFamily:'system-ui, sans-serif'}}>{isEn?"Not an exhaustive list - if something feels wrong and isn't here, contact your provider anyway. Based on ACOG/AIM's Urgent Maternal Warning Signs resource.":'此清單並非詳盡無遺 - 若感覺不適但未列於上述項目,仍應聯絡您的醫護人員。內容參考ACOG/AIM的緊急孕產警號資源。'}</div>
+                </div>
+              </div>}
+
+              {postpartumBookView==='epds'&&<div style={{fontFamily:'inherit'}}>
+                <div style={{fontSize:'13px',color:theme.inkSoft,marginBottom:'14px',lineHeight:1.5}}>{isEn?'The Edinburgh Postnatal Depression Scale, meant for use at 28-32 weeks of pregnancy and again at 6-8 weeks postpartum. This is a screening tool to discuss with your health care provider - not a diagnosis. English only for now. © The Royal College of Psychiatrists, from Cox, Holden & Sagovsky (1987), reprinted with permission.':'愛丁堡產後抑鬱量表,建議於懷孕28-32週及產後6-8週使用。此為篩查工具,用於與您的醫護人員討論 - 並非診斷。暫時僅提供英文版本。© The Royal College of Psychiatrists,出自Cox, Holden & Sagovsky (1987),已獲授權轉載。'}</div>
+
+                {epdsResult&&<div style={{margin:'0 0 14px',padding:'12px 14px',background:epdsResult.item10Flagged?C.redLight:'#fff',border:`0.5px solid ${epdsResult.item10Flagged?C.red:theme.accent}`,borderRadius:'10px'}}>
+                  <div style={{fontSize:'14px',fontWeight:700,color:epdsResult.item10Flagged?C.red:theme.accent,fontFamily:'system-ui, sans-serif'}}>{isEn?`Score: ${epdsResult.totalScore} / 30`:`分數：${epdsResult.totalScore} / 30`}</div>
+                  <div style={{fontSize:'12px',color:theme.inkSoft,marginTop:'4px',lineHeight:1.6,fontFamily:'system-ui, sans-serif'}}>{isEn?'Talk about your answers to these questions with your health care provider.':'請與您的醫護人員討論您的答案。'}</div>
+                  {epdsResult.item10Flagged&&<div style={{fontSize:'12px',color:C.red,fontWeight:600,marginTop:'8px',lineHeight:1.6,fontFamily:'system-ui, sans-serif'}}>{isEn?"You answered that thoughts of harming yourself have occurred to you. Please talk to someone now - contact your OBGYN, midwife, or GP today, or if you're in immediate danger, call 999 or go to your nearest A&E.":'您回答曾出現傷害自己的想法。請立即向人求助 - 今天聯絡您的婦產科醫生、助產士或家庭醫生,若有即時危險,請致電999或前往最近的急症室。'}</div>}
+                </div>}
+
+                {!epdsResult&&!epdsFormOpen&&<Btn variant="primary" style={{width:'100%'}} onClick={()=>setEpdsFormOpen(true)}>{isEn?'Start the check-in (10 questions) ▸':'開始檢視（10個問題） ▸'}</Btn>}
+                {!epdsResult&&epdsFormOpen&&<div style={{fontFamily:'system-ui, sans-serif'}}>
+                  {EPDS_ITEMS.map(item=>(
+                    <div key={item.key} style={{marginBottom:'14px'}}>
+                      <div style={{fontSize:'12.5px',fontWeight:600,color:C.text,marginBottom:'6px'}}>{item.key}. {item.en}</div>
+                      {item.options.map((opt,i)=>(
+                        <div key={i} onClick={()=>setEpdsAnswers({...epdsAnswers,[item.key]:opt.points})} style={{display:'flex',alignItems:'center',gap:'8px',padding:'5px 0',cursor:'pointer'}}>
+                          <div style={{width:16,height:16,borderRadius:'50%',border:`1.5px solid ${epdsAnswers[item.key]===opt.points?theme.accent:C.border}`,background:epdsAnswers[item.key]===opt.points?theme.accent:'#fff',flexShrink:0}}/>
+                          <div style={{fontSize:'12.5px',color:C.text}}>{opt.en}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                  <Btn variant="primary" style={{width:'100%'}} disabled={epdsSaving||EPDS_ITEMS.some(item=>epdsAnswers[item.key]==null)} onClick={submitEpds}>{epdsSaving?(isEn?'Saving…':'儲存中…'):(isEn?'See my score':'查看分數')}</Btn>
+                  <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setEpdsFormOpen(false)}>{isEn?'Collapse':'收起'}</Btn>
+                </div>}
+                {epdsResult&&<Btn style={{width:'100%',marginTop:'4px'}} onClick={()=>{setEpdsResult(null);setEpdsFormOpen(false)}}>{isEn?'Take it again':'重新進行'}</Btn>}
+
+                {epdsScreens.length>0&&<div style={{marginTop:'16px',fontFamily:'system-ui, sans-serif'}}>
+                  <div style={{fontSize:'10px',color:theme.inkSoft,marginBottom:'6px',textTransform:'uppercase',letterSpacing:'0.5px'}}>{isEn?'Past check-ins':'過往記錄'}</div>
+                  {epdsScreens.map(e=>(
+                    <div key={e.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
+                      <span style={{color:theme.inkSoft,width:100,flexShrink:0}}>{new Date(e.completed_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</span>
+                      <span style={{flex:1,fontWeight:e.item10_flagged?700:400,color:e.item10_flagged?C.red:C.text}}>{e.total_score} / 30{e.item10_flagged?(isEn?' ⚠ self-harm item flagged':' ⚠ 已標示傷害自己項目'):''}</span>
+                      <span onClick={()=>deleteEpdsScreen(e.id)} style={{color:theme.inkSoft,cursor:'pointer',fontSize:'13px'}}>✕</span>
+                    </div>
+                  ))}
+                </div>}
+              </div>}
+
+              {postpartumBookView==='checklist'&&<div style={{fontFamily:'inherit'}}>
+                {!bumpRow?.child_dob
+                  ? <div style={{fontSize:'15px',lineHeight:1.5}}>
+                      {otherBumpPass?.child_dob
+                        ? <span onClick={()=>onSwitchBumpSubscription&&onSwitchBumpSubscription(otherBumpPass.id)} style={{textDecoration:'underline',cursor:onSwitchBumpSubscription?'pointer':'default'}}>{isEn?`This checklist is under ${otherBumpPass.child_full_name||'your other baby'}'s own pass, not this pregnancy's. Tap to switch.`:`此清單屬於${otherBumpPass.child_full_name||'另一寶寶'}的產後記錄,並非此次懷孕。點按切換。`}</span>
+                        : (isEn?"This checklist unlocks once baby's born.":'寶寶出生後即可使用此清單。')}
+                    </div>
+                  : <>
+                      <div style={{fontSize:'13px',color:theme.inkSoft,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Based on WHO's 2022 postnatal care guideline and ACOG's \"Fourth Trimester\" recommendation - contact with a provider within 3 weeks, a comprehensive check by 12 weeks, covering physical, feeding, and emotional wellbeing. Check off what's been addressed; the last item is a feelings check-in, not a clinical depression screen.":'根據世衛2022年產後護理指引及美國婦產科學會「第四孕期」建議 - 產後3週內應與醫護聯繫,並於12週內完成全面檢查,涵蓋身體、餵養及情緒健康。請勾選已處理項目;最後一項為情緒自我檢視,並非臨床抑鬱症篩查。'}</div>
+                      {POSTPARTUM_RECOVERY_ITEMS.map(item=>{
+                        const checked = recoveryChecks.some(r=>r.item_key===item.key)
+                        return (
+                          <div key={item.key} onClick={()=>toggleRecoveryItem(item.key)} style={{display:'flex',gap:'10px',alignItems:'flex-start',padding:'7px 0',cursor:'pointer'}}>
+                            <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${checked?theme.accent:C.border}`,background:checked?theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0,marginTop:'1px'}}>{checked?'✓':''}</div>
+                            <div style={{fontSize:'15px',color:theme.ink,lineHeight:1.4,textDecoration:checked?'line-through':'none',textDecorationColor:theme.inkSoft}}>{isEn?item.en:item.zh}</div>
+                          </div>
+                        )
+                      })}
+                    </>}
+              </div>}
+
+              {postpartumBookView==='plan'&&<div style={{fontFamily:'inherit'}}>
+                <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5,fontFamily:'system-ui, sans-serif'}}>
+                  {isEn?"Medsa doesn't author a confinement diet/herb plan for you - that's exactly the kind of unverified medical-adjacent advice we don't want to give. Bring whatever plan your own nanny, TCM practitioner, or dietitian gave you below.":'Medsa不會為你編寫坐月飲食/中藥調理方案 - 這正是我們不想提供的未經證實的醫療相關建議。請在下方輸入你自己的陪月、中醫師或營養師給你的方案。'}
+                </div>
+                <div style={{fontSize:'13px',color:theme.inkSoft,marginBottom:'8px',lineHeight:1.5}}>{isEn?"Whatever your nanny/practitioner/dietitian actually told you - paste or type it here just to keep it in one place. Entirely yours; Medsa doesn't read this to generate advice.":'無論你的陪月/中醫師/營養師跟你說了什麼 - 貼上或輸入於此,方便集中保存。內容完全屬於你,Medsa不會據此生成任何建議。'}</div>
+                <textarea value={confinementPlanDraft} onChange={e=>{setConfinementPlanDraft(e.target.value);setConfinementPlanSaved(false)}} rows={7} placeholder={isEn?"e.g. Week 1: light congee, no cold drinks. Week 2: lactation soups 3x/week…":'例如:第1週:清淡粥水,忌凍飲。第2週:每週3次通乳湯水…'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'10px 12px',fontSize:'17px',fontFamily:'inherit',resize:'vertical',marginBottom:'10px',background:'#fff'}}/>
+                <Btn variant="primary" style={{width:'100%'}} onClick={saveConfinementPlan} disabled={confinementPlanSaving}>{confinementPlanSaving?(isEn?'Saving…':'儲存中…'):confinementPlanSaved?(isEn?'✓ Saved':'✓ 已儲存'):(isEn?'Save':'儲存')}</Btn>
+              </div>}
+
+              {postpartumBookView==='diary'&&(()=>{
+                const dayNumber = bumpRow?.child_dob ? Math.floor((new Date(diaryViewDate) - new Date(bumpRow.child_dob.slice(0,10)))/(1000*60*60*24))+1 : null
+                const todayStr = new Date().toISOString().slice(0,10)
+                const earliestStr = bumpRow?.child_dob ? bumpRow.child_dob.slice(0,10) : null
+                return (
+                  <div>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'14px'}}>
+                      <button onClick={()=>shiftDiaryDate(-1)} disabled={earliestStr!=null&&diaryViewDate<=earliestStr} aria-label={isEn?'Previous day':'前一天'} style={{all:'unset',cursor:(earliestStr!=null&&diaryViewDate<=earliestStr)?'default':'pointer',opacity:(earliestStr!=null&&diaryViewDate<=earliestStr)?0.3:1,width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+                      </button>
+                      <div style={{textAlign:'center'}}>
+                        <div style={{fontSize:'16px',color:theme.inkSoft}}>{new Date(diaryViewDate+'T00:00:00').toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</div>
+                        {dayNumber!=null&&dayNumber>=1&&<div style={{fontSize:'12px',color:theme.inkSoft,opacity:0.8}}>{isEn?`Day ${dayNumber} postpartum`:`產後第${dayNumber}天`}</div>}
+                        {diaryViewDate===todayStr&&<div style={{fontSize:'11px',color:theme.accent,fontWeight:700,marginTop:'2px'}}>{isEn?'TODAY':'今天'}</div>}
+                      </div>
+                      <button onClick={()=>shiftDiaryDate(1)} disabled={diaryViewDate>=todayStr} aria-label={isEn?'Next day':'後一天'} style={{all:'unset',cursor:diaryViewDate>=todayStr?'default':'pointer',opacity:diaryViewDate>=todayStr?0.3:1,width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
+                      </button>
+                    </div>
+                    {diaryDateLoading
+                      ? <div style={{textAlign:'center',padding:'30px',fontSize:'13px',color:theme.inkSoft,fontFamily:'system-ui, sans-serif'}}>{isEn?'Loading…':'載入中…'}</div>
+                      : <div style={{fontFamily:'system-ui, sans-serif'}}>
+                          <div style={{display:'flex',gap:'8px',marginBottom:'8px',flexWrap:'wrap'}}>
+                            <select value={confinementLogForm.lochiaStatus} onChange={e=>setConfinementLogForm({...confinementLogForm,lochiaStatus:e.target.value})} style={{flex:'1 1 140px',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px',background:'#fff'}}>
+                              <option value="">{isEn?'Lochia…':'惡露…'}</option>
+                              <option value="red">{isEn?'Red':'鮮紅'}</option>
+                              <option value="pink_brown">{isEn?'Pink/brown':'粉/棕色'}</option>
+                              <option value="light_white">{isEn?'Light/white':'淡色/白色'}</option>
+                              <option value="concerning">{isEn?'⚠ Fresh red returning / foul smell / fever':'⚠ 再次轉鮮紅/有異味/發燒'}</option>
+                            </select>
+                            <input type="number" min="0" value={confinementLogForm.hydrationCups} onChange={e=>setConfinementLogForm({...confinementLogForm,hydrationCups:e.target.value})} placeholder={isEn?'Cups of water':'飲水杯數'} style={{flex:'1 1 100px',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 10px',fontSize:'12.5px'}}/>
+                          </div>
+                          {confinementLogForm.lochiaStatus==='concerning'&&<div style={{background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'8px',padding:'8px 10px',marginBottom:'8px',fontSize:'11px',color:C.red,lineHeight:1.5}}>{isEn?'This is not normal - contact your doctor.':'此情況並不正常 - 請聯絡醫生。'}</div>}
+                          <div style={{display:'flex',gap:'6px',marginBottom:'8px'}}>
+                            {MOOD_OPTIONS.map(m=>(
+                              <div key={m.value} onClick={()=>setConfinementLogForm({...confinementLogForm,mood:m.value})} style={{flex:1,textAlign:'center',padding:'7px 2px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:confinementLogForm.mood===m.value?theme.accent:'#fff',color:confinementLogForm.mood===m.value?'#fff':C.textSub,border:`0.5px solid rgba(154,116,86,0.3)`}}>{isEn?m.en:m.zh}</div>
+                            ))}
+                          </div>
+                          <div onClick={()=>setConfinementLogForm({...confinementLogForm,activityDone:!confinementLogForm.activityDone})} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 2px',cursor:'pointer',marginBottom:'8px'}}>
+                            <div style={{width:18,height:18,borderRadius:'4px',border:`1.5px solid ${confinementLogForm.activityDone?theme.accent:C.border}`,background:confinementLogForm.activityDone?theme.accent:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:'#fff',flexShrink:0}}>{confinementLogForm.activityDone?'✓':''}</div>
+                            <span style={{fontSize:'12.5px',color:C.text}}>{isEn?'Got up and moved a little today':'今日有起床稍作活動'}</span>
+                          </div>
+                          <div style={{fontSize:'11px',color:theme.inkSoft,marginBottom:'4px',textTransform:'uppercase',letterSpacing:'0.4px'}}>{isEn?"Today's entry":'今日記事'}</div>
+                          <textarea value={confinementLogForm.note} onChange={e=>setConfinementLogForm({...confinementLogForm,note:e.target.value})} rows={4} placeholder={isEn?'How did today go?':'今天過得如何？'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid rgba(154,116,86,0.4)`,borderRadius:'8px',padding:'9px 12px',fontSize:'17px',fontFamily:"'Patrick Hand',cursive",marginBottom:'10px',background:'#fff',color:theme.ink}}/>
+                          <div style={{display:'flex',gap:'8px'}}>
+                            <Btn variant="primary" style={{flex:1}} onClick={saveConfinementLog} disabled={confinementLogSaving}>{confinementLogSaving?(isEn?'Saving…':'儲存中…'):(isEn?'Save this day':'儲存')}</Btn>
+                            <Btn style={{flex:1}} onClick={clearDiaryDay} disabled={confinementLogSaving}>{isEn?'Clear':'清除'}</Btn>
+                          </div>
+                        </div>}
+                  </div>
+                )
+              })()}
+
+              {postpartumBookView==='guide'&&<div style={{fontFamily:'inherit'}}>
+                <div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px',color:C.amber,lineHeight:1.5,fontFamily:'system-ui, sans-serif'}}>
+                  {isEn?'Real sourced safety fact or clearly-labelled cultural practice - not medical guidance, and these genuinely vary a lot by family and region.':'均為有根據的安全資訊或清楚標示的傳統習俗 - 並非醫療指引,各家各地做法差異頗大。'}
+                </div>
+                <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'How long is the core recovery window?':'核心復原期有多長?'}</div>
+                <div style={{fontSize:'14px',lineHeight:1.5,marginBottom:'16px'}}>{isEn?CONFINEMENT_CORE_PERIOD_NOTE.en:CONFINEMENT_CORE_PERIOD_NOTE.zh}</div>
+                <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Activity, bathing & wound/lochia monitoring':'活動、沐浴及傷口/惡露監察'}</div>
+                {CONFINEMENT_ACTIVITY_TIMING.map((a,i)=>(
+                  <div key={a.key} style={{padding:'5px 0',fontSize:'14px',lineHeight:1.5}}>{isEn?a.en:a.zh}</div>
+                ))}
+                <div style={{fontSize:'15px',fontWeight:700,margin:'16px 0 4px'}}>{isEn?'To limit or avoid':'需限制或避免'}</div>
+                {CONFINEMENT_AVOID.map((a,i)=>{
+                  const tag = {refuted:{en:'Refuted',zh:'已被否定',color:C.red,bg:C.redLight},cultural:{en:'Cultural',zh:'傳統習俗',color:C.amber,bg:C.amberLight},advised:{en:'Advised',zh:'建議',color:C.green,bg:C.greenLight}}[a.status]
+                  return (
+                    <div key={i} style={{padding:'5px 0'}}>
+                      <span style={{fontSize:'9.5px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.4px',padding:'2px 7px',borderRadius:'10px',background:tag.bg,color:tag.color,marginRight:'6px',fontFamily:'system-ui, sans-serif'}}>{isEn?tag.en:tag.zh}</span>
+                      <span style={{fontSize:'14px',lineHeight:1.5}}>{isEn?a.en:a.zh}</span>
+                    </div>
+                  )
+                })}
+                <div style={{fontSize:'11px',color:theme.inkSoft,margin:'16px 0 6px',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.4px',fontFamily:'system-ui, sans-serif'}}>{isEn?'Want to go deeper? Referenced, not reproduced.':'想了解更多?僅作參考推薦,並非轉載內容。'}</div>
+                {CONFINEMENT_FURTHER_READING.map((b,i)=>(
+                  <div key={i} style={{padding:'6px 0',fontFamily:'system-ui, sans-serif'}}>
+                    <div style={{fontSize:'12px',fontWeight:600}}>{b.title} <span style={{fontWeight:400,color:theme.inkSoft}}>— {b.author}</span></div>
+                    <div style={{fontSize:'11px',color:theme.inkSoft,marginTop:'2px',lineHeight:1.5}}>{isEn?b.focus.en:b.focus.zh}</div>
+                  </div>
+                ))}
+              </div>}
+
+              {postpartumBookView==='milestones'&&(()=>{
+                const m = CONFINEMENT_MILESTONES[milestonePage]
+                const v = CONFINEMENT_MILESTONE_VISUALS[m.key]
+                const daysSinceBirth = bumpRow?.child_dob ? Math.floor((Date.now()-new Date(bumpRow.child_dob))/(1000*60*60*24)) : null
+                const daysUntil = daysSinceBirth!=null ? v.estimateDay-daysSinceBirth : null
+                const showReminder = daysUntil!=null && daysUntil>0 && daysUntil<=14
+                return (
+                  <div>
+                    {showReminder&&<div style={{background:v.accentSoft,border:`1.5px dashed ${v.accent}`,borderRadius:'10px',padding:'10px 14px',display:'flex',alignItems:'flex-start',gap:'10px',marginBottom:'16px'}}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={v.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,marginTop:2}} aria-hidden="true"><path d="M12 2 L12 8"/><path d="M7 8 L17 8 L19 14 L5 14 Z"/><path d="M12 14 L12 22"/></svg>
+                      <div style={{fontSize:'15px',lineHeight:1.35}}>{isEn
+                        ? <>{'Around '}<strong>{daysUntil} day{daysUntil===1?'':'s'}</strong>{' away - '}{m.name.en}{'. Worth keeping in mind (exact timing varies by family).'}</>
+                        : <>{'約'}<strong>{daysUntil}天</strong>{'後 - '}{m.name.zh}{'。可記在心上(確實時間因各家而異)。'}</>}</div>
+                    </div>}
+                    <div style={{marginBottom:'4px',fontSize:'15px',color:theme.inkSoft}}>{isEn?m.day.en:m.day.zh}</div>
+                    <div style={{fontSize:'20px',color:v.accent,marginBottom:'18px'}}>{isEn?m.name.en:m.name.zh}</div>
+                    <div style={{display:'flex',justifyContent:'center',marginBottom:'18px'}}>
+                      <div style={{width:120,height:120,borderRadius:'50%',background:v.accentSoft,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <MilestoneIllustration icon={v.icon} accent={v.accent} accentSoft={v.accentSoft}/>
+                      </div>
+                    </div>
+                    <div style={{fontSize:'19px',lineHeight:1.55}}>{isEn?m.detail.en:m.detail.zh}</div>
+                    <div style={{marginTop:'16px',display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',color:theme.inkSoft,border:'1px solid rgba(154,116,86,0.4)',borderRadius:'999px',padding:'4px 12px'}}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5l3 2"/></svg>
+                      {isEn?'Cultural tradition, not medical guidance':'傳統習俗,並非醫療指引'}
+                    </div>
+                    <div style={{marginTop:'18px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                      <button onClick={()=>setMilestonePage((milestonePage-1+CONFINEMENT_MILESTONES.length)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Previous entry':'上一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
+                      </button>
+                      <div style={{display:'flex',gap:'7px'}}>
+                        {CONFINEMENT_MILESTONES.map((mm,i)=>(
+                          <div key={mm.key} style={{width:i===milestonePage?20:7,height:7,borderRadius:'999px',background:i===milestonePage?v.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
+                        ))}
+                      </div>
+                      <button onClick={()=>setMilestonePage((milestonePage+1)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Next entry':'下一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {postpartumBookView!=='diary'&&postpartumBookView!=='milestones'&&<div style={{marginTop:'22px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                <button onClick={()=>flipChapter(-1)} aria-label={isEn?'Previous chapter':'上一章'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6 L9 12 L15 18"/></svg>
                 </button>
-                <div style={{display:'flex',gap:'7px'}}>
-                  {CONFINEMENT_MILESTONES.map((mm,i)=>(
-                    <div key={mm.key} style={{width:i===milestonePage?20:7,height:7,borderRadius:'999px',background:i===milestonePage?v.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
+                <div style={{display:'flex',gap:'5px'}}>
+                  {POSTPARTUM_CHAPTERS.map((c,i)=>(
+                    <div key={c.key} style={{width:i===chapterIndex?16:6,height:6,borderRadius:'999px',background:i===chapterIndex?theme.accent:'#D9C9B4',transition:'background .2s,width .2s'}}/>
                   ))}
                 </div>
-                <button onClick={()=>setMilestonePage((milestonePage+1)%CONFINEMENT_MILESTONES.length)} aria-label={isEn?'Next entry':'下一頁'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9C7456" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
+                <button onClick={()=>flipChapter(1)} aria-label={isEn?'Next chapter':'下一章'} style={{all:'unset',cursor:'pointer',width:40,height:40,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M9 6 L15 12 L9 18"/></svg>
                 </button>
-              </div>
+              </div>}
             </div>
           </div>
         )
       })()}
-      </>}
 
       {bumpTab==='monitoring'&&<>
       <SecLabel>{isEn?'Weight gain':'體重增長'}</SecLabel>
