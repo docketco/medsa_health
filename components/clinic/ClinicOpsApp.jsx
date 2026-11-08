@@ -1919,6 +1919,10 @@ function ConsultationScreen({ queueEntry, staffMember, onPrescribed, institution
       to_clinic_name: referralClinicName||null, to_clinic_phone: referralClinicPhone||null, to_clinic_email: referralClinicEmail||null,
       matched_staff_credential_id: referralMatched?.source==='medsa' ? referralMatched.id : null,
       matched_directory_doctor_id: referralMatched?.source==='directory' ? referralMatched.id : null,
+      // Lets the patient-facing Records thread pull in this exact visit's
+      // own medical_records row/receipt alongside the referral, even
+      // while the receiving doctor's result is still outstanding.
+      source_appointment_id: queueEntry?.appointmentId || null,
     }).select('id').single()
     setReferralSentId(data?.id||null)
     setReferralAccessCode(accessCode)
@@ -5441,7 +5445,7 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       setNewApptError(`${newApptDoctor} already has another appointment at ${newApptTime}. Pick a different time.`)
       return
     }
-    const { error: insErr } = await supabase.from('appointments').insert({
+    const { data: insertedAppt, error: insErr } = await supabase.from('appointments').insert({
       patient_id: newApptPatient.id,
       doctor_name: newApptDoctor,
       department: doctorInfo?.department || null,
@@ -5449,8 +5453,35 @@ function ScheduleScreen({ staffMember, onGoToConsultation, onCancelCheckIn, pres
       appointment_type: newApptReason || 'Consultation',
       status: 'confirmed',
       institution_source: 'clinic_ops',
-    })
+    }).select('id').single()
     if (insErr) { setNewApptSaving(false); setNewApptError(insErr.message); return }
+    // Arrived here via the Referrals tab's "Schedule this patient's
+    // visit"/"Schedule/reschedule follow-up" - links the booked
+    // appointment back to that referral so the patient's Records thread
+    // can show it, not just the bare referral + result with no visit
+    // tying them together.
+    if (newApptPatient.__sourceReferralId) {
+      await supabase.from('referrals').update({ followup_appointment_id: insertedAppt?.id || null }).eq('id', newApptPatient.__sourceReferralId)
+    }
+    // A patient booking their own appointment already gets this
+    // confirmation (PatientApp.jsx) - staff booking one for them (walk-in,
+    // or via the Referrals tab's "Schedule this patient's visit") never
+    // did, same best-effort, respects-the-toggles pattern.
+    {
+      const wantsEmail = newApptPatient.notify_email !== false && newApptPatient.email
+      const wantsSms = newApptPatient.notify_sms !== false && newApptPatient.phone
+      if (wantsEmail || wantsSms) {
+        fetch('/api/appointments/notify_booking', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            email: wantsEmail ? newApptPatient.email : null,
+            phone: wantsSms ? newApptPatient.phone : null,
+            patientName: newApptPatient.full_name,
+            doctorName: newApptDoctor, scheduledAt: scheduledAt.toISOString(),
+          }),
+        }).catch(()=>{})
+      }
+    }
     // Same 48-hour window as the patient-app booking flow (12h before the
     // appointment day starts, the day itself, 12h after it ends) - see
     // newApptConsent's own comment for why this insert was missing.
@@ -5847,6 +5878,7 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
   const [decliningId,setDecliningId]=useState(null)
   const [declineReason,setDeclineReason]=useState('')
   const [actingId,setActingId]=useState(null)
+  const [resendingId,setResendingId]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -5907,7 +5939,11 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
   // search for them again.
   async function handleScheduleVisit(r) {
     const { data: patientRow } = await supabase.from('patients').select('*').eq('id', r.patient_id).maybeSingle()
-    if (patientRow) onScheduleFollowup?.(patientRow)
+    // __sourceReferralId rides along on the same preselect object (no new
+    // prop plumbing needed) - ScheduleScreen's handleConfirmNewAppt reads
+    // it back off newApptPatient to link the booked appointment back to
+    // this referral, so the patient's Records thread can show it.
+    if (patientRow) onScheduleFollowup?.({ ...patientRow, __sourceReferralId: r.id })
     onNavSchedule?.()
   }
 
@@ -5954,6 +5990,33 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
             {isOpen&&<div style={{marginTop:'12px',paddingTop:'12px',borderTop:`0.5px solid ${C.border}`}}>
               {r.reason&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Reason:</strong> {r.reason}</div>}
               {r.diagnosis&&<div style={{fontSize:'12px',marginBottom:'6px'}}><strong>Diagnosis:</strong> {r.diagnosis}</div>}
+              {/* Only known when the receiving doctor was never matched
+                  to a real Medsa/directory account - that's the one case
+                  where reaching them isn't already a phone call away via
+                  their own Medsa account or the directory entry. */}
+              {tab==='sent'&&!r.matched_staff_credential_id&&!r.matched_directory_doctor_id&&(r.to_clinic_name||r.to_clinic_phone||r.to_clinic_email)&&<div style={{fontSize:'12px',marginBottom:'6px'}}>
+                <strong>Receiving practice:</strong> {r.to_clinic_name||'—'}{r.to_clinic_phone&&` · ${r.to_clinic_phone}`}{r.to_clinic_email&&` · ${r.to_clinic_email}`}
+              </div>}
+              {/* No automated email ever goes out for this - the original
+                  send screen is the only place the link+code ever showed,
+                  so a doctor who lost that message had no way back in. */}
+              {tab==='sent'&&!r.matched_staff_credential_id&&r.clinical_status==='pending_review'&&<div style={{marginTop:'6px'}} onClick={e=>e.stopPropagation()}>
+                {resendingId!==r.id&&<span onClick={()=>setResendingId(r.id)} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer'}}>Resend invitation {'→'}</span>}
+                {resendingId===r.id&&(()=>{
+                  const link = `${typeof window!=='undefined'?window.location.origin:'https://medsa.health'}/referral-portal?receive=${r.id}`
+                  const mailto = `mailto:${r.to_clinic_email||''}?subject=${encodeURIComponent(`Referral for ${r.patients?.full_name||'patient'}`)}&body=${encodeURIComponent(`Hi,\n\nFollowing up on the referral for ${r.patients?.full_name||'a patient'} via Medsa. Please use this link to receive the referral and submit your consultation findings:\n${link}\n\nYou'll be asked for this access code when you open it: ${r.access_code}\n\nThanks.`)}`
+                  return (
+                    <div style={{background:C.cream,borderRadius:'8px',padding:'10px'}}>
+                      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'8px'}}>
+                        <input readOnly value={link} onClick={e=>e.target.select()} style={{flex:'1 1 160px',fontSize:'11px',padding:'6px 8px',border:`0.5px solid ${C.border}`,borderRadius:'6px',background:'#fff',color:C.text}}/>
+                        <Btn style={{fontSize:'11px',padding:'6px 8px'}} onClick={()=>navigator.clipboard?.writeText(link)}>Copy link</Btn>
+                        <a href={mailto} style={{textDecoration:'none'}}><Btn variant="primary" style={{fontSize:'11px',padding:'6px 8px'}}>✉ Open in email</Btn></a>
+                      </div>
+                      <div style={{fontSize:'11px',color:C.text}}>Access code: <span style={{fontFamily:'monospace',fontWeight:700,letterSpacing:'1px'}}>{r.access_code}</span> <span onClick={()=>navigator.clipboard?.writeText(r.access_code)} style={{color:C.green,cursor:'pointer',fontWeight:600}}>Copy</span></div>
+                    </div>
+                  )
+                })()}
+              </div>}
               {r.clinical_status==='declined'&&r.decline_reason&&<div style={{fontSize:'12px',color:C.red,marginBottom:'6px'}}><strong>Decline reason:</strong> {r.decline_reason}</div>}
               {hasResults&&r.referral_consultations.map((cons,j)=>(
                 <div key={cons.id} style={{marginBottom:'6px',paddingTop:j===0?0:'8px',borderTop:j===0?'none':`0.5px dashed ${C.border}`}}>
@@ -5967,6 +6030,15 @@ function ReferralsManagementScreen({ staffMember, onScheduleFollowup, onNavSched
                   ))}
                 </div>
               ))}
+              {/* Results coming in is exactly when a referring doctor
+                  actually needs to act on them - reuses the same
+                  preselect-into-Schedule flow the Received tab's own
+                  "Schedule this patient's visit" uses, which already
+                  offers reschedule instead of a duplicate booking if
+                  there's an upcoming appointment on file. */}
+              {tab==='sent'&&hasResults&&<div style={{marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
+                <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>handleScheduleVisit(r)}>Schedule/reschedule follow-up</Btn>
+              </div>}
 
               {tab==='received'&&r.clinical_status==='pending_review'&&decliningId!==r.id&&<div style={{display:'flex',gap:'8px',marginTop:'10px'}} onClick={e=>e.stopPropagation()}>
                 <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={actingId===r.id} onClick={()=>handleAccept(r)}>{actingId===r.id?'Saving…':'Accept'}</Btn>
