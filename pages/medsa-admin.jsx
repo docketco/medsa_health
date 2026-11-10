@@ -13,6 +13,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
+import { COMMUNITY_ENABLED } from '../lib/featureFlags'
 import { REFERRAL_FEE_ENABLED } from '../lib/featureFlags'
 import Icon from '../components/shared/Icon'
 import { SecLabel } from '../components/shared/UI'
@@ -38,8 +39,10 @@ export default function MedsaAdminPage() {
       <div style={{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}}>
         {/* TPA Clinics tab shelved (BeeFintech pivot) - see TpaClinicsTab's
             header comment. Left out of this nav array entirely, same
-            pattern as every other shelved tab/screen this pivot. */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],['forum','community','Forum'],['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+            pattern as every other shelved tab/screen this pivot.
+            Forum tab shelved too now (COMMUNITY_ENABLED, lib/featureFlags)
+            - no plan yet for bootstrapping Community, per your call. */}
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -2529,7 +2532,7 @@ function QaToolsTab() {
         Testing tools that bypass a real Stripe payment - use these to simulate what a successful checkout would have written, so paid-gated flows can be tested end to end without a connected Stripe account.
       </div>
       <SponsorshipTester table="insurance_plans" title="Insurance plan sponsorship" searchPlaceholder="Search plan name or company…" nameField="plan_name" subField="company_name" hasSelfServe/>
-      <SponsorshipTester table="forum_products" title="Community product sponsorship" searchPlaceholder="Search a product…" nameField="canonical_name" collectSponsorName/>
+      {COMMUNITY_ENABLED && <SponsorshipTester table="forum_products" title="Community product sponsorship" searchPlaceholder="Search a product…" nameField="canonical_name" collectSponsorName/>}
       <VideoConsultTester/>
       <ClaimsPluginTester/>
     </div>
