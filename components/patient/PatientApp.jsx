@@ -7,7 +7,7 @@ import { fetchAndDownloadConsultationReceipt, fetchAndDownloadTreatmentPlanRecei
 import { subscribeIncomingCalls } from '../../lib/videoCallSignal'
 import { ageDaysBetween, percentileBands, growthPercentile, WHO_MAX_AGE_DAYS } from '../../lib/whoGrowth'
 import { searchPregnancyDrugSafety } from '../../lib/pregnancyDrugSafety'
-import { IAM_SMART_ENABLED } from '../../lib/featureFlags'
+import { IAM_SMART_ENABLED, COMMUNITY_ENABLED } from '../../lib/featureFlags'
 import MedsaLogo from '../shared/MedsaLogo'
 import C from '../shared/colours'
 import Icon from '../shared/Icon'
@@ -907,7 +907,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           another row. Not shown on a Kids profile - your call, a product-
           review board for adult supplements/products isn't relevant on a
           child's own profile. */}
-      {!(patient?.account_type==='kids' && (patient?.dependent_relationship==null||patient?.dependent_relationship==='child')) && <div style={{padding:'4px 16px 4px'}}>
+      {COMMUNITY_ENABLED && !(patient?.account_type==='kids' && (patient?.dependent_relationship==null||patient?.dependent_relationship==='child')) && <div style={{padding:'4px 16px 4px'}}>
         <div onClick={()=>onNav('forum')} style={{background:`linear-gradient(135deg, ${themeAccent} 0%, ${themeAccentMid} 100%)`,borderRadius:'999px',padding:'14px 20px',cursor:'pointer',display:'flex',alignItems:'center',gap:'12px',boxShadow:'0 4px 14px rgba(0,0,0,0.18)'}}>
           <div style={{width:38,height:38,background:'rgba(255,255,255,0.2)',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',flexShrink:0}}><Icon name="community"/></div>
           <div style={{flex:1}}>
