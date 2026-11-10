@@ -2008,7 +2008,7 @@ function ConfinementHelpersTab() {
 function NoticesTab() {
   const [notices, setNotices] = useState([])
   const [loading, setLoading] = useState(true)
-  const [form, setForm] = useState({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'' })
+  const [form, setForm] = useState({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'', location:'HK' })
   const [saving, setSaving] = useState(false)
 
   async function load() {
@@ -2025,9 +2025,10 @@ function NoticesTab() {
     await supabase.from('patient_notices').insert({
       title_en: form.title_en.trim(), title_zh: form.title_zh.trim(),
       body_en: form.body_en.trim(), body_zh: form.body_zh.trim(),
+      location: form.location.trim() || 'HK',
       ...(form.expires_at ? { expires_at: new Date(`${form.expires_at}T23:59:59`).toISOString() } : {}),
     })
-    setForm({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'' })
+    setForm({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'', location:'HK' })
     setSaving(false)
     load()
   }
@@ -2054,9 +2055,16 @@ function NoticesTab() {
           <input value={form.body_en} onChange={e=>setForm({...form,body_en:e.target.value})} placeholder="Body (English)" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
           <input value={form.body_zh} onChange={e=>setForm({...form,body_zh:e.target.value})} placeholder="內容（中文）" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         </div>
-        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+        <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'8px'}}>
           <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional, defaults to 30 days out)</label>
           <input type="date" value={form.expires_at} onChange={e=>setForm({...form,expires_at:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        </div>
+        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, 'HK' (or any other market code) only there once Medsa expands and patients carry their own location</label>
+          <select value={form.location} onChange={e=>setForm({...form,location:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+            <option value="HK">HK</option>
+            <option value="Global">Global</option>
+          </select>
           <button onClick={addNotice} disabled={saving} style={{marginLeft:'auto',padding:'8px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add notice'}</button>
         </div>
       </div>
@@ -2072,7 +2080,7 @@ function NoticesTab() {
               </div>
               <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:live?C.greenLight:C.card,color:live?C.green:C.textMuted,fontWeight:600,flexShrink:0,whiteSpace:'nowrap'}}>{live?'Live':'Expired'}</span>
             </div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Expires {new Date(n.expires_at).toLocaleString('en-HK',{dateStyle:'medium',timeStyle:'short'})}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{n.location||'HK'} · Expires {new Date(n.expires_at).toLocaleString('en-HK',{dateStyle:'medium',timeStyle:'short'})}</div>
             <div style={{display:'flex',gap:'8px'}}>
               {live&&<button onClick={()=>endNow(n)} style={{padding:'8px 14px',background:C.card,color:C.text,border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>End now</button>}
               <button onClick={()=>removeNotice(n.id)} style={{padding:'8px 14px',background:'none',color:C.red,border:`0.5px solid ${C.red}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>Delete</button>
