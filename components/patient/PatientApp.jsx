@@ -413,6 +413,33 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       .order('event_at', { ascending: true }).limit(1).maybeSingle()
       .then(({ data }) => setNextCalendarEvent(data || null))
   }, [patient?.id])
+  // Admin-authored general advisories (medsa-admin's Notices tab) for the
+  // Home alerts feed - replaces a hardcoded flu-season string that used
+  // to show to every patient forever with something Medsa Admin can
+  // actually write and retire (patient_notices.expires_at).
+  const [homeNotices,setHomeNotices]=useState([])
+  useEffect(() => {
+    const nowIso = new Date().toISOString()
+    supabase.from('patient_notices').select('*').eq('active', true)
+      .lte('starts_at', nowIso).gt('expires_at', nowIso)
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setHomeNotices(data || []))
+  }, [])
+  // Lets a patient dismiss a single Home alert without deleting the
+  // record it's derived from (an appointment, a calendar event, a claim,
+  // a notice) - alert_key is a stable id computed per entry in the
+  // alerts list below, not a foreign key, since the list is assembled
+  // fresh from several tables every render, not stored as rows itself.
+  const [dismissedAlertKeys,setDismissedAlertKeys]=useState(new Set())
+  useEffect(() => {
+    if (!patient?.id) { setDismissedAlertKeys(new Set()); return }
+    supabase.from('patient_alert_dismissals').select('alert_key').eq('patient_id', patient.id)
+      .then(({ data }) => setDismissedAlertKeys(new Set((data||[]).map(d=>d.alert_key))))
+  }, [patient?.id])
+  async function dismissAlert(key) {
+    setDismissedAlertKeys(prev => new Set(prev).add(key))
+    if (patient?.id) await supabase.from('patient_alert_dismissals').insert({ patient_id: patient.id, alert_key: key })
+  }
   // Real request: the weekly size-comparison card was buried inside
   // Account Settings → Medsa Bump, so opening the app never actually
   // showed it - same fetch-your-own-data pattern as nextCalendarEvent above,
@@ -944,38 +971,53 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             return t > Date.now() && t < Date.now() + 48*60*60*1000 && a.status !== 'cancelled'
           })
           if (soon) realAlerts.push({
+            key:`appt:${soon.id}`,
             dot:'#d4a017',
             title: isEn?`Reminder: Dr ${soon.doctor_name||'—'} — ${new Date(soon.scheduled_at).toLocaleString('en-HK',{weekday:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`提醒：${soon.doctor_name||'—'}醫生`,
             body: isEn?`${soon.department||'Clinic'} appointment.`:`${soon.department||'診所'}預約。`,
           })
           // Generic calendar-event reminder (used to be MCHC-only, see the
           // comment on nextCalendarEvent above) - same "upcoming within N
-          // days" shape as the clinic appointment reminder above.
-          if (nextCalendarEvent && new Date(nextCalendarEvent.event_at).getTime() - Date.now() < 7*24*60*60*1000) realAlerts.push({
-            dot:C.amber,
-            title: isEn?`${nextCalendarEvent.title} — ${new Date(nextCalendarEvent.event_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`${nextCalendarEvent.title} — ${new Date(nextCalendarEvent.event_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`,
-            body: nextCalendarEvent.note || (isEn?'From your Calendar.':'來自您的日曆。'),
-          })
+          // days" shape as the clinic appointment reminder above. Real bug
+          // found reviewing this: it had no lower bound, so an event kept
+          // showing as a "reminder" for days after it had already passed.
+          if (nextCalendarEvent) {
+            const t = new Date(nextCalendarEvent.event_at).getTime()
+            if (t > Date.now() && t - Date.now() < 7*24*60*60*1000) realAlerts.push({
+              key:`calendarevent:${nextCalendarEvent.id}`,
+              dot:C.amber,
+              title: isEn?`${nextCalendarEvent.title} — ${new Date(nextCalendarEvent.event_at).toLocaleString('en-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`:`${nextCalendarEvent.title} — ${new Date(nextCalendarEvent.event_at).toLocaleString('zh-HK',{weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Hong_Kong'})}`,
+              body: nextCalendarEvent.note || (isEn?'From your Calendar.':'來自您的日曆。'),
+            })
+          }
           // Real recently-approved/settled claim, replacing a hardcoded
-          // fake claim number and dollar amount.
-          const recentClaim = [...claims].filter(c=>['approved','settled'].includes(c.status))
+          // fake claim number and dollar amount. Only for 14 days after
+          // adjudication, so an old approval doesn't sit here forever.
+          const recentClaim = [...claims].filter(c=>['approved','settled'].includes(c.status)
+              && Date.now() - new Date(c.adjudicated_at||c.submitted_at).getTime() < 14*24*60*60*1000)
             .sort((a,b)=>new Date(b.adjudicated_at||b.submitted_at)-new Date(a.adjudicated_at||a.submitted_at))[0]
           if (recentClaim) realAlerts.push({
+            key:`claim:${recentClaim.id}`,
             dot:themeAccent,
             title: isEn?'Insurance claim approved':'保險索賠已批准',
             body: isEn?`Claim ${recentClaim.claim_ref} — HK$${recentClaim.insurer_covered_amount||recentClaim.amount} approved.`:`索賠 ${recentClaim.claim_ref} 已批准。`,
           })
-          // Flu advisory kept as genuinely non-patient-specific public
-          // health content, not fake data about this specific patient.
-          realAlerts.push({dot:C.red,title:isEn?'Flu season advisory':'流感季節公告',body:isEn?'HKDOH recommends vaccination before Oct 31.':'衞生署建議於10月31日前接種疫苗。'})
-          return realAlerts
+          // Admin-authored general advisories - see homeNotices above.
+          homeNotices.forEach(n => realAlerts.push({
+            key:`notice:${n.id}`,
+            dot:C.red,
+            title: isEn?n.title_en:n.title_zh,
+            body: isEn?n.body_en:n.body_zh,
+          }))
+          return realAlerts.filter(a => !dismissedAlertKeys.has(a.key))
         })().map((m,i)=>(
-          <div key={i} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:'10px',alignItems:'flex-start'}}>
+          <div key={m.key||i} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,display:'flex',gap:'10px',alignItems:'flex-start'}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:m.dot,marginTop:'5px',flexShrink:0}}/>
-            <div><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
+            <div style={{flex:1}}><div style={{fontSize:'12px',fontWeight:500}}>{m.title}</div><div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.body}</div></div>
+            <span onClick={()=>dismissAlert(m.key)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0}} title={isEn?'Dismiss':'關閉'}>✕</span>
           </div>
         ))}
-        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages from your doctor':'醫生的訊息'}</div>
+        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages':'訊息'}</div>
         {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
         {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
         {doctorThreadsLatestFirst.map((m,i)=>(
@@ -9702,6 +9744,16 @@ function PrescriptionsScreen({ isEn, medications=[], onNav, patient={}, onReload
     await supabase.from('medications').delete().eq('id', id)
     onReload?.()
   }
+  // Clinic-prescribed rows aren't the patient's own data to hard-delete
+  // (it's a real clinical record a doctor may still want to see) - this
+  // just flips the same `active` flag isMedicationActive already checks,
+  // so it drops out of "Active medications" the same way a course
+  // finishing on its own end_date already does.
+  async function markMedicationDone(id) {
+    if (isReadOnly) return
+    await supabase.from('medications').update({ active: false }).eq('id', id)
+    onReload?.()
+  }
 
   async function searchDrugRef(term) {
     if (!term.trim()) { setDrugSearchResults([]); return }
@@ -9759,6 +9811,11 @@ function PrescriptionsScreen({ isEn, medications=[], onNav, patient={}, onReload
               ? <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={isReadOnly} onClick={()=>deleteSupplement(rx.raw.id)}>{isEn?'Remove':'移除'}</Btn>
               : <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onNav?.('doctors')}>{isEn?'Book a consultation':'預約診症'}</Btn>}
           </div>
+          {rx.raw.reported_by!=='patient_reported'&&(
+            <div style={{borderTop:`0.5px solid ${C.border}`,padding:'8px 16px',textAlign:'center'}}>
+              <span onClick={()=>!isReadOnly&&markMedicationDone(rx.raw.id)} style={{fontSize:'11px',color:isReadOnly?C.textMuted:C.red,cursor:isReadOnly?'default':'pointer'}}>{isEn?'Mark as finished / no longer taking':'標記為已完成／不再服用'}</span>
+            </div>
+          )}
         </Card>
       ))}
       {!hasLiveMeds&&<div style={{textAlign:'center',padding:'20px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No active medications or supplements on file.':'暫無目前藥物或保健品記錄。'}</div>}
