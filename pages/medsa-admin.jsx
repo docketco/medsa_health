@@ -1471,7 +1471,7 @@ function CarouselTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0 })
+  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK' })
   const [approving, setApproving] = useState(null)
   const [priceInputs, setPriceInputs] = useState({}) // submissionId -> string
   const [requestingPaymentId, setRequestingPaymentId] = useState(null)
@@ -1497,11 +1497,11 @@ function CarouselTab() {
       item_type: form.item_type, title: form.title.trim(), subtitle: form.subtitle.trim()||null,
       image_url: form.image_url.trim()||null, sponsor_name: form.sponsor_name.trim()||null,
       link_url: form.link_url.trim()||null, content: form.content.trim()||null,
-      display_order: parseInt(form.display_order)||0, active: true,
+      display_order: parseInt(form.display_order)||0, active: true, location: form.location,
     })
     setSaving(false)
     setCreating(false)
-    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0 })
+    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK' })
     load()
   }
 
@@ -1522,7 +1522,7 @@ function CarouselTab() {
       item_type: sub.item_type, title: sub.title, subtitle: sub.subtitle,
       image_url: sub.image_url, sponsor_name: sub.sponsor_name,
       link_url: sub.link_url, cta_label: sub.cta_label, content_blocks: sub.content_blocks,
-      display_order: maxOrder+1, active: true,
+      display_order: maxOrder+1, active: true, location: sub.location||'HK',
     })
     await supabase.from('home_carousel_submissions').update({ status:'approved', reviewed_at:new Date().toISOString() }).eq('id', sub.id)
     setApproving(null)
@@ -1595,6 +1595,13 @@ function CarouselTab() {
             <div key={t} onClick={()=>setForm(f=>({...f,item_type:t}))} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:form.item_type===t?C.green:C.card,color:form.item_type===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
+        <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}}>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere</label>
+          <select value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+            <option value="HK">HK</option>
+            <option value="Global">Global</option>
+          </select>
+        </div>
         {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)']].map(([field,ph]) => (
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
@@ -1618,7 +1625,7 @@ function CarouselTab() {
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{item.title}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{item.item_type}{item.sponsor_name?` · ${item.sponsor_name}`:''} · order {item.display_order}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{item.item_type}{item.sponsor_name?` · ${item.sponsor_name}`:''} · order {item.display_order} · {item.location||'HK'}</div>
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:item.active?C.greenLight:C.card,color:item.active?C.green:C.textMuted,fontWeight:600}}>{item.active?'active':'inactive'}</span>
           </div>

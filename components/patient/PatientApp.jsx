@@ -477,8 +477,10 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   useEffect(() => {
     async function loadCarousel() {
       const now = new Date().toISOString()
+      // Same hardcoded-for-now ('HK','Global') filter as patient_notices -
+      // every patient is HK-based until patients carry their own location.
       const { data } = await supabase.from('home_carousel_items').select('*')
-        .eq('active', true).order('display_order')
+        .eq('active', true).in('location', ['HK','Global']).order('display_order')
       // Scheduling window checked client-side, not in the query - keeps
       // this simple to read and the table is small (a handful of cards,
       // not thousands of rows).
