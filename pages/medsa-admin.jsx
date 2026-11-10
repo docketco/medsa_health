@@ -42,7 +42,7 @@ export default function MedsaAdminPage() {
             pattern as every other shelved tab/screen this pivot.
             Forum tab shelved too now (COMMUNITY_ENABLED, lib/featureFlags)
             - no plan yet for bootstrapping Community, per your call. */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -63,6 +63,7 @@ export default function MedsaAdminPage() {
       {tab==='recovery' && <AccountRecoveryTab/>}
       {tab==='roster' && <InsurerTestRosterScreen/>}
       {tab==='adulttransfers' && <AdultTransfersTab/>}
+      {tab==='notices' && <NoticesTab/>}
       {tab==='qa' && <QaToolsTab/>}
     </div>
   )
@@ -1998,6 +1999,92 @@ function ConfinementHelpersTab() {
 // ID, grant/revoke the badge and set their title. BumpCohortScreen
 // reads is_verified_perinatal_professional off the poster's own patient
 // row to show it next to their posts/replies.
+// General, non-patient-specific advisories for every patient's Home
+// "Alerts & updates" feed (e.g. a flu-season reminder) - replaces what
+// used to be a hardcoded string with something that can actually be
+// written and retired here. expires_at defaults to 30 days out at
+// insert time (the "auto" expiry) unless an explicit date is set below
+// (the "manual" expiry); "End now" just moves that date into the past.
+function NoticesTab() {
+  const [notices, setNotices] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [form, setForm] = useState({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'' })
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('patient_notices').select('*').order('created_at', { ascending:false })
+    setNotices(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function addNotice() {
+    if (!form.title_en.trim() || !form.title_zh.trim() || !form.body_en.trim() || !form.body_zh.trim()) return
+    setSaving(true)
+    await supabase.from('patient_notices').insert({
+      title_en: form.title_en.trim(), title_zh: form.title_zh.trim(),
+      body_en: form.body_en.trim(), body_zh: form.body_zh.trim(),
+      ...(form.expires_at ? { expires_at: new Date(`${form.expires_at}T23:59:59`).toISOString() } : {}),
+    })
+    setForm({ title_en:'', title_zh:'', body_en:'', body_zh:'', expires_at:'' })
+    setSaving(false)
+    load()
+  }
+  async function endNow(n) {
+    await supabase.from('patient_notices').update({ expires_at: new Date().toISOString() }).eq('id', n.id)
+    load()
+  }
+  async function removeNotice(id) {
+    await supabase.from('patient_notices').delete().eq('id', id)
+    load()
+  }
+
+  const now = Date.now()
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Shown on every patient's Home screen, not tied to any one patient's own records - things like a seasonal vaccination reminder. Each one expires on its own (30 days out by default) unless you set a different date, or you can end one early below.</div>
+      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'20px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>New notice</div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={form.title_en} onChange={e=>setForm({...form,title_en:e.target.value})} placeholder="Title (English)" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <input value={form.title_zh} onChange={e=>setForm({...form,title_zh:e.target.value})} placeholder="標題（中文）" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={form.body_en} onChange={e=>setForm({...form,body_en:e.target.value})} placeholder="Body (English)" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <input value={form.body_zh} onChange={e=>setForm({...form,body_zh:e.target.value})} placeholder="內容（中文）" style={{flex:1,padding:'8px 10px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        </div>
+        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional, defaults to 30 days out)</label>
+          <input type="date" value={form.expires_at} onChange={e=>setForm({...form,expires_at:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <button onClick={addNotice} disabled={saving} style={{marginLeft:'auto',padding:'8px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add notice'}</button>
+        </div>
+      </div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&notices.map(n=>{
+        const live = n.active && new Date(n.expires_at).getTime() > now
+        return (
+          <div key={n.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'8px'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+              <div>
+                <div style={{fontSize:'14px',fontWeight:600}}>{n.title_en} <span style={{color:C.textMuted,fontWeight:400}}>/ {n.title_zh}</span></div>
+                <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{n.body_en}</div>
+              </div>
+              <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:live?C.greenLight:C.card,color:live?C.green:C.textMuted,fontWeight:600,flexShrink:0,whiteSpace:'nowrap'}}>{live?'Live':'Expired'}</span>
+            </div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>Expires {new Date(n.expires_at).toLocaleString('en-HK',{dateStyle:'medium',timeStyle:'short'})}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              {live&&<button onClick={()=>endNow(n)} style={{padding:'8px 14px',background:C.card,color:C.text,border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>End now</button>}
+              <button onClick={()=>removeNotice(n.id)} style={{padding:'8px 14px',background:'none',color:C.red,border:`0.5px solid ${C.red}`,borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>Delete</button>
+            </div>
+          </div>
+        )
+      })}
+      {!loading&&notices.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No notices yet.</div>}
+    </div>
+  )
+}
+
 function VerifiedProsTab() {
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
