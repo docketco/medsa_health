@@ -3,6 +3,7 @@ import { supabase } from '../../lib/supabase'
 import C from '../shared/colours'
 import TermsAgreementModal from '../shared/TermsAgreementModal'
 import { REFERRAL_FEE_ENABLED } from '../../lib/featureFlags'
+import { assignInquiryToNextAgent } from '../../lib/agentAssignment'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'8px',padding:'10px 18px',fontSize:'13px',fontWeight:500,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -1362,6 +1363,33 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     load()
   }
 
+  // Lets an agent hand an inquiry off instead of sitting on it - same
+  // next-in-rotation pick the stale-inquiry cron uses
+  // (lib/agentAssignment.js, reassign_stale_plan_inquiries.js), just
+  // triggered by the agent themselves instead of a response-due timeout.
+  // If nobody else is eligible, the inquiry is unclaimed entirely rather
+  // than staying assigned to an agent who just said they don't want it.
+  async function handleDeclineInquiry(inquiry) {
+    setClaimingId(inquiry.id)
+    setClaimNotice(null)
+    const companyName = inquiry.insurance_plans?.company_name
+    const triedAgentIds = [...(inquiry.reassigned_agent_ids || []), inquiry.claimed_by_agent_id]
+    const newAgent = companyName ? await assignInquiryToNextAgent(supabase, {
+      inquiryId: inquiry.id, companyName, excludeAgentIds: triedAgentIds,
+    }) : null
+    if (newAgent) {
+      await supabase.from('plan_inquiries').update({ reassigned_agent_ids: triedAgentIds }).eq('id', inquiry.id)
+      setClaimNotice(`Declined - reassigned to ${newAgent.full_name || newAgent.email}.`)
+    } else {
+      await supabase.from('plan_inquiries').update({
+        claimed_by_agent_id: null, claimed_at: null, response_due_at: null, reassigned_agent_ids: triedAgentIds,
+      }).eq('id', inquiry.id)
+      setClaimNotice('Declined - no other eligible agent right now, inquiry unassigned.')
+    }
+    setClaimingId(null)
+    load()
+  }
+
   return (
     <PageWrap>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>New Plan Inquiries</div>
@@ -1432,7 +1460,10 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
                 {convertedInquiryIds.has(i.id)
                   ? <Badge text="Converted to policy" type="ok"/>
-                  : <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>}
+                  : <div style={{display:'flex',gap:'6px'}}>
+                      <Btn style={{fontSize:'11px',padding:'6px 10px'}} disabled={claimingId===i.id} onClick={e=>{e.stopPropagation();handleDeclineInquiry(i)}}>Decline</Btn>
+                      <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>
+                    </div>}
               </div>
             </div>
             {/* Pre-computed suitability read (lib/planSuitabilityMatch.js),
