@@ -124,10 +124,16 @@ function Badge({ text, type }) {
 // ── EMERGENCY CARD SETUP + CONSENT FLOW ──────────────────────────────────────
 // This is shown to PATIENTS only for setup/consent — not for showing to EMS.
 // EMS access the emergency card automatically via QR scan in the practitioner portal.
-function EmergencyCardSetup({ open, onClose, consented, onConsent, liveConditions=[], liveAllergies=[], liveMedications=[], liveFamilyHistory=[], patient }) {
+function EmergencyCardSetup({ open, onClose, consented, onConsent, onNav, liveConditions=[], liveAllergies=[], liveMedications=[], liveFamilyHistory=[], patient }) {
   const __theme = useContext(ThemeContext)
   const p = patient
   const [step, setStep] = useState(consented ? 'view' : 'intro')
+  // Long-term medicine (no end date on file) stays forever, same as
+  // everywhere else "active medication" means something in this app -
+  // but this screen used to show every medication ever entered,
+  // expired course or not, since the public emergency_card.js API
+  // already filters correctly but this preview never did.
+  const activeLiveMedications = liveMedications.filter(isMedicationActive)
   const [savingConsent, setSavingConsent] = useState(false)
   const [showAddToHome, setShowAddToHome] = useState(false)
   if (!open) return null
@@ -217,6 +223,7 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
             </div>
             <span style={{fontSize:'10px',background:__theme.accentLight,color:__theme.accent,padding:'3px 10px',borderRadius:'20px',fontWeight:600}}>Consented ✓</span>
           </div>
+          {onNav&&<Btn style={{width:'100%',marginBottom:'14px'}} onClick={()=>{onClose();onNav('editprofile')}}>Edit your info (blood type, contact, allergies & conditions)</Btn>}
           <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'16px',marginBottom:'14px'}}>
             <div style={{fontSize:'13px',color:C.red,fontWeight:600,marginBottom:'10px',textTransform:'uppercase',letterSpacing:'0.5px'}}>What EMS sees on scan</div>
             <div style={{fontSize:'16px',fontWeight:700,marginBottom:'2px'}}>{p.full_name}</div>
@@ -249,8 +256,8 @@ function EmergencyCardSetup({ open, onClose, consented, onConsent, liveCondition
                 : <div style={{fontSize:'12px',color:C.textSub,padding:'3px 0'}}>No known allergies on file</div>}
             </div>
             <div style={{borderTop:`0.5px solid rgba(192,57,43,0.2)`,marginTop:'8px',paddingTop:'8px'}}>
-              {liveMedications.length>0
-                ? liveMedications.map((m,i)=>(
+              {activeLiveMedications.length>0
+                ? activeLiveMedications.map((m,i)=>(
                     <div key={i} style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>◉ {m.medication_name}{m.dosage?` ${m.dosage}`:''}{m.frequency?` — ${m.frequency}`:''}</div>
                   ))
                 : <div style={{fontSize:'12px',color:C.textSub,padding:'2px 0'}}>No current medications on file</div>}
@@ -12047,6 +12054,7 @@ export default function PatientApp({ liveData={} }) {
         onClose={()=>setEmergencyOpen(false)}
         consented={emergencyConsented}
         onConsent={()=>refetchSignedInPatient()}
+        onNav={setScreen}
         liveConditions={liveConditions}
         liveAllergies={liveAllergies}
         liveMedications={liveMedications}

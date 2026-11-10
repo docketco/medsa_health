@@ -7,7 +7,7 @@ const ICON_PATHS = {
   home: <path d="M4 11.5 12 4l8 7.5M6 10v9.5a1 1 0 0 0 1 1h3.5V15h3v5.5H17a1 1 0 0 0 1-1V10"/>,
   records: <><path d="M6 3.5h9l3 3V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1Z"/><path d="M14.5 3.5V7h3.5"/><path d="M8 12h8M8 15h8M8 9h4"/></>,
   insurance: <path d="M12 3 5 6v5.5c0 4.5 3 7.6 7 9 4-1.4 7-4.5 7-9V6l-7-3Zm-2.5 8.5 1.8 1.8 3.7-3.7"/>,
-  prescriptions: <><path d="m6.5 17.5 8-8a3 3 0 1 1 4 4l-8 8a3 3 0 0 1-4-4Z"/><path d="m13 7 4 4"/></>,
+  prescriptions: <><path d="m6.5 17.5 8-8a3 3 0 1 1 4 4l-8 8a3 3 0 0 1-4-4Z"/><path d="m10.5 13.5 4 4"/></>,
   calendar: <><rect x="3.5" y="5" width="17" height="16" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/></>,
   doctors: <><rect x="4" y="8" width="16" height="11" rx="2"/><path d="M9 8V6a3 3 0 0 1 3-3 3 3 0 0 1 3 3v2"/><path d="M12 12v4M10 14h4"/></>,
   family: <><circle cx="8.5" cy="8" r="3"/><circle cx="16" cy="9" r="2.4"/><path d="M3 20v-1.5A4.5 4.5 0 0 1 7.5 14h2A4.5 4.5 0 0 1 14 18.5V20"/><path d="M15.7 14.3A4 4 0 0 1 19 18v2"/></>,
