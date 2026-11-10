@@ -3178,7 +3178,7 @@ function generateIntervalTimes(startTime, intervalHours) {
 // one. Auto-generates them from the prescription's own dosing rule when
 // there is one, but manual add/remove always works regardless of mode -
 // the generated set is just a starting point, not a constraint.
-function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, defaultOn, defaultTimes, defaultStartTime, isEn }) {
+function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, defaultOn, defaultTimes, defaultStartTime, isEn, onRemoved }) {
   const __theme = useContext(ThemeContext)
   const [on,setOn]=useState(defaultOn)
   const [times,setTimes]=useState(defaultTimes&&defaultTimes.length>0?defaultTimes:['08:00'])
@@ -3192,6 +3192,19 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
     setSaving(true)
     await supabase.from('medications').update({ alarm_enabled: newOn, alarm_time: newOn ? (times[0]||null) : null }).eq('id', medId)
     setSaving(false)
+  }
+  // Real gap from your feedback: the only control here was the on/off
+  // toggle - turning it off cleared alarm_time but left the card itself
+  // showing (nothing here ever called the parent's reload), and there
+  // was no way to actually remove a reminder outright. This clears
+  // every alarm field and tells the parent to re-fetch so the card
+  // disappears immediately, same as how a finished medication's
+  // reminder now auto-disappears below.
+  async function removeReminder() {
+    setSaving(true)
+    await supabase.from('medications').update({ alarm_enabled:false, alarm_time:null, alarm_times:[] }).eq('id', medId)
+    setSaving(false)
+    onRemoved?.()
   }
   async function persist(newTimes) {
     setSaving(true)
@@ -3223,6 +3236,7 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
         <div style={{width:36,height:36,borderRadius:'10px',background:C.brownLight,display:'flex',alignItems:'center',justifyContent:'center',color:C.brown,fontSize:'18px'}}>◉</div>
         <div style={{flex:1}}><div style={{fontSize:'13px',fontWeight:500}}>{med}</div><div style={{fontSize:'11px',color:C.textSub}}>{schedule}</div></div>
         <div onClick={toggleAlarm} style={{width:34,height:18,borderRadius:20,background:on?__theme.accent:C.border,cursor:saving?'wait':'pointer',position:'relative',transition:'background 0.2s',flexShrink:0,opacity:saving?0.6:1}}><div style={{position:'absolute',top:2,left:on?16:2,width:14,height:14,borderRadius:'50%',background:'#fff',transition:'left 0.2s'}}/></div>
+        <span onClick={removeReminder} title={isEn?'Remove this reminder':'移除此提醒'} style={{cursor:saving?'wait':'pointer',color:C.textMuted,fontSize:'18px',fontWeight:700,flexShrink:0,lineHeight:1,padding:'0 2px'}}>×</span>
       </div>
       {on&&<div style={{paddingTop:'10px',borderTop:`0.5px solid ${C.border}`}}>
         {dosingMode==='interval'&&intervalHours>0&&<div style={{marginBottom:'10px'}}>
@@ -3254,7 +3268,9 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   const __theme = useContext(ThemeContext)
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
-  const withoutAlarm = medications.filter(m=>!m.alarm_enabled)
+  const activeMedications = medications.filter(isMedicationActive)
+  const withoutAlarm = activeMedications.filter(m=>!m.alarm_enabled)
+  const activeMedsWithAlarm = activeMedications.filter(m=>m.alarm_enabled||m.alarm_time)
 
   // Real gap from your feedback: "I don't know what the MCHC appointment
   // there is for, they could just put it into the calendar" - it was
@@ -3270,12 +3286,34 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
     if (!patient?.id) { setMchcAppointments([]); return }
     supabase.from('kids_mchc_appointments').select('*').eq('patient_id', patient.id).then(({data})=>setMchcAppointments(data||[]))
   }, [patient?.id])
+  // Real gap from your feedback: Calendar had no way to manually add an
+  // appointment or event at all - the only "+" button here only ever
+  // enabled an alarm on a medication that already existed. New
+  // patient_calendar_events table (own, since these aren't medsa
+  // bookings or MCHC-specific - any personal reminder/event) merges in
+  // the same way MCHC does, with its own delete (no "cancel" status to
+  // flip, it's just gone).
+  const [calendarEvents,setCalendarEvents]=useState([])
+  function loadCalendarEvents() {
+    if (!patient?.id) { setCalendarEvents([]); return }
+    supabase.from('patient_calendar_events').select('*').eq('patient_id', patient.id).then(({data})=>setCalendarEvents(data||[]))
+  }
+  useEffect(loadCalendarEvents, [patient?.id])
   const allAppointments = [...appointments, ...mchcAppointments.map(m => ({
     id: `mchc-${m.id}`, scheduled_at: m.appointment_at, status: 'confirmed',
     doctor_name: null, appointment_type: isEn?'MCHC appointment':'母嬰健康院預約',
     institutions: { name: isEn?'Maternal & Child Health Centre':'母嬰健康院' },
     patient_pays: 0, consult_type: null, _mchc: true, _mchcNote: m.note,
+  })), ...calendarEvents.map(e => ({
+    id: `event-${e.id}`, scheduled_at: e.event_at, status: 'confirmed',
+    doctor_name: null, appointment_type: e.title,
+    institutions: e.note ? { name: e.note } : null,
+    patient_pays: 0, consult_type: null, _manual: true, _manualId: e.id,
   }))]
+  async function deleteCalendarEvent(id) {
+    await supabase.from('patient_calendar_events').delete().eq('id', id)
+    loadCalendarEvents()
+  }
 
   // A patient previously had no way to cancel a booking from the app at
   // all - this screen only ever displayed appointments, with no click
@@ -3368,11 +3406,35 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   const isSameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate()
 
   // Days that have something scheduled - marked with a dot, pulled from
-  // real appointment data when available.
-  const markedDays = new Set(allAppointments.map(a=>new Date(a.scheduled_at).getDate()).filter(d=>{
-    const apptDate = new Date(allAppointments.find(a=>new Date(a.scheduled_at).getDate()===d)?.scheduled_at)
-    return apptDate.getMonth()===viewMonth.getMonth() && apptDate.getFullYear()===viewMonth.getFullYear()
-  }))
+  // real appointment data when available. Hong Kong day, not the
+  // device's local calendar day (hkParts, same reason todayHkForCalendar
+  // above uses it) - an HKT-morning appointment could otherwise land its
+  // dot on the wrong day for a patient browsing from outside Hong Kong.
+  const markedDays = new Set(allAppointments.filter(a=>{
+    const p = hkParts(new Date(a.scheduled_at))
+    return p.year===viewMonth.getFullYear() && p.month-1===viewMonth.getMonth()
+  }).map(a=>hkParts(new Date(a.scheduled_at)).day))
+
+  // Real gap from your feedback: no way to manually add an appointment
+  // or event at all. Simple form - title, date/time, optional note -
+  // defaults to whatever day is currently selected on the calendar.
+  const [addEventOpen,setAddEventOpen]=useState(false)
+  const [eventForm,setEventForm]=useState(null)
+  const [savingEvent,setSavingEvent]=useState(false)
+  function openAddEvent() {
+    const d = selectedDate
+    setEventForm({ title:'', date:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`, time:'09:00', note:'' })
+    setAddEventOpen(true)
+  }
+  async function saveEvent() {
+    if (!eventForm?.title?.trim() || !patient?.id) return
+    setSavingEvent(true)
+    const eventAt = hkWallTimeToUTC(...eventForm.date.split('-').map(Number), ...eventForm.time.split(':').map(Number))
+    await supabase.from('patient_calendar_events').insert({ patient_id: patient.id, title: eventForm.title.trim(), event_at: eventAt.toISOString(), note: eventForm.note.trim()||null })
+    setSavingEvent(false)
+    setAddEventOpen(false)
+    loadCalendarEvents()
+  }
 
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -3405,6 +3467,22 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
       </div>
       <SecLabel>{isSameDay(selectedDate,today) ? (isEn?"Today's appointments":'今天的預約') : selectedDate.toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</SecLabel>
       {cancelledMsg&&<div style={{margin:'0 16px 10px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accent}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:__theme.accent}}>{'✓'} {cancelledMsg}</div>}
+      <div style={{padding:'0 16px 12px'}}>
+        {!addEventOpen
+          ? <Btn style={{width:'100%'}} onClick={openAddEvent}>+ {isEn?'Add event':'新增事項'}</Btn>
+          : <Card style={{padding:'14px'}}>
+              <input value={eventForm.title} onChange={e=>setEventForm({...eventForm,title:e.target.value})} placeholder={isEn?'Title (e.g. Dentist, school meeting)':'標題（例如：牙科、家長會）'} style={{width:'100%',padding:'9px 10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+              <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+                <input type="date" value={eventForm.date} onChange={e=>setEventForm({...eventForm,date:e.target.value})} style={{flex:1,padding:'9px 10px',fontSize:'13px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+                <input type="time" value={eventForm.time} onChange={e=>setEventForm({...eventForm,time:e.target.value})} style={{flex:1,padding:'9px 10px',fontSize:'13px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+              </div>
+              <input value={eventForm.note} onChange={e=>setEventForm({...eventForm,note:e.target.value})} placeholder={isEn?'Note (optional)':'備註（選填）'} style={{width:'100%',padding:'9px 10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn style={{flex:1}} onClick={()=>setAddEventOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+                <Btn variant="primary" style={{flex:1}} disabled={savingEvent||!eventForm.title.trim()} onClick={saveEvent}>{savingEvent?(isEn?'Saving…':'儲存中…'):(isEn?'Save':'儲存')}</Btn>
+              </div>
+            </Card>}
+      </div>
       {(() => {
         // A real rundown of the selected day - not a global "upcoming"
         // feed. Includes completed and past appointments for that day
@@ -3466,14 +3544,23 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?"MCHC checkups are self-tracked, not booked through Medsa - manage this date from Growth & feeding.":'母嬰健康院檢查由您自行記錄,並非透過Medsa預約 - 請於「生長與餵養」頁面管理此日期。'}</div>
             <Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>{onNav?.();setActiveAppt(null)}}>{isEn?'Manage in Growth & feeding':'前往「生長與餵養」管理'}</Btn>
           </>}
-          {!activeAppt._mchc&&activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
-          {!activeAppt._mchc&&activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
+          {activeAppt._manual&&<>
+            {activeAppt.institutions?.name&&<div style={{fontSize:'13px',color:C.text,background:C.card,borderRadius:'10px',padding:'10px 12px',marginBottom:'14px',lineHeight:1.5}}>{activeAppt.institutions.name}</div>}
+            <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await deleteCalendarEvent(activeAppt._manualId);setActiveAppt(null)}}>{isEn?'Delete event':'刪除事項'}</Btn>
+          </>}
+          {!activeAppt._mchc&&!activeAppt._manual&&activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
+          {!activeAppt._mchc&&!activeAppt._manual&&activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
       <SecLabel>{isEn?'Medication alarms':'用藥鬧鐘'}</SecLabel>
-      {medications.length>0 ? medications.filter(m=>m.alarm_enabled||m.alarm_time).map((m,i)=>(
-        <MedAlarmCard key={i} medId={m.id} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} dosingMode={m.dosing_mode} intervalHours={m.interval_hours} defaultOn={m.alarm_enabled||false} defaultTimes={(m.alarm_times&&m.alarm_times.length>0)?m.alarm_times:(m.alarm_time?[m.alarm_time.slice(0,5)]:['08:00'])} defaultStartTime={m.alarm_start_time?.slice(0,5)||'08:00'} isEn={isEn}/>
+      {/* Real gap from your feedback: a reminder stayed showing forever
+          even after the medication's own prescribed course had ended -
+          this screen never used isMedicationActive (the same helper
+          "Active prescriptions" already filters by elsewhere), so an
+          expired course's alarm just kept appearing. */}
+      {activeMedsWithAlarm.length>0 ? activeMedsWithAlarm.map((m,i)=>(
+        <MedAlarmCard key={i} medId={m.id} med={`${m.medication_name} ${m.dosage||''}`.trim()} schedule={m.frequency||'As prescribed'} dosingMode={m.dosing_mode} intervalHours={m.interval_hours} defaultOn={m.alarm_enabled||false} defaultTimes={(m.alarm_times&&m.alarm_times.length>0)?m.alarm_times:(m.alarm_time?[m.alarm_time.slice(0,5)]:['08:00'])} defaultStartTime={m.alarm_start_time?.slice(0,5)||'08:00'} isEn={isEn} onRemoved={onReload}/>
       )) : <div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No medication reminders yet.':'暫無用藥提醒。'}</div>}
       {!addReminderOpen&&<div style={{padding:'0 16px 16px'}}><Btn variant="primary" style={{width:'100%'}} onClick={()=>setAddReminderOpen(true)}>+ {isEn?'Add reminder':'新增提醒'}</Btn></div>}
       {addReminderOpen&&<div style={{padding:'0 16px 16px'}}>
@@ -6907,33 +6994,28 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
 
   return (
     <div style={{padding:'0 16px 24px'}}>
-      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
-        <div style={{width:44,height:44,borderRadius:'50%',background:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-          <KidsMascot accent={__theme.accent}/>
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
-          <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
-        </div>
+      <div style={{margin:'16px 0',padding:'14px 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:__theme.accent,marginBottom:'4px'}}>{isEn?'Growth, feeding & health record':'生長、餵養及健康記錄'}</div>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>{isEn?"Medsa's digital equivalent of the MCHC Blue Book's growth and feeding pages. Vaccinations are tracked separately in":'Medsa的數碼版母嬰健康院「健康記錄手冊」生長及餵養頁面。疫苗記錄請見'} <span onClick={()=>onNav&&onNav('records')} style={{color:__theme.accent,textDecoration:'underline',cursor:'pointer'}}>{isEn?'Medical records':'醫療記錄'}</span>{isEn?'.':'。'}</div>
       </div>
 
       <SecLabel>{isEn?"Today at a glance":'今日概覽'}</SecLabel>
       <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'🍼'} {todaysFeedings.length}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysFeedings.length}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`feeding${todaysFeedings.length===1?'':'s'}${todaysMl?` · ${todaysMl}ml`:''}`:`次餵養${todaysMl?` · ${todaysMl}ml`:''}`}</div>
           </div>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'🧷'} {todaysDiapers.length}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysDiapers.length}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?'diaper changes':'次換尿布'}</div>
           </div>
           <div style={{background:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{'😴'} {todaysSleepMinutes<=0?'—':todaysSleepMinutes<60?`${todaysSleepMinutes}m`:`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:__theme.accent}}>{todaysSleepMinutes<=0?'—':todaysSleepMinutes<60?`${todaysSleepMinutes}m`:`${Math.floor(todaysSleepMinutes/60)}h${todaysSleepMinutes%60?` ${todaysSleepMinutes%60}m`:''}`}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`sleep, ${todaysSleep.length} session${todaysSleep.length===1?'':'s'}`:`睡眠, ${todaysSleep.length}次`}</div>
           </div>
           <div style={{background:todaysSymptomCount>0?C.amberLight:__theme.accentXLight,borderRadius:'10px',padding:'10px 12px'}}>
-            <div style={{fontSize:'17px',fontWeight:700,color:todaysSymptomCount>0?C.amber:__theme.accent}}>{'🌡️'} {todaysSymptomCount}</div>
+            <div style={{fontSize:'17px',fontWeight:700,color:todaysSymptomCount>0?C.amber:__theme.accent}}>{todaysSymptomCount}</div>
             <div style={{fontSize:'10.5px',color:C.textSub}}>{isEn?`symptom entr${todaysSymptomCount===1?'y':'ies'}`:'次症狀記錄'}</div>
           </div>
         </div>
@@ -6967,13 +7049,8 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
           and alert banners above stay outside the tabs since they're an
           at-a-glance overview, not one section's job. */}
       <div style={{display:'flex',gap:'6px',margin:'0 0 16px',padding:'4px',background:C.card,borderRadius:'10px'}}>
-        {[{value:'growth',icon:'sprout',en:'Growth',zh:'生長'},{value:'daily',icon:'bottle',en:'Feeding & care',zh:'餵養與照護'},{value:'health',icon:'heart',en:'Health',zh:'健康'},{value:'milestones',icon:'star',en:'Immunisations & milestones',zh:'疫苗與里程碑'}].map(t=>(
-          <div key={t.value} onClick={()=>setKidsTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:'8px',cursor:'pointer',background:kidsTab===t.value?__theme.accent:'transparent'}}>
-            <div style={{display:'flex',justifyContent:'center',marginBottom:'3px'}}>
-              <GuideIllustration icon={t.icon} accent={kidsTab===t.value?'#fff':C.textSub} size={16}/>
-            </div>
-            <div style={{fontSize:'11.5px',fontWeight:600,color:kidsTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
-          </div>
+        {[{value:'growth',en:'Growth',zh:'生長'},{value:'daily',en:'Feeding & care',zh:'餵養與照護'},{value:'health',en:'Health',zh:'健康'},{value:'milestones',en:'Immunisations & milestones',zh:'疫苗與里程碑'}].map(t=>(
+          <div key={t.value} onClick={()=>setKidsTab(t.value)} style={{flex:1,textAlign:'center',padding:'8px 4px',borderRadius:'8px',fontSize:'11.5px',fontWeight:600,cursor:'pointer',background:kidsTab===t.value?__theme.accent:'transparent',color:kidsTab===t.value?'#fff':C.textSub}}>{isEn?t.en:t.zh}</div>
         ))}
       </div>
 
@@ -7624,40 +7701,45 @@ const CONFINEMENT_MILESTONES = [
 // varies by family, as each entry's own detail text already says) -
 // the earliest day each entry itself cites.
 const CONFINEMENT_MILESTONE_VISUALS = {
-  third_day: { icon:'peach', accent:'#C9594A', accentSoft:'#F3DAD3', estimateDay:3 },
-  hair_shave: { icon:'comb', accent:'#7D8F6C', accentSoft:'#DEE6D4', estimateDay:24 },
+  third_day: { icon:'bath', accent:'#C9594A', accentSoft:'#F3DAD3', estimateDay:3 },
+  hair_shave: { icon:'scissors', accent:'#7D8F6C', accentSoft:'#DEE6D4', estimateDay:24 },
   full_month: { icon:'moon', accent:'#B07D4F', accentSoft:'#EBDCC6', estimateDay:30 },
 }
+// Redrawn per your feedback that the old versions were ugly - these were
+// trying to combine too many disconnected ideas in one shape (a peach
+// with a leaf standing in for a bathing ceremony, a head-outline fused
+// with a comb, a moon with a face and a floating egg). Each one now
+// draws just the single clearest, most literal object for what the
+// milestone is actually about - a wash basin for the first bath, a
+// pair of scissors for the haircut (a comb read as architecture/columns
+// at this size, scissors reads clearly), a moon with the traditional
+// red egg sitting cleanly underneath it, not overlapping.
 function MilestoneIllustration({ icon, accent, accentSoft }) {
-  if (icon==='peach') return (
-    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Peach illustration">
-      <path d="M60 30 C 45 10, 20 20, 22 48 C 24 78, 45 100, 60 108 C 75 100, 96 78, 98 48 C 100 20, 75 10, 60 30 Z"/>
-      <path d="M60 30 L 60 18"/>
-      <path d="M60 22 C 68 14, 80 16, 82 26 C 72 28, 64 28, 60 22 Z" fill={accentSoft}/>
-      <path d="M60 68 C 50 72, 42 80, 44 92" strokeWidth="2" opacity="0.55"/>
+  if (icon==='bath') return (
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Bath illustration">
+      <path d="M24 66 L96 66 C96 84 82 96 64 96 L56 96 C38 96 24 84 24 66 Z"/>
+      <path d="M30 66 L30 42 C30 34 36 28 44 28"/>
+      <path d="M40 78 C 46 82, 54 82, 60 78 C 66 82, 74 82, 80 78" strokeWidth="2.2" opacity="0.6"/>
+      <circle cx="58" cy="18" r="2" fill={accent} stroke="none"/>
+      <circle cx="70" cy="28" r="1.8" fill={accent} stroke="none"/>
+      <circle cx="48" cy="14" r="1.4" fill={accent} stroke="none"/>
     </svg>
   )
-  if (icon==='comb') return (
-    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Comb illustration">
-      <path d="M30 52 C 28 30, 48 18, 60 18 C 72 18, 92 30, 90 52 C 89 64, 80 70, 70 68"/>
-      <path d="M30 52 C 27 70, 34 88, 45 98" strokeWidth="2.5"/>
-      <rect x="38" y="86" width="44" height="14" rx="3"/>
-      <line x1="45" y1="86" x2="45" y2="100"/>
-      <line x1="53" y1="86" x2="53" y2="100"/>
-      <line x1="61" y1="86" x2="61" y2="100"/>
-      <line x1="69" y1="86" x2="69" y2="100"/>
-      <line x1="77" y1="86" x2="77" y2="100"/>
+  if (icon==='scissors') return (
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Scissors illustration">
+      <circle cx="32" cy="90" r="10"/>
+      <circle cx="58" cy="90" r="10"/>
+      <path d="M38 82 L65 55 L96 26"/>
+      <path d="M52 82 L65 55 L96 90"/>
     </svg>
   )
   return (
-    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Full moon illustration">
-      <circle cx="60" cy="44" r="30"/>
-      <path d="M46 34 C 44 25, 51 19, 55 24" strokeWidth="2.5"/>
-      <path d="M65 24 C 69 19, 76 25, 74 34" strokeWidth="2.5"/>
-      <circle cx="52" cy="40" r="1.8" fill={accent} stroke="none"/>
-      <circle cx="68" cy="40" r="1.8" fill={accent} stroke="none"/>
-      <path d="M54 50 C 58 53, 62 53, 66 50" strokeWidth="2.2"/>
-      <ellipse cx="60" cy="98" rx="13" ry="17" fill="#C9594A" fillOpacity="0.18" stroke="#C9594A"/>
+    <svg width="76" height="76" viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Full moon celebration illustration">
+      <circle cx="56" cy="46" r="28"/>
+      <path d="M94 22 L97 29 L104 31 L97 33 L94 40 L91 33 L84 31 L91 29 Z" fill={accent} stroke="none"/>
+      <circle cx="26" cy="24" r="2" fill={accent} stroke="none"/>
+      <circle cx="20" cy="62" r="1.6" fill={accent} stroke="none"/>
+      <ellipse cx="60" cy="96" rx="14" ry="18" fill={accentSoft} stroke={accent}/>
     </svg>
   )
 }
@@ -7728,6 +7810,49 @@ function DefaultJournalCoverArt({ accent, themeKey, size=96 }) {
     </svg>
   )
 }
+// Redrawn per your feedback - the cover used to scatter the exact same
+// sparkle shape around every theme, just recoloured, which isn't really
+// "theme specific." Each theme now gets its own small motif scattered
+// around the card instead: blossom petals for peach, leaf sprigs for
+// sage, waves/a shell for sand, stars for fairytale, leaves for
+// dinosaur, stars scattered like a night sky for galaxy.
+function CoverDecorations({ themeKey, accent }) {
+  const fillProps = { fill:accent, 'aria-hidden':'true' }
+  const strokeProps = { fill:'none', stroke:accent, strokeWidth:2, strokeLinecap:'round', strokeLinejoin:'round', 'aria-hidden':'true' }
+  if (themeKey==='sage') return (<>
+    <svg width="20" height="20" viewBox="0 0 24 24" style={{position:'absolute',top:20,left:22,opacity:0.45}} {...fillProps}><path d="M12 20 C12 14 12 8 12 4 C 6 6 4 12 8 16 C 10 18 11 19 12 20 Z"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" style={{position:'absolute',top:26,right:26,opacity:0.35}} {...fillProps}><path d="M12 20 C12 15 12 10 12 6 C17 8 18 13 15 16 C13 18 12 19 12 20 Z"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" style={{position:'absolute',bottom:22,left:32,opacity:0.3}} {...fillProps}><path d="M12 20 C12 16 12 11 12 8 C 8 9 7 13 10 16 Z"/></svg>
+  </>)
+  if (themeKey==='sand') return (<>
+    <svg width="28" height="14" viewBox="0 0 40 20" style={{position:'absolute',top:24,left:20,opacity:0.4}} {...strokeProps}><path d="M2 14 Q10 4 18 14 T34 14"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" style={{position:'absolute',top:22,right:26,opacity:0.35}} {...strokeProps}><path d="M12 4 C6 4 4 10 6 15 C8 19 16 19 18 15 C20 10 18 4 12 4 Z"/><path d="M12 4 L12 19" strokeWidth="1.4"/></svg>
+    <svg width="22" height="11" viewBox="0 0 40 20" style={{position:'absolute',bottom:22,left:28,opacity:0.3}} {...strokeProps}><path d="M2 14 Q10 4 18 14 T34 14"/></svg>
+  </>)
+  if (themeKey==='fairytale') return (<>
+    <svg width="18" height="18" viewBox="0 0 24 24" style={{position:'absolute',top:18,left:22,opacity:0.5}} {...fillProps}><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" style={{position:'absolute',top:24,right:26,opacity:0.4}} {...fillProps}><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+    <svg width="9" height="9" viewBox="0 0 24 24" style={{position:'absolute',bottom:22,left:30,opacity:0.3}} {...fillProps}><circle cx="12" cy="12" r="10"/></svg>
+  </>)
+  if (themeKey==='dinosaur') return (<>
+    <svg width="20" height="20" viewBox="0 0 24 24" style={{position:'absolute',top:20,left:22,opacity:0.4}} {...fillProps}><path d="M12 20 C12 14 12 8 12 4 C 6 6 4 12 8 16 C 10 18 11 19 12 20 Z"/></svg>
+    <svg width="16" height="16" viewBox="0 0 24 24" style={{position:'absolute',bottom:24,right:28,opacity:0.35}} {...fillProps}><ellipse cx="12" cy="17" rx="5" ry="4"/><ellipse cx="6" cy="8" rx="2" ry="2.6"/><ellipse cx="12" cy="5" rx="2" ry="2.6"/><ellipse cx="18" cy="8" rx="2" ry="2.6"/></svg>
+    <svg width="12" height="12" viewBox="0 0 24 24" style={{position:'absolute',top:46,right:40,opacity:0.3}} {...fillProps}><path d="M12 20 C12 14 12 8 12 4 C 6 6 4 12 8 16 C 10 18 11 19 12 20 Z"/></svg>
+  </>)
+  if (themeKey==='galaxy') return (<>
+    <svg width="16" height="16" viewBox="0 0 24 24" style={{position:'absolute',top:18,left:24,opacity:0.5}} {...fillProps}><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+    <svg width="9" height="9" viewBox="0 0 24 24" style={{position:'absolute',top:52,left:40,opacity:0.35}} {...fillProps}><circle cx="12" cy="12" r="10"/></svg>
+    <svg width="11" height="11" viewBox="0 0 24 24" style={{position:'absolute',top:24,right:28,opacity:0.4}} {...fillProps}><circle cx="12" cy="12" r="10"/></svg>
+    <svg width="6" height="6" viewBox="0 0 24 24" style={{position:'absolute',bottom:24,left:30,opacity:0.3}} {...fillProps}><circle cx="12" cy="12" r="10"/></svg>
+    <svg width="7" height="7" viewBox="0 0 24 24" style={{position:'absolute',bottom:30,right:34,opacity:0.3}} {...fillProps}><circle cx="12" cy="12" r="10"/></svg>
+  </>)
+  // peach (default)
+  return (<>
+    <svg width="18" height="18" viewBox="0 0 24 24" style={{position:'absolute',top:20,left:24,opacity:0.4}} {...strokeProps}><path d="M12 4 C6 4 4 10 6 15 C8 19 16 19 18 15 C20 10 18 4 12 4 Z"/></svg>
+    <svg width="12" height="12" viewBox="0 0 24 24" style={{position:'absolute',top:26,right:28,opacity:0.3}} {...strokeProps}><path d="M12 4 C6 4 4 10 6 15 C8 19 16 19 18 15 C20 10 18 4 12 4 Z"/></svg>
+    <svg width="10" height="10" viewBox="0 0 24 24" style={{position:'absolute',bottom:22,left:32,opacity:0.3}} {...strokeProps}><path d="M12 4 C6 4 4 10 6 15 C8 19 16 19 18 15 C20 10 18 4 12 4 Z"/></svg>
+  </>)
+}
 // The confinement guide chapter used to be one long scroll of text - split
 // into its own mini flip-pages (same prev/next + dot pattern as the
 // milestones chapter) with a simple cartoon badge per page, so it's not
@@ -7759,65 +7884,6 @@ function GuideIllustration({ icon, accent, size=60 }) {
       <line x1="60" y1="34" x2="60" y2="96"/>
     </svg>
   )
-  if (icon==='alert') return (
-    <svg {...svgProps}>
-      <path d="M60 22 L104 94 L16 94 Z"/>
-      <line x1="60" y1="48" x2="60" y2="72"/>
-      <circle cx="60" cy="82" r="2" fill={accent} stroke="none"/>
-    </svg>
-  )
-  if (icon==='heart') return (
-    <svg {...svgProps}>
-      <path d="M60 96 C 30 74, 16 54, 16 36 C 16 22, 28 14, 40 18 C 50 21, 56 30, 60 36 C 64 30, 70 21, 80 18 C 92 14, 104 22, 104 36 C 104 54, 90 74, 60 96 Z"/>
-      <path d="M34 42 L48 42 L54 32 L62 56 L70 42 L86 42" strokeWidth="2.2"/>
-    </svg>
-  )
-  if (icon==='checklist') return (
-    <svg {...svgProps}>
-      <rect x="28" y="20" width="64" height="88" rx="8"/>
-      <rect x="46" y="14" width="28" height="14" rx="4"/>
-      <path d="M38 48 L46 56 L60 40" strokeWidth="2.4"/>
-      <line x1="68" y1="50" x2="84" y2="50"/>
-      <path d="M38 72 L46 80 L60 64" strokeWidth="2.4"/>
-      <line x1="68" y1="74" x2="84" y2="74"/>
-    </svg>
-  )
-  if (icon==='notebook') return (
-    <svg {...svgProps}>
-      <rect x="26" y="22" width="68" height="84" rx="6"/>
-      <line x1="26" y1="40" x2="94" y2="40"/>
-      <line x1="40" y1="56" x2="80" y2="56"/>
-      <line x1="40" y1="70" x2="80" y2="70"/>
-      <line x1="40" y1="84" x2="66" y2="84"/>
-    </svg>
-  )
-  if (icon==='pencil') return (
-    <svg {...svgProps}>
-      <path d="M32 88 L80 40 L92 52 L44 100 L30 102 Z"/>
-      <line x1="72" y1="48" x2="84" y2="60"/>
-    </svg>
-  )
-  if (icon==='star') return (
-    <svg {...svgProps}>
-      <path d="M60 18 L70 46 L100 46 L76 64 L86 94 L60 76 L34 94 L44 64 L20 46 L50 46 Z"/>
-    </svg>
-  )
-  if (icon==='sprout') return (
-    <svg {...svgProps}>
-      <path d="M60 100 L60 50"/>
-      <path d="M60 68 C 42 68, 30 54, 30 38 C 46 38, 60 52, 60 68 Z"/>
-      <path d="M60 78 C 78 78, 90 64, 90 48 C 74 48, 60 62, 60 78 Z"/>
-    </svg>
-  )
-  if (icon==='bottle') return (
-    <svg {...svgProps}>
-      <rect x="46" y="18" width="16" height="12" rx="3"/>
-      <path d="M42 30 L78 30 L74 100 C74 104 70 108 66 108 L54 108 C50 108 46 104 46 100 Z"/>
-      <line x1="46" y1="54" x2="74" y2="54"/>
-      <line x1="47" y1="70" x2="73" y2="70"/>
-      <line x1="48" y1="86" x2="72" y2="86"/>
-    </svg>
-  )
   return (
     <svg {...svgProps}>
       <rect x="24" y="30" width="72" height="66" rx="8"/>
@@ -7828,33 +7894,14 @@ function GuideIllustration({ icon, accent, size=60 }) {
     </svg>
   )
 }
-// Real gap from your feedback: Growth & feeding was entirely plain -
-// generic white cards, no illustration anywhere besides the existing
-// tooth-arch diagram and the two celebration-confetti moments. A simple
-// bear-cub face, same stroke-icon style as everything else, gives the
-// screen a bit of personality without touching the WHO percentile chart
-// or any of the real tracking data underneath it.
-function KidsMascot({ accent, size=44 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 120 120" fill="none" stroke={accent} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" role="img" aria-hidden="true">
-      <circle cx="34" cy="30" r="12"/>
-      <circle cx="86" cy="30" r="12"/>
-      <circle cx="60" cy="64" r="38"/>
-      <circle cx="44" cy="60" r="3" fill={accent} stroke="none"/>
-      <circle cx="76" cy="60" r="3" fill={accent} stroke="none"/>
-      <path d="M52 78 C 56 82, 64 82, 68 78" strokeWidth="2.5"/>
-      <circle cx="60" cy="70" r="4" fill={accent} stroke="none"/>
-    </svg>
-  )
-}
 const POSTPARTUM_CHAPTERS = [
-  { key:'warnings', icon:'alert', title:{en:'Urgent Warning Signs',zh:'緊急警號'} },
-  { key:'epds', icon:'heart', title:{en:'Mental Health Check-in',zh:'情緒健康檢視'} },
-  { key:'checklist', icon:'checklist', title:{en:'Recovery Checklist',zh:'產後復原清單'} },
-  { key:'plan', icon:'notebook', title:{en:'My Recovery Plan',zh:'我的調理方案'} },
-  { key:'diary', icon:'pencil', title:{en:'Daily Diary',zh:'每日日記'} },
-  { key:'guide', icon:'book', title:{en:'Confinement Guide',zh:'坐月指南'} },
-  { key:'milestones', icon:'star', title:{en:"Baby's Milestone Days",zh:'寶寶的里程碑日子'} },
+  { key:'warnings', title:{en:'Urgent Warning Signs',zh:'緊急警號'} },
+  { key:'epds', title:{en:'Mental Health Check-in',zh:'情緒健康檢視'} },
+  { key:'checklist', title:{en:'Recovery Checklist',zh:'產後復原清單'} },
+  { key:'plan', title:{en:'My Recovery Plan',zh:'我的調理方案'} },
+  { key:'diary', title:{en:'Daily Diary',zh:'每日日記'} },
+  { key:'guide', title:{en:'Confinement Guide',zh:'坐月指南'} },
+  { key:'milestones', title:{en:"Baby's Milestone Days",zh:'寶寶的里程碑日子'} },
 ]
 const CONFINEMENT_FURTHER_READING = [
   { title:'The First Forty Days', author:'Heng Ou', focus:{en:'A modern translation of confinement practice - keeps the recipes/soups/rest philosophy, drops the unscientific taboos (e.g. no showering).',zh:'將坐月傳統轉化為現代做法 - 保留湯水食療及休養理念,剔除無科學根據的禁忌(如不可洗澡)。'} },
@@ -8775,9 +8822,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
         if (postpartumBookView==='cover') return (
           <div style={{position:'relative',overflow:'hidden',background:theme.paper,fontFamily:"'Patrick Hand',cursive",color:theme.ink,borderRadius:'14px',marginBottom:'16px',padding:'36px 24px 28px',textAlign:'center'}}>
             <Head><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap"/></Head>
-            <svg width="26" height="26" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',top:18,left:20,opacity:0.5}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',top:24,right:24,opacity:0.4}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill={theme.accent} style={{position:'absolute',bottom:20,left:30,opacity:0.3}} aria-hidden="true"><path d="M12 3 L13.8 9.3 L20 11 L13.8 12.7 L12 19 L10.2 12.7 L4 11 L10.2 9.3 Z"/></svg>
+            <CoverDecorations themeKey={bumpRow?.journal_cover_theme||'peach'} accent={theme.accent}/>
             <div style={{width:150,height:150,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px',overflow:'hidden',position:'relative'}}>
               {coverPhotoUrl
                 ? <img src={coverPhotoUrl} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
@@ -8811,11 +8856,8 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
             </div>
             <div style={{fontSize:'24px',marginBottom:'16px'}}>{isEn?'Contents':'目錄'}</div>
             {POSTPARTUM_CHAPTERS.map((c,i)=>(
-              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',gap:'12px',padding:'11px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed ${theme.marginColor}`:'none',cursor:'pointer'}}>
-                <div style={{width:34,height:34,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  <GuideIllustration icon={c.icon} accent={theme.accent} size={18}/>
-                </div>
-                <span style={{fontSize:'19px',flex:1}}>{isEn?c.title.en:c.title.zh}</span>
+              <div key={c.key} onClick={()=>setPostpartumBookView(c.key)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'13px 2px',borderBottom:i<POSTPARTUM_CHAPTERS.length-1?`1px dashed ${theme.marginColor}`:'none',cursor:'pointer'}}>
+                <span style={{fontSize:'19px'}}>{isEn?c.title.en:c.title.zh}</span>
                 <span style={{color:theme.inkSoft}}>▸</span>
               </div>
             ))}
@@ -8841,12 +8883,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.inkSoft} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
                 </div>
               </div>
-              <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
-                <div style={{width:32,height:32,borderRadius:'50%',background:theme.accentSoft,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                  <GuideIllustration icon={POSTPARTUM_CHAPTERS[chapterIndex]?.icon} accent={theme.accent} size={17}/>
-                </div>
-                <div style={{fontSize:'22px',color:theme.accent}}>{isEn?chapterTitle?.en:chapterTitle?.zh}</div>
-              </div>
+              <div style={{fontSize:'22px',color:theme.accent,marginBottom:'16px'}}>{isEn?chapterTitle?.en:chapterTitle?.zh}</div>
 
               {postpartumBookView==='warnings'&&<div style={{fontFamily:'inherit'}}>
                 <div style={{background:'#fff',border:`1px solid ${C.red}`,borderRadius:'10px',padding:'14px 16px'}}>
