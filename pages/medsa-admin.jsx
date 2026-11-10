@@ -2104,59 +2104,6 @@ function ForumModerationTab() {
   const [rescanResult, setRescanResult] = useState(null)
   const [editingPhotoFor, setEditingPhotoFor] = useState(null)
   const [bulkProductResult, setBulkProductResult] = useState(null)
-  // Real gap from your feedback: "brand/sponsor partnership features"
-  // needed building out - sponsored_by used to be a free-text field
-  // retyped per product with no guarantee of consistent spelling, no
-  // logo, no bio, no way to see every product one sponsor backs. Brands
-  // are now their own row (forum_brands), referenced by
-  // forum_products.sponsor_brand_id, so a brand's identity (logo/name/
-  // bio/verified badge) is set once and shows consistently everywhere
-  // it sponsors.
-  const [brands, setBrands] = useState([])
-  const [brandForm, setBrandForm] = useState({ name:'', logo_url:'', short_bio:'', verified:false })
-  const [editingBrandId, setEditingBrandId] = useState(null)
-  const [brandSaving, setBrandSaving] = useState(false)
-  const [brandError, setBrandError] = useState(null)
-
-  async function loadBrands() {
-    const { data } = await supabase.from('forum_brands').select('*').order('name')
-    setBrands(data||[])
-  }
-  useEffect(() => { loadBrands() }, [])
-
-  function startEditBrand(b) {
-    setEditingBrandId(b.id)
-    setBrandForm({ name:b.name, logo_url:b.logo_url||'', short_bio:b.short_bio||'', verified:b.verified })
-    setBrandError(null)
-  }
-  function cancelBrandEdit() {
-    setEditingBrandId(null)
-    setBrandForm({ name:'', logo_url:'', short_bio:'', verified:false })
-    setBrandError(null)
-  }
-  async function saveBrand() {
-    if (!brandForm.name.trim()) return
-    setBrandSaving(true)
-    setBrandError(null)
-    const payload = { name: brandForm.name.trim(), logo_url: brandForm.logo_url.trim()||null, short_bio: brandForm.short_bio.trim()||null, verified: brandForm.verified }
-    const { error } = editingBrandId
-      ? await supabase.from('forum_brands').update(payload).eq('id', editingBrandId)
-      : await supabase.from('forum_brands').insert(payload)
-    setBrandSaving(false)
-    if (error) { setBrandError(error.message); return }
-    await loadBrands()
-    cancelBrandEdit()
-    searchProductsForSponsor()
-  }
-  // A brand still sponsoring a product is kept by the FK's own default
-  // (no action) rather than silently orphaning those products - the
-  // error surfaces so the admin unsponsors it from them first.
-  async function deleteBrand(b) {
-    const { error } = await supabase.from('forum_brands').delete().eq('id', b.id)
-    if (error) { setBrandError(`Can't delete "${b.name}" - ${error.message}`); return }
-    loadBrands()
-  }
-
   // One-off (and repeatable) catch-up scan across every existing
   // product pair - needed because the duplicate check only ever ran
   // once, at the moment the second of a pair was created, using
@@ -2234,14 +2181,10 @@ function ForumModerationTab() {
 
   async function searchProductsForSponsor() {
     if (!sponsorSearch.trim()) { setSponsorResults([]); return }
-    const { data } = await supabase.from('forum_products').select('*, forum_brands(id,name,verified)').ilike('canonical_name', `%${sponsorSearch.trim()}%`)
+    const { data } = await supabase.from('forum_products').select('*').ilike('canonical_name', `%${sponsorSearch.trim()}%`)
     setSponsorResults(data||[])
   }
 
-  async function setSponsorBrand(product, brandId) {
-    await supabase.from('forum_products').update({ sponsor_brand_id: brandId||null }).eq('id', product.id)
-    searchProductsForSponsor()
-  }
   // Your call: Kids commerce/brand affiliates should be the same model
   // as this one - a brand sponsors a product thread, set here, no
   // separate affiliate-click-tracking system. 'category' already
@@ -2278,27 +2221,16 @@ function ForumModerationTab() {
       const normalized = normalizeProductName(row.canonical_name)
       const { data: existing } = await supabase.from('forum_products').select('id').eq('normalized_name', normalized).maybeSingle()
       if (existing) { skipped.push(`${row.canonical_name} - already exists`); continue }
-      // sponsored_by in the CSV is still just a brand name - looked up
-      // (or created, logo/bio left blank for the admin to fill in later
-      // from the brand list below) rather than kept as its own free-text
-      // field, same as setting it by hand now does.
-      let sponsorBrandId = null
-      const sponsorName = row.sponsored_by?.trim()
-      if (sponsorName) {
-        const { data: existingBrand } = await supabase.from('forum_brands').select('id').ilike('name', sponsorName).maybeSingle()
-        if (existingBrand) sponsorBrandId = existingBrand.id
-        else {
-          const { data: newBrand } = await supabase.from('forum_brands').insert({ name: sponsorName }).select('id').maybeSingle()
-          sponsorBrandId = newBrand?.id || null
-        }
-      }
+      // sponsored_by in the CSV just sets the plain sponsor_name field now
+      // - actually marking it `sponsored` (with a price/expiry) still
+      // goes through the Sponsorship tester below, same mechanism as
+      // insurance plan sponsorship, not a separate brand-entity system.
       await supabase.from('forum_products').insert({
         canonical_name: row.canonical_name.trim(), normalized_name: normalized,
-        image_url: row.image_url?.trim() || null, sponsor_brand_id: sponsorBrandId,
+        image_url: row.image_url?.trim() || null, sponsor_name: row.sponsored_by?.trim() || null,
       })
       imported++
     }
-    if (rows.some(r=>r.sponsored_by?.trim())) loadBrands()
     setBulkProductResult({ imported, skipped, total: rows.length })
   }
 
@@ -2337,38 +2269,8 @@ function ForumModerationTab() {
         </div>
       ))}
 
-      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Brands ({brands.length})</div>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>A brand's logo/bio/verified badge is set once here and shows consistently on every product thread it sponsors, instead of retyping a name per product.</div>
-      {brandError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{brandError}</div>}
-      {brands.map(b=>(
-        <div key={b.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`}}>
-          {b.logo_url
-            ? <img src={b.logo_url} alt="" style={{width:32,height:32,borderRadius:'50%',objectFit:'cover',flexShrink:0}}/>
-            : <div style={{width:32,height:32,borderRadius:'50%',background:C.card,flexShrink:0}}/>}
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:'13px',fontWeight:600}}>{b.name}{b.verified&&<span style={{color:C.green}}> ✓</span>}</div>
-            {b.short_bio&&<div style={{fontSize:'11px',color:C.textSub,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{b.short_bio}</div>}
-          </div>
-          <button onClick={()=>startEditBrand(b)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer',flexShrink:0}}>Edit</button>
-          <button onClick={()=>deleteBrand(b)} style={{padding:'6px 12px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer',flexShrink:0}}>Delete</button>
-        </div>
-      ))}
-      <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px',marginTop:'10px',marginBottom:'24px'}}>
-        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>{editingBrandId?'Edit brand':'+ New brand'}</div>
-        <input value={brandForm.name} onChange={e=>setBrandForm(f=>({...f,name:e.target.value}))} placeholder="Brand name" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-        <AdminImagePicker label="Logo" value={brandForm.logo_url} onChange={url=>setBrandForm(f=>({...f,logo_url:url}))} bucket="forum-brand-logos"/>
-        <textarea value={brandForm.short_bio} onChange={e=>setBrandForm(f=>({...f,short_bio:e.target.value}))} rows={2} placeholder="Short bio (one or two sentences, shown wherever this brand sponsors)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'none',fontFamily:'inherit'}}/>
-        <label style={{display:'flex',alignItems:'center',gap:'8px',fontSize:'13px',marginBottom:'10px',cursor:'pointer'}}>
-          <input type="checkbox" checked={brandForm.verified} onChange={e=>setBrandForm(f=>({...f,verified:e.target.checked}))}/>
-          Verified brand
-        </label>
-        <div style={{display:'flex',gap:'8px'}}>
-          {editingBrandId&&<button onClick={cancelBrandEdit} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>}
-          <button onClick={saveBrand} disabled={brandSaving||!brandForm.name.trim()} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{brandSaving?'Saving…':editingBrandId?'Save changes':'Add brand'}</button>
-        </div>
-      </div>
-
-      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Sponsor a product thread & set its photo</div>
+      <div style={{fontSize:'15px',fontWeight:600,marginTop:'24px',marginBottom:'10px'}}>Set a product's photo & category</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>Sponsorship itself (price, expiry) is set in the Sponsorship tester under QA Tools, same mechanism insurance plan sponsorship already uses - not a separate system here.</div>
       <input value={sponsorSearch} onChange={e=>setSponsorSearch(e.target.value)} onKeyDown={e=>e.key==='Enter'&&searchProductsForSponsor()} placeholder="Search a product…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       <button onClick={searchProductsForSponsor} style={{width:'100%',padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer',marginBottom:'12px'}}>Search</button>
       {sponsorResults.map(p=>(
@@ -2378,14 +2280,10 @@ function ForumModerationTab() {
               {p.image_url&&<img src={p.image_url} alt="" style={{width:32,height:32,objectFit:'cover',borderRadius:'6px'}}/>}
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
-                <div style={{fontSize:'11px',color:C.textSub}}>{p.forum_brands?.name?`Sponsored by ${p.forum_brands.name}${p.forum_brands.verified?' ✓':''}`:'Not sponsored'}{p.category?` · ${p.category}`:''}</div>
+                <div style={{fontSize:'11px',color:C.textSub}}>{p.sponsored?`Sponsored (${p.sponsor_name||'unnamed'}) until ${p.sponsored_until}`:'Not sponsored'}{p.category?` · ${p.category}`:''}</div>
               </div>
             </div>
             <div style={{display:'flex',gap:'6px',flexShrink:0,alignItems:'center'}}>
-              <select value={p.sponsor_brand_id||''} onChange={e=>setSponsorBrand(p, e.target.value||null)} style={{padding:'6px 8px',borderRadius:'8px',border:`0.5px solid ${C.border}`,fontSize:'11px',maxWidth:120}}>
-                <option value="">Not sponsored</option>
-                {brands.map(b=>(<option key={b.id} value={b.id}>{b.name}</option>))}
-              </select>
               <button onClick={()=>setEditingPhotoFor(editingPhotoFor===p.id?null:p.id)} style={{padding:'6px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'11px',cursor:'pointer'}}>Photo</button>
             </div>
           </div>
@@ -2630,7 +2528,8 @@ function QaToolsTab() {
       <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
         Testing tools that bypass a real Stripe payment - use these to simulate what a successful checkout would have written, so paid-gated flows can be tested end to end without a connected Stripe account.
       </div>
-      <SponsorshipTester/>
+      <SponsorshipTester table="insurance_plans" title="Insurance plan sponsorship" searchPlaceholder="Search plan name or company…" nameField="plan_name" subField="company_name" hasSelfServe/>
+      <SponsorshipTester table="forum_products" title="Community product sponsorship" searchPlaceholder="Search a product…" nameField="canonical_name" collectSponsorName/>
       <VideoConsultTester/>
       <ClaimsPluginTester/>
     </div>
@@ -2771,31 +2670,44 @@ function VideoConsultTester() {
   )
 }
 
-function SponsorshipTester() {
+// Generalized per your call: product sponsorship (forum_products) used to
+// be its own separate brand-entity system (forum_brands) - no real reason
+// for two mechanisms doing the same job. This one component now drives
+// both insurance-plan sponsorship and product sponsorship, same inline
+// fields (sponsored/sponsored_until/sponsor_price_hkd) either way - just
+// pointed at a different table. Products don't have an existing field
+// that doubles as "who's sponsoring" the way a plan's own company_name
+// does, so collectSponsorName adds the one extra input products need.
+function SponsorshipTester({ table, title, searchPlaceholder, nameField, subField, hasSelfServe=false, collectSponsorName=false }) {
   const [query,setQuery]=useState('')
   const [results,setResults]=useState([])
   const [searching,setSearching]=useState(false)
   const [selected,setSelected]=useState(null)
   const [months,setMonths]=useState('1')
   const [customExpiry,setCustomExpiry]=useState('')
+  const [sponsorNameInput,setSponsorNameInput]=useState('')
   const [saving,setSaving]=useState(false)
   const [notice,setNotice]=useState(null)
+
+  const orFields = subField ? [nameField, subField] : [nameField]
+  const selectCols = ['id', nameField, subField, hasSelfServe?'self_serve_only':null, 'sponsored', 'sponsored_until', 'sponsor_price_hkd', 'sponsor_description', 'sponsor_thumbnail_url'].filter(Boolean).join(', ')
 
   async function search() {
     if (!query.trim()) return
     setSearching(true)
-    const { data } = await supabase.from('insurance_plans')
-      .select('id, plan_name, company_name, self_serve_only, sponsored, sponsored_until, sponsor_price_hkd, sponsor_description, sponsor_thumbnail_url')
-      .or(`plan_name.ilike.%${query}%,company_name.ilike.%${query}%`)
-      .order('plan_name').limit(20)
+    const { data } = await supabase.from(table)
+      .select(selectCols)
+      .or(orFields.map(f=>`${f}.ilike.%${query}%`).join(','))
+      .order(nameField).limit(20)
     setResults(data||[])
     setSearching(false)
   }
 
-  function selectPlan(p) {
+  function selectRow(p) {
     setSelected(p)
     setNotice(null)
     setCustomExpiry('')
+    setSponsorNameInput(p.sponsor_name||'')
   }
 
   async function applySponsorship(enable) {
@@ -2806,9 +2718,10 @@ function SponsorshipTester() {
           sponsored: true,
           sponsored_until: customExpiry || (() => { const d=new Date(); d.setMonth(d.getMonth()+parseInt(months||'1')); return d.toISOString().slice(0,10) })(),
           sponsor_price_hkd: selected.sponsor_price_hkd || 3000*parseInt(months||'1'),
+          ...(collectSponsorName ? { sponsor_name: sponsorNameInput.trim()||null } : {}),
         }
-      : { sponsored: false, sponsored_until: null, sponsor_price_hkd: null }
-    const { error } = await supabase.from('insurance_plans').update(payload).eq('id', selected.id)
+      : { sponsored: false, sponsored_until: null, sponsor_price_hkd: null, ...(collectSponsorName ? { sponsor_name: null } : {}) }
+    const { error } = await supabase.from(table).update(payload).eq('id', selected.id)
     setSaving(false)
     if (error) { setNotice(`Error: ${error.message}`); return }
     setNotice(enable ? `Marked sponsored until ${payload.sponsored_until}.` : 'Sponsorship cleared.')
@@ -2818,33 +2731,34 @@ function SponsorshipTester() {
 
   return (
     <div style={{background:'#fff',borderRadius:'10px',padding:'16px',border:`0.5px solid ${C.border}`,marginBottom:'16px'}}>
-      <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>Sponsorship tester</div>
+      <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{title}</div>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'12px',lineHeight:1.5}}>
-        Marks a plan sponsored (or clears it) directly - the same fields the Stripe webhook sets on a real payment (sponsored, sponsored_until, sponsor_price_hkd). Works for both partnered plans and self-serve/Coverage Rules plans. Set a custom expiry a few minutes out to test that a promoted plan actually disappears from patient search once its window lapses, instead of waiting a real month.
+        Marks a {collectSponsorName?'product':'plan'} sponsored (or clears it) directly - the same fields{hasSelfServe?' the Stripe webhook sets on a real payment':''} (sponsored, sponsored_until, sponsor_price_hkd). Set a custom expiry a few minutes out to test that a promoted listing actually disappears once its window lapses, instead of waiting a real month.
       </div>
       <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
-        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder="Search plan name or company…" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px'}}/>
+        <input value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&search()} placeholder={searchPlaceholder} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px'}}/>
         <button onClick={search} disabled={searching} style={{padding:'0 16px',border:'none',borderRadius:'8px',background:C.green,color:'#fff',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{searching?'…':'Search'}</button>
       </div>
       {results.length>0&&!selected&&<div style={{maxHeight:220,overflowY:'auto',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'12px'}}>
         {results.map(p=>(
-          <div key={p.id} onClick={()=>selectPlan(p)} style={{padding:'10px 12px',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:'13px'}}>
-            <div style={{fontWeight:600}}>{p.plan_name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>{p.company_name}{p.self_serve_only?' · self-serve':''}{p.sponsored?` · sponsored until ${p.sponsored_until}`:''}</div>
+          <div key={p.id} onClick={()=>selectRow(p)} style={{padding:'10px 12px',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer',fontSize:'13px'}}>
+            <div style={{fontWeight:600}}>{p[nameField]}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{subField&&p[subField]}{hasSelfServe&&p.self_serve_only?' · self-serve':''}{p.sponsored?` · sponsored until ${p.sponsored_until}`:''}</div>
           </div>
         ))}
       </div>}
       {selected&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
           <div>
-            <div style={{fontSize:'14px',fontWeight:700}}>{selected.plan_name}</div>
-            <div style={{fontSize:'11px',color:C.textSub}}>{selected.company_name}{selected.self_serve_only?' · self-serve (Coverage Rules)':' · marketplace plan'}</div>
+            <div style={{fontSize:'14px',fontWeight:700}}>{selected[nameField]}</div>
+            <div style={{fontSize:'11px',color:C.textSub}}>{subField&&selected[subField]}{hasSelfServe?(selected.self_serve_only?' · self-serve (Coverage Rules)':' · marketplace plan'):''}</div>
           </div>
           <span onClick={()=>{setSelected(null);setResults([])}} style={{fontSize:'11px',color:C.textSub,cursor:'pointer'}}>Change</span>
         </div>
         <div style={{fontSize:'12px',marginBottom:'10px'}}>
           Current: {selected.sponsored ? <span style={{color:C.green,fontWeight:600}}>Sponsored until {selected.sponsored_until}</span> : <span style={{color:C.textMuted}}>Not sponsored</span>}
         </div>
+        {collectSponsorName&&<input value={sponsorNameInput} onChange={e=>setSponsorNameInput(e.target.value)} placeholder="Sponsor / brand name" style={{width:'100%',padding:'9px 10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
         <div style={{display:'flex',gap:'8px',marginBottom:'8px',alignItems:'center',flexWrap:'wrap'}}>
           <span style={{fontSize:'12px',color:C.textSub}}>Quick duration:</span>
           {[['1','1 mo'],['3','3 mo'],['6','6 mo']].map(([v,l])=>(
@@ -2852,7 +2766,7 @@ function SponsorshipTester() {
           ))}
         </div>
         <div style={{marginBottom:'12px'}}>
-          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Or set a custom expiry date (sponsored_until is date-only, not time-of-day) - set it to yesterday and apply to test that a lapsed sponsorship actually disappears from patient search, or tomorrow to confirm it still shows</div>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Or set a custom expiry date (sponsored_until is date-only, not time-of-day) - set it to yesterday and apply to test that a lapsed sponsorship actually disappears once its window lapses, or tomorrow to confirm it still shows</div>
           <input type="date" value={customExpiry} onChange={e=>setCustomExpiry(e.target.value)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
         </div>
         {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'10px'}}>{notice}</div>}
