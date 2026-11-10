@@ -420,7 +420,11 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   const [homeNotices,setHomeNotices]=useState([])
   useEffect(() => {
     const nowIso = new Date().toISOString()
-    supabase.from('patient_notices').select('*').eq('active', true)
+    // Every patient is HK-based today (patients has no location field of
+    // its own yet) - 'Global' is the catch-all every market sees, so
+    // this hardcoded pair is the correct filter until Medsa actually
+    // operates in a second market and patients carry their own location.
+    supabase.from('patient_notices').select('*').eq('active', true).in('location', ['HK','Global'])
       .lte('starts_at', nowIso).gt('expires_at', nowIso)
       .order('created_at', { ascending: false })
       .then(({ data }) => setHomeNotices(data || []))
@@ -2433,7 +2437,7 @@ function IngredientScanScreen({ isEn, patient={} }) {
 
   return (
     <div style={{padding:'16px 16px 24px'}}>
-      <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'16px'}}>{isEn?"Take or upload a photo of a food/formula/medication/supplement ingredient label - it's read and checked against your own known allergies and, if relevant, G6PD-safety guidance. This is a proposal to review, not a safety verdict - always check with a doctor or pharmacist if unsure.":'拍攝或上傳食物/奶粉/藥物/保健品的成分標籤照片 - 系統會讀取並對照您的已知過敏及(如適用)G6PD安全指引進行檢查。此為建議供您參考,並非安全判斷 - 如有疑問請諮詢醫生或藥劑師。'}</div>
+      <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,marginBottom:'16px'}}>{isEn?"Take or upload a photo of a food/formula/medication/supplement ingredient label - it's read, then checked by plain text matching (not AI judgment) against your known allergies, active medications & supplements, and, if relevant, G6PD-safety guidance. This is a proposal to review, not a safety verdict - always check with a doctor or pharmacist if unsure.":'拍攝或上傳食物/奶粉/藥物/保健品的成分標籤照片 - 系統會讀取內容,再以純文字比對(並非AI判斷)對照您的已知過敏、目前服用的藥物及保健品,以及(如適用)G6PD安全指引。此為建議供您參考,並非安全判斷 - 如有疑問請諮詢醫生或藥劑師。'}</div>
       <Card style={{padding:'16px',marginBottom:'16px'}}>
         <input type="file" accept="image/*" onChange={e=>handleFile(e.target.files?.[0]||null)} style={{width:'100%',fontSize:'12px',marginBottom:'10px'}}/>
         {preview&&<img src={preview} alt="" style={{width:'100%',maxHeight:220,objectFit:'contain',borderRadius:'8px',marginBottom:'10px',background:C.beige}}/>}
@@ -2453,6 +2457,7 @@ function IngredientScanScreen({ isEn, patient={} }) {
           : <div style={{background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
               <div style={{fontSize:'13px',fontWeight:600,color:__theme.accent}}>✓ {isEn?'No conflicts found against what\'s on your profile':'與您檔案上的資料沒有發現衝突'}</div>
             </div>}
+        {result.disclaimer&&<div style={{fontSize:'10.5px',color:C.textMuted,lineHeight:1.5,marginBottom:'16px'}}>{result.disclaimer}</div>}
         <SecLabel>{isEn?'Ingredients read from label':'從標籤讀取的成分'}</SecLabel>
         <Card style={{padding:'14px 16px'}}>
           {result.ingredients.length===0
@@ -6645,9 +6650,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     else if (result.flags.length>0) {
       const flagText = flagsToNoteText(result.flags)
       setFForm(f => ({ ...f, note: f.note ? `${f.note} ${flagText}` : flagText }))
-      setFeedLabelNotice({ type:'flag', text: isEn?'Flagged against your known allergies - added to the note below.':'已對照已知過敏並標記 - 已加入下方備註。' })
+      setFeedLabelNotice({ type:'flag', text: isEn?'Flagged against what\'s on file - added to the note below.':'已對照檔案資料並標記 - 已加入下方備註。' })
     } else {
-      setFeedLabelNotice({ type:'clear', text: isEn?'No conflicts with known allergies found on this label.':'此標籤未發現與已知過敏衝突。' })
+      setFeedLabelNotice({ type:'clear', text: isEn?'No conflicts found against what\'s on file.':'未發現與檔案資料衝突。' })
     }
     setScanningFeedLabel(false)
   }
@@ -6659,9 +6664,9 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
     else if (result.flags.length>0) {
       const flagText = flagsToNoteText(result.flags)
       setDiaperNote(n => n ? `${n} ${flagText}` : flagText)
-      setDiaperLabelNotice({ type:'flag', text: isEn?'Flagged against your known allergies - added to the note below.':'已對照已知過敏並標記 - 已加入下方備註。' })
+      setDiaperLabelNotice({ type:'flag', text: isEn?'Flagged against what\'s on file - added to the note below.':'已對照檔案資料並標記 - 已加入下方備註。' })
     } else {
-      setDiaperLabelNotice({ type:'clear', text: isEn?'No conflicts with known allergies found on this label.':'此標籤未發現與已知過敏衝突。' })
+      setDiaperLabelNotice({ type:'clear', text: isEn?'No conflicts found against what\'s on file.':'未發現與檔案資料衝突。' })
     }
     setScanningDiaperLabel(false)
   }
