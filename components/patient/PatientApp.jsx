@@ -4985,10 +4985,16 @@ function ForumScreen({ isEn, patient={} }) {
 
   async function loadProducts() {
     setLoading(true)
-    const { data } = await supabase.from('forum_products').select('*, forum_brands(name,logo_url,short_bio,verified)').order('sponsor_brand_id',{ascending:false,nullsFirst:false}).order('post_count',{ascending:false})
+    // Same mechanism as insurance plan sponsorship now (sponsored +
+    // sponsored_until inline fields, not a separate brand-entity table) -
+    // sponsored still floats to the top, but only while actually within
+    // its paid window, same real-expiry check used for plans.
+    const { data } = await supabase.from('forum_products').select('*').order('sponsored',{ascending:false}).order('post_count',{ascending:false})
     setProducts(data||[])
     setLoading(false)
   }
+  const todayStr = new Date().toISOString().slice(0,10)
+  const isProductSponsored = p => p.sponsored && p.sponsored_until && p.sponsored_until >= todayStr
   useEffect(() => { loadProducts() }, [])
 
   const searchNorm = normalizeProductName(search)
@@ -5087,13 +5093,13 @@ function ForumScreen({ isEn, patient={} }) {
       <div style={{padding:'0 16px 10px'}}>
         {activeProduct.image_url&&<img src={activeProduct.image_url} alt="" style={{width:'100%',height:140,objectFit:'cover',borderRadius:'12px',marginBottom:'12px'}}/>}
         <div style={{fontSize:'17px',fontWeight:700}}>{activeProduct.canonical_name}</div>
-        {activeProduct.forum_brands&&<div style={{display:'flex',alignItems:'center',gap:'8px',marginTop:'6px',padding:'8px 10px',background:C.amberLight,borderRadius:'10px'}}>
-          {activeProduct.forum_brands.logo_url
-            ? <img src={activeProduct.forum_brands.logo_url} alt="" style={{width:26,height:26,borderRadius:'50%',objectFit:'cover',flexShrink:0}}/>
+        {isProductSponsored(activeProduct)&&<div style={{display:'flex',alignItems:'center',gap:'8px',marginTop:'6px',padding:'8px 10px',background:C.amberLight,borderRadius:'10px'}}>
+          {activeProduct.sponsor_thumbnail_url
+            ? <img src={activeProduct.sponsor_thumbnail_url} alt="" style={{width:26,height:26,borderRadius:'50%',objectFit:'cover',flexShrink:0}}/>
             : <div style={{width:26,height:26,borderRadius:'50%',background:'#fff',flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',color:C.amber,fontWeight:700}}>{'◇'}</div>}
           <div style={{minWidth:0}}>
-            <div style={{fontSize:'11px',color:C.amber,fontWeight:600}}>{isEn?'Sponsored by':'贊助商'} {activeProduct.forum_brands.name}{activeProduct.forum_brands.verified&&<span title={isEn?'Verified brand':'已驗證品牌'}> ✓</span>}</div>
-            {activeProduct.forum_brands.short_bio&&<div style={{fontSize:'10.5px',color:C.textSub,marginTop:'1px'}}>{activeProduct.forum_brands.short_bio}</div>}
+            <div style={{fontSize:'11px',color:C.amber,fontWeight:600}}>{isEn?'Sponsored by':'贊助商'} {activeProduct.sponsor_name||(isEn?'a Medsa partner':'Medsa合作夥伴')}</div>
+            {activeProduct.sponsor_description&&<div style={{fontSize:'10.5px',color:C.textSub,marginTop:'1px'}}>{activeProduct.sponsor_description}</div>}
           </div>
         </div>}
         {activeProduct.rating_count>0&&<div style={{fontSize:'12px',color:'#d4a017',marginTop:'4px'}}>{'★'.repeat(Math.round(activeProduct.rating_sum/activeProduct.rating_count))}{'☆'.repeat(5-Math.round(activeProduct.rating_sum/activeProduct.rating_count))} <span style={{color:C.textMuted}}>{(activeProduct.rating_sum/activeProduct.rating_count).toFixed(1)} ({activeProduct.rating_count})</span></div>}
@@ -5166,9 +5172,9 @@ function ForumScreen({ isEn, patient={} }) {
             {p.image_url&&<img src={p.image_url} alt="" style={{width:44,height:44,objectFit:'cover',borderRadius:'8px',flexShrink:0}}/>}
             <div style={{flex:1}}>
               <div style={{fontSize:'13px',fontWeight:600}}>{p.canonical_name}</div>
-              {p.forum_brands&&<div style={{display:'flex',alignItems:'center',gap:'4px',marginTop:'2px'}}>
-                {p.forum_brands.logo_url&&<img src={p.forum_brands.logo_url} alt="" style={{width:14,height:14,borderRadius:'50%',objectFit:'cover'}}/>}
-                <span style={{fontSize:'10px',color:C.amber,fontWeight:600}}>{isEn?'Sponsored by':'贊助商'} {p.forum_brands.name}{p.forum_brands.verified?' ✓':''}</span>
+              {isProductSponsored(p)&&<div style={{display:'flex',alignItems:'center',gap:'4px',marginTop:'2px'}}>
+                {p.sponsor_thumbnail_url&&<img src={p.sponsor_thumbnail_url} alt="" style={{width:14,height:14,borderRadius:'50%',objectFit:'cover'}}/>}
+                <span style={{fontSize:'10px',color:C.amber,fontWeight:600}}>{isEn?'Sponsored by':'贊助商'} {p.sponsor_name||(isEn?'a Medsa partner':'Medsa合作夥伴')}</span>
               </div>}
               {p.rating_count>0&&<div style={{fontSize:'11px',color:'#d4a017',marginTop:'2px'}}>{'★'} {(p.rating_sum/p.rating_count).toFixed(1)} <span style={{color:C.textMuted}}>({p.rating_count})</span></div>}
             </div>
