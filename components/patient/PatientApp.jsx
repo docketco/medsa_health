@@ -3271,6 +3271,28 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   const __theme = useContext(ThemeContext)
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
+
+  // Real request: sync Calendar to the patient's own phone/Calendar app,
+  // not just view it inside Medsa. A subscribed feed URL (same shape as
+  // emergency_card_token's public, token-authenticated read-only link)
+  // keeps itself current automatically - a reschedule or a newly added
+  // event just shows up next time the device polls it, unlike a one-off
+  // exported file the patient would have to re-download by hand.
+  const [syncOpen,setSyncOpen]=useState(false)
+  const [feedToken,setFeedToken]=useState(patient?.calendar_feed_token||null)
+  const [creatingToken,setCreatingToken]=useState(false)
+  useEffect(() => { setFeedToken(patient?.calendar_feed_token||null) }, [patient?.calendar_feed_token])
+  async function openSync() {
+    setSyncOpen(true)
+    if (feedToken || !patient?.id) return
+    setCreatingToken(true)
+    const token = crypto.randomUUID().replace(/-/g,'')
+    await supabase.from('patients').update({ calendar_feed_token: token }).eq('id', patient.id)
+    setFeedToken(token)
+    setCreatingToken(false)
+    onReload?.()
+  }
+  const feedUrl = (typeof window!=='undefined' && feedToken) ? `${window.location.origin}/api/public/calendar_feed?t=${feedToken}` : null
   const activeMedications = medications.filter(isMedicationActive)
   const withoutAlarm = activeMedications.filter(m=>!m.alarm_enabled)
   const activeMedsWithAlarm = activeMedications.filter(m=>m.alarm_enabled||m.alarm_time)
@@ -3450,6 +3472,24 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
             )
           })}
         </div>
+      </div>
+      <div style={{padding:'12px 16px 0'}}>
+        {!syncOpen
+          ? <div onClick={openSync} style={{fontSize:'12px',color:__theme.accent,fontWeight:600,cursor:'pointer',display:'flex',alignItems:'center',gap:'6px'}}><span>📲</span>{isEn?'Sync to your phone\'s calendar':'同步至手機日曆'}</div>
+          : <Card style={{padding:'14px 16px'}}>
+              <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?"Sync to your phone's calendar":'同步至手機日曆'}</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Subscribe once and this calendar stays current on your phone automatically - new appointments, reschedules, and events you add here all show up without you having to re-export anything.":'一次訂閱後,此日曆將自動於手機上保持最新 - 新預約、改期及您在此新增的事項都會自動顯示,毋須重新匯出。'}</div>
+              {creatingToken&&<div style={{fontSize:'12px',color:C.textMuted,padding:'8px 0'}}>{isEn?'Setting up…':'設定中…'}</div>}
+              {feedUrl&&<>
+                <a href={feedUrl.replace(/^https?:/,'webcal:')} style={{display:'block',textAlign:'center',width:'100%',boxSizing:'border-box',padding:'10px',background:__theme.accent,color:'#fff',borderRadius:'8px',fontSize:'13px',fontWeight:600,textDecoration:'none',marginBottom:'8px'}}>{isEn?'Subscribe (iPhone / Mac)':'訂閱（iPhone / Mac）'}</a>
+                <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+                  <input readOnly value={feedUrl} onClick={e=>e.target.select()} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'11px',color:C.textSub}}/>
+                  <Btn onClick={()=>navigator.clipboard?.writeText(feedUrl)}>{isEn?'Copy':'複製'}</Btn>
+                </div>
+                <div style={{fontSize:'10.5px',color:C.textMuted,lineHeight:1.5}}>{isEn?'Android / Google Calendar / Outlook: copy the link above, then use "Add calendar → From URL" in your calendar app.':'Android / Google日曆 / Outlook：複製上方連結,然後於您的日曆應用程式中使用「新增日曆→透過URL」功能。'}</div>
+              </>}
+              <Btn style={{width:'100%',marginTop:'10px'}} onClick={()=>setSyncOpen(false)}>{isEn?'Close':'關閉'}</Btn>
+            </Card>}
       </div>
       <SecLabel>{isSameDay(selectedDate,today) ? (isEn?"Today's appointments":'今天的預約') : selectedDate.toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</SecLabel>
       {cancelledMsg&&<div style={{margin:'0 16px 10px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accent}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:__theme.accent}}>{'✓'} {cancelledMsg}</div>}
@@ -9623,11 +9663,39 @@ function BumpCohortScreen({ isEn, patient={} }) {
   )
 }
 
-function PrescriptionsScreen({ isEn, medications=[], onNav }) {
+function PrescriptionsScreen({ isEn, medications=[], onNav, patient={}, onReload }) {
   const __theme = useContext(ThemeContext)
   const [drugInfoFor,setDrugInfoFor]=useState(null) // holds {name, effects, intake_info, precautions} | 'loading' | 'none'
   const [drugSearch,setDrugSearch]=useState('')
   const [drugSearchResults,setDrugSearchResults]=useState([])
+  // Same permanently-read-only guard every other self-entry feature in
+  // this app uses (KidsGrowthScreen, allergies, etc.) - an adult-transfer
+  // profile over a year past 18 with no choice made can't add new data.
+  const isReadOnly = !!patient.pending_deletion_at && (Date.now() - new Date(patient.pending_deletion_at).getTime() >= 30*86400000)
+  // Real request: let ANY patient log their own supplements/OTC stuff
+  // they're taking, not just something gated behind a paid tier - there
+  // was no self-entry here at all before, only clinic-prescribed rows.
+  // Reuses the medications table (so the existing Calendar reminder/
+  // alarm system just works for these too) with reported_by distinguishing
+  // them, same pattern as self-reported allergies/family history elsewhere.
+  const [suppForm,setSuppForm]=useState({ name:'', dosage:'', frequency:'' })
+  const [savingSupp,setSavingSupp]=useState(false)
+  async function addSupplement() {
+    if (!suppForm.name.trim() || !patient?.id || isReadOnly) return
+    setSavingSupp(true)
+    await supabase.from('medications').insert({
+      patient_id: patient.id, medication_name: suppForm.name.trim(), dosage: suppForm.dosage.trim()||null,
+      frequency: suppForm.frequency.trim()||null, reported_by:'patient_reported', active:true,
+    })
+    setSuppForm({ name:'', dosage:'', frequency:'' })
+    setSavingSupp(false)
+    onReload?.()
+  }
+  async function deleteSupplement(id) {
+    if (isReadOnly) return
+    await supabase.from('medications').delete().eq('id', id)
+    onReload?.()
+  }
 
   async function searchDrugRef(term) {
     if (!term.trim()) { setDrugSearchResults([]); return }
@@ -9656,7 +9724,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
   const hasLiveMeds = liveMedications.length > 0
   return (
     <div style={{background:C.beige,flex:1}}>
-      <SecLabel>{isEn?'Active prescriptions':'有效處方'}</SecLabel>
+      <SecLabel>{isEn?'Active medications & supplements':'目前藥物及保健品'}</SecLabel>
       {(hasLiveMeds ? liveMedications.map((m,idx)=>({
         raw:m,
         name:`${m.medication_name} ${m.dosage||''}`.trim(),
@@ -9670,19 +9738,34 @@ function PrescriptionsScreen({ isEn, medications=[], onNav }) {
           <div style={{padding:'14px 16px',display:'flex',gap:'12px',alignItems:'flex-start'}}>
             <div style={{width:40,height:40,borderRadius:'12px',background:rx.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:__theme.accent,flexShrink:0}}>{rx.icon}</div>
             <div style={{flex:1}}>
-              <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
+              <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                <div style={{fontSize:'14px',fontWeight:500}}>{rx.name}</div>
+                {rx.raw.reported_by==='patient_reported'&&<span style={{fontSize:'9px',padding:'1px 6px',borderRadius:'20px',background:'rgba(212,160,23,0.15)',color:C.amber,fontWeight:600,flexShrink:0}}>{isEn?'Self-reported':'自行申報'}</span>}
+              </div>
               <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>{rx.dose}</div>
-              <div style={{fontSize:'11px',color:__theme.accent,marginTop:'4px'}}>{rx.dr}</div>
+              {rx.raw.reported_by!=='patient_reported'&&<div style={{fontSize:'11px',color:__theme.accent,marginTop:'4px'}}>{rx.dr}</div>}
               <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{rx.refills}</div>
             </div>
           </div>
           <div style={{borderTop:`0.5px solid ${C.border}`,padding:'10px 16px',display:'flex',gap:'8px'}}>
             <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>showDrugInfo(rx.raw)}>{isEn?'Drug info':'藥物資訊'}</Btn>
-            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onNav?.('doctors')}>{isEn?'Book a consultation':'預約診症'}</Btn>
+            {rx.raw.reported_by==='patient_reported'
+              ? <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={isReadOnly} onClick={()=>deleteSupplement(rx.raw.id)}>{isEn?'Remove':'移除'}</Btn>
+              : <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>onNav?.('doctors')}>{isEn?'Book a consultation':'預約診症'}</Btn>}
           </div>
         </Card>
       ))}
-      {!hasLiveMeds&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No active prescriptions on file.':'暫無有效處方記錄。'}</div>}
+      {!hasLiveMeds&&<div style={{textAlign:'center',padding:'20px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No active medications or supplements on file.':'暫無目前藥物或保健品記錄。'}</div>}
+      <Card style={{padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'6px'}}>{isEn?'+ Add a supplement or medication':'+ 新增保健品或藥物'}</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Track anything you're taking on your own - vitamins, supplements, over-the-counter medication - even if it wasn't prescribed here. Open to every patient, self-reported and labelled as such wherever it shows.":'記錄您自行服用的任何產品 - 維他命、保健品、非處方藥物 - 即使並非由此處方。所有患者均可使用,並會於所有顯示位置標示為自行申報。'}</div>
+        <input value={suppForm.name} onChange={e=>setSuppForm({...suppForm,name:e.target.value})} placeholder={isEn?'Name (e.g. Vitamin D, Fish Oil)':'名稱（如維他命D、魚油）'} style={{width:'100%',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px',marginBottom:'8px'}}/>
+        <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
+          <input value={suppForm.dosage} onChange={e=>setSuppForm({...suppForm,dosage:e.target.value})} placeholder={isEn?'Dosage (optional)':'劑量（選填）'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+          <input value={suppForm.frequency} onChange={e=>setSuppForm({...suppForm,frequency:e.target.value})} placeholder={isEn?'Frequency (optional)':'頻率（選填）'} style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'13px'}}/>
+        </div>
+        <Btn variant="primary" style={{width:'100%'}} disabled={savingSupp||!suppForm.name.trim()||isReadOnly} onClick={addSupplement}>{savingSupp?(isEn?'Saving…':'儲存中…'):(isEn?'Add':'新增')}</Btn>
+      </Card>
       <SecLabel>{isEn?'Drug reference':'藥物參考'}</SecLabel>
       <Card style={{padding:'14px 16px'}}>
         <div style={{position:'relative',display:'flex',alignItems:'center'}}>
@@ -11863,7 +11946,7 @@ export default function PatientApp({ liveData={} }) {
         {screen==='ingredientscan'&&<IngredientScanScreen isEn={isEn} patient={patient}/>}
         {screen==='calendar'&&<CalendarScreen isEn={isEn} appointments={liveAppointments} medications={liveMedications} records={liveRecords} patient={patient} onCancelled={loadRealData} onReload={loadRealData} onViewRecord={(id)=>{setDeepLinkRecordId(id);setScreen('records')}}/>}
         {screen==='insurance'&&<InsuranceScreen isEn={isEn} claims={liveClaims} patient={patient} records={liveRecords} deepLinkInquiryId={deepLinkInquiryId} onConsumeInquiryDeepLink={()=>setDeepLinkInquiryId(null)}/>}
-        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen}/>}
+        {screen==='prescriptions'&&<PrescriptionsScreen isEn={isEn} medications={liveMedications} onNav={setScreen} patient={patient} onReload={loadRealData}/>}
         {screen==='kidsgrowth'&&<KidsGrowthScreen isEn={isEn} patient={patient} onNav={setScreen} onSwitchToPatient={switchToPatient} onPatientUpdated={async()=>{
           if (!signedInPatient?.id) return
           const { data } = await supabase.from('patients').select('*').eq('id', signedInPatient.id).maybeSingle()
