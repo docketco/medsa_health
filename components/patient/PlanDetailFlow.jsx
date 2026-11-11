@@ -332,8 +332,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   const [vitals, setVitals] = useState(null)
   const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
   const [savedDeclaration, setSavedDeclaration] = useState(null) // null until loaded, or {conditions, consentHistoryShared, createdAt, expiresAt}
-  const [agentRequestSent, setAgentRequestSent] = useState(false)
-  const [requestingAgent, setRequestingAgent] = useState(false)
 
   // Real gap found live-testing: this is a long page (wizard -> result),
   // so landing on the result while still scrolled down from the
@@ -409,25 +407,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
     runMatch(conditions, consentHistoryShared, mode)
   }
 
-  // Real gap: re-running the full match on "talk to an agent about this
-  // instead" re-showed the exact same decline screen (deterministic
-  // engine, same declaration) - looked like the button did nothing, even
-  // though a real agent-mode inquiry was created behind it. This posts
-  // directly and shows a plain confirmation instead of re-rendering the
-  // result.
-  async function requestAgentForDecline() {
-    if (!savedDeclaration) return
-    setRequestingAgent(true)
-    try {
-      await fetch('/api/patient/match_plan_suitability', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: 'agent', consentHistoryShared: patient.history_matching_enabled !== false, declaredConditions: savedDeclaration.conditions }),
-      })
-      setAgentRequestSent(true)
-    } finally {
-      setRequestingAgent(false)
-    }
-  }
 
   async function handlePurchase() {
     if (!declarationAck) return
@@ -577,9 +556,11 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>What now?</div>
             <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'4px'}}>This plan's own exclusion rule means it can't be sold automatically with what's declared above - that doesn't mean every plan is off the table.</div>
             <AlternativePlansPanel inquiryId={result.inquiryId} onViewPlan={onViewPlan}/>
-            {mode==='auto'&&(agentRequestSent
-              ? <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginTop:'8px'}}>✓ Sent - an agent will review this personally and reach out. Check "My inquiries".</div>
-              : <Btn style={{width:'100%',marginTop:'8px'}} disabled={requestingAgent} onClick={requestAgentForDecline}>{requestingAgent?'Sending…':'Talk to an agent about this instead'}</Btn>)}
+            {/* Automatic now (pages/api/patient/match_plan_suitability.js
+                already assigns an agent server-side the moment a decline
+                comes back) - nothing left to tap, just confirming it
+                already happened. */}
+            {mode==='auto'&&<div style={{fontSize:'12px',color:C.green,fontWeight:600,marginTop:'8px'}}>✓ An agent has already been assigned to help you look at other options - check "My inquiries".</div>}
           </Card>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
         </div>

@@ -109,6 +109,8 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'plans',icon:'▣',label:'Your plans',sub:'Add, edit, and bulk-import your own plan catalog'},
           {key:'verify',icon:'✓',label:'Verify',sub:'Tell Medsa how to confirm a policyholder against your own records'},
           {key:'claims',icon:'◇',label:'Claims',sub:'Claims synced back from your own system'},
+          {key:'staff',icon:'◉',label:'Underwriters & claims approvers',sub:'Onboard who reviews applications and who decides payouts'},
+          {key:'roster',icon:'▥',label:'Policy roster',sub:'Every patient and plan on file under your institution'},
           {key:'ads',icon:'⬡',label:'Promote your plans',sub:'Sponsor a plan in patient search and AI recommendations'},
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
@@ -1538,6 +1540,202 @@ function PolicyVerificationManager({ company }) {
           <Btn variant="navy" style={{width:'100%'}} onClick={()=>saveMode('api')} disabled={saving||!apiUrl.trim()}>{saving?'Saving…':'Save endpoint'}</Btn>
         </Card>
       </>}
+    </div>
+  )
+}
+
+// ── STAFF (underwriters + claims approvers) ──────────────────────────────────
+// Two real, separate roles the insurer onboards themselves - underwriting
+// (should this applicant be accepted) and claims approval (should this
+// claim be paid), your own call that these are different jobs even when
+// the same person might hold both accounts. Trimmed out of the old,
+// larger TeamsAndAgents screen (teams/bulk-agent-CSV dropped along with
+// the team concept itself, see TransferRequestModal's own header comment)
+// - this is just the two onboarding sections that were already real and
+// working, finally given a way back into the nav.
+function StaffScreen({ company }) {
+  const [underwriters,setUnderwriters]=useState([])
+  const [approvers,setApprovers]=useState([])
+  const [loading,setLoading]=useState(true)
+  const [showAddUnderwriter,setShowAddUnderwriter]=useState(false)
+  const [underwriterForm,setUnderwriterForm]=useState({ fullName:'', email:'' })
+  const [savingUnderwriter,setSavingUnderwriter]=useState(false)
+  const [underwriterNotice,setUnderwriterNotice]=useState(null)
+  const [underwriterCredentialNotice,setUnderwriterCredentialNotice]=useState(null)
+  const [showAddApprover,setShowAddApprover]=useState(false)
+  const [approverForm,setApproverForm]=useState({ fullName:'', email:'' })
+  const [savingApprover,setSavingApprover]=useState(false)
+  const [approverNotice,setApproverNotice]=useState(null)
+  const [approverCredentialNotice,setApproverCredentialNotice]=useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data: underwriterRows } = await supabase.from('insurance_underwriters')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setUnderwriters(underwriterRows||[])
+    const { data: approverRows } = await supabase.from('insurance_claims_approvers')
+      .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
+    setApprovers(approverRows||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id])
+
+  async function handleAddUnderwriter() {
+    if (!underwriterForm.fullName.trim()||!underwriterForm.email.trim()) return
+    setSavingUnderwriter(true); setUnderwriterNotice(null); setUnderwriterCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_underwriter', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...underwriterForm, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setUnderwriterNotice(data.message||'Could not add underwriter.'); setSavingUnderwriter(false); return }
+      setUnderwriterCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setUnderwriterForm({ fullName:'', email:'' })
+      setShowAddUnderwriter(false)
+      load()
+    } finally {
+      setSavingUnderwriter(false)
+    }
+  }
+
+  async function handleAddApprover() {
+    if (!approverForm.fullName.trim()||!approverForm.email.trim()) return
+    setSavingApprover(true); setApproverNotice(null); setApproverCredentialNotice(null)
+    try {
+      const res = await fetch('/api/insurer/onboard_claims_approver', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ ...approverForm, institutionId: company.institutionRefId }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setApproverNotice(data.message||'Could not add claims approver.'); setSavingApprover(false); return }
+      setApproverCredentialNotice({ password: data.tempPassword, emailSent: data.emailSent })
+      setApproverForm({ fullName:'', email:'' })
+      setShowAddApprover(false)
+      load()
+    } finally {
+      setSavingApprover(false)
+    }
+  }
+
+  if (loading) return <div style={{textAlign:'center',padding:'40px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>
+
+  return (
+    <div style={{padding:'16px'}}>
+      <div style={{background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.green,marginBottom:'4px'}}>Underwriters - review applications</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>Reviews flagged/clean-signoff applications and agent-submitted policies in the Underwriter Portal (/underwriter-portal) - never sees them here.</div>
+        {underwriters.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - applications wait here until someone can review them.</div>}
+        {underwriters.map(u=>(
+          <div key={u.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{u.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{u.medsa_id}</span>
+          </div>
+        ))}
+        {underwriterNotice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{underwriterNotice}</div>}
+        {underwriterCredentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.green}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.green,marginBottom:'6px'}}>✓ Underwriter account created</div>
+          {underwriterCredentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{underwriterCredentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /underwriter-portal.</div>
+        </div>}
+        {showAddUnderwriter ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={underwriterForm.fullName} onChange={e=>setUnderwriterForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={underwriterForm.email} onChange={e=>setUnderwriterForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAddUnderwriter(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAddUnderwriter} disabled={savingUnderwriter||!underwriterForm.fullName.trim()||!underwriterForm.email.trim()}>{savingUnderwriter?'Saving…':'Add underwriter'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddUnderwriter(true)}>+ Add an underwriter</Btn>
+        )}
+      </div>
+
+      <div style={{background:C.amberLight,border:`1px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.amber,marginBottom:'4px'}}>Claims approvers - decide payouts</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>A different role from underwriting - decides whether to pay a submitted claim, in the Claims Portal (/claims-portal), never here.</div>
+        {approvers.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'8px'}}>None yet - claims wait here until someone can review them.</div>}
+        {approvers.map(a=>(
+          <div key={a.id} style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',display:'flex',justifyContent:'space-between',marginBottom:'6px'}}>
+            <span style={{fontSize:'13px'}}>{a.full_name}</span>
+            <span style={{fontSize:'11px',color:C.textMuted}}>{a.medsa_id}</span>
+          </div>
+        ))}
+        {approverNotice&&<div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{approverNotice}</div>}
+        {approverCredentialNotice&&<div style={{background:'#fff',border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'14px',marginBottom:'10px'}}>
+          <div style={{fontSize:'13px',fontWeight:600,color:C.amber,marginBottom:'6px'}}>✓ Claims approver account created</div>
+          {approverCredentialNotice.emailSent
+            ? <div style={{fontSize:'12px',color:C.textSub}}>Login details emailed to them.</div>
+            : <div style={{fontSize:'12px',color:C.textSub}}>Temp password: <strong>{approverCredentialNotice.password}</strong></div>}
+          <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Relay this directly - not shown again. They sign in at /claims-portal.</div>
+        </div>}
+        {showAddApprover ? (
+          <div style={{background:'#fff',borderRadius:'10px',padding:'14px'}}>
+            <input value={approverForm.fullName} onChange={e=>setApproverForm(f=>({...f,fullName:e.target.value}))} placeholder="Full name" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <input value={approverForm.email} onChange={e=>setApproverForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setShowAddApprover(false)}>Cancel</Btn>
+              <Btn variant="navy" style={{flex:1}} onClick={handleAddApprover} disabled={savingApprover||!approverForm.fullName.trim()||!approverForm.email.trim()}>{savingApprover?'Saving…':'Add claims approver'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddApprover(true)}>+ Add a claims approver</Btn>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── POLICY ROSTER (every patient + plan bought under this insurer) ───────────
+// The "storage" the insurer asked for - a live record of every policy
+// actually on file, patient and plan both, not just the plans themselves
+// (that's the Plans tab) or claims against them (Claims tab). Read-only -
+// Medsa doesn't edit a policy from here, an agent does that in their own
+// portal; this is the insurer's own oversight view.
+function PolicyRosterScreen({ company }) {
+  const [policies,setPolicies]=useState([])
+  const [search,setSearch]=useState('')
+  const [loading,setLoading]=useState(true)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('agent_policies')
+      .select('id, patient_name, plan_name, policy_number, status, premium, start_date, renewal_date, underwriter_status, agents(full_name)')
+      .eq('institution_id', company.institutionRefId).order('created_at', { ascending: false })
+    setPolicies(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [company.id])
+
+  const filtered = policies.filter(p => {
+    const q = search.trim().toLowerCase()
+    if (!q) return true
+    return [p.patient_name, p.plan_name, p.policy_number].filter(Boolean).some(s => s.toLowerCase().includes(q))
+  })
+
+  return (
+    <div style={{padding:'16px'}}>
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by patient, plan, or policy number…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:'#fff',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'14px'}}/>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{policies.length===0?'No policies on file yet.':'No policies match your search.'}</div>}
+      {!loading&&filtered.map(p=>(
+        <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'6px'}}>
+            <div>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.patient_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name} - {p.policy_number||'No policy number yet'}</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>Written by {p.agents?.full_name||'an agent'}</div>
+            </div>
+            <span style={{fontSize:'10px',fontWeight:600,padding:'3px 9px',borderRadius:'20px',background:p.underwriter_status==='approved'?C.greenLight:p.underwriter_status==='declined'?C.redLight:C.amberLight,color:p.underwriter_status==='approved'?C.green:p.underwriter_status==='declined'?C.red:C.amber,whiteSpace:'nowrap'}}>
+              {p.underwriter_status==='approved'?'Approved':p.underwriter_status==='declined'?'Declined':'Pending'}
+            </span>
+          </div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>HK${p.premium}/mo · {p.status}{p.renewal_date?` · renews ${new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+        </Card>
+      ))}
     </div>
   )
 }
@@ -3027,7 +3225,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // was left at, landing partway down a page that looks blank/broken.
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',underwriters:'Underwriters'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',staff:'Underwriters & Claims',roster:'Policy roster'}
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
   // is - swapped for shapes that at least gesture at the real meaning
@@ -3074,7 +3272,12 @@ export default function InsuranceApp({ company, onLogout }) {
   // webhook pushes documents out) - no insurer ever logs into Medsa for
   // it. This whole file is left defined/untouched (frozen, not deleted)
   // in case a real reason to bring a human portal back ever comes up.
-  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'ads',icon:'✦',label:'Promote'}]
+  // Underwriters and the policy roster are back in the nav, per your call
+  // reversing the older "Underwriters stays off - that's carrier work"
+  // decision - it IS carrier work, which is exactly why the carrier
+  // needs a way to staff and see it themselves, not why it should stay
+  // hidden. Claims approvers are new, sharing the same Staff screen.
+  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'staff',icon:'◉',label:'Staff'},{key:'roster',icon:'▥',label:'Policies'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
@@ -3110,7 +3313,8 @@ export default function InsuranceApp({ company, onLogout }) {
             a registered plan the same way a partnered one sponsors a
             marketplace listing, at the same per-month rate. */}
         {screen==='ads'&&<SponsoredListings company={company}/>}
-        {false&&screen==='underwriters'&&<UnderwritersManager company={company}/>}
+        {screen==='staff'&&<StaffScreen company={company}/>}
+        {screen==='roster'&&<PolicyRosterScreen company={company}/>}
       </div>
       <div style={{background:C.cream,borderTop:`0.5px solid ${C.border}`,display:'flex',padding:'8px 6px 6px',gap:'2px',position:'sticky',bottom:0}}>
         {navItems.map(item=>{

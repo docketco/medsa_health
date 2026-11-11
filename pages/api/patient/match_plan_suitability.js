@@ -153,6 +153,27 @@ export default async function handler(req, res) {
       })
     }
   }
+  // Real gap: a straight automated decline (the engine itself, no
+  // underwriter ever involved - see underwriter_status above, which stays
+  // null for a declined verdict) used to dead-end on a "what now?" screen
+  // with a button the patient had to notice and tap. Same automatic
+  // hand-off a declined-after-review case gets from
+  // pages/api/underwriter/decide.js now happens here too, so "declined"
+  // always means "an agent is already on it", never a dead end.
+  if (!existingOpen && result.verdict === 'declined' && mode === 'auto') {
+    const agent = await assignInquiryToNextAgent(supabase, { inquiryId: inquiry.id, companyName: plan.company_name })
+    if (agent?.email) {
+      await sendEmail({
+        to: agent.email, subject: `New plan inquiry - ${plan.plan_name}`,
+        html: `<p>A declined automated application for <strong>${plan.plan_name}</strong> has been assigned to you to help find an alternative.</p><p>Open the agent portal's claimed inquiries to see it.</p>`,
+      })
+    }
+    await supabase.from('inquiry_messages').insert({
+      inquiry_id: inquiry.id, sender_type: 'agent', sender_name: 'Medsa',
+      body: `This plan couldn't be approved automatically with what's declared - an agent has been assigned to help you look at other options.`,
+      read_by_patient: false, read_by_agent: true,
+    })
+  }
 
   // Logs every auto-decision, not just flagged ones - an insurer's audit
   // log (medsa-admin, aq2-16) should show what the matching engine
