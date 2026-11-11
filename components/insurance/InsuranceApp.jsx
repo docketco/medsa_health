@@ -283,6 +283,47 @@ function CustomQuestionsManager({ company, planId }) {
   )
 }
 
+// Self-serve carve-out from the otherwise Medsa-only Plan Manager form
+// (readOnly for insurers - see PlanManager's own header comment): Medsa
+// is only ever responsible for wiring the decision up, never for writing
+// or picking the actual underwriting questions/criteria, so this one
+// piece stays insurer-editable even when the rest of the plan is locked.
+// Reads/writes insurance_plans directly (self_declare_enabled,
+// requires_agent) rather than going through PlanManager's own form
+// state, so it works whether or not that form is even reachable.
+function SelfDeclareManager({ company, plan, onChanged }) {
+  const [enabled,setEnabled]=useState(!!plan.self_declare_enabled)
+  const [requiresAgent,setRequiresAgent]=useState(!!plan.requires_agent)
+  const [saving,setSaving]=useState(false)
+
+  async function save(nextEnabled, nextRequiresAgent) {
+    setSaving(true)
+    await supabase.from('insurance_plans').update({ self_declare_enabled: nextEnabled, requires_agent: nextRequiresAgent }).eq('id', plan.id)
+    setSaving(false)
+    onChanged?.()
+  }
+
+  return (
+    <div onClick={e=>e.stopPropagation()}>
+      <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px',cursor:'pointer'}}>
+        <input type="checkbox" checked={enabled} disabled={saving} onChange={e=>{const v=e.target.checked; setEnabled(v); save(v, requiresAgent)}}/>
+        <div>
+          <div style={{fontSize:'12px',color:C.text}}>Enable self-serve health declaration &amp; instant quote</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>Off by default for every plan. On: patients can declare health conditions themselves and get an instant automated verdict instead of only "Talk to an agent". Medsa only wires this up - the questions and what counts as a flag are entirely yours to set below.</div>
+        </div>
+      </label>
+      {enabled&&<label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px',cursor:'pointer'}}>
+        <input type="checkbox" checked={requiresAgent} disabled={saving} onChange={e=>{const v=e.target.checked; setRequiresAgent(v); save(enabled, v)}}/>
+        <div>
+          <div style={{fontSize:'12px',color:C.text}}>But still require talking to an agent</div>
+          <div style={{fontSize:'11px',color:C.textMuted}}>Keeps the self-serve path hidden for this plan specifically, even with the account-level setting above on.</div>
+        </div>
+      </label>}
+      {enabled&&<CustomQuestionsManager company={company} planId={plan.id}/>}
+    </div>
+  )
+}
+
 // Reusable local-preview + upload widget. Used for a plan's own logo
 // (falls back to the company's when unset) and could be reused anywhere
 // else a single-image field is needed.
@@ -388,6 +429,7 @@ export function PlanManager({ company, readOnly=false }) {
   const [descriptionError,setDescriptionError]=useState(null)
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
+  const [expandedDeclareId,setExpandedDeclareId]=useState(null)
   // Bulk CSV plan import - requested live-testing: a platform partner's
   // whole real plan catalog should be able to land on Medsa in one pass,
   // not typed in one at a time through the form above. Same
@@ -828,6 +870,11 @@ export function PlanManager({ company, readOnly=false }) {
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No covered categories set - claims won\'t match against this plan'}</div>
           <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
           {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
+          {/* Available whether or not the rest of this form is readOnly -
+              see SelfDeclareManager's own header comment for why this one
+              piece is always insurer-editable. */}
+          <div onClick={e=>{e.stopPropagation();setExpandedDeclareId(expandedDeclareId===p.id?null:p.id)}} style={{fontSize:'11px',color:C.blue,marginTop:'6px'}}>{expandedDeclareId===p.id?'▾':'▸'} Self-declare health questionnaire</div>
+          {expandedDeclareId===p.id&&<SelfDeclareManager company={company} plan={p} onChanged={load}/>}
         </Card>
       ))}
     </div>

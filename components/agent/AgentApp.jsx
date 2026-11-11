@@ -170,31 +170,39 @@ function OverviewScreen({ agent, policies, inquiries }) {
 }
 
 // ── POLICIES ──────────────────────────────────────────────────────────────
-// Agent-initiated: "I want to hand this client to a teammate" - distinct
+// Agent-initiated: "I want to hand this client to someone else" - distinct
 // from the patient-initiated switch_requested_at flag elsewhere (that one
 // creates a fresh inquiry while this policy keeps running uninterrupted;
-// this is the agent's own side of a handoff, and needs the team lead to
-// approve it before the policy's agent_id actually changes).
+// this is the agent's own side of a handoff). Used to be scoped to a
+// teammate with the team lead approving it - team structure is gone now
+// (Medsa doesn't organise agents under a whole insurer any more), so this
+// searches any agent on the platform by name, and the target agent
+// accepts/declines it themselves (see the "Transfer requests" section on
+// PoliciesScreen below) - no team-lead middleman.
 function TransferRequestModal({ policy, agent, onClose, onRequested }) {
-  const [teammates,setTeammates]=useState([])
-  const [toAgentId,setToAgentId]=useState('')
+  const [search,setSearch]=useState('')
+  const [results,setResults]=useState([])
+  const [toAgent,setToAgent]=useState(null)
   const [reason,setReason]=useState('')
   const [saving,setSaving]=useState(false)
 
   useEffect(() => {
-    if (!policy) return
-    supabase.from('agent_institution_appointments').select('agent_id, agents(id, full_name)')
-      .eq('team_id', agent.team_id).eq('status','active').neq('agent_id', agent.id)
-      .then(({data}) => setTeammates((data||[]).map(a=>a.agents).filter(Boolean)))
-  }, [policy, agent.team_id, agent.id])
+    if (!search.trim()) { setResults([]); return }
+    const t = setTimeout(() => {
+      supabase.from('agents').select('id, full_name, email, agent_type')
+        .ilike('full_name', `%${search.trim()}%`).neq('id', agent.id).limit(8)
+        .then(({data}) => setResults(data||[]))
+    }, 250)
+    return () => clearTimeout(t)
+  }, [search, agent.id])
 
   if (!policy) return null
 
   async function handleSubmit() {
+    if (!toAgent) return
     setSaving(true)
     await supabase.from('agent_client_transfer_requests').insert({
-      policy_id: policy.id, from_agent_id: agent.id, to_agent_id: toAgentId || null,
-      team_id: agent.team_id, reason: reason || null,
+      policy_id: policy.id, from_agent_id: agent.id, to_agent_id: toAgent.id, reason: reason || null,
     })
     setSaving(false)
     onRequested()
@@ -205,15 +213,24 @@ function TransferRequestModal({ policy, agent, onClose, onRequested }) {
       <div onClick={e=>e.stopPropagation()} style={{background:C.cream,borderRadius:'16px',width:'100%',maxWidth:400,padding:'24px'}}>
         <div style={{fontSize:'16px',fontWeight:700,marginBottom:'4px'}}>Request transfer</div>
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>{policy.patient_name} - {policy.plan_name}</div>
-        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Hand to (optional - leave blank for the team lead to pick)</div>
-        <select value={toAgentId} onChange={e=>setToAgentId(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'12px',boxSizing:'border-box'}}>
-          <option value="">Any teammate</option>
-          {teammates.map(t=><option key={t.id} value={t.id}>{t.full_name}</option>)}
-        </select>
+        <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Hand to</div>
+        {toAgent
+          ? <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',marginBottom:'12px'}}>
+              <span style={{fontSize:'13px'}}>{toAgent.full_name}</span>
+              <span onClick={()=>setToAgent(null)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer'}}>Change</span>
+            </div>
+          : <>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search agents by name…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
+              {results.length>0&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'12px',overflow:'hidden'}}>
+                {results.map(r=>(
+                  <div key={r.id} onClick={()=>{setToAgent(r);setResults([])}} style={{padding:'9px 12px',fontSize:'13px',cursor:'pointer',borderBottom:`0.5px solid ${C.border}`}}>{r.full_name} <span style={{color:C.textMuted,fontSize:'11px'}}>({r.agent_type})</span></div>
+                ))}
+              </div>}
+            </>}
         <textarea value={reason} onChange={e=>setReason(e.target.value)} placeholder="Reason (optional)" rows={2} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginBottom:'16px',boxSizing:'border-box',fontFamily:'inherit',resize:'none'}}/>
         <div style={{display:'flex',gap:'8px'}}>
           <Btn style={{flex:1}} onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" style={{flex:1}} onClick={handleSubmit} disabled={saving}>{saving?'Sending…':'Send request'}</Btn>
+          <Btn variant="primary" style={{flex:1}} onClick={handleSubmit} disabled={saving||!toAgent}>{saving?'Sending…':'Send request'}</Btn>
         </div>
       </div>
     </div>
@@ -227,6 +244,30 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [pushingId,setPushingId]=useState(null)
   const [pushNotice,setPushNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
+
+  // Incoming transfer requests addressed to THIS agent - decided by them
+  // directly now, no team-lead middleman (team structure is gone, see
+  // TransferRequestModal's own header comment).
+  const [incomingTransfers,setIncomingTransfers]=useState([])
+  const [decidingTransferId,setDecidingTransferId]=useState(null)
+  async function loadIncomingTransfers() {
+    const { data } = await supabase.from('agent_client_transfer_requests')
+      .select('*, agent_policies(patient_name, plan_name), from:from_agent_id(full_name)')
+      .eq('to_agent_id', agent.id).eq('status','pending').order('created_at',{ascending:false})
+    setIncomingTransfers(data||[])
+  }
+  useEffect(() => { loadIncomingTransfers() }, [agent.id])
+
+  async function decideIncomingTransfer(reqRow, approve) {
+    setDecidingTransferId(reqRow.id)
+    await supabase.from('agent_client_transfer_requests').update({
+      status: approve?'approved':'rejected', decided_at: new Date().toISOString(), decided_by_agent_id: agent.id,
+    }).eq('id', reqRow.id)
+    if (approve) await supabase.from('agent_policies').update({ agent_id: agent.id }).eq('id', reqRow.policy_id)
+    setDecidingTransferId(null)
+    loadIncomingTransfers()
+    onReload?.()
+  }
 
   // Write-back half of policy issuance - mirrors InsuranceAdminClaimsLog's
   // "Push to your system" for claims exactly, just for a newly-issued
@@ -268,6 +309,21 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
         <h2 style={{fontSize:'20px',fontWeight:700}}>Policies</h2>
         <Btn variant="primary" onClick={onNewPolicy}>+ Issue policy / quote</Btn>
       </div>
+      {incomingTransfers.length>0&&<div style={{marginBottom:'20px'}}>
+        <SecLabel>Transfer requests for you</SecLabel>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {incomingTransfers.map(r=>(
+            <Card key={r.id} style={{padding:'14px 16px'}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>From {r.from?.full_name||'another agent'}{r.reason?`: ${r.reason}`:''}</div>
+              <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,false)}>Decline</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,true)}>{decidingTransferId===r.id?'…':'Accept'}</Btn>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>}
       <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
         {[['all','All'],['quote','Quotes'],['active','Active'],['lapsed','Lapsed']].map(([k,l])=>(
           <div key={k} onClick={()=>setFilter(k)} style={{fontSize:'12px',padding:'7px 14px',borderRadius:'20px',cursor:'pointer',background:filter===k?C.green:C.card,color:filter===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
@@ -296,7 +352,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                 <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px'}}>Process it with the insurer, then confirm here once it's actually cancelled.</div>
                 <Btn style={{fontSize:'11px',padding:'6px 10px',marginTop:'8px'}} disabled={confirmingCancelId===p.id} onClick={()=>confirmCancellation(p)}>{confirmingCancelId===p.id?'Confirming…':'Confirm cancelled'}</Btn>
               </div>}
-              {agent.team_id&&<div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to teammate</Btn></div>}
+              <div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to another agent</Btn></div>
               <div style={{marginTop:'10px'}}>
                 {p.pushed_to_insurer_at
                   ? <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>{'✓'} Pushed to insurer {new Date(p.pushed_to_insurer_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
@@ -1247,7 +1303,6 @@ function PlanInquiriesScreen({ agent, onConvert }) {
   // here has no team gating at all - the old flat claim race still
   // applies unchanged. A plan that DOES have team authorizations can only
   // be won by a member of one of those teams, via team-confirm below.
-  const [planTeamAuth,setPlanTeamAuth]=useState({})
   const [loading,setLoading]=useState(true)
   const [claimingId,setClaimingId]=useState(null)
   const [claimNotice,setClaimNotice]=useState(null)
@@ -1308,57 +1363,10 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
     setConvertedInquiryIds(new Set((convertedRows||[]).map(r=>r.inquiry_id)))
 
-    // Real bug found live-testing: unclaimed used to be committed to state
-    // before this team-authorization data was ready, so a team-gated
-    // inquiry the agent isn't eligible for would render for one frame
-    // (planTeamAuth still empty, so isTeamGated read as false below) and
-    // then vanish the instant the real auth data landed - a visible
-    // flash-then-disappear on every refresh. Both are committed together
-    // now, so the list never shows something it's about to hide.
-    const planIds = [...new Set((unclaimedRows||[]).map(i=>i.plan_id).filter(Boolean))]
-    if (planIds.length>0) {
-      const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', planIds)
-      const byPlan = {}
-      for (const a of (auths||[])) (byPlan[a.plan_id] ||= []).push(a.team_id)
-      setPlanTeamAuth(byPlan)
-    } else {
-      setPlanTeamAuth({})
-    }
     setUnclaimed(unclaimedRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [agent.id])
-
-  // First team (among those authorized to sell this plan) to confirm
-  // wins the lead - same atomic race pattern as handleClaim below, just
-  // scoped to team_confirmed_by_team_id instead of claimed_by_agent_id.
-  // Once a team wins, its own assignment_mode decides the final agent
-  // immediately (confirmer/random) or leaves it for the team lead
-  // (manual) - see TeamLeadScreen's "Awaiting your assignment".
-  async function handleTeamConfirm(inquiry) {
-    if (!agent.team_id) return
-    setClaimingId(inquiry.id)
-    setClaimNotice(null)
-    const { data } = await supabase.from('plan_inquiries')
-      .update({ team_confirmed_by_team_id: agent.team_id, team_confirmed_at: new Date().toISOString(), confirmed_by_agent_id: agent.id })
-      .eq('id', inquiry.id).is('team_confirmed_by_team_id', null).select()
-    if (!data || data.length === 0) {
-      setClaimNotice('Another team already confirmed this inquiry first.')
-      setClaimingId(null); load(); return
-    }
-    const { data: team } = await supabase.from('insurance_teams').select('assignment_mode').eq('id', agent.team_id).maybeSingle()
-    if (team?.assignment_mode === 'confirmer') {
-      await supabase.from('plan_inquiries').update({ claimed_by_agent_id: agent.id, claimed_at: new Date().toISOString() }).eq('id', inquiry.id)
-    } else if (team?.assignment_mode === 'random') {
-      const { data: appts } = await supabase.from('agent_institution_appointments').select('agent_id').eq('team_id', agent.team_id).eq('status','active')
-      const memberIds = (appts||[]).map(a=>a.agent_id)
-      const pick = memberIds[Math.floor(Math.random()*memberIds.length)] || agent.id
-      await supabase.from('plan_inquiries').update({ claimed_by_agent_id: pick, claimed_at: new Date().toISOString() }).eq('id', inquiry.id)
-    }
-    // 'manual' leaves claimed_by_agent_id null - the team lead assigns it.
-    setClaimingId(null)
-    load()
-  }
 
   // Atomic first-come-first-served claim - the .is('claimed_by_agent_id', null)
   // filter means this UPDATE only affects the row if nobody has claimed
@@ -1421,23 +1429,9 @@ function PlanInquiriesScreen({ agent, onConvert }) {
       <SecLabel>Unclaimed - legacy/manual fallback only</SecLabel>
       <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-8px',marginBottom:'12px',lineHeight:1.5}}>New inquiries are assigned automatically to an eligible agent the moment they're submitted - see "Your claimed inquiries" below. This section only ever holds something left over from before that shipped, or a company with no eligible agent on file.</div>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
-      {!loading&&unclaimed.filter(i=>{
-        const authTeams = planTeamAuth[i.plan_id]
-        const isTeamGated = authTeams && authTeams.length > 0
-        return !isTeamGated || (agent.team_id && authTeams.includes(agent.team_id))
-      }).length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries you're eligible to work right now.</div>}
+      {!loading&&unclaimed.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries you're eligible to work right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'24px'}}>
-        {unclaimed.map(i=>{
-          const authTeams = planTeamAuth[i.plan_id]
-          const isTeamGated = authTeams && authTeams.length > 0
-          const myTeamEligible = isTeamGated && agent.team_id && authTeams.includes(agent.team_id)
-          // An inquiry this agent structurally cannot work (gated to
-          // teams they're not on) isn't shown at all any more, not just
-          // disabled - "Not your team's plan" used to still surface the
-          // applicant's real name/HKID/DOB/phone/email to someone who
-          // could never legitimately act on it.
-          if (isTeamGated && !myTeamEligible) return null
-          return (
+        {unclaimed.map(i=>(
           <Card key={i.id} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'8px'}}>
               <div>
@@ -1445,16 +1439,11 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
                 {i.is_switch_request&&<div style={{marginTop:'4px'}}><Badge text="⇄ Plan switch request" type="due"/></div>}
-                {isTeamGated&&<div style={{fontSize:'11px',color:C.blue,marginTop:'2px'}}>Team-gated - claim it yourself, or confirm it for your team to distribute by its own rule</div>}
               </div>
-              <div style={{display:'flex',gap:'6px'}}>
-                <Btn onClick={()=>handleClaim(i)} disabled={claimingId===i.id} style={{fontSize:'12px'}}>{claimingId===i.id?'Claiming…':'Claim for myself'}</Btn>
-                {isTeamGated&&<Btn variant="primary" onClick={()=>handleTeamConfirm(i)} disabled={claimingId===i.id} style={{fontSize:'12px'}}>{claimingId===i.id?'Confirming…':'Confirm for team'}</Btn>}
-              </div>
+              <Btn onClick={()=>handleClaim(i)} disabled={claimingId===i.id} style={{fontSize:'12px'}}>{claimingId===i.id?'Claiming…':'Claim for myself'}</Btn>
             </div>
           </Card>
-          )
-        })}
+        ))}
       </div>
 
       <SecLabel>Your claimed inquiries</SecLabel>
