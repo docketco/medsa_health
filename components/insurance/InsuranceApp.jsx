@@ -410,13 +410,20 @@ const PLAN_MANAGER_EMPTY_FORM = {
   self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
   patient_facing_description:'', self_declare_enabled:false,
 }
-// readOnly: the insurer portal passes this - per your call, going back
-// to the original (pre-refinement) decision, adding/editing a plan is a
-// Medsa job now, not insurer self-serve. medsa-admin's own Plans tab
-// (AdminPlansTab below, picks a company first) renders this same
-// component without readOnly, so there's exactly one real form, not two
-// to keep in sync.
-export function PlanManager({ company, readOnly=false }) {
+// readOnly: left defined for a future "we're not ready to let this
+// insurer touch it yet" case, but nothing passes it true anymore -
+// insurers upload and edit their own catalog now (insurerSelfServe,
+// below), the same real form medsa-admin's own Plans tab uses
+// (AdminPlansTab, picks a company first), so there's exactly one form,
+// not two to keep in sync.
+// insurerSelfServe: true only from the insurer's own portal. A NEW plan
+// an insurer creates (single form or bulk CSV) lands as status
+// 'pending_review', not 'active' - invisible to patients/agents (every
+// real query filters .eq('status','active')) until Medsa approves it
+// below. Editing an already-published plan goes live immediately, no
+// re-review - the gate is only ever on a brand new listing, so this
+// doesn't become the same bottleneck self-serve was meant to remove.
+export function PlanManager({ company, readOnly=false, insurerSelfServe=false }) {
   const [plans,setPlans]=useState([])
   const [search,setSearch]=useState('')
   const [loading,setLoading]=useState(true)
@@ -581,7 +588,8 @@ export function PlanManager({ company, readOnly=false }) {
       if (!planName) { results.errors.push('Row skipped - missing plan_name.'); continue }
       const tiersParsed = parseTiersField(row.tiers)
       const { data: newPlan, error } = await supabase.from('insurance_plans').insert({
-        company_name: company.name, status: 'active',
+        company_name: company.name, status: insurerSelfServe ? 'pending_review' : 'active',
+        created_by: insurerSelfServe ? company.name : null,
         plan_name: planName, plan_type: row.plan_type || null,
         key_benefits: row.key_benefits || null,
         covered_categories: splitList(row.covered_categories),
@@ -652,7 +660,9 @@ export function PlanManager({ company, readOnly=false }) {
       await supabase.from('insurance_plan_pricing_tiers').delete().eq('plan_id', editingId)
     } else {
       const { data: newPlan } = await supabase.from('insurance_plans').insert({
-        ...payload, company_name: company.name, status: 'active',
+        ...payload, company_name: company.name,
+        status: insurerSelfServe ? 'pending_review' : 'active',
+        created_by: insurerSelfServe ? company.name : null,
       }).select().maybeSingle()
       planId = newPlan?.id
     }
@@ -693,11 +703,14 @@ export function PlanManager({ company, readOnly=false }) {
       {readOnly&&<div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>Medsa adds and edits your plan listings - contact your Medsa account manager with new plans or changes to existing ones. This is a read-only view of what's currently registered.</div>
       </div>}
-      {!readOnly&&!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
+      {insurerSelfServe&&<div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
+        <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>A new plan you add needs a quick Medsa review before patients can see it - you'll see it marked "Pending review" until then. Editing an already-published plan goes live immediately.</div>
+      </div>}
+      {(!readOnly||insurerSelfServe)&&!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
         <Btn variant="navy" style={{flex:1}} onClick={startCreate}>+ Add new plan</Btn>
         <Btn style={{flex:1}} onClick={()=>setBulkPlanOpen(o=>!o)}>{bulkPlanOpen?'Hide bulk import':'⭱ Bulk import plans (CSV)'}</Btn>
       </div>}
-      {!readOnly&&!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
+      {(!readOnly||insurerSelfServe)&&!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
         <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Bulk import your whole plan catalog</div>
         <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>
           CSV columns: plan_name (required), plan_type, key_benefits, covered_categories, covered_conditions, insurer_flags (each semicolon-separated, e.g. "Dental;Optical"), pre_existing_condition_policy, waiting_period_days, copay_rate_pct, annual_deductible_hkd, commission_rate_pct, requires_agent (true/false), auto_buy_on_clean (true/false), additional_terms.<br/>
@@ -713,7 +726,7 @@ export function PlanManager({ company, readOnly=false }) {
           {bulkPlanResult.errors.length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkPlanResult.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}
         </div>}
       </Card>}
-      {!readOnly&&creating&&(
+      {(!readOnly||insurerSelfServe)&&creating&&(
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
@@ -856,9 +869,15 @@ export function PlanManager({ company, readOnly=false }) {
             <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
               {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
               {p.self_serve_checkout_enabled&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Self-serve</span>}
-              {!readOnly&&<span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>}
+              {p.status==='pending_review'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600,whiteSpace:'nowrap'}}>Pending review</span>}
+              {(!readOnly||insurerSelfServe)&&<span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>}
             </div>
           </div>
+          {/* Only Medsa (not insurerSelfServe, not readOnly) ever flips a
+              brand new listing live - the whole point of the pending-
+              review gate above. */}
+          {p.status==='pending_review'&&!insurerSelfServe&&!readOnly&&
+            <Btn variant="primary" style={{width:'100%',marginBottom:'8px',fontSize:'12px',padding:'8px'}} onClick={async e=>{e.stopPropagation(); await supabase.from('insurance_plans').update({status:'active'}).eq('id',p.id); load()}}>✓ Approve & publish</Btn>}
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.self_declare_enabled?(p.requires_agent?' · Self-declare on, agent-only':' · Self-declare & instant quote on'):' · Agent-only (default)'}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
@@ -3071,7 +3090,7 @@ export default function InsuranceApp({ company, onLogout }) {
             Coverage Rules) made it look like a real distinction still
             existed. CoverageRulesManager is left defined above, not
             deleted, in case a cut-down intake ever makes sense again. */}
-        {screen==='plans'&&<PlanManager company={company} readOnly/>}
+        {screen==='plans'&&<PlanManager company={company} insurerSelfServe/>}
         {screen==='verify'&&<PolicyVerificationManager company={company}/>}
         {screen==='claims'&&<InsuranceAdminClaimsLog onOpenClaim={openClaim} company={company}/>}
         {screen==='claim-detail'&&<ClaimDetailErrorBoundary key={openClaimRef}><AgentClaimView claimRef={openClaimRef}/></ClaimDetailErrorBoundary>}
