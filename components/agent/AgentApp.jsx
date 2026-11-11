@@ -75,7 +75,7 @@ function AgentLogin({ onLogin }) {
     setChecking(true)
     setError(null)
     const { data: agent } = await supabase.from('agents')
-      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, institutions(name)')
+      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, my_plans_last_viewed_at, institutions(name)')
       .ilike('email', email.trim()).maybeSingle()
     if (!agent) { setChecking(false); setError('No agent account matches that email.'); return }
     const { data: ok } = await supabase.rpc('verify_agent_password', { p_agent_id: agent.id, p_password: password })
@@ -245,7 +245,7 @@ function TransferRequestModal({ policy, agent, onClose, onRequested }) {
 // blocked from selling anything until they come configure this first.
 // This only ever gates NewPolicyScreen's basket below, never round-robin
 // eligibility for new inquiries - a different concern.
-function MyPlansScreen({ agent }) {
+function MyPlansScreen({ agent, onViewed }) {
   const [insurers,setInsurers]=useState([])
   const [builderInsurer,setBuilderInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:'')
   const [plans,setPlans]=useState([])
@@ -258,6 +258,13 @@ function MyPlansScreen({ agent }) {
       supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
     }
   }, [agent.agent_type])
+
+  // Clears the nav badge the moment this screen is actually opened - the
+  // badge's whole job is getting the agent to come look, not staying lit
+  // forever once they have.
+  useEffect(() => {
+    supabase.from('agents').update({ my_plans_last_viewed_at: new Date().toISOString() }).eq('id', agent.id).then(() => onViewed?.())
+  }, [agent.id])
 
   async function load() {
     if (!builderInsurer) { setPlans([]); setLoading(false); return }
@@ -2018,6 +2025,7 @@ export default function AgentApp() {
   const [policies,setPolicies]=useState([])
   const [inquiries,setInquiries]=useState([])
   const [newInquiryCount,setNewInquiryCount]=useState(0)
+  const [newPlansCount,setNewPlansCount]=useState(0)
   const [loading,setLoading]=useState(true)
   const [myLeadTeam,setMyLeadTeam]=useState(null)
 
@@ -2064,6 +2072,17 @@ export default function AgentApp() {
     const { count: mineNewCount } = await supabase.from('plan_inquiries')
       .select('id', {count:'exact', head:true}).eq('claimed_by_agent_id', a.id).eq('status', 'new')
     setNewInquiryCount((unclaimedCount||0) + (mineNewCount||0))
+
+    // A new plan auto-joins every eligible agent's basket by design
+    // (opt-out, see MyPlansScreen) - nothing to configure for it to be
+    // sellable, but that also meant no signal at all that it showed up.
+    // Same myCompanyNames scoping as above, across every insurer this
+    // agent is eligible for, not just the one MyPlansScreen happens to
+    // have picked in its own dropdown.
+    const { count: newPlansCount } = myCompanyNames.length===0 ? { count: 0 } : await supabase.from('insurance_plans')
+      .select('id', {count:'exact', head:true}).eq('status','active').eq('self_serve_only',false)
+      .in('company_name', myCompanyNames).gt('created_at', a.my_plans_last_viewed_at)
+    setNewPlansCount(newPlansCount||0)
     setLoading(false)
   }
 
@@ -2081,7 +2100,7 @@ export default function AgentApp() {
 
   const navItems = [
     {key:'overview', icon:'\u25a3', label:'Overview'},
-    {key:'myplans', icon:'\u25a2', label:'My Plans'},
+    {key:'myplans', icon:'\u25a2', label:'My Plans', badge: newPlansCount},
     {key:'policies', icon:'\u25c7', label:'Policies'},
     {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
     {key:'planinquiries', icon:'\u25c6', label:'New Plan Inquiries', badge: newInquiryCount},
@@ -2099,7 +2118,7 @@ export default function AgentApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
         {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries}/>}
-        {!loading&&screen==='myplans'&&<MyPlansScreen agent={agent}/>}
+        {!loading&&screen==='myplans'&&<MyPlansScreen agent={agent} onViewed={()=>setNewPlansCount(0)}/>}
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
