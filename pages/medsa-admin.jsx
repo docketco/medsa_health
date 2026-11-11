@@ -42,7 +42,7 @@ export default function MedsaAdminPage() {
             pattern as every other shelved tab/screen this pivot.
             Forum tab shelved too now (COMMUNITY_ENABLED, lib/featureFlags)
             - no plan yet for bootstrapping Community, per your call. */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['underwriting','alert','Underwriting'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -57,6 +57,7 @@ export default function MedsaAdminPage() {
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
+      {tab==='underwriting' && <UnderwritingQueueTab/>}
       {tab==='clinics' && <ClinicsTab/>}
       {false&&tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
@@ -721,20 +722,6 @@ function PartnersTab() {
     }
   }
 
-  // Deliberate, separate gate from the Partner Onboarding checkpoints -
-  // getting a login (contract/integration/payment checkpoints) doesn't
-  // automatically mean Medsa wants this insurer touching real money yet.
-  // Only flippable once the contract is actually signed.
-  // Per-insurer delegation (aq2-10/aq2-06): off by default, same posture
-  // as Stripe payments above - Medsa staff only ever act in an insurer's
-  // underwriting queue once that insurer has explicitly said so. No
-  // contract-signed gate here (unlike Stripe payments) since this doesn't
-  // touch money - just who reviews a flagged case.
-  async function toggleUnderwritingDelegation(company) {
-    await supabase.from('insurance_companies').update({ underwriting_delegated_to_medsa: !company.underwriting_delegated_to_medsa }).eq('id', company.id)
-    load()
-  }
-
   async function toggleAuditLog(company) {
     if (auditLogOpenId === company.id) { setAuditLogOpenId(null); return }
     setAuditLogOpenId(company.id)
@@ -931,17 +918,16 @@ function PartnersTab() {
             </button>
             {!c.contract_signed_at&&<span style={{fontSize:'10px',color:C.textMuted}}>Needs a signed contract first</span>}
           </div>
-          {/* aq2-10/aq2-06: off by default - Medsa staff only ever act in
-              this insurer's underwriting queue once they've explicitly
-              said so. Their own underwriter staff (added below) handles
-              flagged cases otherwise. */}
-          <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'6px',flexWrap:'wrap'}}>
-            <div style={{fontSize:'11px',color:C.textSub,flexShrink:0}}>Delegate underwriting review to Medsa staff:</div>
-            <button onClick={()=>toggleUnderwritingDelegation(c)}
-              style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:'none',borderRadius:'6px',cursor:'pointer',background:c.underwriting_delegated_to_medsa?C.green:C.card,color:c.underwriting_delegated_to_medsa?'#fff':C.textMuted}}>
-              {c.underwriting_delegated_to_medsa?'✓ Delegated':'Off - insurer\'s own underwriter'}
-            </button>
-          </div>
+          {/* Shelved the per-insurer self-serve underwriter login
+              (/underwriter-portal, see its own header comment) - every
+              insurer's flagged/clean-signoff queue is relayed by Medsa
+              staff now (Underwriting tab), not reviewed by their own
+              logged-in underwriter. underwriting_delegated_to_medsa
+              defaults true for that reason (see migration); the flag and
+              list_queue.js's non-delegated branch stay defined/untouched
+              (frozen, not deleted) as the seam a real insurer API
+              integration would flip back off through later. */}
+          {!c.underwriting_delegated_to_medsa&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'6px'}}>⚠ Not delegated to Medsa staff - nobody reviews this insurer's underwriting queue right now.</div>}
           <div style={{marginBottom:'6px'}}>
             <button onClick={()=>toggleAuditLog(c)} style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:`0.5px solid ${C.border}`,borderRadius:'6px',cursor:'pointer',background:C.card,color:C.textSub}}>
               {auditLogOpenId===c.id?'▾':'▸'} Underwriting audit log
@@ -1001,6 +987,112 @@ function PartnersTab() {
         </div>
         )
       })}
+    </div>
+  )
+}
+
+// The Medsa-relay replacement for the old self-serve /underwriter-portal
+// (see that page's header comment for why it's archived). Same two real
+// API endpoints the portal used - pages/api/underwriter/list_queue.js and
+// decide.js - just called with medsaStaff:true instead of a logged-in
+// underwriter. Medsa reads the case, approves or declines; it never
+// writes the underwriting logic itself (lib/planSuitabilityMatch.js
+// already decided flagged vs. clean - this is the human sign-off that
+// was always required either way, now just done by Medsa staff instead
+// of insurer staff who never logged in to do it).
+function UnderwritingQueueTab() {
+  const [flagged, setFlagged] = useState([])
+  const [cleanSignoff, setCleanSignoff] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expandedId, setExpandedId] = useState(null)
+  const [showDeclineId, setShowDeclineId] = useState(null)
+  const [reason, setReason] = useState('')
+  const [busyId, setBusyId] = useState(null)
+  const [error, setError] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const res = await fetch('/api/underwriter/list_queue', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ medsaStaff: true }),
+    })
+    const data = await res.json()
+    setFlagged(data.flagged||[])
+    setCleanSignoff(data.cleanSignoff||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function act(inquiryId, action, extra={}) {
+    setBusyId(inquiryId); setError(null)
+    try {
+      const res = await fetch('/api/underwriter/decide', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ inquiryId, action, medsaStaff: true, underwriterName: 'Medsa staff', ...extra }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setError(data.message||'Could not save this decision.'); setBusyId(null); return }
+      setShowDeclineId(null); setReason('')
+      load()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  function CaseRow(i, isCleanSignoff) {
+    const expanded = expandedId === i.id
+    return (
+      <div key={i.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',marginBottom:'10px',overflow:'hidden'}}>
+        <div style={{padding:'12px 14px',cursor:'pointer'}} onClick={()=>setExpandedId(expanded?null:i.id)}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'10px'}}>
+            <div>
+              <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
+              <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.insurance_plans?.plan_name} — {i.insurance_plans?.company_name}</div>
+            </div>
+            <span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:isCleanSignoff?C.greenXLight:C.amberLight,color:isCleanSignoff?C.green:C.amber,whiteSpace:'nowrap'}}>
+              {isCleanSignoff?'Clean - sign-off':'Flagged'}
+            </span>
+          </div>
+          {i.quoted_premium_hkd!=null&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'6px'}}>Est. HK${i.quoted_premium_hkd}/mo</div>}
+        </div>
+        {expanded&&<div style={{padding:'0 14px 14px',borderTop:`0.5px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+          <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.6,margin:'10px 0 8px'}}>{i.suitability_summary}</div>
+          {(i.declared_conditions||[]).length>0&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Declared: {i.declared_conditions.join(', ')}</div>}
+          {i.applicant_hkid&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>HKID {i.applicant_hkid}</div>}
+          {i.requested_report_note&&<div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',marginBottom:'10px',fontSize:'11px',color:C.textSub}}>
+            Report already requested{i.requested_report_doctor?` from ${i.requested_report_doctor}`:''}: {i.requested_report_note}
+          </div>}
+          {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+          {showDeclineId===i.id ? (
+            <div>
+              <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={2} placeholder="Reason - the patient sees this" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',marginBottom:'8px'}}/>
+              <div style={{display:'flex',gap:'8px'}}>
+                <button onClick={()=>{setShowDeclineId(null);setReason('')}} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Cancel</button>
+                <button onClick={()=>act(i.id,'decline',{reason})} disabled={busyId===i.id||!reason.trim()} style={{flex:1,padding:'8px',background:C.red,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===i.id?'Saving…':'Confirm decline'}</button>
+              </div>
+            </div>
+          ) : (
+            <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+              <button onClick={()=>act(i.id,'approve')} disabled={busyId===i.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===i.id?'Saving…':'✓ Approve'}</button>
+              <button onClick={()=>setShowDeclineId(i.id)} disabled={busyId===i.id} style={{flex:1,padding:'8px',background:C.red,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>✕ Decline</button>
+            </div>
+          )}
+        </div>}
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Medsa relays - never decides. Everything below is a case lib/planSuitabilityMatch.js already matched (or couldn't): "flagged" means it genuinely couldn't tell, "clean - sign-off" means it's a clear match but this insurer hasn't turned on auto-buy for clean cases. Approve or decline only - a decline needs a reason, the patient sees it.</div>
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&<>
+        <SecLabel>Flagged - needs real review ({flagged.length})</SecLabel>
+        {flagged.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>Nothing flagged right now.</div>}
+        {flagged.map(i=>CaseRow(i,false))}
+        <SecLabel>Clean - quick sign-off ({cleanSignoff.length})</SecLabel>
+        {cleanSignoff.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing waiting on a clean-case sign-off.</div>}
+        {cleanSignoff.map(i=>CaseRow(i,true))}
+      </>}
     </div>
   )
 }
