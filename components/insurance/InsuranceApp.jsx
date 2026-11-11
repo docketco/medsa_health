@@ -952,6 +952,18 @@ function mergeExtractedIntoForm(prevForm, extracted) {
     pre_existing_condition_policy: extracted.pre_existing_condition_policy || prevForm.pre_existing_condition_policy,
     preauth_threshold_hkd: extracted.preauth_threshold_hkd!=null ? String(extracted.preauth_threshold_hkd) : prevForm.preauth_threshold_hkd,
     covered_categories, category_limits,
+    // Real gap found testing the self-serve upload flow: these three are
+    // the fields PlanManager's own real, live form actually saves and
+    // shows to patients (key_benefits, plan_type) or shows before
+    // purchase (additional_terms) - everything above this line is a
+    // CoverageRulesManager claims-adjudication field, and that form isn't
+    // reachable by any insurer anymore (see its own shelving comment).
+    // Without these three, uploading a brochure here silently extracted
+    // numbers nobody could see or save - the insurer still had to retype
+    // the one thing a brochure actually has a lot of: its own wording.
+    plan_type: extracted.plan_type || prevForm.plan_type,
+    key_benefits: extracted.key_benefits || prevForm.key_benefits,
+    additional_terms: extracted.additional_terms || prevForm.additional_terms,
   }
 }
 
