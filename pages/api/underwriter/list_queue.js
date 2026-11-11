@@ -45,5 +45,25 @@ export default async function handler(req, res) {
   const flagged = (inquiries || []).filter(i => i.suitability_verdict === 'flagged')
   const cleanSignoff = (inquiries || []).filter(i => i.suitability_verdict === 'approved')
 
-  return res.status(200).json({ status: 'OK', flagged, cleanSignoff })
+  // A real agent-written policy, submitted (with its documents) for
+  // approval - a different real-world decision from "should this
+  // applicant be accepted at all" above, but the same human makes it, so
+  // it's the same queue. institution_id is a direct FK here (unlike
+  // plan_inquiries, which only ever carries a plan's company_name text),
+  // so this scopes to every company whose institution_ref_id matched
+  // above - not just the one name-matched list.
+  let pendingPolicies = []
+  if (companyNames.length > 0) {
+    const { data: instRows } = await supabase.from('insurance_companies').select('institution_ref_id').in('name', companyNames)
+    const institutionIds = (instRows || []).map(r => r.institution_ref_id).filter(Boolean)
+    if (institutionIds.length > 0) {
+      const { data: policies } = await supabase.from('agent_policies')
+        .select('id, patient_name, plan_name, premium, policy_number, start_date, ward_class, payment_frequency, underwriter_submitted_at, agents(full_name), agent_policy_documents(id, file_path, file_name)')
+        .eq('underwriter_status', 'pending').not('underwriter_submitted_at', 'is', null).in('institution_id', institutionIds)
+        .order('underwriter_submitted_at', { ascending: true })
+      pendingPolicies = policies || []
+    }
+  }
+
+  return res.status(200).json({ status: 'OK', flagged, cleanSignoff, pendingPolicies })
 }

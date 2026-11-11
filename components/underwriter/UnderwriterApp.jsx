@@ -144,9 +144,79 @@ function CaseCard({ inquiry, underwriter, isCleanSignoff, onDecided }) {
   )
 }
 
+// A real agent-written policy, submitted (with documents) for approval -
+// a different real-world decision ("should this stay in force") from a
+// CaseCard's ("should this applicant be accepted"), so its own card
+// rather than forcing it into CaseCard's inquiry-shaped fields.
+function PolicyCard({ policy, underwriter, onDecided }) {
+  const [expanded,setExpanded]=useState(false)
+  const [reason,setReason]=useState('')
+  const [showDecline,setShowDecline]=useState(false)
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function act(action) {
+    setBusy(true); setError(null)
+    try {
+      const res = await fetch('/api/underwriter/decide', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ policyId: policy.id, action, underwriterId: underwriter.id, underwriterName: underwriter.full_name, reason }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setError(data.message||'Could not save this decision.'); setBusy(false); return }
+      onDecided()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function openDoc(path) {
+    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  return (
+    <Card style={{marginBottom:'10px'}}>
+      <div style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpanded(x=>!x)}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'10px'}}>
+          <div>
+            <div style={{fontSize:'13px',fontWeight:600}}>{policy.patient_name||'Unnamed patient'}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{policy.plan_name} — by {policy.agents?.full_name||'an agent'}</div>
+          </div>
+          <span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:C.amberLight,color:C.amber,whiteSpace:'nowrap'}}>Policy</span>
+        </div>
+        {policy.premium!=null&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'6px'}}>HK${policy.premium}/mo{policy.ward_class?` · ${policy.ward_class}`:''}</div>}
+      </div>
+      {expanded&&<div style={{padding:'0 16px 16px',borderTop:`0.5px solid ${C.border}`}} onClick={e=>e.stopPropagation()}>
+        <div style={{fontSize:'11px',fontWeight:600,textTransform:'uppercase',color:C.textMuted,margin:'12px 0 6px'}}>Submitted documents</div>
+        {(policy.agent_policy_documents||[]).length===0
+          ? <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>None attached.</div>
+          : (policy.agent_policy_documents||[]).map(d=><div key={d.id} onClick={()=>openDoc(d.file_path)} style={{fontSize:'12px',color:C.blue,cursor:'pointer',marginBottom:'4px'}}>📄 {d.file_name||d.file_path.split('/').pop()}</div>)}
+        {policy.policy_number&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Policy number {policy.policy_number}</div>}
+        {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+        {showDecline ? (
+          <div style={{marginBottom:'8px'}}>
+            <textarea value={reason} onChange={e=>setReason(e.target.value)} rows={2} placeholder="Reason - the agent sees this" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',marginBottom:'8px'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>setShowDecline(false)}>Cancel</Btn>
+              <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={busy||!reason.trim()} onClick={()=>act('decline')}>{busy?'Saving…':'Confirm decline'}</Btn>
+            </div>
+          </div>
+        ) : (
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={busy} onClick={()=>act('approve')}>{busy?'Saving…':'✓ Approve'}</Btn>
+            <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={busy} onClick={()=>setShowDecline(true)}>✕ Decline</Btn>
+          </div>
+        )}
+      </div>}
+    </Card>
+  )
+}
+
 function QueueScreen({ underwriter }) {
   const [flagged,setFlagged]=useState([])
   const [cleanSignoff,setCleanSignoff]=useState([])
+  const [pendingPolicies,setPendingPolicies]=useState([])
   const [loading,setLoading]=useState(true)
 
   async function load() {
@@ -158,6 +228,7 @@ function QueueScreen({ underwriter }) {
     const data = await res.json()
     setFlagged(data.flagged||[])
     setCleanSignoff(data.cleanSignoff||[])
+    setPendingPolicies(data.pendingPolicies||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [underwriter.id])
@@ -176,6 +247,10 @@ function QueueScreen({ underwriter }) {
       <SecLabel>Clean - quick sign-off ({cleanSignoff.length})</SecLabel>
       {cleanSignoff.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing waiting on a clean-case sign-off.</div>}
       {cleanSignoff.map(i=><CaseCard key={i.id} inquiry={i} underwriter={underwriter} isCleanSignoff={true} onDecided={load}/>)}
+
+      <SecLabel>Policies submitted by agents ({pendingPolicies.length})</SecLabel>
+      {pendingPolicies.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing submitted right now.</div>}
+      {pendingPolicies.map(p=><PolicyCard key={p.id} policy={p} underwriter={underwriter} onDecided={load}/>)}
     </PageWrap>
   )
 }

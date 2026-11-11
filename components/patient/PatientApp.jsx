@@ -5359,7 +5359,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     if (!medsaId) { setPolicyLoading(false); return }
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setPolicyLoading(false); return }
-    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model, company_name, logo_url)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true})
+    const { data: all } = await supabase.from('agent_policies').select('*, institutions(name), insurance_plans(billing_model, company_name, logo_url)').eq('patient_id', patientRow.id).in('status',['active','renewal_in_progress']).eq('underwriter_status','approved').order('renewal_date',{ascending:true})
     setHeldPolicies(all||[])
     const data = (all||[])[0]
     setActivePolicy(data||null)
@@ -8292,7 +8292,7 @@ function BumpHealthScreen({ isEn, patient={}, bumpSubscriptionId, initialTab, on
       patient?.id ? supabase.from('medications').select('*').eq('patient_id',patient.id) : Promise.resolve({data:[]}),
       supabase.from('bump_recovery_checklist').select('*').eq('bump_subscription_id',bumpSubscriptionId),
       supabase.from('bump_epds_screens').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('completed_at',{ascending:false}),
-      patient?.id ? supabase.from('agent_policies').select('*, insurance_plans(company_name)').eq('patient_id',patient.id).in('status',['active','renewal_in_progress']).order('renewal_date',{ascending:true}).limit(1) : Promise.resolve({data:[]}),
+      patient?.id ? supabase.from('agent_policies').select('*, insurance_plans(company_name)').eq('patient_id',patient.id).in('status',['active','renewal_in_progress']).eq('underwriter_status','approved').order('renewal_date',{ascending:true}).limit(1) : Promise.resolve({data:[]}),
       supabase.from('bump_fetal_biometry').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('scan_date',{ascending:false}),
       supabase.from('bump_contraction_logs').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('started_at',{ascending:false}).limit(30),
       supabase.from('bump_journal_entries').select('*').eq('bump_subscription_id',bumpSubscriptionId).order('created_at',{ascending:false}).limit(30),

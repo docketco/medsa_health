@@ -243,7 +243,38 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [confirmingCancelId,setConfirmingCancelId]=useState(null)
   const [pushingId,setPushingId]=useState(null)
   const [pushNotice,setPushNotice]=useState(null)
+  const [submittingId,setSubmittingId]=useState(null)
+  const [pendingFiles,setPendingFiles]=useState({}) // {policyId: FileList}
+  const [submitNotice,setSubmitNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
+
+  // Real build: "after agent writes a policy, they upload everything to
+  // their portal for the underwriter to approve" - a policy isn't
+  // genuinely in force (even if its own status says 'active') until a
+  // real underwriter signs off. Separate from "Push to insurer" above,
+  // which is for an insurer with a real webhook/API integration - this is
+  // the in-house path, for one that reviews through Medsa's own
+  // underwriter portal instead.
+  async function handleSubmitForApproval(policyId) {
+    const files = pendingFiles[policyId]
+    setSubmittingId(policyId); setSubmitNotice(null)
+    try {
+      if (files && files.length > 0) {
+        for (const file of files) {
+          const path = `agent-policies/${policyId}/${Date.now()}-${file.name}`
+          const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, file)
+          if (upErr) { setSubmitNotice({ id: policyId, ok: false, text: upErr.message }); setSubmittingId(null); return }
+          await supabase.from('agent_policy_documents').insert({ policy_id: policyId, file_path: path, file_name: file.name })
+        }
+      }
+      await supabase.from('agent_policies').update({ underwriter_submitted_at: new Date().toISOString() }).eq('id', policyId)
+      setSubmitNotice({ id: policyId, ok: true, text: 'Submitted for underwriter approval.' })
+      setPendingFiles(f => { const n = {...f}; delete n[policyId]; return n })
+      onReload?.()
+    } finally {
+      setSubmittingId(null)
+    }
+  }
 
   // Incoming transfer requests addressed to THIS agent - decided by them
   // directly now, no team-lead middleman (team structure is gone, see
@@ -341,7 +372,12 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name} - {p.policy_number||'No policy number yet'}</div>
                   {agent.agent_type==='independent'&&<div style={{fontSize:'11px',color:C.purple,marginTop:'2px'}}>{p.institutions?.name||'Unknown insurer'}</div>}
                 </div>
-                <Badge text={p.status} type={p.status==='active'?'ok':p.status==='quote'?'waiting':'due'}/>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
+                  <Badge text={p.status} type={p.status==='active'?'ok':p.status==='quote'?'waiting':'due'}/>
+                  {p.underwriter_status==='approved'&&<Badge text="Underwriter approved" type="ok"/>}
+                  {p.underwriter_status==='declined'&&<Badge text="Underwriter declined" type="full"/>}
+                  {p.underwriter_status==='pending'&&p.underwriter_submitted_at&&<Badge text="Awaiting underwriter" type="waiting"/>}
+                </div>
               </div>
               <div style={{display:'flex',gap:'16px',fontSize:'11px',color:C.textMuted}}>
                 <span>Premium: HK${p.premium}/mo</span>
@@ -359,6 +395,23 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   : <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handlePushPolicy(p.id)} disabled={pushingId===p.id}>{pushingId===p.id?'Pushing…':'Push to insurer'}</Btn>}
                 {pushNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:pushNotice.ok?C.green:C.red}}>{pushNotice.text}</div>}
               </div>
+              {/* Separate from "Push to insurer" above - that's for an
+                  insurer with their own real webhook/API. This is the
+                  in-house path: everything the agent has (documents
+                  included) goes to Medsa's own underwriter portal
+                  instead, for an insurer that reviews there. */}
+              {p.underwriter_status==='declined'&&p.underwriter_decision_reason&&
+                <div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.red}}>{p.underwriter_decision_reason}</div>}
+              {(p.underwriter_status==='pending')&&<div style={{marginTop:'10px'}}>
+                {p.underwriter_submitted_at
+                  ? <div style={{fontSize:'11px',color:C.blue,fontWeight:600}}>Submitted {new Date(p.underwriter_submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - awaiting underwriter approval</div>
+                  : <>
+                      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Attach everything you'd hand an underwriter in real life (signed application, supporting documents), then submit.</div>
+                      <input type="file" multiple onChange={e=>setPendingFiles(f=>({...f,[p.id]:e.target.files}))} style={{fontSize:'11px',marginBottom:'6px'}}/>
+                      <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleSubmitForApproval(p.id)} disabled={submittingId===p.id}>{submittingId===p.id?'Submitting…':'Submit for underwriter approval'}</Btn>
+                    </>}
+                {submitNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:submitNotice.ok?C.green:C.red}}>{submitNotice.text}</div>}
+              </div>}
             </Card>
           )
         })}
