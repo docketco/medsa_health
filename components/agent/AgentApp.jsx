@@ -237,6 +237,76 @@ function TransferRequestModal({ policy, agent, onClose, onRequested }) {
   )
 }
 
+// ── MY PLANS ──────────────────────────────────────────────────────────────
+// An agent's own pick of which plans, from their institution's basket,
+// they actually write and sell - your call that not every agent wants to
+// carry every plan in the basket. Opt-OUT (agent_plan_exclusions): every
+// plan starts selected, same as today's behavior, so a new agent isn't
+// blocked from selling anything until they come configure this first.
+// This only ever gates NewPolicyScreen's basket below, never round-robin
+// eligibility for new inquiries - a different concern.
+function MyPlansScreen({ agent }) {
+  const [insurers,setInsurers]=useState([])
+  const [builderInsurer,setBuilderInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:'')
+  const [plans,setPlans]=useState([])
+  const [excludedIds,setExcludedIds]=useState(new Set())
+  const [loading,setLoading]=useState(true)
+  const [savingId,setSavingId]=useState(null)
+
+  useEffect(() => {
+    if (agent.agent_type==='independent') {
+      supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
+    }
+  }, [agent.agent_type])
+
+  async function load() {
+    if (!builderInsurer) { setPlans([]); setLoading(false); return }
+    setLoading(true)
+    const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
+    if (!inst) { setPlans([]); setLoading(false); return }
+    const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, plan_type').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
+    setPlans(Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values()))
+    const { data: excl } = await supabase.from('agent_plan_exclusions').select('plan_id').eq('agent_id', agent.id)
+    setExcludedIds(new Set((excl||[]).map(e=>e.plan_id)))
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [builderInsurer, agent.id])
+
+  async function toggle(planId) {
+    setSavingId(planId)
+    const isExcluded = excludedIds.has(planId)
+    if (isExcluded) await supabase.from('agent_plan_exclusions').delete().eq('agent_id', agent.id).eq('plan_id', planId)
+    else await supabase.from('agent_plan_exclusions').insert({ agent_id: agent.id, plan_id: planId })
+    setExcludedIds(prev => { const n = new Set(prev); isExcluded ? n.delete(planId) : n.add(planId); return n })
+    setSavingId(null)
+  }
+
+  return (
+    <PageWrap maxWidth={720}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px'}}>My Plans</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Which plans from your basket you actually write and sell - everything's ticked by default. Untick a plan to stop offering it; it stays available to pick back up any time.</div>
+      {agent.agent_type==='independent'&&<select value={builderInsurer} onChange={e=>setBuilderInsurer(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'10px',padding:'10px',marginBottom:'14px'}}>
+        <option value="">Select an insurer…</option>
+        {insurers.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+      </select>}
+      {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
+      {!loading&&builderInsurer&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No active plans in this basket yet.</div>}
+      {!loading&&plans.map(p=>{
+        const checked = !excludedIds.has(p.id)
+        return (
+          <Card key={p.id} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}} onClick={()=>toggle(p.id)}>
+            <input type="checkbox" checked={checked} disabled={savingId===p.id} onChange={()=>toggle(p.id)} onClick={e=>e.stopPropagation()} style={{width:18,height:18}}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
+            </div>
+          </Card>
+        )
+      })}
+    </PageWrap>
+  )
+}
+
 function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [filter,setFilter]=useState('all')
   const [transferringPolicy,setTransferringPolicy]=useState(null)
@@ -563,14 +633,17 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       const { data: inst } = await supabase.from('institutions').select('name').eq('id', builderInsurer).maybeSingle()
       if (!inst) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
       const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, waiting_period_days, pre_existing_condition_policy, additional_terms, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
-      const allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
+      let allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
       if (agent.team_id) {
         const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
         const authIds = new Set((auths||[]).map(a=>a.plan_id))
-        setBasketPlans(allPlans.filter(p=>authIds.has(p.id)))
-      } else {
-        setBasketPlans(allPlans)
+        allPlans = allPlans.filter(p=>authIds.has(p.id))
       }
+      // The agent's own pick (My Plans) of what they actually sell -
+      // opt-out, so this only ever narrows the basket, never widens it.
+      const { data: excl } = await supabase.from('agent_plan_exclusions').select('plan_id').eq('agent_id', agent.id)
+      const excludedIds = new Set((excl||[]).map(e=>e.plan_id))
+      setBasketPlans(allPlans.filter(p=>!excludedIds.has(p.id)))
       // Medsa's own cut, set once per insurer partnership by Medsa admin
       // (medsa-admin's Insurers tab) - a contract term, not something an
       // agent types on a per-policy basis.
@@ -2008,6 +2081,7 @@ export default function AgentApp() {
 
   const navItems = [
     {key:'overview', icon:'\u25a3', label:'Overview'},
+    {key:'myplans', icon:'\u25a2', label:'My Plans'},
     {key:'policies', icon:'\u25c7', label:'Policies'},
     {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
     {key:'planinquiries', icon:'\u25c6', label:'New Plan Inquiries', badge: newInquiryCount},
@@ -2025,6 +2099,7 @@ export default function AgentApp() {
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
         {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries}/>}
+        {!loading&&screen==='myplans'&&<MyPlansScreen agent={agent}/>}
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
