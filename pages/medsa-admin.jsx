@@ -41,8 +41,14 @@ export default function MedsaAdminPage() {
             header comment. Left out of this nav array entirely, same
             pattern as every other shelved tab/screen this pivot.
             Forum tab shelved too now (COMMUNITY_ENABLED, lib/featureFlags)
-            - no plan yet for bootstrapping Community, per your call. */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['underwriting','alert','Underwriting'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+            - no plan yet for bootstrapping Community, per your call.
+            Underwriting tab shelved too, same turn it was added - the
+            insurer decides and confirms their own underwriting cases,
+            always, through their own login (/underwriter-portal). Medsa
+            relaying/deciding on their behalf was wrong; see that page's
+            header comment. UnderwritingQueueTab left defined/untouched
+            below (frozen, not deleted). */}
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -57,7 +63,7 @@ export default function MedsaAdminPage() {
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
-      {tab==='underwriting' && <UnderwritingQueueTab/>}
+      {false&&tab==='underwriting' && <UnderwritingQueueTab/>}
       {tab==='clinics' && <ClinicsTab/>}
       {false&&tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
@@ -918,16 +924,12 @@ function PartnersTab() {
             </button>
             {!c.contract_signed_at&&<span style={{fontSize:'10px',color:C.textMuted}}>Needs a signed contract first</span>}
           </div>
-          {/* Shelved the per-insurer self-serve underwriter login
-              (/underwriter-portal, see its own header comment) - every
-              insurer's flagged/clean-signoff queue is relayed by Medsa
-              staff now (Underwriting tab), not reviewed by their own
-              logged-in underwriter. underwriting_delegated_to_medsa
-              defaults true for that reason (see migration); the flag and
-              list_queue.js's non-delegated branch stay defined/untouched
-              (frozen, not deleted) as the seam a real insurer API
-              integration would flip back off through later. */}
-          {!c.underwriting_delegated_to_medsa&&<div style={{fontSize:'11px',color:C.amber,marginBottom:'6px'}}>⚠ Not delegated to Medsa staff - nobody reviews this insurer's underwriting queue right now.</div>}
+          {/* Underwriting is always the insurer's own call, made through
+              their own login (/underwriter-portal) - never Medsa's.
+              underwriting_delegated_to_medsa stays false for every
+              insurer; the flag and list_queue.js/decide.js's medsaStaff
+              branch stay defined/untouched (frozen, not deleted) as a
+              seam, not a live path. */}
           <div style={{marginBottom:'6px'}}>
             <button onClick={()=>toggleAuditLog(c)} style={{padding:'4px 10px',fontSize:'11px',fontWeight:600,border:`0.5px solid ${C.border}`,borderRadius:'6px',cursor:'pointer',background:C.card,color:C.textSub}}>
               {auditLogOpenId===c.id?'▾':'▸'} Underwriting audit log
