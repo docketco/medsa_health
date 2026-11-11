@@ -3961,7 +3961,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
     if (!patient?.id) { setLoading(false); return }
     const { data } = await supabase.from('plan_inquiries')
       .select('*, insurance_plans(plan_name, company_name, waiting_period_days, pre_existing_condition_policy, additional_terms), agents:claimed_by_agent_id(full_name)')
-      .eq('patient_id', patient.id).order('created_at',{ascending:false})
+      .eq('patient_id', patient.id).neq('status', 'withdrawn').order('created_at',{ascending:false})
     setInquiries(data||[])
     // Real gap: an agent building a policy directly (Issue Policy / Quote)
     // never showed up anywhere in the patient's own app - the plain
@@ -3990,6 +3990,23 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
       claimed_by_agent_id: null, claimed_at: null, switch_requested_at: new Date().toISOString(),
     }).eq('id', i.id)
     setSwitching(null)
+    load()
+  }
+
+  // A patient's own request, not resolved by an agent/insurer - clears
+  // claimed_by_agent_id/response_due_at too, so it drops off that
+  // agent's claimed-inquiries list immediately rather than sitting
+  // there as a lead nobody's actually working any more. Soft status
+  // (not deleted) so there's still a real record if an agent already
+  // spent time on it; withdrawn ones are excluded from load() below so
+  // they don't clutter the patient's own list once gone.
+  const [withdrawingId,setWithdrawingId]=useState(null)
+  async function handleWithdrawInquiry(i) {
+    setWithdrawingId(i.id)
+    await supabase.from('plan_inquiries').update({
+      status: 'withdrawn', claimed_by_agent_id: null, claimed_at: null, response_due_at: null,
+    }).eq('id', i.id)
+    setWithdrawingId(null)
     load()
   }
 
@@ -4112,6 +4129,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
                   : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
+                {!isPurchased&&<div onClick={()=>handleWithdrawInquiry(i)} style={{fontSize:'12px',color:C.red,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{withdrawingId===i.id?(isEn?'Withdrawing...':'撤回中...'):(isEn?'Withdraw this inquiry':'撤回此查詢')}</div>}
               </div>}
             </div>
           </Card>

@@ -40,6 +40,22 @@ function daysUntil(dateStr) {
   return Math.ceil(diff / (1000*60*60*24))
 }
 
+// Visible warning for how long this lead has left before the daily
+// reassign_stale_plan_inquiries cron moves it to the next eligible agent
+// (lib/agentAssignment.js's responseWindowHours, 72h by default) - so
+// an agent sitting on a lead can see it's about to slip away instead of
+// only finding out after the fact.
+function formatReassignCountdown(dueAtStr) {
+  if (!dueAtStr) return null
+  const diffMs = new Date(dueAtStr).getTime() - Date.now()
+  if (diffMs <= 0) return { text: '⏱ Overdue - moves to next agent on the next daily check', urgent: true }
+  const totalHours = Math.floor(diffMs / (1000*60*60))
+  const days = Math.floor(totalHours / 24)
+  const hours = totalHours % 24
+  const text = days > 0 ? `⏱ ${days}d ${hours}h left to respond` : `⏱ ${hours}h left to respond`
+  return { text, urgent: totalHours < 24 }
+}
+
 // ── AGENT LOGIN ───────────────────────────────────────────────────────────
 // Captive agents belong to one insurer (like a doctor belongs to one
 // clinic). Independent agents are standalone and can hold policies with
@@ -1454,6 +1470,10 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 </div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
+                {!convertedInquiryIds.has(i.id)&&(()=>{
+                  const countdown = formatReassignCountdown(i.response_due_at)
+                  return countdown&&<div style={{marginTop:'6px'}}><Badge text={countdown.text} type={countdown.urgent?'full':'due'}/></div>
+                })()}
               </div>
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px'}}>
                 {i.is_switch_request&&<Badge text="⇄ Plan switch request" type="due"/>}
