@@ -142,10 +142,9 @@ function Sidebar({ screen, setScreen, agent, onLogout, navItems }) {
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────────────────────
-function OverviewScreen({ agent, policies, inquiries, onPlanDecided }) {
+function OverviewScreen({ agent, policies, newInquiryCount, onPlanDecided }) {
   const activeCount = policies.filter(p=>p.status==='active').length
   const renewalsSoon = policies.filter(p=>{ const d=daysUntil(p.renewal_date); return d!==null && d<=30 && d>=0 }).length
-  const pendingInquiries = inquiries.filter(i=>i.status==='new').length
 
   return (
     <PageWrap maxWidth={720}>
@@ -154,7 +153,7 @@ function OverviewScreen({ agent, policies, inquiries, onPlanDecided }) {
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Active policies" value={activeCount} sub={agent.agent_type==='captive'?'with your insurer':'across all insurers'} color={C.green} bg={C.greenLight}/>
         <StatCard label="Renewals due soon" value={renewalsSoon} sub="within 30 days" color={C.amber} bg={C.amberLight}/>
-        <StatCard label="New claim inquiries" value={pendingInquiries} sub="awaiting response" color={C.blue} bg={C.blueLight}/>
+        <StatCard label="New plan inquiries" value={newInquiryCount} sub="awaiting response" color={C.blue} bg={C.blueLight}/>
       </div>
       <SecLabel>Recent policies</SecLabel>
       <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
@@ -2188,7 +2187,6 @@ export default function AgentApp() {
   const [screen,setScreen]=useState('overview')
   const [prefillInquiry,setPrefillInquiry]=useState(null)
   const [policies,setPolicies]=useState([])
-  const [inquiries,setInquiries]=useState([])
   const [newInquiryCount,setNewInquiryCount]=useState(0)
   const [newPlansCount,setNewPlansCount]=useState(0)
   const [loading,setLoading]=useState(true)
@@ -2208,9 +2206,6 @@ export default function AgentApp() {
     let query = supabase.from('agent_policies').select('*, institutions(name)').eq('agent_id', a.id)
     const { data: policyRows } = await query
     setPolicies(policyRows||[])
-
-    const { data: inquiryRows } = await supabase.from('agent_claim_inquiries').select('*').eq('agent_id', a.id).order('created_at',{ascending:false})
-    setInquiries(inquiryRows||[])
 
     // Same insurer-scoping PlanInquiriesScreen.load() applies to the actual
     // list - this badge counted every unclaimed inquiry system-wide before,
@@ -2260,22 +2255,25 @@ export default function AgentApp() {
     if (agent) loadData(agent)
   }, [agent])
 
-  async function handleStatusChange(id, newStatus) {
-    setInquiries(prev=>prev.map(i=>i.id===id?{...i,status:newStatus}:i))
-    await supabase.from('agent_claim_inquiries').update({ status: newStatus }).eq('id', id)
-  }
-
-  const pendingCount = inquiries.filter(i=>i.status==='new').length
   const renewalsSoonCount = policies.filter(p=>{ const d=daysUntil(p.renewal_date); return d!==null && d<=30 }).length
 
+  // "Claim Inquiries" shelved: agent_claim_inquiries had no real write path
+  // anywhere in the live app (its own banner's claim about a "patient
+  // claim-prep tool" feeding it was stale) - a dead tab showing nothing
+  // but leftover test rows from before round-robin shipped (plan_inquiries
+  // below is the real, live inquiry feed). "Pending Claims" shelved too -
+  // an agent approving/rejecting real insurance_claims rows here duplicates
+  // (and bypasses) the dedicated claims-approver role and /claims-portal
+  // built this same round: deciding a claim is strictly an insurer/claims-
+  // approver call, never an agent's, same principle as underwriting.
+  // ClaimInquiriesScreen and ClaimsReviewScreen left defined/untouched
+  // below (frozen, not deleted).
   const navItems = [
     {key:'overview', icon:'\u25a3', label:'Overview'},
     {key:'myplans', icon:'\u25a2', label:'My Plans', badge: newPlansCount},
     ...(agent?.agent_type==='independent' ? [{key:'myinsurers', icon:'\u25a0', label:'My Insurers'}] : []),
     {key:'policies', icon:'\u25c7', label:'Policies'},
-    {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
     {key:'planinquiries', icon:'\u25c6', label:'New Plan Inquiries', badge: newInquiryCount},
-    {key:'claimsreview', icon:'\u26a0', label:'Pending Claims'},
     {key:'referrals', icon:'\u25c8', label:'Referrals'},
     {key:'renewals', icon:'\u25ce', label:'Renewals', badge: renewalsSoonCount},
     // Team tab shelved - see TeamLeadScreen's header comment.
@@ -2288,14 +2286,14 @@ export default function AgentApp() {
       <Sidebar screen={screen} setScreen={setScreen} agent={agent} navItems={navItems} onLogout={()=>{setAgent(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-        {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries} onPlanDecided={()=>setNewPlansCount(c=>Math.max(0,c-1))}/>}
+        {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} newInquiryCount={newInquiryCount} onPlanDecided={()=>setNewPlansCount(c=>Math.max(0,c-1))}/>}
         {!loading&&screen==='myplans'&&<MyPlansScreen agent={agent} onViewed={()=>setNewPlansCount(0)}/>}
         {!loading&&screen==='myinsurers'&&<MyInsurersScreen agent={agent}/>}
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
-        {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}
+        {false&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={[]} onStatusChange={()=>{}}/>}
         {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent} onConvert={(inq)=>{setPrefillInquiry(inq);setScreen('newpolicy')}}/>}
-        {!loading&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
+        {false&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
         {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
         {false&&screen==='team'&&myLeadTeam&&<TeamLeadScreen agent={agent} team={myLeadTeam}/>}

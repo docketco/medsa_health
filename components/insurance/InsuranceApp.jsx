@@ -547,19 +547,25 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
     scrollFormIntoView('plan-manager-form')
   }
 
-  // Document auto-fill found more than one deductible option in the same
-  // premium table - rather than force a choice of just one, create every
-  // option as its own plan straight away (each is a real, separately
-  // priced product a patient picks between, not a variant of one plan).
+  // Document auto-fill found more than one deductible option (and/or, for
+  // a multi-level brochure like Bupa Hero's Core-through-Deluxe-Pro range,
+  // more than one plan LEVEL) in the same premium table - rather than
+  // force a choice of just one, create every combination as its own plan
+  // straight away (each is a real, separately priced product a patient
+  // picks between - but a level is still an option on the SAME base
+  // product, same as a deductible choice, never a different product;
+  // both labels just combine into one display string here, reusing the
+  // existing deductible_label column rather than adding a new one).
   // Deliberately plain: plan_type/key_benefits/terms only, no commission/
   // self-declare/checkout settings - those apply per-plan and the insurer
   // sets them from "Your listed plans" below once these land, same as
   // editing any other auto-filled plan.
   async function createPlansFromVariants(basePlanName, baseExtracted, variants) {
     for (const v of variants) {
-      const name = v.deductible_label ? `${basePlanName} (${v.deductible_label})` : basePlanName
+      const optionLabel = [v.plan_tier_label, v.deductible_label].filter(Boolean).join(' · ')
+      const name = optionLabel ? `${basePlanName} (${optionLabel})` : basePlanName
       const { data: newPlan } = await supabase.from('insurance_plans').insert({
-        company_name: company.name, plan_name: name, deductible_label: v.deductible_label || null,
+        company_name: company.name, plan_name: name, deductible_label: optionLabel || null,
         plan_type: baseExtracted.plan_type || null, key_benefits: baseExtracted.key_benefits || null,
         covered_categories: baseExtracted.covered_categories || [],
         patient_facing_description: baseExtracted.patient_facing_description || null,
@@ -875,7 +881,7 @@ function mergeExtractedIntoForm(prevForm, extracted) {
     // patient-facing blurb yourself, typing a deductible label) that the
     // document already answers directly.
     patient_facing_description: extracted.patient_facing_description || prevForm.patient_facing_description,
-    deductible_label: extracted.pricing_variants?.[0]?.deductible_label || prevForm.deductible_label,
+    deductible_label: [extracted.pricing_variants?.[0]?.plan_tier_label, extracted.pricing_variants?.[0]?.deductible_label].filter(Boolean).join(' · ') || prevForm.deductible_label,
   }
 }
 
@@ -925,7 +931,7 @@ function DocumentAutoFillCard({ form, setForm, tiers, setTiers, uploadPathPrefix
       const rowCount = variants.reduce((n,v)=>n+(v.pricing_tiers?.length||0), 0)
       if (variants.length > 0) setTiers(variantToTierRows(variants[0]))
       let note = 'Filled in from your document - review every field before saving, nothing here was applied automatically.'
-      if (rowCount > 0) note += ` Found ${rowCount} age-band pricing row${rowCount===1?'':'s'}${variants.length>1?` across ${variants.length} deductible options`:''} - no need to type these in by hand.`
+      if (rowCount > 0) note += ` Found ${rowCount} age-band pricing row${rowCount===1?'':'s'}${variants.length>1?` across ${variants.length} plan option${variants.length===1?'':'s'}`:''} - no need to type these in by hand.`
       setAutoFilledNote(note)
       if (variants.length > 1) setExtraVariants({ base: json.extracted, variants })
     } catch (e) {
@@ -955,8 +961,8 @@ function DocumentAutoFillCard({ form, setForm, tiers, setTiers, uploadPathPrefix
       {autoFilledNote&&<div style={{fontSize:'11px',color:C.green,marginTop:'8px'}}>{autoFilledNote}</div>}
       {form.policy_document_path&&!docError&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Document on file - will be saved with this plan.</div>}
       {extraVariants&&<div style={{marginTop:'10px',background:'#fff',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
-        <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'8px'}}>This document covers <b>{extraVariants.variants.length} deductible options</b>, each with its own full pricing table. The form below is filled in with the first one ({extraVariants.variants[0].deductible_label||'no deductible'}) - rename it yourself if you're keeping just this one, or create all {extraVariants.variants.length} as separate plans in one go (each named after its deductible option, all landing below for you to review/edit/publish same as any other plan).</div>
-        <Btn variant="navy" style={{width:'100%'}} onClick={handleCreateAllVariants} disabled={creatingVariants}>{creatingVariants?'Creating…':`Create all ${extraVariants.variants.length} deductible options as separate plans`}</Btn>
+        <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'8px'}}>This document covers <b>{extraVariants.variants.length} plan options</b> (a plan level, a deductible choice, or both combined - still one product, just a lot of ways to buy it), each with its own full pricing table. The form below is filled in with the first one ({[extraVariants.variants[0].plan_tier_label, extraVariants.variants[0].deductible_label].filter(Boolean).join(' · ')||'no options stated'}) - rename it yourself if you're keeping just this one, or create all {extraVariants.variants.length} as separate plans in one go (each named after its own option combination, all landing below for you to review/edit/publish same as any other plan).</div>
+        <Btn variant="navy" style={{width:'100%'}} onClick={handleCreateAllVariants} disabled={creatingVariants}>{creatingVariants?'Creating…':`Create all ${extraVariants.variants.length} options as separate plans`}</Btn>
       </div>}
     </div>
   )

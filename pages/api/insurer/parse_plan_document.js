@@ -30,6 +30,17 @@
 // premium is extracted (not annual/semi-annual/quarterly) since that's
 // the only frequency this app prices, displays or checks out anywhere -
 // extracting the others would have nowhere real to go.
+//
+// plan_tier_label: real gap found manually simulating this against a real
+// 6-level VHIS brochure (Bupa Hero, Core through Deluxe Pro) - a document
+// like that isn't 6 different products, it's ONE product with a LOT of
+// options (6 levels x 4 deductibles = 24 combinations), the same way a
+// single-level plan with 4 deductible options is still one product. Each
+// (tier, deductible) combination still becomes its own plan listing (a
+// patient picks a specific level + deductible to buy, same reasoning as
+// deductible alone), but the extraction and this file's own comments
+// must never describe plan levels as separate products - they are
+// options on one plan, worded that way in whatever this returns.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -53,10 +64,11 @@ const PRICING_VARIANT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    plan_tier_label: { type: ['string', 'null'], description: 'How this document names this plan LEVEL, if it offers more than one (e.g. "Core", "Advance", "Deluxe", "Smart Choice", "Signature") - this is still the SAME underlying product with a lot of different options, not a separate plan, same as a deductible option. Null if the document only has one level.' },
     deductible_label: { type: ['string', 'null'], description: 'How this document names the deductible/excess option this rate table is for, e.g. "Deductible HKD8,800" - null if the document only has one pricing structure with no deductible options' },
-    pricing_tiers: { type: 'array', items: PRICING_TIER_SCHEMA, description: 'Every age band row the document states for this deductible option - extract all of them, not a sample' },
+    pricing_tiers: { type: 'array', items: PRICING_TIER_SCHEMA, description: 'Every age band row the document states for this plan level + deductible combination - extract all of them, not a sample' },
   },
-  required: ['deductible_label', 'pricing_tiers'],
+  required: ['plan_tier_label', 'deductible_label', 'pricing_tiers'],
 }
 const CATEGORY_LIMIT_SCHEMA = {
   type: 'object',
@@ -101,7 +113,7 @@ export default async function handler(req, res) {
       model: 'claude-opus-5',
       max_tokens: 16000,
       output_config: { effort: 'medium' },
-      system: 'You are reading a real health insurance policy/plan document or brochure for a Hong Kong clinic platform, and this is the ONLY step that reads it - there is no manual data-entry form afterward, just a review of what you return. Extract: its name, type, the plain benefit categories a patient would recognize (e.g. "Hospitalisation", "Outpatient", "Dental"), a short patient-facing overview in the brochure\'s own voice (what the product brings - not a technical spec sheet; this is the only description a patient will ever see for this plan), the terms a patient should read before buying, whatever coverage-rule figures the document states, and the full age-banded premium table if the document contains one. Only extract what the document actually states - leave a field null/empty rather than guessing a typical industry figure, and never invent a premium number. If a premium table is present, extract every row for every age band it lists (not a sample, not just a few representative rows) - these numbers fill in a form field the insurer will still review before saving, but the whole point is that they should not have to retype a long table by hand, so a partial extraction defeats it. If the table repeats once per deductible/excess option, return one pricing_variants entry per option, each with its own full set of rows. This is a proposal a human will review and edit before saving, so it is fine (expected, even) to leave non-pricing fields blank when the document does not clearly state them.',
+      system: 'You are reading a real health insurance policy/plan document or brochure for a Hong Kong clinic platform, and this is the ONLY step that reads it - there is no manual data-entry form afterward, just a review of what you return. Extract: its name, type, the plain benefit categories a patient would recognize (e.g. "Hospitalisation", "Outpatient", "Dental"), a short patient-facing overview in the brochure\'s own voice (what the product brings - not a technical spec sheet; this is the only description a patient will ever see for this plan), the terms a patient should read before buying, whatever coverage-rule figures the document states, and the full age-banded premium table if the document contains one. Only extract what the document actually states - leave a field null/empty rather than guessing a typical industry figure, and never invent a premium number. If a premium table is present, extract every row for every age band it lists (not a sample, not just a few representative rows) - these numbers fill in a form field the insurer will still review before saving, but the whole point is that they should not have to retype a long table by hand, so a partial extraction defeats it. If the table repeats once per deductible/excess option, return one pricing_variants entry per option, each with its own full set of rows. If the document covers multiple plan LEVELS of the same product (e.g. "Core", "Advance", "Deluxe" - this is still one product with a lot of options, never describe or treat these as separate products), return one pricing_variants entry per level-and-deductible combination, each tagged with its own plan_tier_label and deductible_label (either can be null if the document only varies on one of those two). This is a proposal a human will review and edit before saving, so it is fine (expected, even) to leave non-pricing fields blank when the document does not clearly state them.',
       messages: [{
         role: 'user',
         content: [
