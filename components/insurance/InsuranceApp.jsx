@@ -1571,6 +1571,10 @@ function StaffScreen({ company }) {
   const [decidingAppointmentId,setDecidingAppointmentId]=useState(null)
   const [rejectReasonId,setRejectReasonId]=useState(null)
   const [rejectReason,setRejectReason]=useState('')
+  const [bulkRows,setBulkRows]=useState([])
+  const [bulkFileName,setBulkFileName]=useState('')
+  const [bulkRunning,setBulkRunning]=useState(false)
+  const [bulkResults,setBulkResults]=useState(null)
 
   async function load() {
     setLoading(true)
@@ -1606,6 +1610,58 @@ function StaffScreen({ company }) {
   async function openProof(path) {
     const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  // Bulk, insurer-initiated path - separate from the one-by-one, agent-
+  // initiated My Insurers request above. A management company (many
+  // independent agents, one insurer) is the real case this closes: the
+  // insurer already knows and wants these agents, so each one goes
+  // straight to a real, active appointment - no per-agent proof, no
+  // review queue, nothing for the insurer to individually approve.
+  // Independent only (agentType is never 'captive' here - a captive
+  // agent is tied to one insurer at onboarding by definition, nothing
+  // to "bulk appoint" them to beyond that single institution_id, which
+  // this same endpoint already sets when a brand-new agent is created).
+  function handleBulkFile(file) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const lines = String(e.target.result).split(/\r?\n/).filter(l=>l.trim())
+      const [header, ...rows] = lines
+      const cols = header.split(',').map(c=>c.trim().toLowerCase())
+      const parsed = rows.map(line => {
+        const vals = line.split(',').map(v=>v.trim())
+        const row = {}
+        cols.forEach((c,i)=>{ row[c] = vals[i]||'' })
+        return row
+      }).filter(r=>r.email)
+      setBulkRows(parsed)
+      setBulkFileName(file.name)
+      setBulkResults(null)
+    }
+    reader.readAsText(file)
+  }
+
+  async function runBulkAppoint() {
+    setBulkRunning(true)
+    const results = []
+    for (const row of bulkRows) {
+      try {
+        const res = await fetch('/api/agent/onboard', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            fullName: row.fullname, email: row.email, phone: row.phone, licenseNumber: row.licensenumber,
+            agentType: 'independent', institutionId: company.institutionRefId,
+          }),
+        })
+        const data = await res.json()
+        results.push({ email: row.email, ok: data.status==='OK', message: data.status==='OK' ? (data.isNew?'created & appointed':'appointed') : (data.message||'failed') })
+      } catch (e) {
+        results.push({ email: row.email, ok: false, message: e.message })
+      }
+    }
+    setBulkResults(results)
+    setBulkRunning(false)
+    setBulkRows([]); setBulkFileName('')
   }
 
   async function handleAddUnderwriter() {
@@ -1712,6 +1768,18 @@ function StaffScreen({ company }) {
         ) : (
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddApprover(true)}>+ Add a claims approver</Btn>
         )}
+      </div>
+
+      <div style={{background:C.navyLight,border:`1px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginTop:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Bulk-appoint independent agents (CSV)</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>For a management company or a whole roster you already know and want appointed - e.g. the agents at a captive-agent management firm. Goes straight to a real, active appointment for each one, no individual review. CSV columns: fullName, email, phone, licenseNumber.</div>
+        <input type="file" accept=".csv" onChange={e=>e.target.files?.[0]&&handleBulkFile(e.target.files[0])} style={{width:'100%',fontSize:'11px',marginBottom:'10px'}}/>
+        {bulkRows.length>0&&<div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{bulkFileName} - {bulkRows.length} agent{bulkRows.length!==1?'s':''} ready to appoint.</div>}
+        {bulkRows.length>0&&<Btn variant="navy" style={{width:'100%'}} onClick={runBulkAppoint} disabled={bulkRunning}>{bulkRunning?'Appointing…':`Appoint ${bulkRows.length} agent${bulkRows.length!==1?'s':''}`}</Btn>}
+        {bulkResults&&<div style={{marginTop:'10px',fontSize:'12px'}}>
+          <div style={{color:C.green,fontWeight:600}}>{bulkResults.filter(r=>r.ok).length} of {bulkResults.length} appointed.</div>
+          {bulkResults.filter(r=>!r.ok).length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkResults.filter(r=>!r.ok).map((r,i)=><div key={i}>{r.email}: {r.message}</div>)}</div>}
+        </div>}
       </div>
 
       {appointmentRequests.length>0&&<div style={{background:C.navyLight,border:`1px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginTop:'16px'}}>
