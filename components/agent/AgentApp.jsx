@@ -140,7 +140,7 @@ function Sidebar({ screen, setScreen, agent, onLogout, navItems }) {
 }
 
 // ── OVERVIEW ──────────────────────────────────────────────────────────────
-function OverviewScreen({ agent, policies, inquiries }) {
+function OverviewScreen({ agent, policies, inquiries, onPlanDecided }) {
   const activeCount = policies.filter(p=>p.status==='active').length
   const renewalsSoon = policies.filter(p=>{ const d=daysUntil(p.renewal_date); return d!==null && d<=30 && d>=0 }).length
   const pendingInquiries = inquiries.filter(i=>i.status==='new').length
@@ -148,6 +148,7 @@ function OverviewScreen({ agent, policies, inquiries }) {
   return (
     <PageWrap maxWidth={720}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'20px',textAlign:'center'}}>Overview</h2>
+      <NewPlanBanner agent={agent} onChanged={onPlanDecided}/>
       <div style={{display:'flex',gap:'12px',marginBottom:'24px'}}>
         <StatCard label="Active policies" value={activeCount} sub={agent.agent_type==='captive'?'with your insurer':'across all insurers'} color={C.green} bg={C.greenLight}/>
         <StatCard label="Renewals due soon" value={renewalsSoon} sub="within 30 days" color={C.amber} bg={C.amberLight}/>
@@ -238,26 +239,29 @@ function TransferRequestModal({ policy, agent, onClose, onRequested }) {
 }
 
 // ── MY PLANS ──────────────────────────────────────────────────────────────
-// An agent's own pick of which plans, from their institution's basket,
-// they actually write and sell - your call that not every agent wants to
-// carry every plan in the basket. Opt-OUT (agent_plan_exclusions): every
-// plan starts selected, same as today's behavior, so a new agent isn't
-// blocked from selling anything until they come configure this first.
-// This only ever gates NewPolicyScreen's basket below, never round-robin
-// eligibility for new inquiries - a different concern.
+// An agent's own pick of which plans, from an insurer they're actually
+// appointed to, they write and sell. Opt-IN (agent_plan_decisions), per
+// your call: a brand-new plan is never auto-added - it shows up
+// undecided (ticked false) until the agent explicitly confirms it via
+// the banner on Overview or right here. This only ever gates
+// NewPolicyScreen's basket below, never round-robin eligibility for new
+// inquiries - a different concern. Independent agents only see insurers
+// they hold a real, active appointment to - picking up a NEW insurer is
+// "My Insurers" below, a separate, insurer-approved step.
 function MyPlansScreen({ agent, onViewed }) {
   const [insurers,setInsurers]=useState([])
   const [builderInsurer,setBuilderInsurer]=useState(agent.agent_type==='captive'?agent.institution_id:'')
   const [plans,setPlans]=useState([])
-  const [excludedIds,setExcludedIds]=useState(new Set())
+  const [decisions,setDecisions]=useState({}) // {planId: 'selected'|'dismissed'}
   const [loading,setLoading]=useState(true)
   const [savingId,setSavingId]=useState(null)
 
   useEffect(() => {
     if (agent.agent_type==='independent') {
-      supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
+      supabase.from('agent_institution_appointments').select('institutions(id,name)').eq('agent_id', agent.id).eq('status','active')
+        .then(({data}) => setInsurers((data||[]).map(d=>d.institutions).filter(Boolean)))
     }
-  }, [agent.agent_type])
+  }, [agent.agent_type, agent.id])
 
   // Clears the nav badge the moment this screen is actually opened - the
   // badge's whole job is getting the agent to come look, not staying lit
@@ -273,43 +277,186 @@ function MyPlansScreen({ agent, onViewed }) {
     if (!inst) { setPlans([]); setLoading(false); return }
     const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, plan_type').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
     setPlans(Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values()))
-    const { data: excl } = await supabase.from('agent_plan_exclusions').select('plan_id').eq('agent_id', agent.id)
-    setExcludedIds(new Set((excl||[]).map(e=>e.plan_id)))
+    const { data: dec } = await supabase.from('agent_plan_decisions').select('plan_id, decision').eq('agent_id', agent.id)
+    setDecisions(Object.fromEntries((dec||[]).map(d=>[d.plan_id, d.decision])))
     setLoading(false)
   }
   useEffect(() => { load() }, [builderInsurer, agent.id])
 
-  async function toggle(planId) {
+  async function toggle(planId, nextSelected) {
     setSavingId(planId)
-    const isExcluded = excludedIds.has(planId)
-    if (isExcluded) await supabase.from('agent_plan_exclusions').delete().eq('agent_id', agent.id).eq('plan_id', planId)
-    else await supabase.from('agent_plan_exclusions').insert({ agent_id: agent.id, plan_id: planId })
-    setExcludedIds(prev => { const n = new Set(prev); isExcluded ? n.delete(planId) : n.add(planId); return n })
+    await supabase.from('agent_plan_decisions').upsert({ agent_id: agent.id, plan_id: planId, decision: nextSelected?'selected':'dismissed' })
+    setDecisions(prev => ({ ...prev, [planId]: nextSelected?'selected':'dismissed' }))
     setSavingId(null)
   }
 
   return (
     <PageWrap maxWidth={720}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px'}}>My Plans</h2>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Which plans from your basket you actually write and sell - everything's ticked by default. Untick a plan to stop offering it; it stays available to pick back up any time.</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Which plans, from an insurer you're appointed to, you actually write and sell. A brand-new plan starts unticked - you confirm it before it shows up in your basket, it's never added for you.</div>
       {agent.agent_type==='independent'&&<select value={builderInsurer} onChange={e=>setBuilderInsurer(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'10px',padding:'10px',marginBottom:'14px'}}>
         <option value="">Select an insurer…</option>
         {insurers.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
       </select>}
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&builderInsurer&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No active plans in this basket yet.</div>}
+      {!loading&&builderInsurer&&plans.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No active plans from this insurer yet.</div>}
       {!loading&&plans.map(p=>{
-        const checked = !excludedIds.has(p.id)
+        const checked = decisions[p.id]==='selected'
         return (
-          <Card key={p.id} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}} onClick={()=>toggle(p.id)}>
-            <input type="checkbox" checked={checked} disabled={savingId===p.id} onChange={()=>toggle(p.id)} onClick={e=>e.stopPropagation()} style={{width:18,height:18}}/>
+          <Card key={p.id} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}} onClick={()=>toggle(p.id, !checked)}>
+            <input type="checkbox" checked={checked} disabled={savingId===p.id} onChange={()=>toggle(p.id, !checked)} onClick={e=>e.stopPropagation()} style={{width:18,height:18}}/>
             <div style={{flex:1}}>
               <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
             </div>
+            {!decisions[p.id]&&<span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:C.amberLight,color:C.amber}}>New - not yet reviewed</span>}
           </Card>
         )
       })}
+    </PageWrap>
+  )
+}
+
+// ── NEW PLAN BANNER (Overview) ───────────────────────────────────────────
+// "Are you equipped to sell this?" - a new plan never silently joins an
+// agent's basket now; it prompts them, once, right where they land after
+// signing in. "Not for me" is a real answer (dismissed), not just hiding
+// the prompt - it won't be asked again, same plan stays reachable to
+// pick back up later from My Plans if they change their mind.
+function NewPlanBanner({ agent, onChanged }) {
+  const [undecided,setUndecided]=useState([])
+  const [busyId,setBusyId]=useState(null)
+
+  async function load() {
+    let myCompanyNames = []
+    if (agent.agent_type === 'captive') {
+      myCompanyNames = agent.institutions?.name ? [agent.institutions.name] : []
+    } else {
+      const { data: appts } = await supabase.from('agent_institution_appointments')
+        .select('institutions(name)').eq('agent_id', agent.id).eq('status','active')
+      myCompanyNames = [...new Set((appts||[]).map(x=>x.institutions?.name).filter(Boolean))]
+    }
+    if (myCompanyNames.length===0) { setUndecided([]); return }
+    const { data: plans } = await supabase.from('insurance_plans').select('id, plan_name, company_name')
+      .eq('status','active').eq('self_serve_only',false).in('company_name', myCompanyNames)
+    const { data: dec } = await supabase.from('agent_plan_decisions').select('plan_id').eq('agent_id', agent.id)
+    const decidedIds = new Set((dec||[]).map(d=>d.plan_id))
+    setUndecided((plans||[]).filter(p=>!decidedIds.has(p.id)))
+  }
+  useEffect(() => { load() }, [agent.id])
+
+  async function decide(planId, selected) {
+    setBusyId(planId)
+    await supabase.from('agent_plan_decisions').upsert({ agent_id: agent.id, plan_id: planId, decision: selected?'selected':'dismissed' })
+    setUndecided(prev => prev.filter(p=>p.id!==planId))
+    setBusyId(null)
+    onChanged?.()
+  }
+
+  if (undecided.length===0) return null
+  return (
+    <div style={{marginBottom:'20px'}}>
+      {undecided.map(p=>(
+        <Card key={p.id} style={{padding:'14px 16px',marginBottom:'8px',background:C.amberLight,border:`1px solid ${C.amber}`}}>
+          <div style={{fontSize:'13px',fontWeight:600,marginBottom:'2px'}}>New plan: {p.plan_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px'}}>{p.company_name} - are you equipped to sell this?</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={busyId===p.id} onClick={()=>decide(p.id,true)}>Yes, add to my plans</Btn>
+            <Btn style={{flex:1,fontSize:'12px'}} disabled={busyId===p.id} onClick={()=>decide(p.id,false)}>Not for me</Btn>
+          </div>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+// ── MY INSURERS ───────────────────────────────────────────────────────────
+// Self-service request to add another insurer - per HK's actual licensing
+// regime (Insurance Authority's Maximum Number of Authorized Insurers
+// Rules), an individual agent can be appointed by up to 4 insurers (max 2
+// long-term/life), but each appointment is the INSURER's own real act,
+// never something an agent can self-certify into existence - this only
+// ever creates a pending_review request (with optional proof), reviewed
+// and approved/rejected by that insurer's own staff (InsuranceApp.jsx's
+// Staff screen). Independent agents only - a captive agent is tied to
+// their one institution by definition.
+function MyInsurersScreen({ agent }) {
+  const [appointments,setAppointments]=useState([])
+  const [allInsurers,setAllInsurers]=useState([])
+  const [requesting,setRequesting]=useState(false)
+  const [newInsurerId,setNewInsurerId]=useState('')
+  const [proofFile,setProofFile]=useState(null)
+  const [saving,setSaving]=useState(false)
+  const [error,setError]=useState(null)
+
+  async function load() {
+    const { data } = await supabase.from('agent_institution_appointments')
+      .select('id, status, requested_at, appointed_at, decided_at, decision_reason, proof_document_path, institutions(id,name)')
+      .eq('agent_id', agent.id).order('requested_at', { ascending: false, nullsFirst: false })
+    setAppointments(data||[])
+    const { data: insts } = await supabase.from('institutions').select('id,name').eq('institution_type','insurer')
+    setAllInsurers(insts||[])
+  }
+  useEffect(() => { load() }, [agent.id])
+
+  const takenIds = new Set(appointments.filter(a=>a.status!=='rejected').map(a=>a.institutions?.id))
+  const availableInsurers = allInsurers.filter(i=>!takenIds.has(i.id))
+  const activeCount = appointments.filter(a=>a.status==='active').length
+
+  async function handleRequest() {
+    if (!newInsurerId) return
+    setSaving(true); setError(null)
+    try {
+      let proofPath = null
+      if (proofFile) {
+        const path = `agent-appointments/${agent.id}/${Date.now()}-${proofFile.name}`
+        const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, proofFile)
+        if (upErr) { setError(upErr.message); setSaving(false); return }
+        proofPath = path
+      }
+      const { error: insErr } = await supabase.from('agent_institution_appointments').insert({
+        agent_id: agent.id, institution_id: newInsurerId, status: 'pending_review',
+        requested_at: new Date().toISOString(), proof_document_path: proofPath,
+      })
+      if (insErr) { setError(insErr.message); setSaving(false); return }
+      setNewInsurerId(''); setProofFile(null); setRequesting(false)
+      load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <PageWrap maxWidth={720}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px'}}>My Insurers</h2>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Hong Kong's Insurance Authority caps an individual agent at 4 appointed insurers (at most 2 long-term/life) - each appointment is the insurer's own call, so a request here is reviewed by their staff before it's real, not active on submission.</div>
+      {activeCount>=4&&<div style={{fontSize:'12px',color:C.amber,background:C.amberLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px'}}>You're at the typical IA cap of 4 appointed insurers - a new one may need your existing insurers' consent first.</div>}
+      {appointments.map(a=>(
+        <Card key={a.id} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div style={{fontSize:'14px',fontWeight:600}}>{a.institutions?.name}</div>
+          <span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:a.status==='active'?C.greenLight:a.status==='rejected'?C.redLight:C.amberLight,color:a.status==='active'?C.green:a.status==='rejected'?C.red:C.amber}}>
+            {a.status==='active'?'Appointed':a.status==='rejected'?'Rejected':'Pending review'}
+          </span>
+        </Card>
+      ))}
+      {appointments.some(a=>a.status==='rejected'&&a.decision_reason)&&
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>{appointments.filter(a=>a.status==='rejected').map(a=><div key={a.id}>{a.institutions?.name}: {a.decision_reason}</div>)}</div>}
+
+      {!requesting
+        ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>setRequesting(true)}>+ Request appointment with another insurer</Btn>
+        : <Card style={{padding:'16px'}}>
+            <select value={newInsurerId} onChange={e=>setNewInsurerId(e.target.value)} style={{width:'100%',border:`1px solid ${C.border}`,borderRadius:'10px',padding:'10px',marginBottom:'10px'}}>
+              <option value="">Select an insurer…</option>
+              {availableInsurers.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Proof of appointment/license with this insurer (optional, but speeds up review)</div>
+            <input type="file" onChange={e=>setProofFile(e.target.files?.[0]||null)} style={{fontSize:'11px',marginBottom:'10px'}}/>
+            {error&&<div style={{fontSize:'11px',color:C.red,marginBottom:'8px'}}>{error}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setRequesting(false);setNewInsurerId('');setProofFile(null);setError(null)}}>Cancel</Btn>
+              <Btn variant="primary" style={{flex:1}} disabled={saving||!newInsurerId} onClick={handleRequest}>{saving?'Submitting…':'Submit request'}</Btn>
+            </div>
+          </Card>}
     </PageWrap>
   )
 }
@@ -646,11 +793,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         const authIds = new Set((auths||[]).map(a=>a.plan_id))
         allPlans = allPlans.filter(p=>authIds.has(p.id))
       }
-      // The agent's own pick (My Plans) of what they actually sell -
-      // opt-out, so this only ever narrows the basket, never widens it.
-      const { data: excl } = await supabase.from('agent_plan_exclusions').select('plan_id').eq('agent_id', agent.id)
-      const excludedIds = new Set((excl||[]).map(e=>e.plan_id))
-      setBasketPlans(allPlans.filter(p=>!excludedIds.has(p.id)))
+      // The agent's own pick (My Plans) of what they actually sell - opt-
+      // IN now, so a plan only ever counts once the agent has explicitly
+      // confirmed it (via My Plans or the new-plan banner), never by
+      // default. This only ever narrows the basket, never widens it.
+      const { data: dec } = await supabase.from('agent_plan_decisions').select('plan_id').eq('agent_id', agent.id).eq('decision','selected')
+      const selectedIds = new Set((dec||[]).map(d=>d.plan_id))
+      setBasketPlans(allPlans.filter(p=>selectedIds.has(p.id)))
       // Medsa's own cut, set once per insurer partnership by Medsa admin
       // (medsa-admin's Insurers tab) - a contract term, not something an
       // agent types on a per-policy basis.
@@ -2073,16 +2222,21 @@ export default function AgentApp() {
       .select('id', {count:'exact', head:true}).eq('claimed_by_agent_id', a.id).eq('status', 'new')
     setNewInquiryCount((unclaimedCount||0) + (mineNewCount||0))
 
-    // A new plan auto-joins every eligible agent's basket by design
-    // (opt-out, see MyPlansScreen) - nothing to configure for it to be
-    // sellable, but that also meant no signal at all that it showed up.
-    // Same myCompanyNames scoping as above, across every insurer this
-    // agent is eligible for, not just the one MyPlansScreen happens to
-    // have picked in its own dropdown.
-    const { count: newPlansCount } = myCompanyNames.length===0 ? { count: 0 } : await supabase.from('insurance_plans')
-      .select('id', {count:'exact', head:true}).eq('status','active').eq('self_serve_only',false)
-      .in('company_name', myCompanyNames).gt('created_at', a.my_plans_last_viewed_at)
-    setNewPlansCount(newPlansCount||0)
+    // A plan the agent has never decided on (selected or dismissed,
+    // agent_plan_decisions) - same real signal the new-plan banner itself
+    // acts on, not just a date comparison, so this and the banner always
+    // agree on what still needs a decision. Same myCompanyNames scoping
+    // as above, across every insurer this agent is eligible for, not
+    // just the one MyPlansScreen happens to have picked in its dropdown.
+    let newPlansCount = 0
+    if (myCompanyNames.length > 0) {
+      const { data: eligiblePlans } = await supabase.from('insurance_plans').select('id')
+        .eq('status','active').eq('self_serve_only',false).in('company_name', myCompanyNames)
+      const { data: dec } = await supabase.from('agent_plan_decisions').select('plan_id').eq('agent_id', a.id)
+      const decidedIds = new Set((dec||[]).map(d=>d.plan_id))
+      newPlansCount = (eligiblePlans||[]).filter(p=>!decidedIds.has(p.id)).length
+    }
+    setNewPlansCount(newPlansCount)
     setLoading(false)
   }
 
@@ -2101,6 +2255,7 @@ export default function AgentApp() {
   const navItems = [
     {key:'overview', icon:'\u25a3', label:'Overview'},
     {key:'myplans', icon:'\u25a2', label:'My Plans', badge: newPlansCount},
+    ...(agent?.agent_type==='independent' ? [{key:'myinsurers', icon:'\u25a0', label:'My Insurers'}] : []),
     {key:'policies', icon:'\u25c7', label:'Policies'},
     {key:'inquiries', icon:'\u25c9', label:'Claim Inquiries', badge: pendingCount},
     {key:'planinquiries', icon:'\u25c6', label:'New Plan Inquiries', badge: newInquiryCount},
@@ -2117,8 +2272,9 @@ export default function AgentApp() {
       <Sidebar screen={screen} setScreen={setScreen} agent={agent} navItems={navItems} onLogout={()=>{setAgent(null);setScreen('overview')}}/>
       <div style={{flex:1,padding:'32px 40px',overflowY:'auto'}}>
         {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
-        {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries}/>}
+        {!loading&&screen==='overview'&&<OverviewScreen agent={agent} policies={policies} inquiries={inquiries} onPlanDecided={()=>setNewPlansCount(c=>Math.max(0,c-1))}/>}
         {!loading&&screen==='myplans'&&<MyPlansScreen agent={agent} onViewed={()=>setNewPlansCount(0)}/>}
+        {!loading&&screen==='myinsurers'&&<MyInsurersScreen agent={agent}/>}
         {!loading&&screen==='policies'&&<PoliciesScreen agent={agent} policies={policies} onNewPolicy={()=>{setPrefillInquiry(null);setScreen('newpolicy')}} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='newpolicy'&&<NewPolicyScreen agent={agent} prefillInquiry={prefillInquiry} onBack={()=>setScreen(prefillInquiry?'planinquiries':'policies')} onSaved={()=>{loadData(agent);setPrefillInquiry(null);setScreen('policies')}}/>}
         {!loading&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={inquiries} onStatusChange={handleStatusChange}/>}

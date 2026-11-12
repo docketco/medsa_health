@@ -1567,6 +1567,10 @@ function StaffScreen({ company }) {
   const [savingApprover,setSavingApprover]=useState(false)
   const [approverNotice,setApproverNotice]=useState(null)
   const [approverCredentialNotice,setApproverCredentialNotice]=useState(null)
+  const [appointmentRequests,setAppointmentRequests]=useState([])
+  const [decidingAppointmentId,setDecidingAppointmentId]=useState(null)
+  const [rejectReasonId,setRejectReasonId]=useState(null)
+  const [rejectReason,setRejectReason]=useState('')
 
   async function load() {
     setLoading(true)
@@ -1576,9 +1580,33 @@ function StaffScreen({ company }) {
     const { data: approverRows } = await supabase.from('insurance_claims_approvers')
       .select('id, full_name, email, medsa_id, active').eq('institution_id', company.institutionRefId).order('created_at')
     setApprovers(approverRows||[])
+    // Self-service requests from agents (My Insurers) asking to be
+    // appointed - a real decision only the insurer can make, per HK's
+    // actual licensing regime (see MyInsurersScreen's own header comment).
+    const { data: apptRows } = await supabase.from('agent_institution_appointments')
+      .select('id, proof_document_path, requested_at, agents(full_name, medsa_id, email)')
+      .eq('institution_id', company.institutionRefId).eq('status','pending_review').order('requested_at')
+    setAppointmentRequests(apptRows||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [company.id])
+
+  async function decideAppointment(reqId, approve, reason) {
+    setDecidingAppointmentId(reqId)
+    await supabase.from('agent_institution_appointments').update({
+      status: approve?'active':'rejected',
+      appointed_at: approve?new Date().toISOString():null,
+      decided_at: new Date().toISOString(), decision_reason: approve?null:(reason||null),
+    }).eq('id', reqId)
+    setDecidingAppointmentId(null)
+    setRejectReasonId(null); setRejectReason('')
+    load()
+  }
+
+  async function openProof(path) {
+    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
 
   async function handleAddUnderwriter() {
     if (!underwriterForm.fullName.trim()||!underwriterForm.email.trim()) return
@@ -1685,6 +1713,32 @@ function StaffScreen({ company }) {
           <Btn variant="primary" style={{width:'100%'}} onClick={()=>setShowAddApprover(true)}>+ Add a claims approver</Btn>
         )}
       </div>
+
+      {appointmentRequests.length>0&&<div style={{background:C.navyLight,border:`1px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginTop:'16px'}}>
+        <div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Agent appointment requests ({appointmentRequests.length})</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>An agent asking to sell your plans - your own call whether they're actually appointed, same as any real licensing decision.</div>
+        {appointmentRequests.map(r=>(
+          <div key={r.id} style={{background:'#fff',borderRadius:'8px',padding:'12px',marginBottom:'8px'}}>
+            <div style={{fontSize:'13px',fontWeight:600}}>{r.agents?.full_name}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>{r.agents?.email} · {r.agents?.medsa_id}</div>
+            {r.proof_document_path&&<div onClick={()=>openProof(r.proof_document_path)} style={{fontSize:'12px',color:C.blue,cursor:'pointer',marginBottom:'8px'}}>📄 View submitted proof</div>}
+            {rejectReasonId===r.id ? (
+              <div>
+                <textarea value={rejectReason} onChange={e=>setRejectReason(e.target.value)} rows={2} placeholder="Reason (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',marginBottom:'8px'}}/>
+                <div style={{display:'flex',gap:'8px'}}>
+                  <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setRejectReasonId(null);setRejectReason('')}}>Cancel</Btn>
+                  <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,false,rejectReason)}>Confirm reject</Btn>
+                </div>
+              </div>
+            ) : (
+              <div style={{display:'flex',gap:'8px'}}>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,true)}>{decidingAppointmentId===r.id?'Saving…':'✓ Appoint'}</Btn>
+                <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>setRejectReasonId(r.id)}>✕ Reject</Btn>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>}
     </div>
   )
 }
