@@ -10,14 +10,22 @@ import C from '../components/shared/colours'
 import MedsaLogo from '../components/shared/MedsaLogo'
 
 export default function AgentSignupPage() {
-  const [form, setForm] = useState({ fullName:'', email:'', phone:'', licenseNumber:'', password:'' })
+  const [form, setForm] = useState({ fullName:'', email:'', phone:'', licenseNumber:'', password:'', confirmPassword:'' })
   const [proofFile, setProofFile] = useState(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
   const [done, setDone] = useState(false)
 
+  // Real gap: no confirm-password field meant a typo in the only password
+  // box was invisible until the very next sign-in attempt failed, with
+  // no way to tell "wrong password" apart from "I mistyped it when I
+  // signed up" - the same confirm-field pattern most real signup forms
+  // use specifically to catch this before the account is even created.
+  const passwordsMismatch = form.confirmPassword.length > 0 && form.password !== form.confirmPassword
+
   async function handleSubmit() {
     if (!form.fullName.trim() || !form.email.trim() || !form.licenseNumber.trim() || !form.password) return
+    if (form.password !== form.confirmPassword) { setError('Passwords don\'t match.'); return }
     setSaving(true); setError(null)
     try {
       let licenseProofPath = null
@@ -63,10 +71,12 @@ export default function AgentSignupPage() {
           <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input value={form.licenseNumber} onChange={e=>setForm(f=>({...f,licenseNumber:e.target.value}))} placeholder="IA license number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
           <input type="password" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))} placeholder="Choose a password" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+          <input type="password" value={form.confirmPassword} onChange={e=>setForm(f=>({...f,confirmPassword:e.target.value}))} placeholder="Confirm password" style={{width:'100%',border:`0.5px solid ${passwordsMismatch?C.red:C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:passwordsMismatch?'4px':'10px',boxSizing:'border-box'}}/>
+          {passwordsMismatch&&<div style={{fontSize:'11px',color:C.red,marginBottom:'10px'}}>Passwords don't match.</div>}
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Proof of your license (optional, but speeds up verification)</div>
           <input type="file" onChange={e=>setProofFile(e.target.files?.[0]||null)} style={{fontSize:'11px',marginBottom:'14px'}}/>
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
-          <button onClick={handleSubmit} disabled={saving||!form.fullName.trim()||!form.email.trim()||!form.licenseNumber.trim()||!form.password} style={{width:'100%',border:'none',borderRadius:'10px',padding:'12px',fontSize:'14px',fontWeight:600,cursor:saving?'not-allowed':'pointer',background:C.green,color:'#fff',fontFamily:'inherit',opacity:saving?0.6:1}}>{saving?'Creating…':'Create account'}</button>
+          <button onClick={handleSubmit} disabled={saving||!form.fullName.trim()||!form.email.trim()||!form.licenseNumber.trim()||!form.password||passwordsMismatch||!form.confirmPassword} style={{width:'100%',border:'none',borderRadius:'10px',padding:'12px',fontSize:'14px',fontWeight:600,cursor:saving?'not-allowed':'pointer',background:C.green,color:'#fff',fontFamily:'inherit',opacity:saving?0.6:1}}>{saving?'Creating…':'Create account'}</button>
         </div>
         <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'16px',lineHeight:1.5}}>Already have an account? <a href="/agent-portal" style={{color:C.green}}>Sign in</a>.</div>
       </div>

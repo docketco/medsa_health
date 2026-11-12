@@ -722,7 +722,7 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
           </div>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Always flag for review</div>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Anything a patient declares that matches one of these forces a "needs review" verdict on both the automated and talk-to-an-agent paths, regardless of the plan's own coverage terms above - your own call on what always needs a human, not something Medsa or an agent overrides.</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Anything a patient declares that matches one of these forces a "needs review" verdict for the underwriter, regardless of the plan's own coverage terms above - your own call on what always needs a human, not something Medsa or an agent overrides.</div>
             <div style={{display:'flex',flexWrap:'wrap',gap:'6px',marginBottom:'8px'}}>
               {form.insurer_flags.map(flag=>(
                 <div key={flag} onClick={()=>removeFlag(flag)} style={{padding:'5px 10px',borderRadius:'16px',fontSize:'11px',background:C.amber,color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',gap:'6px'}}>{flag}<span style={{fontWeight:700}}>×</span></div>
@@ -2159,7 +2159,7 @@ function PaymentsManager({ company }) {
           <span onClick={refreshStatus} style={{fontSize:'11px',color:C.green,cursor:'pointer'}}>{refreshing?'Refreshing…':'↻ Refresh status'}</span>
         </div>
         {!connectActive&&<button onClick={connectStripe} disabled={connecting} style={{width:'100%',padding:'10px',background:C.navy,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer',marginBottom:'8px'}}>{connecting?'Opening Stripe…':status.stripe_connect_status==='onboarding'?'Finish onboarding on Stripe':'Connect Stripe account'}</button>}
-        {connectActive&&<div style={{padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Connected. Turn self-serve checkout on per plan from Plans → edit a plan → "Self-serve checkout for this plan" - some of your plans can use it while others stay bill-the-patient-yourselves.</div>}
+        {connectActive&&<div style={{padding:'10px 12px',background:C.cream,borderRadius:'8px',fontSize:'12px',color:C.textSub}}>Connected. Self-serve checkout per plan is shelved for now - every purchase goes through an agent, so this account just sits ready for if/when that changes.</div>}
         {connectNotice&&<div style={{marginTop:'10px',fontSize:'11px',color:connectNotice==='Refreshed.'?C.green:C.red}}>{connectNotice}</div>}
       </Card>
     </div>
