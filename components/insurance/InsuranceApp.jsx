@@ -619,6 +619,37 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
     load()
   }
 
+  // Document auto-fill found more than one deductible option in the same
+  // premium table - rather than force a choice of just one, create every
+  // option as its own plan straight away (each is a real, separately
+  // priced product a patient picks between, not a variant of one plan).
+  // Deliberately plain: plan_type/key_benefits/terms only, no commission/
+  // self-declare/checkout settings - those apply per-plan and the insurer
+  // sets them from "Your listed plans" below once these land, same as
+  // editing any other auto-filled plan.
+  async function createPlansFromVariants(basePlanName, baseExtracted, variants) {
+    for (const v of variants) {
+      const name = v.deductible_label ? `${basePlanName} (${v.deductible_label})` : basePlanName
+      const { data: newPlan } = await supabase.from('insurance_plans').insert({
+        company_name: company.name, plan_name: name,
+        plan_type: baseExtracted.plan_type || null, key_benefits: baseExtracted.key_benefits || null,
+        additional_terms: baseExtracted.additional_terms || null,
+        status: insurerSelfServe ? 'pending_review' : 'active',
+        created_by: insurerSelfServe ? company.name : null,
+      }).select().maybeSingle()
+      if (newPlan && v.pricing_tiers?.length) {
+        await supabase.from('insurance_plan_pricing_tiers').insert(v.pricing_tiers.map(t => ({
+          plan_id: newPlan.id, age_min: t.age_min, age_max: t.age_max, monthly_premium: t.monthly_premium,
+          semi_private_premium: t.semi_private_premium ?? null, private_premium: t.private_premium ?? null,
+        })))
+      }
+    }
+    setCreating(false); setEditingId(null)
+    setForm(PLAN_MANAGER_EMPTY_FORM)
+    setTiers([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
+    load()
+  }
+
   async function handleSubmit() {
     const validTiers = tiers.filter(t => t.age_min!=='' && t.age_max!=='' && t.monthly_premium!=='')
     if (!form.plan_name || validTiers.length===0) return
@@ -732,7 +763,7 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
           <div style={{fontSize:'14px',fontWeight:600,marginBottom:'14px'}}>{editingId?'Edit plan listing':'New plan listing'}</div>
-          <DocumentAutoFillCard form={form} setForm={setForm} uploadPathPrefix={`insurers/${company.id}/plans`}/>
+          <DocumentAutoFillCard form={form} setForm={setForm} tiers={tiers} setTiers={setTiers} uploadPathPrefix={`insurers/${company.id}/plans`} onCreateVariantPlans={createPlansFromVariants}/>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Plan name</div>
             <input value={form.plan_name} onChange={e=>setForm(f=>({...f,plan_name:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. AIA Gold Health"/>
@@ -969,16 +1000,35 @@ function mergeExtractedIntoForm(prevForm, extracted) {
   }
 }
 
-function DocumentAutoFillCard({ form, setForm, uploadPathPrefix }) {
+// A document's pricing_variants rows come back as numbers; the tier
+// editor's inputs are controlled strings, same shape PlanManager already
+// uses when loading an existing plan's tiers for editing.
+function variantToTierRows(variant) {
+  return (variant.pricing_tiers||[]).map(t => ({
+    age_min: t.age_min!=null?String(t.age_min):'', age_max: t.age_max!=null?String(t.age_max):'',
+    monthly_premium: t.monthly_premium!=null?String(t.monthly_premium):'',
+    semi_private_premium: t.semi_private_premium!=null?String(t.semi_private_premium):'',
+    private_premium: t.private_premium!=null?String(t.private_premium):'',
+    annual_limit: '',
+  }))
+}
+
+function DocumentAutoFillCard({ form, setForm, tiers, setTiers, uploadPathPrefix, onCreateVariantPlans }) {
   const [docFile,setDocFile]=useState(null)
   const [uploadingDoc,setUploadingDoc]=useState(false)
   const [parsingDoc,setParsingDoc]=useState(false)
   const [docError,setDocError]=useState(null)
   const [autoFilledNote,setAutoFilledNote]=useState(null)
+  // Set only when the document covered more than one deductible/excess
+  // option - each one is a separate plan listing (see this file's own
+  // comment on why), so there's a real choice to make rather than one
+  // obvious thing to fill in.
+  const [extraVariants,setExtraVariants]=useState(null)
+  const [creatingVariants,setCreatingVariants]=useState(false)
 
   async function handleUploadDoc() {
     if (!docFile) return
-    setUploadingDoc(true); setDocError(null); setAutoFilledNote(null)
+    setUploadingDoc(true); setDocError(null); setAutoFilledNote(null); setExtraVariants(null)
     try {
       const path = `${uploadPathPrefix}/${Date.now()}-${docFile.name}`
       const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, docFile)
@@ -992,7 +1042,13 @@ function DocumentAutoFillCard({ form, setForm, uploadPathPrefix }) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error || 'Could not read this document')
       setForm(f => mergeExtractedIntoForm(f, json.extracted))
-      setAutoFilledNote('Filled in from your document - review every field before saving, nothing here was applied automatically.')
+      const variants = json.extracted.pricing_variants || []
+      const rowCount = variants.reduce((n,v)=>n+(v.pricing_tiers?.length||0), 0)
+      if (variants.length > 0) setTiers(variantToTierRows(variants[0]))
+      let note = 'Filled in from your document - review every field before saving, nothing here was applied automatically.'
+      if (rowCount > 0) note += ` Found ${rowCount} age-band pricing row${rowCount===1?'':'s'}${variants.length>1?` across ${variants.length} deductible options`:''} - no need to type these in by hand.`
+      setAutoFilledNote(note)
+      if (variants.length > 1) setExtraVariants({ base: json.extracted, variants })
     } catch (e) {
       setDocError(e.message)
     } finally {
@@ -1000,10 +1056,18 @@ function DocumentAutoFillCard({ form, setForm, uploadPathPrefix }) {
     }
   }
 
+  async function handleCreateAllVariants() {
+    if (!extraVariants) return
+    setCreatingVariants(true)
+    await onCreateVariantPlans(form.plan_name || extraVariants.base.plan_name, extraVariants.base, extraVariants.variants)
+    setCreatingVariants(false)
+    setExtraVariants(null)
+  }
+
   return (
     <div style={{background:C.beige,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px',marginBottom:'14px'}}>
       <div style={{fontSize:'12px',fontWeight:600,marginBottom:'6px'}}>✨ Auto-fill from your policy document</div>
-      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px',lineHeight:1.5}}>Upload the real plan/policy document (PDF or a clear photo) and every field below gets proposed from it - review and edit before saving, nothing is applied automatically.</div>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px',lineHeight:1.5}}>Upload the real plan/policy document, including its premium table if it has one (PDF or a clear photo) - every field below AND the age-banded pricing tiers get proposed from it. Review before saving, nothing is applied automatically.</div>
       <div style={{display:'flex',gap:'6px'}}>
         <input type="file" accept=".pdf,.png,.jpg,.jpeg" onChange={e=>setDocFile(e.target.files?.[0]||null)} style={{flex:1,fontSize:'11px'}}/>
         <Btn variant="navy" style={{flexShrink:0}} onClick={handleUploadDoc} disabled={!docFile||uploadingDoc||parsingDoc}>{uploadingDoc?'Uploading…':parsingDoc?'Reading…':'Upload & fill'}</Btn>
@@ -1011,6 +1075,10 @@ function DocumentAutoFillCard({ form, setForm, uploadPathPrefix }) {
       {docError&&<div style={{fontSize:'11px',color:C.red,marginTop:'8px'}}>{docError}</div>}
       {autoFilledNote&&<div style={{fontSize:'11px',color:C.green,marginTop:'8px'}}>{autoFilledNote}</div>}
       {form.policy_document_path&&!docError&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Document on file - will be saved with this plan.</div>}
+      {extraVariants&&<div style={{marginTop:'10px',background:'#fff',border:`1px solid ${C.border}`,borderRadius:'8px',padding:'10px'}}>
+        <div style={{fontSize:'11.5px',color:C.text,lineHeight:1.5,marginBottom:'8px'}}>This document covers <b>{extraVariants.variants.length} deductible options</b>, each with its own full pricing table. The form below is filled in with the first one ({extraVariants.variants[0].deductible_label||'no deductible'}) - rename it yourself if you're keeping just this one, or create all {extraVariants.variants.length} as separate plans in one go (each named after its deductible option, all landing below for you to review/edit/publish same as any other plan).</div>
+        <Btn variant="navy" style={{width:'100%'}} onClick={handleCreateAllVariants} disabled={creatingVariants}>{creatingVariants?'Creating…':`Create all ${extraVariants.variants.length} deductible options as separate plans`}</Btn>
+      </div>}
     </div>
   )
 }

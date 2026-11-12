@@ -601,8 +601,9 @@ function AgentVerificationTab() {
 
   return (
     <div>
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>
-        An agent who self-registered (not onboarded by an insurer or team). Look up their license number at <a href="https://iir.ia.org.hk" target="_blank" rel="noreferrer">iir.ia.org.hk</a> - the IA's own public register - before approving.
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.6,background:C.beige,borderRadius:'8px',padding:'12px'}}>
+        An agent who self-registered (not onboarded by an insurer or team - that path is already trusted and skips this queue). Most onboarding should go through an insurer or a partner management company instead; self-signup is the fallback for an independent agent nobody's appointed yet, so check it carefully.<br/><br/>
+        <strong>How to verify:</strong> open the IA's own public register at <a href="https://iir.ia.org.hk/searchLicenceNo.html" target="_blank" rel="noreferrer">iir.ia.org.hk/searchLicenceNo.html</a>, search the license number below, and confirm the name and status ("Active") on the result match what's declared here. There's no API for this - it's a real manual lookup every time, same as it would be for any other individual license check. If it doesn't match (or the license is lapsed/revoked), reject.
       </div>
       {loading && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Loading…</div>}
       {!loading && agents.length===0 && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No pending agent sign-ups.</div>}
