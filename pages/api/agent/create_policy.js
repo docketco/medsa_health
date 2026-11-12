@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const {
     agentId, patientId, patientName, lineItems, bundleDiscountHkd,
-    policyNumber, status, startDate, renewalDate, inquiryId,
+    policyNumber, startDate, renewalDate, inquiryId,
     brokerCommissionHkd, referralFeeHkd, wardClass, paymentFrequency, healthDeclarationAcknowledged,
     // Real gap: nothing in this form ever collected the client's payment
     // details the insurer actually needs to set up premium collection
@@ -35,6 +35,17 @@ export default async function handler(req, res) {
   if (!agentId) return res.status(400).json({ status: 'ERROR', message: 'agentId is required.' })
   if (!Array.isArray(lineItems) || lineItems.length === 0) {
     return res.status(400).json({ status: 'ERROR', message: 'Add at least one real plan first - from your basket or by searching.' })
+  }
+  // Real gap found live-testing: an agent could pick 'active' on the
+  // client and skip underwriting entirely - there was never a real gate,
+  // only a UI toggle. Per your call: every policy an agent writes now
+  // goes to the underwriter the moment it's submitted, no separate
+  // button, and 'active' only ever happens from the underwriter's own
+  // approval (pages/api/underwriter/decide.js) - so status is never
+  // trusted from the client, it's always 'quote' here regardless of what
+  // (if anything) the client still sends.
+  if (!healthDeclarationAcknowledged) {
+    return res.status(400).json({ status: 'ERROR', message: 'Review and accept the health declaration with the patient before submitting.' })
   }
 
   const { data: agent } = await supabase.from('agents').select('id, team_id').eq('id', agentId).maybeSingle()
@@ -61,13 +72,18 @@ export default async function handler(req, res) {
       const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
         agent_id: agentId, institution_id: li.institutionId, patient_id: patientId || null,
         patient_name: patientName, plan_name: li.planName, plan_id: li.planId,
-        policy_number: policyNumber || null, status, premium: li.premium, deductible_hkd: li.deductibleHkd,
+        policy_number: policyNumber || null, status: 'quote', premium: li.premium, deductible_hkd: li.deductibleHkd,
         start_date: startDate || null, renewal_date: renewalDate || null, bundle_id: bundleId,
         inquiry_id: inquiryId || null,
         broker_commission_hkd: inquiryId && brokerCommissionHkd != null ? brokerCommissionHkd : null,
         referral_fee_hkd: inquiryId && referralFeeHkd != null ? referralFeeHkd : null,
         ward_class: wardClass || null, payment_frequency: paymentFrequency,
-        health_declaration_acknowledged_at: healthDeclarationAcknowledged ? new Date().toISOString() : null,
+        health_declaration_acknowledged_at: new Date().toISOString(),
+        // Submitted the moment it's written - underwriter_status itself
+        // defaults to 'pending' at the database level already; this is
+        // the timestamp the underwriter-portal queue and PoliciesScreen
+        // both read to know there's nothing left for the agent to do.
+        underwriter_submitted_at: new Date().toISOString(),
         payer_bank_name: payerBankName || null, payer_account_number: payerAccountNumber || null,
         payer_account_holder_name: payerAccountHolderName || null,
       }).select().maybeSingle()

@@ -472,38 +472,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [confirmingCancelId,setConfirmingCancelId]=useState(null)
   const [pushingId,setPushingId]=useState(null)
   const [pushNotice,setPushNotice]=useState(null)
-  const [submittingId,setSubmittingId]=useState(null)
-  const [pendingFiles,setPendingFiles]=useState({}) // {policyId: FileList}
-  const [submitNotice,setSubmitNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
-
-  // Real build: "after agent writes a policy, they upload everything to
-  // their portal for the underwriter to approve" - a policy isn't
-  // genuinely in force (even if its own status says 'active') until a
-  // real underwriter signs off. Separate from "Push to insurer" above,
-  // which is for an insurer with a real webhook/API integration - this is
-  // the in-house path, for one that reviews through Medsa's own
-  // underwriter portal instead.
-  async function handleSubmitForApproval(policyId) {
-    const files = pendingFiles[policyId]
-    setSubmittingId(policyId); setSubmitNotice(null)
-    try {
-      if (files && files.length > 0) {
-        for (const file of files) {
-          const path = `agent-policies/${policyId}/${Date.now()}-${file.name}`
-          const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, file)
-          if (upErr) { setSubmitNotice({ id: policyId, ok: false, text: upErr.message }); setSubmittingId(null); return }
-          await supabase.from('agent_policy_documents').insert({ policy_id: policyId, file_path: path, file_name: file.name })
-        }
-      }
-      await supabase.from('agent_policies').update({ underwriter_submitted_at: new Date().toISOString() }).eq('id', policyId)
-      setSubmitNotice({ id: policyId, ok: true, text: 'Submitted for underwriter approval.' })
-      setPendingFiles(f => { const n = {...f}; delete n[policyId]; return n })
-      onReload?.()
-    } finally {
-      setSubmittingId(null)
-    }
-  }
 
   // Incoming transfer requests addressed to THIS agent - decided by them
   // directly now, no team-lead middleman (team structure is gone, see
@@ -628,18 +597,16 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   insurer with their own real webhook/API. This is the
                   in-house path: everything the agent has (documents
                   included) goes to Medsa's own underwriter portal
-                  instead, for an insurer that reviews there. */}
+                  instead, for an insurer that reviews there. Submission
+                  itself now happens the moment NewPolicyScreen saves the
+                  policy (your call) - every policy is born already
+                  submitted, so there's nothing left to do here but show
+                  that it happened. A policy created before that change
+                  shipped may still show no date - real, not a bug. */}
               {p.underwriter_status==='declined'&&p.underwriter_decision_reason&&
                 <div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.red}}>{p.underwriter_decision_reason}</div>}
               {(p.underwriter_status==='pending')&&<div style={{marginTop:'10px'}}>
-                {p.underwriter_submitted_at
-                  ? <div style={{fontSize:'11px',color:C.blue,fontWeight:600}}>Submitted {new Date(p.underwriter_submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - awaiting underwriter approval</div>
-                  : <>
-                      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Attach everything you'd hand an underwriter in real life (signed application, supporting documents), then submit.</div>
-                      <input type="file" multiple onChange={e=>setPendingFiles(f=>({...f,[p.id]:e.target.files}))} style={{fontSize:'11px',marginBottom:'6px'}}/>
-                      <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handleSubmitForApproval(p.id)} disabled={submittingId===p.id}>{submittingId===p.id?'Submitting…':'Submit for underwriter approval'}</Btn>
-                    </>}
-                {submitNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:submitNotice.ok?C.green:C.red}}>{submitNotice.text}</div>}
+                <div style={{fontSize:'11px',color:C.blue,fontWeight:600}}>{p.underwriter_submitted_at?`Submitted ${new Date(p.underwriter_submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - `:''}Awaiting underwriter approval</div>
               </div>}
             </Card>
           )
@@ -699,7 +666,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [payerAccountHolderName,setPayerAccountHolderName]=useState('')
   const [startDate,setStartDate]=useState('')
   const [renewalDate,setRenewalDate]=useState('')
-  const [status,setStatus]=useState('quote')
+  // No more agent-picked quote/active toggle, per your call - every
+  // policy an agent writes now goes to the underwriter the moment it's
+  // submitted (see handleSave below), and 'active' is only ever something
+  // the underwriter's own approval sets (pages/api/underwriter/decide.js).
+  // A fixed value, not state - there's nothing left for an agent to pick.
+  const status = 'quote'
+  const [underwriterFiles,setUnderwriterFiles]=useState(null)
   // Referral fee to Medsa - only relevant when this policy converts a
   // real inquiry (an unsolicited manually-entered policy has no referral
   // to pay a fee for). broker_commission_hkd used to be a number the
@@ -970,6 +943,21 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       })
       const data = await res.json()
       if (data.status !== 'OK') { setError(data.message || 'Could not save this policy.'); return }
+      // Real gap this closes: document attachment used to be a SEPARATE
+      // step (PoliciesScreen's old "Submit for underwriter approval"),
+      // meaning a policy could sit around never actually submitted. Every
+      // policy now gets submitted the moment it's created (server-side,
+      // see create_policy.js) - this just uploads whatever was attached
+      // here, same storage path/table handleSubmitForApproval used to.
+      if (underwriterFiles && underwriterFiles.length > 0 && data.policyIds?.length > 0) {
+        for (const policyId of data.policyIds) {
+          for (const file of underwriterFiles) {
+            const path = `agent-policies/${policyId}/${Date.now()}-${file.name}`
+            const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, file)
+            if (!upErr) await supabase.from('agent_policy_documents').insert({ policy_id: policyId, file_path: path, file_name: file.name })
+          }
+        }
+      }
       onSaved()
     } catch (e) {
       setError(e.message)
@@ -1178,13 +1166,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         </div>
       </div>
 
-      <SecLabel>Status</SecLabel>
-      <div style={{display:'flex',gap:'8px',marginBottom:'20px'}}>
-        {['quote','active'].map(s=>(
-          <div key={s} onClick={()=>setStatus(s)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:status===s?C.green:C.card,color:status===s?'#fff':C.text,textTransform:'capitalize'}}>{s}</div>
-        ))}
-      </div>
-
       {/* Real gap this closes: this used to be one inline checkbox
           sentence, ticked by the agent alone with no real document - not
           something the agent could actually walk the patient through.
@@ -1206,7 +1187,11 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         additionalTerms={lineItems[0]?.additionalTerms}
         onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
       />
-      {status==='active'&&!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Needed to continue, since this policy is set to issue active - a quote doesn't need it yet.</div>}
+      {!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Needed before you can submit - every policy now goes to the underwriter the moment you save it, so this has to be reviewed with the patient first.</div>}
+
+      <SecLabel>Documents for the underwriter</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>Attach everything you'd hand an underwriter in real life (signed application, supporting documents) - optional, but this is your one chance to include them: saving below submits straight to the underwriter, there's no separate submit step afterward.</div>
+      <input type="file" multiple onChange={e=>setUnderwriterFiles(e.target.files)} style={{fontSize:'11px',marginBottom:'16px'}}/>
 
       {/* Real fix: this used to only show the computed HK$ commission
           figure, unlabelled beyond a placeholder, buried inside a block
@@ -1253,7 +1238,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>Total: HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</div>
         <div style={{fontSize:'12px',color:C.textSub}}>{startDate?`Starts ${startDate}`:'Start date not set'}{renewalDate?` · renews ${renewalDate}`:''}</div>
         <div style={{fontSize:'12px',color:C.textSub}}>{wardClass?wardClass.replace('_',' '):'Ward class not set'} · {paymentFrequency}</div>
-        <div style={{fontSize:'12px',color:C.textSub,textTransform:'capitalize'}}>Status: {status}{status==='active'&&(healthDeclarationAck?' · declaration accepted':' · declaration still needed')}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>Goes to the underwriter on submit{healthDeclarationAck?' · declaration accepted':' · declaration still needed'}</div>
       </Card>
 
       <SecLabel>Policy number</SecLabel>
@@ -1288,7 +1273,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       <div style={{display:'flex',gap:'8px',marginTop:'24px'}}>
         {step>1&&<Btn style={{flex:1}} onClick={()=>setStep(s=>s-1)}>← Back</Btn>}
         {step<4&&<Btn variant="primary" style={{flex:1}} onClick={()=>setStep(s=>s+1)} disabled={!canAdvanceStep(step)}>Next: {NEW_POLICY_STEPS[step].label} →</Btn>}
-        {step===4&&<Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||lineItems.length===0||referralFeeExceedsCap||(status==='active'&&!healthDeclarationAck)}>{saving?'Saving...':`Save policy (${lineItems.length} plan${lineItems.length>1?'s':''})`}</Btn>}
+        {step===4&&<Btn variant="primary" style={{flex:1}} onClick={handleSave} disabled={saving||lineItems.length===0||referralFeeExceedsCap||!healthDeclarationAck}>{saving?'Saving...':`Submit to underwriter (${lineItems.length} plan${lineItems.length>1?'s':''})`}</Btn>}
       </div>
     </PageWrap>
   )
