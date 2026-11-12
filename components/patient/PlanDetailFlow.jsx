@@ -318,10 +318,71 @@ function HealthDeclarationWizard({ onComplete, onCancel, initialHeightCm, initia
   return null
 }
 
+// Agent-mode contact preferences, modeled directly on AIA's own public
+// "Contact us" form (existing-policy question, phone/email already on
+// file so not re-asked, preferred time/method/language, optional note)
+// - per your call, so a patient picking "Talk to an agent" gives the
+// agent the same logistics AIA itself collects before a human reaches
+// out, instead of nothing beyond the bare inquiry.
+function ContactPrefsForm({ companyName, applicantName, applicantPhone, applicantEmail, onComplete, onCancel }) {
+  const [hasExistingPolicy, setHasExistingPolicy] = useState(null)
+  const [preferredContactDate, setPreferredContactDate] = useState('')
+  const [preferredContactTime, setPreferredContactTime] = useState('anytime')
+  const [preferredContactMethod, setPreferredContactMethod] = useState(null)
+  const [preferredLanguage, setPreferredLanguage] = useState(null)
+  const [message, setMessage] = useState('')
+
+  const ready = hasExistingPolicy !== null && preferredContactMethod && preferredLanguage
+
+  function Pick({ options, value, onChange }) {
+    return (
+      <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+        {options.map(o=>(
+          <button key={o.value} onClick={()=>onChange(o.value)} style={{padding:'10px 14px',borderRadius:'10px',fontSize:'13px',fontWeight:600,cursor:'pointer',border:value===o.value?`2px solid ${C.green}`:`1px solid ${C.border}`,background:value===o.value?C.greenXLight:'#fff',color:value===o.value?C.green:C.textSub}}>{o.label}</button>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{padding:'20px 16px',maxWidth:560,margin:'0 auto'}}>
+      <div style={{fontSize:'18px',fontWeight:700,marginBottom:'4px'}}>Before we connect you with an agent</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>A couple of quick questions so the agent who picks this up knows how to reach you - same as {companyName}'s own enquiry form.</div>
+      <Card>
+        <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>We already have your contact details on file: <b>{applicantName}</b>{applicantPhone?`, ${applicantPhone}`:''}{applicantEmail?`, ${applicantEmail}`:''}.</div>
+        <YesNo label={`Do you already have an individual insurance policy with ${companyName}?`} value={hasExistingPolicy} onChange={setHasExistingPolicy}/>
+        <div style={{marginBottom:'20px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,color:C.text,marginBottom:'10px'}}>When should we contact you? (optional)</div>
+          <input type="date" value={preferredContactDate} onChange={e=>setPreferredContactDate(e.target.value)} style={{width:'100%',padding:'10px',borderRadius:'8px',border:`1px solid ${C.border}`,fontSize:'13px',marginBottom:'10px',fontFamily:'inherit'}}/>
+          <Pick options={[{value:'anytime',label:'Anytime'},{value:'am',label:'AM'},{value:'pm',label:'PM'}]} value={preferredContactTime} onChange={setPreferredContactTime}/>
+        </div>
+        <div style={{marginBottom:'20px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Preferred contact method*</div>
+          <Pick options={[{value:'phone',label:'Phone'},{value:'whatsapp',label:'WhatsApp'},{value:'email',label:'Email'}]} value={preferredContactMethod} onChange={setPreferredContactMethod}/>
+        </div>
+        <div style={{marginBottom:'20px'}}>
+          <div style={{fontSize:'14px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Preferred language*</div>
+          <Pick options={[{value:'cantonese',label:'Cantonese'},{value:'mandarin',label:'Mandarin'},{value:'english',label:'English'}]} value={preferredLanguage} onChange={setPreferredLanguage}/>
+        </div>
+        <div>
+          <div style={{fontSize:'14px',fontWeight:600,color:C.text,marginBottom:'10px'}}>Anything else we should know about? (optional)</div>
+          <textarea value={message} maxLength={500} onChange={e=>setMessage(e.target.value)} placeholder="Leave your message here…" rows={3} style={{width:'100%',padding:'10px',borderRadius:'8px',border:`1px solid ${C.border}`,fontSize:'13px',fontFamily:'inherit',resize:'vertical'}}/>
+          <div style={{fontSize:'11px',color:C.textMuted,textAlign:'right',marginTop:'4px'}}>{message.length}/500</div>
+        </div>
+      </Card>
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1}} onClick={onCancel}>Back</Btn>
+        <Btn variant="primary" style={{flex:2}} disabled={!ready} onClick={()=>onComplete({ hasExistingPolicy, preferredContactDate: preferredContactDate||null, preferredContactTime, preferredContactMethod, preferredLanguage, message: message.trim()||null })}>Continue</Btn>
+      </div>
+    </div>
+  )
+}
+
 // ── The dedicated plan page itself ───────────────────────────────────────────
 export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldPolicies=[], onViewPlan }) {
-  const [phase, setPhase] = useState('overview') // overview | wizard | submitting | result | purchasing
+  const [phase, setPhase] = useState('overview') // overview | contact_prefs | wizard | submitting | result | purchasing
   const [mode, setMode] = useState('auto')
+  const [contactPrefs, setContactPrefs] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [purchaseWardClass, setPurchaseWardClass] = useState('')
@@ -370,13 +431,13 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
 
   const alreadyHeld = heldPolicies.some(hp => hp.plan_id === plan.id)
 
-  async function runMatch(conditions, consentHistoryShared, chosenMode) {
+  async function runMatch(conditions, consentHistoryShared, chosenMode, prefs=contactPrefs) {
     setPhase('submitting')
     setError(null)
     try {
       const res = await fetch('/api/patient/match_plan_suitability', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: chosenMode, consentHistoryShared, declaredConditions: conditions }),
+        body: JSON.stringify({ patientId: patient.id, planId: plan.id, mode: chosenMode, consentHistoryShared, declaredConditions: conditions, contactPrefs: chosenMode==='agent' ? prefs : null }),
       })
       const data = await res.json()
       if (data.status !== 'OK') { setError(data.message || 'Something went wrong.'); setPhase('overview'); return }
@@ -394,10 +455,21 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
 
   function startFlow(chosenMode, forceNew=false) {
     setMode(chosenMode)
+    // Agent mode always collects contact preferences first, regardless
+    // of whether a health declaration is already on file - that's a
+    // separate question (how/when to reach you) from what's already
+    // answered (health conditions).
+    if (chosenMode === 'agent') { setPhase('contact_prefs'); return }
     // Always the patient's CURRENT Settings value, not whatever was true
     // when this declaration was first saved - it's a live standing
     // preference now, not a per-declaration snapshot.
     if (!forceNew && savedDeclaration) { runMatch(savedDeclaration.conditions, patient.history_matching_enabled !== false, chosenMode); return }
+    setPhase('wizard')
+  }
+
+  function onContactPrefsComplete(prefs) {
+    setContactPrefs(prefs)
+    if (savedDeclaration) { runMatch(savedDeclaration.conditions, patient.history_matching_enabled !== false, 'agent', prefs); return }
     setPhase('wizard')
   }
 
@@ -504,6 +576,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
         </div>
       )}
 
+      {phase === 'contact_prefs' && <ContactPrefsForm companyName={plan.company} applicantName={patient.full_name} applicantPhone={patient.phone} applicantEmail={patient.email} onComplete={onContactPrefsComplete} onCancel={()=>setPhase('overview')}/>}
       {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')} initialHeightCm={vitals?.height_cm} initialWeightKg={vitals?.weight_kg} customQuestions={customQuestions} historyMatchingEnabled={patient.history_matching_enabled !== false}/>}
       {phase === 'submitting' && <div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted}}>Checking against this plan…</div>}
 

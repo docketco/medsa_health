@@ -1792,6 +1792,16 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>✉ {unreadByInquiry[i.id].preview || 'New message'}</span>
               <span style={{color:C.red,fontWeight:600,flexShrink:0}}>View ›</span>
             </div>}
+            {/* Collected on the "Talk to an agent" contact-prefs step
+                (modeled on AIA's own contact-us form) - only set for
+                agent-mode inquiries submitted after that shipped, so
+                older rows just show nothing here. */}
+            {expandedId===i.id&&i.preferred_contact_method&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>
+              <div style={{fontWeight:600,color:C.text,marginBottom:'2px'}}>How they'd like to be contacted</div>
+              Via {i.preferred_contact_method}, in {i.preferred_language}{i.preferred_contact_date?`, on ${new Date(i.preferred_contact_date).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`:''}{i.preferred_contact_time&&i.preferred_contact_time!=='anytime'?` (${i.preferred_contact_time.toUpperCase()})`:' (anytime)'}.
+              {i.has_existing_policy&&<div style={{marginTop:'2px'}}>Already holds an individual policy with this insurer.</div>}
+              {i.inquiry_message&&<div style={{marginTop:'6px',fontStyle:'italic'}}>&ldquo;{i.inquiry_message}&rdquo;</div>}
+            </div>}
             {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
           </Card>
         ))}

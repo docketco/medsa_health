@@ -28,7 +28,7 @@ const DECLARATION_VALIDITY_DAYS = 30
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode, wardClass, paymentFrequency } = req.body || {}
+  const { patientId, planId, declaredConditions, consentHistoryShared, isSwitchRequest, message, mode: requestedMode, wardClass, paymentFrequency, contactPrefs } = req.body || {}
   // Replacing a plan already held is never an automated, self-service
   // purchase - the Insurance Authority's own guideline on policy
   // replacement (GL27) exists specifically because a switch can leave a
@@ -113,6 +113,15 @@ export default async function handler(req, res) {
     applicant_dob: patient.date_of_birth || null, applicant_phone: patient.phone || null,
     applicant_email: patient.email || null, consent_given: true, consent_given_at: new Date().toISOString(),
     status: 'new', mode, is_switch_request: !!isSwitchRequest,
+    // Agent-mode-only contact preferences (modeled on how AIA's own
+    // "Contact us" form asks a prospective client to be reached) - null
+    // for 'auto' mode, where there's no human to schedule contact with.
+    has_existing_policy: contactPrefs?.hasExistingPolicy ?? null,
+    preferred_contact_date: contactPrefs?.preferredContactDate || null,
+    preferred_contact_time: contactPrefs?.preferredContactTime || null,
+    preferred_contact_method: contactPrefs?.preferredContactMethod || null,
+    preferred_language: contactPrefs?.preferredLanguage || null,
+    inquiry_message: contactPrefs?.message?.slice(0, 500) || null,
     consent_history_shared_at: consentHistoryShared ? new Date().toISOString() : null,
     declared_conditions: declaredConditions || [],
     suitability_verdict: result.verdict, suitability_summary: result.summary,
