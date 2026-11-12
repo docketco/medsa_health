@@ -32,16 +32,18 @@ export default async function handler(req, res) {
   }
 
   const { data: overdue } = await supabase.from('plan_inquiries')
-    .select('id, claimed_by_agent_id, reassigned_agent_ids, insurance_plans(plan_name, company_name)')
+    .select('id, claimed_by_agent_id, reassigned_agent_ids, responded_at, insurance_plans(plan_name, company_name)')
     .eq('mode', 'agent').eq('status', 'new').not('claimed_by_agent_id', 'is', null)
     .lt('response_due_at', new Date().toISOString())
   if (!overdue || overdue.length === 0) return res.status(200).json({ status: 'OK', checked: 0, reassigned: 0 })
 
   let reassigned = 0
   for (const inq of overdue) {
-    const { count: messagesFromAgent } = await supabase.from('inquiry_messages')
-      .select('id', { count: 'exact', head: true }).eq('inquiry_id', inq.id).eq('sender_type', 'agent')
-    if ((messagesFromAgent || 0) > 0) continue // the agent did respond - just hasn't converted/closed it yet, not stale
+    // responded_at (stamped by AgentApp.jsx's handleSend, see
+    // lib/agentAssignment.js) replaces a per-row inquiry_messages count
+    // query - same "did the agent actually reply" check, one column read
+    // instead of a query per overdue inquiry.
+    if (inq.responded_at) continue // the agent did respond - just hasn't converted/closed it yet, not stale
 
     const companyName = inq.insurance_plans?.company_name
     if (!companyName) continue

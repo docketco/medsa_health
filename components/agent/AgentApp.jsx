@@ -1552,6 +1552,12 @@ function InquiryMessageThread({ inquiry, agentName }) {
       body: body.trim()||null, attachment_url: attachment?.url||null, attachment_name: attachment?.name||null,
       read_by_agent: true, read_by_patient: false,
     })
+    // Real response-time signal for round-robin's own responsiveness
+    // weighting (lib/agentAssignment.js) - stamped only the FIRST time an
+    // agent actually replies on this inquiry (the .is() guard below is a
+    // no-op on every message after the first), measuring claimed_at to
+    // actually responding, not claimed_at to converting/closing it.
+    await supabase.from('plan_inquiries').update({ responded_at: new Date().toISOString() }).eq('id', inquiry.id).is('responded_at', null)
     setBody(''); setAttachment(null); setSending(false)
     load()
   }
