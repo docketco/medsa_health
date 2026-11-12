@@ -47,8 +47,12 @@ export default function MedsaAdminPage() {
             always, through their own login (/underwriter-portal). Medsa
             relaying/deciding on their behalf was wrong; see that page's
             header comment. UnderwritingQueueTab left defined/untouched
-            below (frozen, not deleted). */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+            below (frozen, not deleted).
+            陪月 Helpers and Verified Pros shelved too, per your call -
+            neither is core to the insurer/agent/patient bridge this app
+            is now scoped to. ConfinementHelpersTab and VerifiedProsTab
+            left defined/untouched below (frozen, not deleted). */}
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -58,8 +62,8 @@ export default function MedsaAdminPage() {
       {tab==='carousel' && <CarouselTab/>}
       {tab==='plans' && <AdminPlansTab/>}
       {tab==='claims' && <AdminClaimsTab/>}
-      {tab==='confinement' && <ConfinementHelpersTab/>}
-      {tab==='verifiedpros' && <VerifiedProsTab/>}
+      {false&&tab==='confinement' && <ConfinementHelpersTab/>}
+      {false&&tab==='verifiedpros' && <VerifiedProsTab/>}
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
@@ -611,7 +615,7 @@ function AgentVerificationTab() {
         <div key={a.id} style={{background:C.card,borderRadius:'10px',padding:'16px',marginBottom:'12px'}}>
           <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{a.full_name}</div>
           <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{a.email}{a.phone?` · ${a.phone}`:''}</div>
-          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>License number: <strong>{a.license_number}</strong></div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>License number: <strong>{a.license_number}</strong> <span onClick={()=>navigator.clipboard?.writeText(a.license_number||'')} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Copy</span></div>
           {a.license_proof_path&&<button onClick={()=>viewProof(a.license_proof_path)} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.border}`,borderRadius:'6px',background:'#fff',cursor:'pointer',marginBottom:'10px'}}>View submitted proof</button>}
           {rejectingId===a.id ? (
             <div style={{display:'flex',gap:'8px'}}>
