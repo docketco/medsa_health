@@ -423,13 +423,15 @@ const PLAN_MANAGER_EMPTY_FORM = {
 // below), the same real form medsa-admin's own Plans tab uses
 // (AdminPlansTab, picks a company first), so there's exactly one form,
 // not two to keep in sync.
-// insurerSelfServe: true only from the insurer's own portal. A NEW plan
-// an insurer creates (single form or bulk CSV) lands as status
-// 'pending_review', not 'active' - invisible to patients/agents (every
-// real query filters .eq('status','active')) until Medsa approves it
-// below. Editing an already-published plan goes live immediately, no
-// re-review - the gate is only ever on a brand new listing, so this
-// doesn't become the same bottleneck self-serve was meant to remove.
+// insurerSelfServe: true only from the insurer's own portal - kept as a
+// prop for the "created_by" audit trail below, nothing else now.
+// Dropped, per your call: a NEW plan used to land as 'pending_review'
+// until Medsa clicked "Approve & publish" - a safeguard against an
+// insurer typing arbitrary numbers into a manual form. That manual form
+// is gone; every plan now comes straight from an uploaded brochure (the
+// insurer's own real document, read by AI, same trust level as a signed
+// contract on file), so there's nothing left for a second human read of
+// the same PDF to catch. Every new plan goes 'active' immediately now.
 export function PlanManager({ company, readOnly=false, insurerSelfServe=false }) {
   const [plans,setPlans]=useState([])
   const [search,setSearch]=useState('')
@@ -562,7 +564,7 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
         covered_categories: baseExtracted.covered_categories || [],
         patient_facing_description: baseExtracted.patient_facing_description || null,
         additional_terms: baseExtracted.additional_terms || null,
-        status: insurerSelfServe ? 'pending_review' : 'active',
+        status: 'active',
         created_by: insurerSelfServe ? company.name : null,
       }).select().maybeSingle()
       if (newPlan && v.pricing_tiers?.length) {
@@ -614,7 +616,7 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
     } else {
       const { data: newPlan } = await supabase.from('insurance_plans').insert({
         ...payload, company_name: company.name,
-        status: insurerSelfServe ? 'pending_review' : 'active',
+        status: 'active',
         created_by: insurerSelfServe ? company.name : null,
       }).select().maybeSingle()
       planId = newPlan?.id
@@ -777,13 +779,14 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
             </div>
             <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
               {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
+              {/* 'pending_review' is a dead status now (see PlanManager's
+                  header comment) - no code path writes it anymore, but a
+                  plan from before that change could still carry it, so
+                  the badge/approve action below stays as a safety net. */}
               {p.status==='pending_review'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600,whiteSpace:'nowrap'}}>Pending review</span>}
               {(!readOnly||insurerSelfServe)&&<span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>}
             </div>
           </div>
-          {/* Only Medsa (not insurerSelfServe, not readOnly) ever flips a
-              brand new listing live - the whole point of the pending-
-              review gate above. */}
           {p.status==='pending_review'&&!insurerSelfServe&&!readOnly&&
             <Btn variant="primary" style={{width:'100%',marginBottom:'8px',fontSize:'12px',padding:'8px'}} onClick={async e=>{e.stopPropagation(); await supabase.from('insurance_plans').update({status:'active'}).eq('id',p.id); load()}}>✓ Approve & publish</Btn>}
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
@@ -3291,7 +3294,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // was left at, landing partway down a page that looks blank/broken.
   const contentRef = useRef(null)
   useEffect(() => { contentRef.current?.scrollTo(0, 0) }, [screen])
-  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',staff:'Underwriters & Claims',roster:'Policy roster'}
+  const titles={dashboard:'Insurance partner',plans:'Plan listings',planrules:'Coverage rules',claims:'Claims log','claim-detail':'Claim review',ads:'Sponsored listings',verify:'Policy verification',staff:'Team',roster:'Policy roster'}
   // Real gap reported live-testing: these were arbitrary geometric
   // glyphs (◈ ▣ ◆ ⬡ ◎...) with no visual tie to what each tab actually
   // is - swapped for shapes that at least gesture at the real meaning
@@ -3343,7 +3346,7 @@ export default function InsuranceApp({ company, onLogout }) {
   // decision - it IS carrier work, which is exactly why the carrier
   // needs a way to staff and see it themselves, not why it should stay
   // hidden. Claims approvers are new, sharing the same Staff screen.
-  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'staff',icon:'◉',label:'Staff'},{key:'roster',icon:'▥',label:'Policies'},{key:'ads',icon:'✦',label:'Promote'}]
+  const navItems=[{key:'dashboard',icon:'⌂',label:'Overview'},{key:'plans',icon:'▦',label:'Plans'},{key:'verify',icon:'✓',label:'Verify'},{key:'claims',icon:'▤',label:'Claims'},{key:'staff',icon:'◉',label:'Team'},{key:'roster',icon:'▥',label:'Policies'},{key:'ads',icon:'✦',label:'Promote'}]
 
   function openClaim(ref) { setOpenClaimRef(ref); setScreen('claim-detail') }
 
