@@ -1,27 +1,16 @@
 // pages/api/agent/create_policy.js
 // ─────────────────────────────────────────────────────────────────────────────
-// Real gap found live-testing (ag-02): an agent's own basket already
-// filters out plans their team isn't authorized to sell (hi-05), but that
-// filter was UI-only - NewPolicyScreen.handleSave inserted straight into
-// agent_policies from the browser, and agent_policies' own RLS policy is
-// anon_full_access (USING true/WITH CHECK true), the same open posture as
-// the rest of this app. The "search any other plan by name" escape hatch
-// made this trivially reachable even by accident: typing a team-gated
-// plan's exact name there skipped the basket filter entirely, with
-// nothing underneath to stop it.
-//
-// This endpoint is the actual enforcement point - every policy an agent
-// issues now has to pass through here, which re-derives the agent's team
-// from their own agent_id server-side (never trusts a client-supplied
-// team id) and checks each line item's plan against
-// team_plan_authorizations exactly the same way the basket/queue screens
-// already read it: a plan with no rows there at all is ungated (anyone at
-// the company can sell it), a plan WITH rows can only be sold by a member
-// of one of those teams. No real Supabase Auth session exists in this
-// app (just the custom agents table + an app-layer password check), so
-// "server-side" here means "the browser can no longer just skip the
-// check by calling a different button" - the same trust boundary every
-// other API route in this codebase already draws.
+// team_plan_authorizations enforcement REMOVED, per your call - the
+// sales-team/branch feature it belongs to (TeamsAndAgents on the
+// insurer-portal side, TeamLeadScreen on the agent side) is already fully
+// shelved from both UIs, which left this as an orphaned restriction: old
+// test rows (from before the shelve) could still block a real policy
+// save with a confusing "your team isn't authorized" error, with no
+// screen left anywhere for anyone to see, manage, or lift that
+// restriction. Enforcing a gate nobody can administer any more isn't
+// safer, it's just stuck. team_plan_authorizations itself stays real
+// (frozen, not dropped) in case sales teams come back as a real feature
+// later - this endpoint just stops reading it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
@@ -54,17 +43,6 @@ export default async function handler(req, res) {
   const planIds = [...new Set(lineItems.map(l => l.planId).filter(Boolean))]
   if (planIds.length !== lineItems.length) {
     return res.status(400).json({ status: 'ERROR', message: 'Every line item needs a real plan_id - nothing here can be typed into existence.' })
-  }
-  const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', planIds)
-  const authTeamsByPlan = {}
-  for (const a of (auths || [])) (authTeamsByPlan[a.plan_id] ||= []).push(a.team_id)
-
-  for (const li of lineItems) {
-    const authTeams = authTeamsByPlan[li.planId]
-    const isTeamGated = authTeams && authTeams.length > 0
-    if (isTeamGated && !(agent.team_id && authTeams.includes(agent.team_id))) {
-      return res.status(403).json({ status: 'ERROR', message: `"${li.planName}" is restricted to specific teams by its insurer - your team isn't authorized to sell it.` })
-    }
   }
 
   try {
