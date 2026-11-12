@@ -44,8 +44,16 @@ export default async function handler(req, res) {
       // UPDATE commits first flips the row out of 'pending', and the
       // second one's WHERE clause then matches nothing - caught below by
       // checking the affected row actually came back, not assumed.
+      // status flips to 'active' here too, not just underwriter_status -
+      // real gap found live-testing: every agent-written policy now
+      // starts 'quote' with no way for the agent to set 'active'
+      // themselves (create_policy.js), so approval has to be the one
+      // place that actually turns it on, or an approved policy would sit
+      // 'quote' forever and never surface as "Policy on file" to the
+      // patient (PatientApp.jsx's own held-policy query checks both
+      // status='active' AND underwriter_status='approved').
       const { data: updated } = await supabase.from('agent_policies').update({
-        underwriter_status: 'approved', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
+        status: 'active', underwriter_status: 'approved', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
       }).eq('id', policyId).eq('underwriter_status', 'pending').select('id')
       if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
       await supabase.from('underwriting_audit_log').insert({
