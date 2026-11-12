@@ -24,11 +24,17 @@ export default async function handler(req, res) {
 
   if (action === 'approve') {
     const payable = (claim.patient_copay_amount || 0) + (claim.deductible_applied || 0)
-    await supabase.from('insurance_claims').update({
+    // Atomic conditional update (status='pending' in the WHERE itself,
+    // not just the earlier SELECT) - two approvers deciding the same
+    // claim within the same second can't both "win": whichever commits
+    // first flips it out of 'pending', the second's WHERE matches
+    // nothing, caught below instead of assumed.
+    const { data: updated } = await supabase.from('insurance_claims').update({
       status: payable === 0 ? 'settled' : 'approved',
       settled_at: payable === 0 ? new Date().toISOString() : null,
       decided_at: new Date().toISOString(), decision_by: approverName || null,
-    }).eq('id', claimId)
+    }).eq('id', claimId).eq('status', 'pending').select('id')
+    if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this claim.' })
     // Same real gap AgentClaimView's own approve path already closes -
     // approving a claim with attached documents IS a human having checked
     // them closely enough to pay out against them.
@@ -40,9 +46,10 @@ export default async function handler(req, res) {
     }
   } else {
     if (!reason?.trim()) return res.status(400).json({ status: 'ERROR', message: 'A rejection needs a reason - the patient sees this.' })
-    await supabase.from('insurance_claims').update({
+    const { data: updated } = await supabase.from('insurance_claims').update({
       status: 'rejected', rejection_reason: reason.trim(), decided_at: new Date().toISOString(), decision_by: approverName || null,
-    }).eq('id', claimId)
+    }).eq('id', claimId).eq('status', 'pending').select('id')
+    if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this claim.' })
   }
 
   return res.status(200).json({ status: 'OK' })

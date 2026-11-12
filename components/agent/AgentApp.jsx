@@ -75,12 +75,14 @@ function AgentLogin({ onLogin }) {
     setChecking(true)
     setError(null)
     const { data: agent } = await supabase.from('agents')
-      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, my_plans_last_viewed_at, institutions(name)')
+      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, my_plans_last_viewed_at, verification_status, institutions(name)')
       .ilike('email', email.trim()).maybeSingle()
     if (!agent) { setChecking(false); setError('No agent account matches that email.'); return }
     const { data: ok } = await supabase.rpc('verify_agent_password', { p_agent_id: agent.id, p_password: password })
     setChecking(false)
     if (!ok) { setError('Incorrect password.'); return }
+    if (agent.verification_status === 'pending') { setError("Your account is still being verified against your license - you'll be able to sign in once that's done."); return }
+    if (agent.verification_status === 'rejected') { setError('Your account could not be verified. Contact your Medsa account manager.'); return }
     onLogin(agent)
   }
 
@@ -97,7 +99,7 @@ function AgentLogin({ onLogin }) {
           {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{error}</div>}
           <Btn variant="primary" style={{width:'100%'}} onClick={handleLogin} disabled={checking||!email||!password}>{checking?'Checking\u2026':'Sign in'}</Btn>
         </div>
-        <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'16px',lineHeight:1.5}}>No account yet? Your institution or team lead onboards you - not self-serve.</div>
+        <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginTop:'16px',lineHeight:1.5}}>No account yet? <a href="/agent-signup" style={{color:C.green}}>Sign up here</a> - your institution or team lead can still onboard you directly too.</div>
       </div>
     </div>
   )
@@ -394,8 +396,12 @@ function MyInsurersScreen({ agent }) {
       .select('id, status, requested_at, appointed_at, decided_at, decision_reason, proof_document_path, institutions(id,name)')
       .eq('agent_id', agent.id).order('requested_at', { ascending: false, nullsFirst: false })
     setAppointments(data||[])
-    const { data: insts } = await supabase.from('institutions').select('id,name').eq('institution_type','insurer')
-    setAllInsurers(insts||[])
+    // Only insurers actually partnered with Medsa (insurance_companies,
+    // not just any institution row) - requesting appointment with one
+    // that isn't would be a real dead end, nobody on their side to ever
+    // see or decide the request.
+    const { data: companies } = await supabase.from('insurance_companies').select('institution_ref_id, name').eq('status','active').not('institution_ref_id','is',null)
+    setAllInsurers((companies||[]).map(c=>({ id: c.institution_ref_id, name: c.name })))
   }
   useEffect(() => { load() }, [agent.id])
 

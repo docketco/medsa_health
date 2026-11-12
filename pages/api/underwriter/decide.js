@@ -37,9 +37,17 @@ export default async function handler(req, res) {
     if (policy.underwriter_status !== 'pending') return res.status(400).json({ status: 'ERROR', message: 'This policy is no longer pending review.' })
 
     if (action === 'approve') {
-      await supabase.from('agent_policies').update({
+      // Atomic conditional update - this and decline's own update both
+      // require underwriter_status='pending' in the WHERE clause itself,
+      // not just an earlier SELECT check, so two colleagues deciding the
+      // same case within the same second can't both "win": whichever
+      // UPDATE commits first flips the row out of 'pending', and the
+      // second one's WHERE clause then matches nothing - caught below by
+      // checking the affected row actually came back, not assumed.
+      const { data: updated } = await supabase.from('agent_policies').update({
         underwriter_status: 'approved', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
-      }).eq('id', policyId)
+      }).eq('id', policyId).eq('underwriter_status', 'pending').select('id')
+      if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
       await supabase.from('underwriting_audit_log').insert({
         policy_id: policyId, actor_type: actorType, actor_name: underwriterName || null, action: 'policy_approved', detail: reason || null,
       })
@@ -56,9 +64,10 @@ export default async function handler(req, res) {
       }
     } else {
       if (!reason?.trim()) return res.status(400).json({ status: 'ERROR', message: 'A decline needs a reason - the agent sees this.' })
-      await supabase.from('agent_policies').update({
+      const { data: updated } = await supabase.from('agent_policies').update({
         underwriter_status: 'declined', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason.trim(),
-      }).eq('id', policyId)
+      }).eq('id', policyId).eq('underwriter_status', 'pending').select('id')
+      if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
       await supabase.from('underwriting_audit_log').insert({
         policy_id: policyId, actor_type: actorType, actor_name: underwriterName || null, action: 'policy_declined', detail: reason.trim(),
       })
@@ -79,10 +88,12 @@ export default async function handler(req, res) {
   if (inquiry.underwriter_status !== 'pending') return res.status(400).json({ status: 'ERROR', message: 'This case is no longer pending review.' })
 
   if (action === 'approve') {
-    await supabase.from('plan_inquiries').update({
+    // Same atomic conditional-update guard as the policy branch above.
+    const { data: updated } = await supabase.from('plan_inquiries').update({
       underwriter_status: 'approved', underwriter_id: underwriterId || null,
       underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
-    }).eq('id', inquiryId)
+    }).eq('id', inquiryId).eq('underwriter_status', 'pending').select('id')
+    if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
     await supabase.from('underwriting_audit_log').insert({
       inquiry_id: inquiryId, actor_type: actorType, actor_name: underwriterName || null, action: 'approved', detail: reason || null,
     })
@@ -104,10 +115,11 @@ export default async function handler(req, res) {
     // suitability_verdict to decide what to show, and a case that was
     // 'flagged' needs to actually read 'declined' once decided, the same
     // as a matching-only decline would.
-    await supabase.from('plan_inquiries').update({
+    const { data: updated } = await supabase.from('plan_inquiries').update({
       underwriter_status: 'declined', suitability_verdict: 'declined',
       underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason.trim(),
-    }).eq('id', inquiryId)
+    }).eq('id', inquiryId).eq('underwriter_status', 'pending').select('id')
+    if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
     await supabase.from('underwriting_audit_log').insert({
       inquiry_id: inquiryId, actor_type: actorType, actor_name: underwriterName || null, action: 'declined', detail: reason.trim(),
     })
