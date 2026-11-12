@@ -22,7 +22,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
 import C from '../shared/colours'
-import TermsAgreementModal from '../shared/TermsAgreementModal'
 
 function Btn({ children, onClick, variant='secondary', style:sx={}, disabled }) {
   const base={border:'none',borderRadius:'10px',padding:'12px 18px',fontSize:'14px',fontWeight:600,cursor:disabled?'not-allowed':'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',opacity:disabled?0.5:1,...sx}
@@ -380,16 +379,11 @@ function ContactPrefsForm({ companyName, applicantName, applicantPhone, applican
 
 // ── The dedicated plan page itself ───────────────────────────────────────────
 export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldPolicies=[], onViewPlan }) {
-  const [phase, setPhase] = useState('overview') // overview | contact_prefs | wizard | submitting | result | purchasing
+  const [phase, setPhase] = useState('overview') // overview | contact_prefs | wizard | submitting | agent_sent
   const [mode, setMode] = useState('auto')
   const [contactPrefs, setContactPrefs] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
-  const [purchaseWardClass, setPurchaseWardClass] = useState('')
-  const [purchasePaymentFrequency, setPurchasePaymentFrequency] = useState('monthly')
-  const [declarationAck, setDeclarationAck] = useState(false)
-  const [termsModalOpen, setTermsModalOpen] = useState(false)
-  const [purchasing, setPurchasing] = useState(false)
   const [vitals, setVitals] = useState(null)
   const [customQuestions, setCustomQuestions] = useState(EMPTY_CUSTOM_QUESTIONS)
   const [savedDeclaration, setSavedDeclaration] = useState(null) // null until loaded, or {conditions, consentHistoryShared, createdAt, expiresAt}
@@ -480,23 +474,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
   }
 
 
-  async function handlePurchase() {
-    if (!declarationAck) return
-    setPurchasing(true)
-    try {
-      const res = await fetch('/api/patient/complete_auto_purchase', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ inquiryId: result.inquiryId, patientId: patient.id, planId: plan.id, wardClass: purchaseWardClass||null, paymentFrequency: purchasePaymentFrequency, healthDeclarationAcknowledged: declarationAck }),
-      })
-      const data = await res.json()
-      if (data.status === 'REDIRECT' && data.checkoutUrl) { window.location.href = data.checkoutUrl; return }
-      if (data.status !== 'OK') { setError(data.message || 'Could not complete the purchase.'); setPurchasing(false); return }
-      setPhase('purchased')
-    } finally {
-      setPurchasing(false)
-    }
-  }
-
   return (
     <div style={{minHeight:'100vh',background:C.beige}}>
       <div style={{padding:'16px',borderBottom:`1px solid ${C.border}`,background:'#fff',position:'sticky',top:0,zIndex:5}}>
@@ -526,7 +503,8 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
                 as "reads published terms, makes no judgment call." */}
             {plan.suitability&&<div style={{fontSize:'12.5px',color:plan.suitability.verdict==='suitable'?C.green:C.amber,marginTop:'10px',fontWeight:600}}>{plan.suitability.verdict==='suitable'?'✓ ':'⚠ '}{plan.suitability.reason}</div>}
             {plan.waitingPeriodDays!=null&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>Waiting period: {plan.waitingPeriodDays} days for new conditions.</div>}
-            {plan.price!=null&&<div style={{fontSize:'18px',fontWeight:700,color:C.navy,marginTop:'12px'}}>Estimated HK${plan.price}/mo</div>}
+            {plan.deductibleLabel&&<div style={{fontSize:'12px',color:C.textMuted,marginTop:'6px'}}>{plan.deductibleLabel}</div>}
+            {plan.price!=null&&<div style={{fontSize:'18px',fontWeight:700,color:C.navy,marginTop:'12px'}}>HK${plan.price}/mo</div>}
             {/* Legal T&Cs only, not the main description anymore - kept
                 as a secondary reference, not the primary place a patient
                 learns what the plan actually offers. */}
@@ -551,14 +529,10 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
                 {!plan.companyContactEmail&&!plan.companyContactPhone&&<div style={{fontSize:'12px',color:C.textMuted}}>No contact on file yet - check back later.</div>}
               </Card>
             : <>
-              {/* Off by default on every plan (your call) - Medsa holds no
-                  underwriting power without a real insurer partnership,
-                  so an automated quote only exists for a plan whose
-                  insurer specifically opted into the self-serve
-                  declaration engine (insurance_plans.self_declare_enabled,
-                  set from Plan Manager). Every other plan shows only
-                  "Talk to an agent" - no questionnaire, no verdict. */}
-              {plan.selfDeclareEnabled&&<Btn variant="primary" style={{width:'100%',marginBottom:'10px'}} disabled={plan.requiresAgent} onClick={()=>startFlow('auto')}>{plan.requiresAgent?'Automated quote not offered for this plan':'Quote immediately'}</Btn>}
+              {/* Only path left (your call, Nov 12) - no instant/self-
+                  declare quote on any plan any more, since matching a
+                  patient to real cover is the agent's own judgment, not
+                  something Medsa automates. */}
               <Btn style={{width:'100%'}} onClick={()=>startFlow('agent')}>Talk to an agent</Btn>
               {/* Real gap: commission/referral-fee figures were computed
                   throughout the agent/insurer/admin screens but never
@@ -568,7 +542,7 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
                   shows once a policy is actually issued (see the held-
                   policy card). */}
               <div style={{fontSize:'10px',color:C.textMuted,textAlign:'center',marginTop:'8px',lineHeight:1.5}}>If an agent helps you with this plan, the insurer may pay them (and Medsa) a commission - this is never added to your premium.</div>
-              {plan.selfDeclareEnabled&&savedDeclaration&&<div style={{textAlign:'center',marginTop:'12px'}}>
+              {savedDeclaration&&<div style={{textAlign:'center',marginTop:'12px'}}>
                 <div style={{fontSize:'11px',color:C.textMuted}}>Using your health declaration from {new Date(savedDeclaration.createdAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} - valid until {new Date(savedDeclaration.expiresAt).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}.</div>
                 <span onClick={()=>setPhase('wizard')} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',textDecoration:'underline'}}>Update your health declaration</span>
               </div>}
@@ -579,65 +553,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
       {phase === 'contact_prefs' && <ContactPrefsForm companyName={plan.company} applicantName={patient.full_name} applicantPhone={patient.phone} applicantEmail={patient.email} onComplete={onContactPrefsComplete} onCancel={()=>setPhase('overview')}/>}
       {phase === 'wizard' && <HealthDeclarationWizard onComplete={onWizardComplete} onCancel={()=>setPhase('overview')} initialHeightCm={vitals?.height_cm} initialWeightKg={vitals?.weight_kg} customQuestions={customQuestions} historyMatchingEnabled={patient.history_matching_enabled !== false}/>}
       {phase === 'submitting' && <div style={{textAlign:'center',padding:'60px 20px',color:C.textMuted}}>Checking against this plan…</div>}
-
-      {phase === 'result' && result && (
-        <div style={{padding:'20px 16px',maxWidth:560,margin:'0 auto'}}>
-          <Card style={{background:result.verdict==='declined'?C.redLight:result.verdict==='flagged'?C.amberLight:C.greenXLight,border:`1px solid ${result.verdict==='declined'?C.red:result.verdict==='flagged'?C.amber:C.greenLight}`}}>
-            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'8px',color:result.verdict==='declined'?C.red:result.verdict==='flagged'?C.amber:C.green}}>
-              {result.verdict==='approved'&&'✓ Looks suitable for you'}
-              {result.verdict==='flagged'&&'⚠ Sent for a quick underwriter review'}
-              {result.verdict==='declined'&&"✕ Not suitable under this plan's terms"}
-            </div>
-            {result.quotedPremium!=null&&result.verdict!=='declined'&&<div style={{fontSize:'16px',fontWeight:700,color:C.navy,marginBottom:'8px'}}>Estimated HK${result.quotedPremium}/mo</div>}
-            <div style={{fontSize:'13px',color:C.textSub,lineHeight:1.6}}>{result.summary}</div>
-            {result.verdict==='flagged'&&<div style={{fontSize:'12px',color:C.textSub,marginTop:'8px'}}>An underwriter usually decides within 2-3 business days. Check back under "My inquiries".</div>}
-            <div style={{fontSize:'11px',color:C.textMuted,marginTop:'8px'}}>Rule-based match against this plan's own coverage terms - no AI used.</div>
-          </Card>
-
-          {mode==='auto'&&result.verdict!=='declined'&&!result.underwriterPending&&!purchasing&&phase!=='purchased'&&(
-            <Card>
-              <div style={{fontSize:'13px',fontWeight:600,marginBottom:'12px'}}>Complete your purchase</div>
-              <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
-                <select value={purchaseWardClass} onChange={e=>setPurchaseWardClass(e.target.value)} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px'}}>
-                  <option value="">Ward class (General)</option>
-                  <option value="general">General</option><option value="semi_private">Semi-private</option><option value="private">Private</option>
-                </select>
-                <select value={purchasePaymentFrequency} onChange={e=>setPurchasePaymentFrequency(e.target.value)} style={{flex:1,border:`1px solid ${C.border}`,borderRadius:'8px',padding:'9px'}}>
-                  <option value="monthly">Monthly</option><option value="annual">Annually</option>
-                </select>
-              </div>
-              {/* Ward class is a real price lever, not just a label - this
-                  updates live as it's picked, before the patient commits,
-                  per your own note that they should see the real price
-                  before the end of the flow, not after. */}
-              {result.quotedPremiumByWard&&<div style={{fontSize:'15px',fontWeight:700,color:C.navy,marginBottom:'12px'}}>HK${result.quotedPremiumByWard[purchaseWardClass||'general']}/mo</div>}
-              {declarationAck
-                ? <div style={{fontSize:'12px',color:C.green,fontWeight:600,marginBottom:'10px'}}>✓ Health declaration & terms reviewed and accepted.</div>
-                : <Btn style={{width:'100%',marginBottom:'10px'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration</Btn>}
-              <TermsAgreementModal open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={isEn} planName={plan.name} companyName={plan.company} declaredConditions={result.declaredConditions} waitingPeriodDays={plan.waitingPeriodDays} preExistingConditionPolicy={plan.preExistingConditionPolicy} additionalTerms={plan.additionalTerms} onAccept={()=>{setDeclarationAck(true);setTermsModalOpen(false)}}/>
-              {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{error}</div>}
-              <Btn variant="primary" style={{width:'100%'}} disabled={!declarationAck||purchasing} onClick={handlePurchase}>{purchasing?'Confirming…':'Confirm & checkout'}</Btn>
-            </Card>
-          )}
-          {result.underwriterPending&&<div style={{fontSize:'12px',color:C.textMuted,textAlign:'center'}}>Waiting on a quick sign-off before this can be purchased - check "My inquiries".</div>}
-          {/* Real gap: a decline used to be a dead end here (just "Done")
-              - the patient has two real next steps instead: a plan that
-              would actually approve them, or a human who can look at the
-              specific exclusion. Only offered for the auto path - "talk to
-              an agent" already took them to a human the first time. */}
-          {result.verdict==='declined'&&<Card>
-            <div style={{fontSize:'13px',fontWeight:600,marginBottom:'4px'}}>What now?</div>
-            <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.5,marginBottom:'4px'}}>This plan's own exclusion rule means it can't be sold automatically with what's declared above - that doesn't mean every plan is off the table.</div>
-            <AlternativePlansPanel inquiryId={result.inquiryId} onViewPlan={onViewPlan}/>
-            {/* Automatic now (pages/api/patient/match_plan_suitability.js
-                already assigns an agent server-side the moment a decline
-                comes back) - nothing left to tap, just confirming it
-                already happened. */}
-            {mode==='auto'&&<div style={{fontSize:'12px',color:C.green,fontWeight:600,marginTop:'8px'}}>✓ An agent has already been assigned to help you look at other options - check "My inquiries".</div>}
-          </Card>}
-          <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
-        </div>
-      )}
 
       {/* Skips the automated verdict entirely for "Talk to an agent" - the
           whole point of asking for a human instead of an instant quote is
@@ -657,14 +572,6 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
             <AlternativePlansPanel inquiryId={result.inquiryId} onViewPlan={onViewPlan}/>
           </Card>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={onBack}>Done</Btn>
-        </div>
-      )}
-
-      {phase === 'purchased' && (
-        <div style={{padding:'40px 16px',maxWidth:560,margin:'0 auto',textAlign:'center'}}>
-          <div style={{fontSize:'20px',fontWeight:700,color:C.green,marginBottom:'8px'}}>✓ Purchased</div>
-          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px'}}>See it under "Policy on file".</div>
-          <Btn variant="primary" style={{width:'100%'}} onClick={onBack}>Back to plans</Btn>
         </div>
       )}
     </div>

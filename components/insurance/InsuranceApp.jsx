@@ -405,12 +405,17 @@ function CompanyLogoUploader({ company }) {
 // actually costs to buy), and the agent/commission/self-checkout fields
 // - none of that is Medsa deciding a claim, it's Medsa selling a
 // policy, which the pivot never objected to.
+// Self-declare/instant-quote/auto-buy/self-serve-checkout shelved per
+// your call (Nov 12) - Medsa doesn't decide or calculate for a patient,
+// an agent does, using their own real-world skill. Those fields stay
+// real and untouched on insurance_plans (frozen, not dropped, same
+// convention as every other shelved field in this codebase) but this
+// form no longer renders or writes them.
 const PLAN_MANAGER_EMPTY_FORM = {
-  plan_name:'', plan_type:'', key_benefits:'',
+  plan_name:'', plan_type:'', key_benefits:'', deductible_label:'',
   covered_categories:[], policy_document_path:'',
-  commission_rate_pct:'', requires_agent:false, insurer_flags:[], additional_terms:'',
-  self_serve_checkout_enabled:false, auto_buy_on_clean:false, logo_url:'',
-  patient_facing_description:'', self_declare_enabled:false,
+  commission_rate_pct:'', insurer_flags:[], additional_terms:'',
+  logo_url:'', patient_facing_description:'',
 }
 // readOnly: left defined for a future "we're not ready to let this
 // insurer touch it yet" case, but nothing passes it true anymore -
@@ -438,17 +443,6 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
   const [descriptionError,setDescriptionError]=useState(null)
   const [tiers,setTiers]=useState([{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
   const [expandedPlanId,setExpandedPlanId]=useState(null)
-  const [expandedDeclareId,setExpandedDeclareId]=useState(null)
-  // Bulk CSV plan import - requested live-testing: a platform partner's
-  // whole real plan catalog should be able to land on Medsa in one pass,
-  // not typed in one at a time through the form above. Same
-  // parseCSV/insert-directly-from-the-browser pattern this app already
-  // uses for agent and roster bulk uploads.
-  const [bulkPlanOpen,setBulkPlanOpen]=useState(false)
-  const [bulkPlanRows,setBulkPlanRows]=useState([])
-  const [bulkPlanFileName,setBulkPlanFileName]=useState('')
-  const [bulkPlanImporting,setBulkPlanImporting]=useState(false)
-  const [bulkPlanResult,setBulkPlanResult]=useState(null)
   // Whether this insurer's own Stripe account is actually ready to take a
   // charge - the self-serve toggle below is per-PLAN (an insurer might
   // want it for some plans and not others), but it can only ever be
@@ -534,17 +528,14 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
     setEditingId(plan.id)
     setForm({
       plan_name: plan.plan_name||'', plan_type: plan.plan_type||'', key_benefits: plan.key_benefits||'',
+      deductible_label: plan.deductible_label||'',
       covered_categories: plan.covered_categories||[],
       policy_document_path: plan.policy_document_path||'',
       commission_rate_pct: plan.commission_rate_pct!=null ? String(plan.commission_rate_pct) : '',
-      requires_agent: !!plan.requires_agent,
       insurer_flags: plan.insurer_flags||[],
       additional_terms: plan.additional_terms||'',
-      self_serve_checkout_enabled: !!plan.self_serve_checkout_enabled,
-      auto_buy_on_clean: !!plan.auto_buy_on_clean,
       logo_url: plan.logo_url||'',
       patient_facing_description: plan.patient_facing_description||'',
-      self_declare_enabled: !!plan.self_declare_enabled,
     })
     const existingTiers = (plan.insurance_plan_pricing_tiers||[]).sort((a,b)=>a.age_min-b.age_min)
     setTiers(existingTiers.length>0
@@ -552,71 +543,6 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
       : [{ age_min:'', age_max:'', monthly_premium:'', semi_private_premium:'', private_premium:'', annual_limit:'' }])
     setCreating(true)
     scrollFormIntoView('plan-manager-form')
-  }
-
-  // tiers column format: "ageMin-ageMax:monthlyPremium:semiPrivatePremium:privatePremium:annualLimit"
-  // entries separated by ";" - semi-private/private/annual limit may be
-  // left blank (e.g. "0-30:300::: ") when the insurer doesn't vary by ward
-  // or hasn't set a limit.
-  function parseTiersField(raw) {
-    if (!raw) return []
-    return raw.split(';').map(s=>s.trim()).filter(Boolean).map(entry => {
-      const [ageRange, monthly, semi, priv, limit] = entry.split(':')
-      const [ageMin, ageMax] = (ageRange||'').split('-')
-      return {
-        age_min: parseInt(ageMin,10), age_max: parseInt(ageMax,10),
-        monthly_premium: parseFloat(monthly),
-        semi_private_premium: semi?.trim() ? parseFloat(semi) : null,
-        private_premium: priv?.trim() ? parseFloat(priv) : null,
-        annual_limit: limit?.trim() ? parseFloat(limit) : null,
-      }
-    }).filter(t => Number.isFinite(t.age_min) && Number.isFinite(t.age_max) && Number.isFinite(t.monthly_premium))
-  }
-  function splitList(raw) {
-    return (raw||'').split(';').map(s=>s.trim()).filter(Boolean)
-  }
-  async function handleBulkPlanFile(file) {
-    const text = await file.text()
-    const { rows } = parseCSV(text)
-    setBulkPlanRows(rows)
-    setBulkPlanFileName(file.name)
-    setBulkPlanResult(null)
-  }
-  async function handleBulkPlanImport() {
-    setBulkPlanImporting(true)
-    const results = { total: bulkPlanRows.length, imported: 0, errors: [] }
-    for (const row of bulkPlanRows) {
-      const planName = row.plan_name?.trim()
-      if (!planName) { results.errors.push('Row skipped - missing plan_name.'); continue }
-      const tiersParsed = parseTiersField(row.tiers)
-      const { data: newPlan, error } = await supabase.from('insurance_plans').insert({
-        company_name: company.name, status: insurerSelfServe ? 'pending_review' : 'active',
-        created_by: insurerSelfServe ? company.name : null,
-        plan_name: planName, plan_type: row.plan_type || null,
-        key_benefits: row.key_benefits || null,
-        covered_categories: splitList(row.covered_categories),
-        covered_conditions: splitList(row.covered_conditions),
-        insurer_flags: splitList(row.insurer_flags),
-        additional_terms: row.additional_terms || null,
-        pre_existing_condition_policy: row.pre_existing_condition_policy || null,
-        waiting_period_days: row.waiting_period_days ? parseInt(row.waiting_period_days,10) : null,
-        copay_rate: row.copay_rate_pct ? parseFloat(row.copay_rate_pct)/100 : null,
-        annual_deductible_hkd: row.annual_deductible_hkd ? parseFloat(row.annual_deductible_hkd) : null,
-        commission_rate_pct: row.commission_rate_pct ? parseFloat(row.commission_rate_pct) : null,
-        requires_agent: String(row.requires_agent).trim().toLowerCase()==='true',
-        auto_buy_on_clean: String(row.auto_buy_on_clean).trim().toLowerCase()==='true',
-      }).select().maybeSingle()
-      if (error || !newPlan) { results.errors.push(`${planName}: ${error?.message||'could not be created'}`); continue }
-      if (tiersParsed.length>0) {
-        const { error: tErr } = await supabase.from('insurance_plan_pricing_tiers').insert(tiersParsed.map(t=>({...t, plan_id:newPlan.id})))
-        if (tErr) results.errors.push(`${planName}: plan created, but pricing tiers failed - ${tErr.message}`)
-      }
-      results.imported++
-    }
-    setBulkPlanResult(results)
-    setBulkPlanImporting(false)
-    setBulkPlanRows([]); setBulkPlanFileName('')
-    load()
   }
 
   // Document auto-fill found more than one deductible option in the same
@@ -631,8 +557,10 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
     for (const v of variants) {
       const name = v.deductible_label ? `${basePlanName} (${v.deductible_label})` : basePlanName
       const { data: newPlan } = await supabase.from('insurance_plans').insert({
-        company_name: company.name, plan_name: name,
+        company_name: company.name, plan_name: name, deductible_label: v.deductible_label || null,
         plan_type: baseExtracted.plan_type || null, key_benefits: baseExtracted.key_benefits || null,
+        covered_categories: baseExtracted.covered_categories || [],
+        patient_facing_description: baseExtracted.patient_facing_description || null,
         additional_terms: baseExtracted.additional_terms || null,
         status: insurerSelfServe ? 'pending_review' : 'active',
         created_by: insurerSelfServe ? company.name : null,
@@ -667,25 +595,17 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
       // stay real on the table and just go untouched/null going forward.
       policy_document_path: form.policy_document_path || null,
       policy_document_uploaded_at: form.policy_document_path ? new Date().toISOString() : null,
+      deductible_label: form.deductible_label || null,
       // Real gap: an agent's own commission on a policy was a free-text
       // field THEY typed, with Medsa's referral fee capped against
       // whatever number they entered - backwards, since commission is
       // the insurer's own rate, not something an agent gets to declare.
       // Set once here, it now feeds every quote/policy for this plan.
       commission_rate_pct: form.commission_rate_pct!=='' ? parseFloat(form.commission_rate_pct) : null,
-      requires_agent: form.requires_agent,
       insurer_flags: form.insurer_flags,
       additional_terms: form.additional_terms || null,
-      auto_buy_on_clean: form.auto_buy_on_clean,
-      // Only ever actually takes effect while the company's own Connect
-      // account is active (see complete_auto_purchase.js) - saved as
-      // whatever the checkbox says regardless, so it's remembered for
-      // when the account does connect, but never lets a not-ready
-      // account be silently selected as a checkout destination.
-      self_serve_checkout_enabled: connectActive ? form.self_serve_checkout_enabled : false,
       logo_url: form.logo_url || null,
       patient_facing_description: form.patient_facing_description || null,
-      self_declare_enabled: form.self_declare_enabled,
     }
     let planId = editingId
     if (editingId) {
@@ -739,26 +659,9 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
       {insurerSelfServe&&<div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'12px 14px'}}>
         <div style={{fontSize:'12px',color:C.navy,lineHeight:1.6}}>A new plan you add needs a quick Medsa review before patients can see it - you'll see it marked "Pending review" until then. Editing an already-published plan goes live immediately.</div>
       </div>}
-      {(!readOnly||insurerSelfServe)&&!creating&&<div style={{padding:'16px 16px 0',display:'flex',gap:'8px'}}>
-        <Btn variant="navy" style={{flex:1}} onClick={startCreate}>+ Add new plan</Btn>
-        <Btn style={{flex:1}} onClick={()=>setBulkPlanOpen(o=>!o)}>{bulkPlanOpen?'Hide bulk import':'⭱ Bulk import plans (CSV)'}</Btn>
+      {(!readOnly||insurerSelfServe)&&!creating&&<div style={{padding:'16px 16px 0'}}>
+        <Btn variant="navy" style={{width:'100%'}} onClick={startCreate}>+ Add new plan</Btn>
       </div>}
-      {(!readOnly||insurerSelfServe)&&!creating&&bulkPlanOpen&&<Card style={{margin:'12px 16px 0',padding:'16px'}}>
-        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Bulk import your whole plan catalog</div>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>
-          CSV columns: plan_name (required), plan_type, key_benefits, covered_categories, covered_conditions, insurer_flags (each semicolon-separated, e.g. "Dental;Optical"), pre_existing_condition_policy, waiting_period_days, copay_rate_pct, annual_deductible_hkd, commission_rate_pct, requires_agent (true/false), auto_buy_on_clean (true/false), additional_terms.<br/>
-          <strong>tiers</strong> (semicolon-separated per age band): <span style={{fontFamily:'monospace'}}>ageMin-ageMax:monthlyPremium:semiPrivatePremium:privatePremium:annualLimit</span> - e.g. "0-30:300:360:450:500000;31-60:450:540:675:500000". Semi-private/private/annual limit may be left blank if this plan doesn't vary by ward or has no cap.
-        </div>
-        <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}}>
-          <input type="file" accept=".csv" onChange={e=>e.target.files?.[0]&&handleBulkPlanFile(e.target.files[0])} style={{flex:1,fontSize:'11px'}}/>
-        </div>
-        {bulkPlanRows.length>0&&<div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>{bulkPlanFileName} - {bulkPlanRows.length} plan{bulkPlanRows.length!==1?'s':''} ready to import.</div>}
-        <Btn variant="primary" disabled={bulkPlanRows.length===0||bulkPlanImporting} onClick={handleBulkPlanImport} style={{width:'100%'}}>{bulkPlanImporting?'Importing…':`Import ${bulkPlanRows.length||''} plan${bulkPlanRows.length!==1?'s':''}`}</Btn>
-        {bulkPlanResult&&<div style={{marginTop:'10px',fontSize:'12px',color:C.text}}>
-          <div style={{color:C.green,fontWeight:600}}>{bulkPlanResult.imported} of {bulkPlanResult.total} imported.</div>
-          {bulkPlanResult.errors.length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkPlanResult.errors.map((e,i)=><div key={i}>{e}</div>)}</div>}
-        </div>}
-      </Card>}
       {(!readOnly||insurerSelfServe)&&creating&&(
         <div id="plan-manager-form">
         <Card style={{margin:'16px 16px 0',padding:'16px'}}>
@@ -809,40 +712,14 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
           </div>
           <BasicCategoriesSection form={form} setForm={setForm}/>
           <div style={{marginBottom:'12px'}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Deductible (optional) - if your brochure covers several deductible options, upload it once and use "Create all as separate plans" above; this field just labels which one THIS listing is</div>
+            <input value={form.deductible_label} onChange={e=>setForm(f=>({...f,deductible_label:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. Deductible HKD8,800"/>
+          </div>
+          <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Commission rate (%) - what you pay an agent on this plan</div>
             <input type="number" value={form.commission_rate_pct} onChange={e=>setForm(f=>({...f,commission_rate_pct:e.target.value}))} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box'}} placeholder="e.g. 20"/>
             <div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>Set by you, not the agent - it now computes automatically on every quote for this plan, and Medsa's referral fee is capped at 50% of it. Leave blank if not set yet; an agent quoting this plan sees "not set by insurer" until it is.</div>
           </div>
-          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
-            <input type="checkbox" checked={form.self_declare_enabled} onChange={e=>setForm(f=>({...f,self_declare_enabled:e.target.checked}))}/>
-            <div>
-              <div style={{fontSize:'12px',color:C.text}}>Enable self-serve health declaration &amp; instant quote</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>Off by default for every plan - Medsa doesn't hold underwriting power without a real partnership, so patients only ever see "Talk to an agent" unless you opt this specific plan in. On: patients can also declare health conditions themselves and get an instant automated verdict. Add your own questions to that declaration below once this is on.</div>
-            </div>
-          </label>
-          {form.self_declare_enabled&&<label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
-            <input type="checkbox" checked={form.requires_agent} onChange={e=>setForm(f=>({...f,requires_agent:e.target.checked}))}/>
-            <div>
-              <div style={{fontSize:'12px',color:C.text}}>But still require talking to an agent</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>Overrides the above for this plan specifically - keeps the self-serve declaration/quote hidden even though it's enabled on your account generally.</div>
-            </div>
-          </label>}
-          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:'pointer'}}>
-            <input type="checkbox" checked={form.auto_buy_on_clean} onChange={e=>setForm(f=>({...f,auto_buy_on_clean:e.target.checked}))}/>
-            <div>
-              <div style={{fontSize:'12px',color:C.text}}>Buy immediately on a clean verdict</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>Off by default: even a clean (approved by matching alone) application still waits for a quick sign-off in your Underwriter Portal before it can be purchased. On: a clean application goes straight to purchase, no human touch.</div>
-            </div>
-          </label>
-          <label style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'12px',cursor:connectActive?'pointer':'not-allowed',opacity:connectActive?1:0.5}}>
-            <input type="checkbox" checked={form.self_serve_checkout_enabled} disabled={!connectActive} onChange={e=>setForm(f=>({...f,self_serve_checkout_enabled:e.target.checked}))}/>
-            <div>
-              <div style={{fontSize:'12px',color:C.text}}>Self-serve checkout for this plan</div>
-              <div style={{fontSize:'11px',color:C.textMuted}}>{connectActive
-                ? 'When on, "Buy now" charges the patient\'s first premium straight to your connected Stripe account - Medsa never touches it.'
-                : 'Connect your Stripe account first (Payments tab) - this stays off until then.'}</div>
-            </div>
-          </label>
           <div style={{marginBottom:'12px'}}>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Always flag for review</div>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'6px'}}>Anything a patient declares that matches one of these forces a "needs review" verdict on both the automated and talk-to-an-agent paths, regardless of the plan's own coverage terms above - your own call on what always needs a human, not something Medsa or an agent overrides.</div>
@@ -871,7 +748,6 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
             </div>
             <textarea value={form.additional_terms} onChange={e=>setForm(f=>({...f,additional_terms:e.target.value}))} rows={5} placeholder="e.g. exclusions, what counts as a pre-existing condition, how claims are assessed…" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'12px',background:C.beige,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
           </div>
-          {form.self_declare_enabled&&<CustomQuestionsManager company={company} planId={editingId}/>}
           {/* Real bug found live-testing: a plan with no pricing tier yet
               (e.g. one created before a tier was added, or where tiers
               got cleared) left Save permanently disabled with zero
@@ -897,11 +773,10 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{p.plan_name}</div>
-              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}</div>
+              <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_type||'—'}{p.deductible_label?` · ${p.deductible_label}`:''}</div>
             </div>
             <div style={{display:'flex',alignItems:'center',gap:'8px',flexShrink:0}}>
               {p.sponsored&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Sponsored</span>}
-              {p.self_serve_checkout_enabled&&<span style={{fontSize:'10px',background:C.blueLight,color:C.blue,padding:'2px 8px',borderRadius:'20px',fontWeight:600}}>Self-serve</span>}
               {p.status==='pending_review'&&<span style={{fontSize:'10px',background:C.amberLight,color:C.amber,padding:'2px 8px',borderRadius:'20px',fontWeight:600,whiteSpace:'nowrap'}}>Pending review</span>}
               {(!readOnly||insurerSelfServe)&&<span onClick={e=>{e.stopPropagation();startEdit(p)}} style={{fontSize:'11px',color:C.blue,cursor:'pointer'}}>Edit</span>}
             </div>
@@ -912,7 +787,7 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
           {p.status==='pending_review'&&!insurerSelfServe&&!readOnly&&
             <Btn variant="primary" style={{width:'100%',marginBottom:'8px',fontSize:'12px',padding:'8px'}} onClick={async e=>{e.stopPropagation(); await supabase.from('insurance_plans').update({status:'active'}).eq('id',p.id); load()}}>✓ Approve & publish</Btn>}
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
-            {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.self_declare_enabled?(p.requires_agent?' · Self-declare on, agent-only':' · Self-declare & instant quote on'):' · Agent-only (default)'}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
+            {p.commission_rate_pct!=null ? `${p.commission_rate_pct}% commission` : 'Commission not set'}{p.additional_terms?' · Terms set':' · No terms yet'}{(p.insurer_flags||[]).length>0?` · ${p.insurer_flags.length} flag${p.insurer_flags.length===1?'':'s'}`:''}
           </div>
           <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>
             {(p.insurance_plan_pricing_tiers||[]).length===0
@@ -922,11 +797,6 @@ export function PlanManager({ company, readOnly=false, insurerSelfServe=false })
           <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>{(p.covered_categories||[]).length>0 ? p.covered_categories.join(', ') : 'No covered categories set - claims won\'t match against this plan'}</div>
           <div style={{fontSize:'11px',color:C.blue}}>{expandedPlanId===p.id?'▾':'▸'} Riders & deductible options</div>
           {expandedPlanId===p.id&&<div onClick={e=>e.stopPropagation()}><PlanExtrasManager plan={p} onChanged={load}/></div>}
-          {/* Available whether or not the rest of this form is readOnly -
-              see SelfDeclareManager's own header comment for why this one
-              piece is always insurer-editable. */}
-          <div onClick={e=>{e.stopPropagation();setExpandedDeclareId(expandedDeclareId===p.id?null:p.id)}} style={{fontSize:'11px',color:C.blue,marginTop:'6px'}}>{expandedDeclareId===p.id?'▾':'▸'} Self-declare health questionnaire</div>
-          {expandedDeclareId===p.id&&<SelfDeclareManager company={company} plan={p} onChanged={load}/>}
         </Card>
       ))}
     </div>
@@ -997,6 +867,12 @@ function mergeExtractedIntoForm(prevForm, extracted) {
     plan_type: extracted.plan_type || prevForm.plan_type,
     key_benefits: extracted.key_benefits || prevForm.key_benefits,
     additional_terms: extracted.additional_terms || prevForm.additional_terms,
+    // The brochure upload is now the WHOLE plan-creation step (your call,
+    // Nov 12) - these two used to need a second manual pass (writing the
+    // patient-facing blurb yourself, typing a deductible label) that the
+    // document already answers directly.
+    patient_facing_description: extracted.patient_facing_description || prevForm.patient_facing_description,
+    deductible_label: extracted.pricing_variants?.[0]?.deductible_label || prevForm.deductible_label,
   }
 }
 
