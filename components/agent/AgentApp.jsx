@@ -793,11 +793,11 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       if (!inst) { setBasketPlans([]); setMedsaReferralFeeRatePct(null); return }
       const { data: allPlansRaw } = await supabase.from('insurance_plans').select('id, plan_name, commission_rate_pct, waiting_period_days, pre_existing_condition_policy, additional_terms, insurance_plan_pricing_tiers(*)').eq('company_name', inst.name).eq('status','active').eq('self_serve_only',false)
       let allPlans = Array.from(new Map((allPlansRaw||[]).map(p=>[p.plan_name,p])).values())
-      if (agent.team_id) {
-        const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id').eq('team_id', agent.team_id)
-        const authIds = new Set((auths||[]).map(a=>a.plan_id))
-        allPlans = allPlans.filter(p=>authIds.has(p.id))
-      }
+      // team_plan_authorizations filtering removed - the sales-team
+      // feature it belongs to is shelved everywhere else (see
+      // create_policy.js's own header comment), so an orphaned test row
+      // could silently hide a real plan from an agent's basket with no
+      // screen left to see or fix why.
       // The agent's own pick (My Plans) of what they actually sell - opt-
       // IN now, so a plan only ever counts once the agent has explicitly
       // confirmed it (via My Plans or the new-plan banner), never by
@@ -881,22 +881,11 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       .ilike('plan_name', `%${q}%`).limit(10)
     if (agent.agent_type==='captive' && agent.institutions?.name) query = query.eq('company_name', agent.institutions.name)
     const { data } = await query
-    // Real gap found live-testing (ag-02): this search bypassed the
-    // basket's own team-authorization filter (hi-05) entirely - typing a
-    // team-gated plan's exact name here found it anyway. The actual save
-    // is now blocked server-side regardless (/api/agent/create_policy.js),
-    // but filtering it out of the results too means a team-gated agent
-    // never sees it offered as an option in the first place.
+    // team_plan_authorizations filtering removed here too - see
+    // create_policy.js's own header comment for why (the sales-team
+    // feature this belonged to is shelved everywhere, so an orphaned
+    // test row had no screen left anywhere to see or fix it from).
     let results = data || []
-    if (agent.team_id && results.length > 0) {
-      const { data: auths } = await supabase.from('team_plan_authorizations').select('plan_id, team_id').in('plan_id', results.map(p=>p.id))
-      const authTeamsByPlan = {}
-      for (const a of (auths||[])) (authTeamsByPlan[a.plan_id] ||= []).push(a.team_id)
-      results = results.filter(p => {
-        const authTeams = authTeamsByPlan[p.id]
-        return !authTeams || authTeams.length === 0 || authTeams.includes(agent.team_id)
-      })
-    }
     setPlanSearching(false)
     setPlanSearchResults(results)
   }
