@@ -485,8 +485,23 @@ export default function PlanDetailPage({ plan, patient, isEn=true, onBack, heldP
           <div style={{fontSize:'22px',fontWeight:700,marginBottom:'2px'}}>{plan.name}</div>
           <div style={{fontSize:'14px',color:C.textSub,marginBottom:'18px'}}>{plan.company}</div>
           <Card>
-            <div style={{fontSize:'12px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'10px'}}>Coverage</div>
-            {(plan.covers||[]).map(c=><span key={c} style={{display:'inline-block',fontSize:'12px',background:C.card,color:C.textSub,padding:'4px 10px',borderRadius:'20px',marginRight:'6px',marginBottom:'6px'}}>{c}</span>)}
+            <div style={{fontSize:'12px',fontWeight:600,color:C.textMuted,textTransform:'uppercase',marginBottom:'10px'}}>What's included</div>
+            {/* Real gap: every insurer's brochure lists its covered
+                categories in its own wording/layout, so a patient
+                comparing two plans saw two completely different-looking
+                presentations of the same kind of information. This table
+                is Medsa's own fixed layout, same every time regardless of
+                which PDF it came from - only the row content differs. */}
+            {(plan.covers||[]).length>0
+              ? <table style={{width:'100%',borderCollapse:'collapse',marginBottom:'4px'}}><tbody>
+                  {(plan.covers||[]).map((c,i)=>(
+                    <tr key={c} style={{borderTop:i>0?`0.5px solid ${C.border}`:'none'}}>
+                      <td style={{padding:'7px 0',fontSize:'13px',color:C.text}}>{c}</td>
+                      <td style={{padding:'7px 0',fontSize:'12px',color:C.green,fontWeight:600,textAlign:'right'}}>✓ Covered</td>
+                    </tr>
+                  ))}
+                </tbody></table>
+              : <div style={{fontSize:'12px',color:C.textMuted}}>No benefit categories on file for this plan yet.</div>}
             {/* Medsa's own patient-facing write-up, written by AI from
                 whatever the insurer typed into Plan Manager, reviewed by
                 them before it's shown here - the point being a patient
