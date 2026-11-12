@@ -1,20 +1,18 @@
 // pages/api/insurer/parse_plan_document.js
 // ─────────────────────────────────────────────────────────────────────────────
-// AI-assisted plan-detail extraction - DocumentAutoFillCard, used inside
-// PlanManager (the one real plan form every insurer self-serves through
-// now; see its "One registration flow for every insurer" comment). An
-// insurer uploads their real brochure/policy document (PDF or photo) and
-// Claude reads it and proposes values to pre-fill the form - plan_type,
-// key_benefits and additional_terms (the wording PlanManager actually
-// saves and shows patients), plus the older Coverage-Rules-only fields
-// (copay, deductible, network type, etc.) kept for CoverageRulesManager,
-// which is unreachable today but left defined, not deleted. The insurer
-// still writes patient_facing_description themselves (or drafts it from
-// what's already typed, via PlanManager's own separate "Generate with AI"
-// button) - this only ever proposes what the document itself states, same
-// pattern as suggest_icd10.js: a proposal to review and edit, never a
-// direct write. Requires ANTHROPIC_API_KEY; without it this returns a
-// clear 503 instead of silently doing nothing.
+// AI-assisted plan-detail extraction - the ONLY way a plan gets created in
+// PlanManager now (your call: no manual tiers/category/benefit-limit form
+// at all - an insurer uploads the real brochure and that's it). Claude
+// reads it once and returns everything the plan listing needs: name,
+// type, categories, the patient-facing overview (what the product brings,
+// not its technical spec - that line is deliberate, see this repo's own
+// "bridge and record, not a decision tool" principle), the full age-
+// banded premium table, and the older Coverage-Rules-only fields (copay,
+// network type, etc.) kept for CoverageRulesManager, which is unreachable
+// today but left defined, not deleted. Always a proposal to review and
+// edit before saving, same pattern as suggest_icd10.js, never a direct
+// write. Requires ANTHROPIC_API_KEY; without it this returns a clear 503
+// instead of silently doing nothing.
 //
 // pricing_variants: a real insurer premium table (e.g. a VHIS-certified
 // plan's standardized Premium Table) is a full age-banded rate grid, often
@@ -103,7 +101,7 @@ export default async function handler(req, res) {
       model: 'claude-opus-5',
       max_tokens: 16000,
       output_config: { effort: 'medium' },
-      system: 'You are reading a real health insurance policy/plan document or brochure for a Hong Kong clinic platform, extracting structured values to pre-fill a plan listing form - its name, type, a plain-language benefits summary, the terms a patient should read before buying, whatever coverage-rule figures the document states, and the full age-banded premium table if the document contains one. Only extract what the document actually states - leave a field null/empty rather than guessing a typical industry figure, and never invent a premium number. If a premium table is present, extract every row for every age band it lists (not a sample, not just a few representative rows) - these numbers fill in a form field the insurer will still review before saving, but the whole point is that they should not have to retype a long table by hand, so a partial extraction defeats it. If the table repeats once per deductible/excess option, return one pricing_variants entry per option, each with its own full set of rows. This is a proposal a human will review and edit before saving, so it is fine (expected, even) to leave non-pricing fields blank when the document does not clearly state them.',
+      system: 'You are reading a real health insurance policy/plan document or brochure for a Hong Kong clinic platform, and this is the ONLY step that reads it - there is no manual data-entry form afterward, just a review of what you return. Extract: its name, type, the plain benefit categories a patient would recognize (e.g. "Hospitalisation", "Outpatient", "Dental"), a short patient-facing overview in the brochure\'s own voice (what the product brings - not a technical spec sheet; this is the only description a patient will ever see for this plan), the terms a patient should read before buying, whatever coverage-rule figures the document states, and the full age-banded premium table if the document contains one. Only extract what the document actually states - leave a field null/empty rather than guessing a typical industry figure, and never invent a premium number. If a premium table is present, extract every row for every age band it lists (not a sample, not just a few representative rows) - these numbers fill in a form field the insurer will still review before saving, but the whole point is that they should not have to retype a long table by hand, so a partial extraction defeats it. If the table repeats once per deductible/excess option, return one pricing_variants entry per option, each with its own full set of rows. This is a proposal a human will review and edit before saving, so it is fine (expected, even) to leave non-pricing fields blank when the document does not clearly state them.',
       messages: [{
         role: 'user',
         content: [
@@ -131,11 +129,12 @@ export default async function handler(req, res) {
             waiting_period_days: { type: ['number', 'null'] },
             pre_existing_condition_policy: { type: ['string', 'null'], enum: ['excluded', 'covered_after_waiting', 'covered', null] },
             preauth_threshold_hkd: { type: ['number', 'null'] },
-            covered_categories: { type: 'array', items: { type: 'string' } },
+            covered_categories: { type: 'array', items: { type: 'string' }, description: 'Plain benefit categories a patient browsing plans would recognize, e.g. "Hospitalisation", "Outpatient", "Dental", "Maternity" - not legal clause names' },
             category_limits: { type: 'array', items: CATEGORY_LIMIT_SCHEMA },
+            patient_facing_description: { type: ['string', 'null'], description: 'A short (3-5 sentence) plain-language overview of what this plan brings a patient - its story/positioning, the way the brochure itself pitches it, not a technical spec sheet. This is the ONLY description a patient ever sees for this plan - write it as if that patient never opens the PDF.' },
             pricing_variants: { type: 'array', items: PRICING_VARIANT_SCHEMA, description: 'Empty array if the document has no premium/rate table at all' },
           },
-          required: ['plan_name', 'plan_type', 'key_benefits', 'additional_terms', 'copay_rate_pct', 'annual_deductible_hkd', 'overall_annual_limit_hkd', 'room_board_daily_limit_hkd', 'network_type', 'waiting_period_days', 'pre_existing_condition_policy', 'preauth_threshold_hkd', 'covered_categories', 'category_limits', 'pricing_variants'],
+          required: ['plan_name', 'plan_type', 'key_benefits', 'additional_terms', 'copay_rate_pct', 'annual_deductible_hkd', 'overall_annual_limit_hkd', 'room_board_daily_limit_hkd', 'network_type', 'waiting_period_days', 'pre_existing_condition_policy', 'preauth_threshold_hkd', 'covered_categories', 'category_limits', 'patient_facing_description', 'pricing_variants'],
         },
       }],
       tool_choice: { type: 'tool', name: 'extract_plan_details' },

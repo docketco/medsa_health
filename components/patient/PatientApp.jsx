@@ -5569,6 +5569,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   const [findPlanConditions,setFindPlanConditions]=useState([])
   const [findPlanLoading,setFindPlanLoading]=useState(false)
   const [findPlanResults,setFindPlanResults]=useState(null)
+  // Compare (new, per your call) - browsing and matching are both
+  // optional; this is a third, separate optional action, picking a few
+  // plans to see side by side rather than opening each one's own page.
+  const [compareIds,setCompareIds]=useState([])
+  const [compareOpen,setCompareOpen]=useState(false)
+  function toggleCompare(id) {
+    setCompareIds(ids => ids.includes(id) ? ids.filter(x=>x!==id) : ids.length>=4 ? ids : [...ids, id])
+  }
 
   useEffect(() => {
     async function loadPlansAndMatch() {
@@ -5661,15 +5669,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           sponsorDescription: p.sponsor_description||null, sponsorThumbnailUrl: p.sponsor_thumbnail_url||null,
           criteria: p.covered_conditions||[], covers: p.covered_categories||[],
           matchedConditions, isMatched: matchedConditions.length > 0, suitability,
-          requiresAgent: !!p.requires_agent,
-          // Off by default on every plan (per your call) - Medsa holds no
-          // underwriting power without a real insurer partnership, so
-          // "Quote immediately" and its health-declaration questionnaire
-          // only exist for a plan whose insurer has specifically opted
-          // into the self-serve matching engine (insurance_plans.
-          // self_declare_enabled, set from Plan Manager). Every other
-          // plan only ever offers "Talk to an agent" - see PlanDetailFlow.
-          selfDeclareEnabled: !!p.self_declare_enabled,
+          deductibleLabel: p.deductible_label || null,
           waitingPeriodDays: p.waiting_period_days ?? null,
           preExistingConditionPolicy: p.pre_existing_condition_policy || null,
           additionalTerms: p.additional_terms || null,
@@ -5747,6 +5747,59 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // view, same as navigating to a different page would.
   if (viewingPlanIndex != null && visiblePlans[viewingPlanIndex]) {
     return <PlanDetailPage plan={visiblePlans[viewingPlanIndex]} patient={patient} isEn={isEn} heldPolicies={heldPolicies} onBack={()=>{setViewingPlanIndex(null);loadPolicy()}} onViewPlan={viewPlanById}/>
+  }
+
+  // Compare (new) - a plain side-by-side table, built from the exact
+  // same mapped plan objects the browse cards already show (same price/
+  // deductible/categories), not a separate recomputation. Capped at 4
+  // plans via toggleCompare so the table stays legible on a phone.
+  if (compareOpen) {
+    const comparePlans = plans.filter(p => compareIds.includes(p.id))
+    return (
+      <div style={{minHeight:'100vh',background:C.beige}}>
+        <div style={{padding:'16px',borderBottom:`1px solid ${C.border}`,background:'#fff',position:'sticky',top:0,zIndex:5,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <Btn variant="ghost" onClick={()=>setCompareOpen(false)}>← {isEn?'Back to plans':'返回計劃'}</Btn>
+          <div style={{fontSize:'13px',fontWeight:600}}>{isEn?'Compare plans':'比較計劃'}</div>
+        </div>
+        <div style={{padding:'16px',overflowX:'auto'}}>
+          <table style={{borderCollapse:'collapse',minWidth:comparePlans.length*150+100}}>
+            <tbody>
+              <tr>
+                <td style={{padding:'8px'}}></td>
+                {comparePlans.map(p=>(
+                  <td key={p.id} style={{padding:'8px',minWidth:'150px',verticalAlign:'top'}}>
+                    <div style={{fontSize:'13px',fontWeight:700}}>{p.name}</div>
+                    <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{p.company}</div>
+                    <span onClick={()=>toggleCompare(p.id)} style={{fontSize:'11px',color:C.red,cursor:'pointer'}}>{isEn?'Remove':'移除'}</span>
+                  </td>
+                ))}
+              </tr>
+              {[[isEn?'Type':'類型','type'],[isEn?'Deductible':'自付額','deductibleLabel'],[isEn?'Price':'價格','price_fmt'],[isEn?'Annual limit':'年度限額','limit_fmt'],[isEn?'Covers':'保障範圍','covers_fmt']].map(([label,key])=>(
+                <tr key={key} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td style={{padding:'8px',fontSize:'11px',color:C.textMuted,fontWeight:600,whiteSpace:'nowrap'}}>{label}</td>
+                  {comparePlans.map(p=>{
+                    let val
+                    if (key==='price_fmt') val = p.priceUnavailable ? '—' : `HK$${p.price}/mo`
+                    else if (key==='limit_fmt') val = p.priceUnavailable ? '—' : `HK$${p.limit}`
+                    else if (key==='covers_fmt') val = (p.covers||[]).join(', ') || '—'
+                    else val = p[key] || '—'
+                    return <td key={p.id} style={{padding:'8px',fontSize:'12px',color:C.text}}>{val}</td>
+                  })}
+                </tr>
+              ))}
+              <tr style={{borderTop:`1px solid ${C.border}`}}>
+                <td></td>
+                {comparePlans.map(p=>(
+                  <td key={p.id} style={{padding:'8px'}}>
+                    <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>{setCompareOpen(false);viewPlanById(p.id)}}>{isEn?'View →':'查看 →'}</Btn>
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -6121,10 +6174,26 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
                 "see details" step first. */}
             {heldPolicies.some(hp=>hp.plan_id===plan.id)
               ? <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.textSub,lineHeight:1.5,marginBottom:'10px'}}>{isEn?'✓ You already hold this plan.':'✓ 您已持有此計劃。'}</div>
-              : <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{plan.requiresAgent?`${plan.company} only takes inquiries for this plan through an agent.`:''}</div>}
-            <Btn variant="primary" style={{width:'100%',fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
+              : <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'6px',lineHeight:1.4}}>{isEn?`${plan.company} takes inquiries for this plan through an agent.`:`${plan.company}透過代理接受此計劃的查詢。`}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn variant="primary" style={{flex:1,fontSize:'12px'}} onClick={()=>setViewingPlanIndex(i)}>View plan →</Btn>
+              {/* Compare (new) - a third optional action alongside
+                  browsing and the AI match above: pick a few plans, see
+                  them side by side, instead of opening each one's own
+                  page. Capped at 4 so the table stays legible. */}
+              <Btn style={{flexShrink:0,fontSize:'12px',padding:'0 12px',background:compareIds.includes(plan.id)?__theme.accent:undefined,color:compareIds.includes(plan.id)?'#fff':undefined}} onClick={()=>toggleCompare(plan.id)}>{compareIds.includes(plan.id)?(isEn?'✓ Comparing':'✓ 已加入比較'):(isEn?'+ Compare':'+ 比較')}</Btn>
+            </div>
           </Card>
         ))}
+        {/* Floating bar only while 2+ plans are picked - comparing just
+            one is the same as viewing its own page. */}
+        {compareIds.length>=2&&<div style={{position:'sticky',bottom:'70px',zIndex:5,margin:'10px 16px',background:C.navy,borderRadius:'12px',padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',boxShadow:'0 4px 16px rgba(0,0,0,0.2)'}}>
+          <div style={{fontSize:'12px',color:'#fff',fontWeight:600}}>{isEn?`${compareIds.length} plans selected`:`已選擇${compareIds.length}個計劃`}</div>
+          <div style={{display:'flex',gap:'8px'}}>
+            <span onClick={()=>setCompareIds([])} style={{fontSize:'12px',color:'rgba(255,255,255,0.7)',cursor:'pointer',padding:'6px 4px'}}>{isEn?'Clear':'清除'}</span>
+            <Btn variant="primary" style={{fontSize:'12px',padding:'7px 14px'}} onClick={()=>setCompareOpen(true)}>{isEn?'Compare':'比較'}</Btn>
+          </div>
+        </div>}
 
         {/* Search all plans */}
         <SecLabel>{isEn?'Search all plans':'搜尋所有計劃'}</SecLabel>
