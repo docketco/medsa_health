@@ -84,7 +84,14 @@ function CaseCard({ inquiry, underwriter, isCleanSignoff, onDecided }) {
         body: JSON.stringify({ inquiryId: inquiry.id, action, underwriterId: underwriter.id, underwriterName: underwriter.full_name, ...extra }),
       })
       const data = await res.json()
-      if (data.status !== 'OK') { setError(data.message||'Could not save this decision.'); setBusy(false); return }
+      if (data.status !== 'OK') {
+        setError(data.message||'Could not save this decision.')
+        // Someone else decided this case in the same moment - refresh so
+        // the stale card (with its now-invalid buttons) disappears
+        // instead of sitting there looking actionable.
+        if (res.status === 409) onDecided()
+        setBusy(false); return
+      }
       onDecided()
     } finally {
       setBusy(false)
@@ -163,7 +170,14 @@ function PolicyCard({ policy, underwriter, onDecided }) {
         body: JSON.stringify({ policyId: policy.id, action, underwriterId: underwriter.id, underwriterName: underwriter.full_name, reason }),
       })
       const data = await res.json()
-      if (data.status !== 'OK') { setError(data.message||'Could not save this decision.'); setBusy(false); return }
+      if (data.status !== 'OK') {
+        setError(data.message||'Could not save this decision.')
+        // Someone else decided this case in the same moment - refresh so
+        // the stale card (with its now-invalid buttons) disappears
+        // instead of sitting there looking actionable.
+        if (res.status === 409) onDecided()
+        setBusy(false); return
+      }
       onDecided()
     } finally {
       setBusy(false)

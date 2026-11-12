@@ -48,7 +48,7 @@ export default function MedsaAdminPage() {
             relaying/deciding on their behalf was wrong; see that page's
             header comment. UnderwritingQueueTab left defined/untouched
             below (frozen, not deleted). */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],['confinement','family','陪月 Helpers'],['verifiedpros','badge','Verified Pros'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             <Icon name={ic} size={18}/>
             {l}
@@ -63,6 +63,7 @@ export default function MedsaAdminPage() {
       {tab==='healthcolumn' && <HealthColumnTab/>}
       {tab==='forum' && <ForumModerationTab/>}
       {tab==='partners' && <PartnersTab/>}
+      {tab==='agentverification' && <AgentVerificationTab/>}
       {false&&tab==='underwriting' && <UnderwritingQueueTab/>}
       {tab==='clinics' && <ClinicsTab/>}
       {false&&tab==='tpa' && <TpaClinicsTab/>}
@@ -558,6 +559,70 @@ function AccountRecoveryTab() {
             <button onClick={()=>handleReject(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Reject'}</button>
             <button onClick={()=>handleApprove(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Approve'}</button>
           </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Self-registered agents (pages/agent-signup.jsx) land here pending
+// review - the claimed license number gets checked against the HK
+// Insurance Authority's own public Register of Licensed Insurance
+// Intermediaries (iir.ia.org.hk), which has no public API, so this is a
+// real human lookup, not automated. Existing agents (onboarded the old
+// way, by an insurer/team) are already backfilled 'verified' and never
+// show up here.
+function AgentVerificationTab() {
+  const [agents, setAgents] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busyId, setBusyId] = useState(null)
+  const [rejectingId, setRejectingId] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('agents').select('id, full_name, email, phone, license_number, license_proof_path, created_at')
+      .eq('verification_status', 'pending').order('created_at')
+    setAgents(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function viewProof(path) {
+    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  async function decide(id, verified) {
+    setBusyId(id)
+    await supabase.from('agents').update({ verification_status: verified?'verified':'rejected' }).eq('id', id)
+    setBusyId(null); setRejectingId(null)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>
+        An agent who self-registered (not onboarded by an insurer or team). Look up their license number at <a href="https://iir.ia.org.hk" target="_blank" rel="noreferrer">iir.ia.org.hk</a> - the IA's own public register - before approving.
+      </div>
+      {loading && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Loading…</div>}
+      {!loading && agents.length===0 && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No pending agent sign-ups.</div>}
+      {agents.map(a => (
+        <div key={a.id} style={{background:C.card,borderRadius:'10px',padding:'16px',marginBottom:'12px'}}>
+          <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{a.full_name}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{a.email}{a.phone?` · ${a.phone}`:''}</div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>License number: <strong>{a.license_number}</strong></div>
+          {a.license_proof_path&&<button onClick={()=>viewProof(a.license_proof_path)} style={{padding:'6px 10px',fontSize:'11px',border:`1px solid ${C.border}`,borderRadius:'6px',background:'#fff',cursor:'pointer',marginBottom:'10px'}}>View submitted proof</button>}
+          {rejectingId===a.id ? (
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>setRejectingId(null)} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Cancel</button>
+              <button onClick={()=>decide(a.id,false)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.red,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Confirm reject'}</button>
+            </div>
+          ) : (
+            <div style={{display:'flex',gap:'8px'}}>
+              <button onClick={()=>setRejectingId(a.id)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
+              <button onClick={()=>decide(a.id,true)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Verify & approve'}</button>
+            </div>
+          )}
         </div>
       ))}
     </div>

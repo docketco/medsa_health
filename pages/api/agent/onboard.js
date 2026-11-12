@@ -11,10 +11,14 @@
 //   - no match: a brand new agent account is created (medsa_id, temp
 //     password emailed - same pattern as every other onboarding flow
 //     this session), plus its appointment row.
-// License verification: there's no real HK agent-license registry to
-// check against (unlike clinics' BR/ORPHF checks) - license_number is
-// recorded as declared, not verified, same posture as before this
-// change. Nothing to build there until a real registry exists.
+// License verification: a real registry does exist (the HK Insurance
+// Authority's own public Register of Licensed Insurance Intermediaries,
+// iir.ia.org.hk), but it has no public API to check against
+// automatically, and an agent onboarded here comes through a trusted
+// channel (an insurer/team actually appointing them) rather than a cold
+// self-registration - verification_status defaults 'verified' for that
+// reason. pages/api/agent/self_signup.js is the self-service path that
+// genuinely needs the manual check (medsa-admin's Agent Verification tab).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'

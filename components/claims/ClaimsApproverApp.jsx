@@ -76,7 +76,11 @@ function ClaimCard({ claim, approver, onDecided }) {
         body: JSON.stringify({ claimId: claim.id, action, approverId: approver.id, approverName: approver.full_name, reason }),
       })
       const data = await res.json()
-      if (data.status !== 'OK') { setError(data.message||'Could not save this decision.'); setBusy(false); return }
+      if (data.status !== 'OK') {
+        setError(data.message||'Could not save this decision.')
+        if (res.status === 409) onDecided()
+        setBusy(false); return
+      }
       onDecided()
     } finally {
       setBusy(false)
