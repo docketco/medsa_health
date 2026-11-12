@@ -5424,8 +5424,14 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     const medsaId = patient?.medsa_id
     const { data: patientRow } = await supabase.from('patients').select('id').eq('medsa_id', medsaId).maybeSingle()
     if (!patientRow) { setLinkError(isEn?'Could not find your patient record.':'找不到您的病人記錄。'); setLinking(false); return }
+    // Real gap found live-testing: this never set institution_id, so a
+    // patient's self-linked policy could never show up in that insurer's
+    // own Policy roster (InsuranceApp.jsx's PolicyRosterScreen), even
+    // when the insurer is a real partner with a live portal.
+    const { data: companyRow } = await supabase.from('insurance_companies').select('institution_ref_id').eq('name', linkSelectedPlan.company_name).maybeSingle()
     const { error } = await supabase.from('agent_policies').insert({
       patient_id: patientRow.id, plan_id: linkSelectedPlan.id, plan_name: linkSelectedPlan.plan_name,
+      institution_id: companyRow?.institution_ref_id || null,
       policy_number: linkPolicyNumber.trim(), status: 'active', start_date: new Date().toISOString().slice(0,10),
     })
     setLinking(false)
