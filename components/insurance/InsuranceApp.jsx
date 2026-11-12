@@ -109,7 +109,7 @@ function InsuranceDashboard({ onNav, company }) {
           {key:'plans',icon:'▣',label:'Your plans',sub:'Add, edit, and bulk-import your own plan catalog'},
           {key:'verify',icon:'✓',label:'Verify',sub:'Tell Medsa how to confirm a policyholder against your own records'},
           {key:'claims',icon:'◇',label:'Claims',sub:'Claims synced back from your own system'},
-          {key:'staff',icon:'◉',label:'Underwriters & claims approvers',sub:'Onboard who reviews applications and who decides payouts'},
+          {key:'staff',icon:'◉',label:'Team',sub:'Onboard who reviews applications and who decides payouts - and agent appointment requests'},
           {key:'roster',icon:'▥',label:'Policy roster',sub:'Every patient and plan on file under your institution'},
           {key:'ads',icon:'⬡',label:'Promote your plans',sub:'Sponsor a plan in patient search and AI recommendations'},
         ].map(item=>(
