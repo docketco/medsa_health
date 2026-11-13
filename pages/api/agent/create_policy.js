@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   const {
     agentId, patientId, patientName, lineItems, bundleDiscountHkd,
     policyNumber, startDate, renewalDate, inquiryId,
-    brokerCommissionHkd, referralFeeHkd, wardClass, paymentFrequency, healthDeclarationAcknowledged,
+    brokerCommissionHkd, referralFeeHkd, paymentFrequency, healthDeclarationAcknowledged,
     // Real gap: nothing in this form ever collected the client's payment
     // details the insurer actually needs to set up premium collection
     // (direct debit, etc.) - per your call, Medsa stores this the way an
@@ -62,6 +62,18 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'ERROR', message: 'Every line item needs a real plan_id - nothing here can be typed into existence.' })
   }
 
+  // Real gap: a discount used to only ever exist on the policy_bundles
+  // wrapper, which only gets created for 2+ plans - a real discount
+  // (loyalty, first-year promo, a one-off negotiated figure) can apply
+  // to a single plan too. agent_policies now has its own discount_hkd;
+  // split proportionally by each line's share of the package total so
+  // the sum still nets out to the real discounted total, correct for
+  // both the single-plan case (gets the whole thing) and a bundle.
+  const packageTotal = lineItems.reduce((s, l) => s + (l.premium || 0), 0)
+  const discountByLineItem = lineItems.map(li =>
+    packageTotal > 0 ? Math.round(((bundleDiscountHkd || 0) * (li.premium || 0) / packageTotal) * 100) / 100 : 0
+  )
+
   try {
     let bundleId = null
     if (lineItems.length > 1) {
@@ -74,16 +86,22 @@ export default async function handler(req, res) {
     }
 
     const createdPolicyIds = []
-    for (const li of lineItems) {
+    for (const [idx, li] of lineItems.entries()) {
       const { data: pol, error: pErr } = await supabase.from('agent_policies').insert({
         agent_id: agentId, institution_id: li.institutionId, patient_id: patientId || null,
         patient_name: patientName, plan_name: li.planName, plan_id: li.planId,
         policy_number: policyNumber || null, status: 'quote', premium: li.premium, deductible_hkd: li.deductibleHkd,
+        discount_hkd: discountByLineItem[idx] || null,
         start_date: startDate || null, renewal_date: renewalDate || null, bundle_id: bundleId,
         inquiry_id: inquiryId || null,
         broker_commission_hkd: inquiryId && brokerCommissionHkd != null ? brokerCommissionHkd : null,
         referral_fee_hkd: inquiryId && referralFeeHkd != null ? referralFeeHkd : null,
-        ward_class: wardClass || null, payment_frequency: paymentFrequency,
+        // Per line item now, per your call - each plan in a bundle can
+        // have its own ward-class pricing, see NewPolicyScreen's own
+        // header comment on builderWardClass for the real bug this
+        // closes (ward class used to be picked here with zero effect on
+        // the premium actually charged).
+        ward_class: li.wardClass || null, payment_frequency: paymentFrequency,
         health_declaration_acknowledged_at: new Date().toISOString(),
         // Submitted the moment it's written - underwriter_status itself
         // defaults to 'pending' at the database level already; this is

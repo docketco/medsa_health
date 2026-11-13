@@ -622,7 +622,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                 </div>
               </div>
               <div style={{display:'flex',gap:'16px',fontSize:'11px',color:C.textMuted}}>
-                <span>Premium: HK${p.premium}/mo</span>
+                <span>Premium: HK${p.premium}/mo{p.discount_hkd>0?` (-HK$${p.discount_hkd} discount)`:''}</span>
                 {p.renewal_date&&<span style={{color:d!==null&&d<=30?C.amber:C.textMuted}}>Renews {new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{d!==null&&d<=30&&d>=0?` (${d}d)`:''}</span>}
               </div>
               {p.cancellation_requested_at&&<div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px'}}>
@@ -732,6 +732,19 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [manualEmail,setManualEmail]=useState('')
   const [manualHkid,setManualHkid]=useState('')
   const [manualDob,setManualDob]=useState('')
+  // Real gap found live-testing: manual entry only ever appeared after a
+  // search came back with no match - an agent who already knows this
+  // client isn't a Medsa patient had to go through a pointless failed
+  // search first. A real, deliberate button now. First/last name
+  // separately (a real application asks for both, not one combined
+  // field) - joined into patientSearch under the hood since that's what
+  // handleSave and the rest of this screen already read patientName from.
+  const [manualEntryMode,setManualEntryMode]=useState(false)
+  const [manualFirstName,setManualFirstName]=useState('')
+  const [manualLastName,setManualLastName]=useState('')
+  useEffect(() => {
+    if (manualEntryMode) setPatientSearch([manualFirstName.trim(), manualLastName.trim()].filter(Boolean).join(' '))
+  }, [manualEntryMode, manualFirstName, manualLastName])
   const [patientAge,setPatientAge]=useState(null)
   const [patientDetails,setPatientDetails]=useState(null) // {date_of_birth, phone, email, hkid} - what an agent actually needs to see to work the case
   const [insurers,setInsurers]=useState([])
@@ -788,13 +801,12 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   // (see PatientApp.jsx's purchase flow) - an agent-issued policy should
   // carry the same details, not less, than one a patient bought without
   // any human involved at all.
-  // Pre-filled from the patient's own answers on the inquiry (see
-  // formWardClass/formPaymentFrequency in PatientApp.jsx's "talk to an
-  // agent" form) when this policy is being built from one - they already
-  // answered this while asking about this specific product, and re-asking
-  // meant an agent either had to track the answer down separately or just
-  // guessed. Still a normal editable field - an agent can change it.
-  const [wardClass,setWardClass]=useState(prefillInquiry?.ward_class || '')
+  // Pre-filled from the patient's own answer on the inquiry (see
+  // formPaymentFrequency in PatientApp.jsx's "talk to an agent" form)
+  // when this policy is being built from one. Ward class moved to
+  // builderWardClass below (per line item, where it actually prices) -
+  // this field used to double as a second, disconnected ward-class
+  // picker for the whole policy that never fed into any premium.
   const [paymentFrequency,setPaymentFrequency]=useState(prefillInquiry?.payment_frequency || 'monthly')
   const [healthDeclarationAck,setHealthDeclarationAck]=useState(false)
   const [termsModalOpen,setTermsModalOpen]=useState(false)
@@ -811,7 +823,17 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [builderDeductibles,setBuilderDeductibles]=useState([])
   const [builderDeductibleId,setBuilderDeductibleId]=useState('')
   const [builderSelectedRiderIds,setBuilderSelectedRiderIds]=useState(new Set())
-  const [lineItems,setLineItems]=useState([]) // [{planId, planName, deductibleId, deductibleHkd, riderIds:[], riderNames:[], premium}]
+  // Real gap found live-testing: ward class used to be one picker for
+  // the WHOLE policy, disconnected from pricing entirely - picking
+  // "Private" never changed a single number, because the builder only
+  // ever read monthly_premium off the matched age tier, even though
+  // insurance_plan_pricing_tiers already carries semi_private_premium/
+  // private_premium for plans that actually price by ward class. Per
+  // line item now (a bundle can mix plans with different ward-class
+  // pricing), defaulting to the patient's own stated preference
+  // (prefillInquiry.ward_class) when converting a real lead.
+  const [builderWardClass,setBuilderWardClass]=useState(prefillInquiry?.ward_class || 'standard')
+  const [lineItems,setLineItems]=useState([]) // [{planId, planName, deductibleId, deductibleHkd, riderIds:[], riderNames:[], premium, wardClass}]
   const [bundleDiscount,setBundleDiscount]=useState('')
   // Real gap found live-testing: the old "manual plan" section let an
   // agent just type a plan name and a premium into existence, unlinked
@@ -895,18 +917,31 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
 
   useEffect(() => {
     setBuilderDeductibleId(''); setBuilderSelectedRiderIds(new Set())
+    // A new plan may not offer the ward class the last one did (or may
+    // offer one the last one didn't) - reset to the patient's stated
+    // preference if this plan actually has it priced, else Standard.
+    setBuilderWardClass(prefillInquiry?.ward_class || 'standard')
     if (!builderPlanId) { setBuilderRiders([]); setBuilderDeductibles([]); return }
     supabase.from('insurance_plan_riders').select('*').eq('plan_id', builderPlanId).eq('status','active').then(({data})=>setBuilderRiders(data||[]))
     supabase.from('insurance_plan_deductible_options').select('*').eq('plan_id', builderPlanId).then(({data})=>setBuilderDeductibles(data||[]))
   }, [builderPlanId])
 
   const builderPlan = basketPlans.find(p=>p.id===builderPlanId) || (searchedPlan?.id===builderPlanId ? searchedPlan : null)
-  const builderBasePremium = (() => {
-    if (!builderPlan) return 0
+  const builderMatchedTier = (() => {
+    if (!builderPlan) return null
     const tiers = builderPlan.insurance_plan_pricing_tiers||[]
     const matched = patientAge!=null ? tiers.find(t=>patientAge>=t.age_min && patientAge<=t.age_max) : null
-    return (matched || tiers[0])?.monthly_premium || 0
+    return matched || tiers[0] || null
   })()
+  // Only ever offer a ward class this tier actually has a real price
+  // for - never fall back to monthly_premium silently, that's exactly
+  // the "picked Private, nothing changed" bug this closes.
+  const builderWardClassOptions = builderMatchedTier ? [
+    { key:'standard', label:'Standard/general', premium: builderMatchedTier.monthly_premium },
+    ...(builderMatchedTier.semi_private_premium!=null ? [{ key:'semi_private', label:'Semi-private', premium: builderMatchedTier.semi_private_premium }] : []),
+    ...(builderMatchedTier.private_premium!=null ? [{ key:'private', label:'Private', premium: builderMatchedTier.private_premium }] : []),
+  ] : []
+  const builderBasePremium = builderWardClassOptions.find(o=>o.key===builderWardClass)?.premium ?? builderWardClassOptions[0]?.premium ?? 0
   const builderDeductible = builderDeductibles.find(d=>d.id===builderDeductibleId)
   const builderRidersTotal = builderRiders.filter(r=>builderSelectedRiderIds.has(r.id)).reduce((s,r)=>s+(r.monthly_premium||0),0)
   const builderComputedPremium = Math.round((builderBasePremium * (1 + (builderDeductible?.premium_adjustment_pct||0)/100) + builderRidersTotal) * 100) / 100
@@ -922,6 +957,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       planId: builderPlan.id, planName: builderPlan.plan_name, institutionId: builderInsurer,
       deductibleId: builderDeductibleId||null, deductibleHkd: builderDeductible?.deductible_hkd??null,
       riderIds: [...builderSelectedRiderIds], riderNames, premium: builderComputedPremium,
+      wardClass: builderWardClassOptions.length>0 ? builderWardClass : null,
       commissionRatePct: builderPlan.commission_rate_pct,
       waitingPeriodDays: builderPlan.waiting_period_days ?? null,
       preExistingConditionPolicy: builderPlan.pre_existing_condition_policy || null,
@@ -985,7 +1021,12 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   // Medsa's referral fee is likewise computed, never agent-typed, once a
   // real commission and Medsa's contracted rate for this insurer are both
   // known - same reasoning as commission itself, one level up.
-  const computedReferralFee = (lineItems.length>0 && commissionNum>0 && medsaReferralFeeRatePct!=null)
+  // Real bug found live-testing: this ran regardless of REFERRAL_FEE_
+  // ENABLED - only the display block below was gated on the flag, so a
+  // referral fee amount was still being silently computed and saved to
+  // referral_fee_hkd on every real converted policy, invisible to the
+  // agent, even with the feature supposedly off. Gated at the source now.
+  const computedReferralFee = (REFERRAL_FEE_ENABLED && lineItems.length>0 && commissionNum>0 && medsaReferralFeeRatePct!=null)
     ? Math.min(commissionNum * medsaReferralFeeRatePct / 100, commissionNum * 0.5) : null
   useEffect(() => {
     setReferralFee(computedReferralFee!=null ? computedReferralFee.toFixed(2) : '')
@@ -1033,7 +1074,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           inquiryId: prefillInquiry?.id || null,
           brokerCommissionHkd: prefillInquiry && brokerCommission ? commissionNum : null,
           referralFeeHkd: prefillInquiry && referralFee ? referralFeeNum : null,
-          wardClass: wardClass||null, paymentFrequency, healthDeclarationAcknowledged: healthDeclarationAck,
+          paymentFrequency, healthDeclarationAcknowledged: healthDeclarationAck,
           payerBankName: payerBankName||null, payerAccountNumber: payerAccountNumber||null, payerAccountHolderName: payerAccountHolderName||null,
           manualPatientPhone: !foundPatient?.id ? (manualPhone.trim()||null) : null,
           manualPatientEmail: !foundPatient?.id ? (manualEmail.trim()||null) : null,
@@ -1076,7 +1117,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   }
 
   function canAdvanceStep(s) {
-    if (s===1) return !!(foundPatient || patientSearch.trim())
+    if (s===1) return manualEntryMode ? !!(manualFirstName.trim() && manualLastName.trim()) : !!foundPatient
     if (s===2) return lineItems.length>0
     // Real bug found this round: this used to read `status!=='active' ||
     // healthDeclarationAck` - a leftover from when status was a picker.
@@ -1120,10 +1161,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
 
       {step===1 && (<>
       <SecLabel>Patient</SecLabel>
-      <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-        <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search by name or Medsa ID" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
-        <Btn onClick={searchPatient}>Search</Btn>
-      </div>
+      {!manualEntryMode&&<>
+        <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+          <input value={patientSearch} onChange={e=>setPatientSearch(e.target.value)} placeholder="Search by name or Medsa ID" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <Btn onClick={searchPatient}>Search</Btn>
+        </div>
+        <div onClick={()=>{setManualEntryMode(true);setFoundPatient(null);setPatientSearch('')}} style={{fontSize:'12px',color:C.green,fontWeight:600,cursor:'pointer',marginBottom:'16px'}}>+ This client isn't a Medsa patient - add manually</div>
+      </>}
       {/* Real gap this closes: an agent building or converting a policy
           used to see just a name and a Medsa ID - no age, no way to
           reach the patient, and (when converting a real inquiry)
@@ -1138,8 +1182,16 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           {patientDetails?.hkid&&` · HKID ${patientDetails.hkid}`}
         </div>
       </div>}
-      {!foundPatient&&patientSearch&&<>
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>No match yet - you can still continue without linking a Medsa profile. Everything below is optional.</div>
+      {!foundPatient&&patientSearch&&!manualEntryMode&&<div onClick={()=>{setManualEntryMode(true);setPatientSearch('')}} style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match - <span style={{color:C.green,fontWeight:600,cursor:'pointer'}}>add this client manually instead</span></div>}
+      {manualEntryMode&&<>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:'8px'}}>
+          <div style={{fontSize:'11px',color:C.textMuted}}>Not linked to a Medsa profile - first/last name required, everything else optional.</div>
+          <span onClick={()=>{setManualEntryMode(false);setManualFirstName('');setManualLastName('');setPatientSearch('')}} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'8px'}}>Search instead</span>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'8px'}}>
+          <input value={manualFirstName} onChange={e=>setManualFirstName(e.target.value)} placeholder="First name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={manualLastName} onChange={e=>setManualLastName(e.target.value)} placeholder="Last name" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'16px'}}>
           <input value={manualPhone} onChange={e=>setManualPhone(e.target.value)} placeholder="Phone" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
           <input value={manualEmail} onChange={e=>setManualEmail(e.target.value)} placeholder="Email" type="email" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
@@ -1221,6 +1273,17 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
               ))}
             </div>
           </>}
+          {/* Only shows when this plan's own pricing table actually
+              prices by ward class (semi-private/private premiums on
+              file) - a plan with one flat rate has nothing to pick. */}
+          {builderWardClassOptions.length>1&&<>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Ward class</div>
+            <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'10px'}}>
+              {builderWardClassOptions.map(o=>(
+                <div key={o.key} onClick={()=>setBuilderWardClass(o.key)} style={{padding:'6px 10px',borderRadius:'8px',fontSize:'11px',cursor:'pointer',background:builderWardClass===o.key?C.green:C.card,color:builderWardClass===o.key?'#fff':C.text}}>{o.label} (HK${o.premium})</div>
+              ))}
+            </div>
+          </>}
           <div style={{fontSize:'13px',fontWeight:600,marginBottom:'10px'}}>Line premium: HK${builderComputedPremium}/mo</div>
           <Btn variant="primary" style={{width:'100%'}} onClick={addLineItem}>+ Add this plan to the package</Btn>
         </>}
@@ -1231,7 +1294,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'6px 0',borderBottom:`0.5px solid ${C.border}`,fontSize:'12px'}}>
             <div>
               <div style={{fontWeight:500}}>{li.planName}</div>
-              {(li.deductibleHkd!=null||li.riderNames.length>0)&&<div style={{color:C.textMuted,fontSize:'11px'}}>{li.deductibleHkd!=null?`HK$${li.deductibleHkd} deductible`:''}{li.riderNames.length>0?`${li.deductibleHkd!=null?' · ':''}${li.riderNames.join(', ')}`:''}</div>}
+              {(li.deductibleHkd!=null||li.riderNames.length>0||li.wardClass)&&<div style={{color:C.textMuted,fontSize:'11px'}}>{[li.wardClass&&li.wardClass!=='standard'&&li.wardClass.replace('_',' '),li.deductibleHkd!=null&&`HK$${li.deductibleHkd} deductible`,li.riderNames.length>0&&li.riderNames.join(', ')].filter(Boolean).join(' · ')}</div>}
             </div>
             <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
               <span>HK${li.premium}/mo</span>
@@ -1246,21 +1309,28 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </>)}
 
       {step===3 && (<>
-      {/* Bundle discount, dates, commission and the health declaration all
-          moved here from the single long page - none of them meant
-          anything until a real plan existed (step 2), so this is just
-          making that dependency explicit in the flow instead of leaving
-          it conditionally hidden on one long page. */}
-      {lineItems.length>1&&<>
-      <SecLabel>Bundle discount</SecLabel>
+      {/* Dates, commission and the health declaration all moved here
+          from the single long page - none of them meant anything until
+          a real plan existed (step 2), so this is just making that
+          dependency explicit in the flow instead of leaving it
+          conditionally hidden on one long page.
+          Real gap found live-testing: this used to only show for a 2+
+          plan bundle - a real discount (first-year promo, loyalty, a
+          negotiated one-off) can apply to a single plan too, not only
+          when plans are bundled together. No longer gated on
+          lineItems.length - agent_policies now has its own discount_hkd
+          (split proportionally across line items in create_policy.js
+          when there's more than one), so a single-plan policy can carry
+          a real discount on its own row, not only via the policy_bundles
+          wrapper a 2+ plan package gets. */}
+      <SecLabel>Discount</SecLabel>
       <div style={{marginBottom:'16px'}}>
-        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>HK$/mo, real negotiated figure</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>HK$/mo, real negotiated figure - optional</div>
         <input value={bundleDiscount} onChange={e=>setBundleDiscount(e.target.value)} type="number" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
         <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',fontWeight:600,marginTop:'8px'}}>
           <span>Total after discount</span><span>HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</span>
         </div>
       </div>
-      </>}
 
       {/* Real gap found live-testing: these dates apply to the whole
           policy - basket-built or not - but used to live only under "Or
@@ -1281,26 +1351,23 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       </div>
 
       <SecLabel>Coverage details</SecLabel>
-      {prefillInquiry?.ward_class || prefillInquiry?.payment_frequency
-        ? <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Pre-filled from the patient's own answer when they reached out - change either if it's no longer right.</div>
+      {/* Ward class moved to a per-line-item pick back in step 2 (where
+          it actually drives the premium, see builderWardClassOptions) -
+          this used to be one global picker here that never changed a
+          single number, which was the real bug. Read-only summary of
+          what was picked, not a second place to set it. */}
+      {lineItems.some(li=>li.wardClass)&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px',lineHeight:1.6}}>
+        {lineItems.map((li,i)=>li.wardClass&&<div key={i}>{li.planName}: {li.wardClass.replace('_',' ')}</div>)}
+      </div>}
+      {prefillInquiry?.payment_frequency
+        ? <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Payment frequency pre-filled from the patient's own answer when they reached out - change it if it's no longer right.</div>
         : null}
-      <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
-        <div style={{flex:1}}>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Ward class</div>
-          <select value={wardClass} onChange={e=>setWardClass(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}>
-            <option value="">Not set</option>
-            <option value="general">General ward</option>
-            <option value="semi_private">Semi-private</option>
-            <option value="private">Private</option>
-          </select>
-        </div>
-        <div style={{flex:1}}>
-          <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Payment frequency</div>
-          <select value={paymentFrequency} onChange={e=>setPaymentFrequency(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}>
-            <option value="monthly">Monthly</option>
-            <option value="annual">Annual</option>
-          </select>
-        </div>
+      <div style={{marginBottom:'16px'}}>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'4px'}}>Payment frequency</div>
+        <select value={paymentFrequency} onChange={e=>setPaymentFrequency(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 10px',fontSize:'13px',boxSizing:'border-box'}}>
+          <option value="monthly">Monthly</option>
+          <option value="annual">Annual</option>
+        </select>
       </div>
 
       {/* Real gap this closes: this used to be one inline checkbox
@@ -1388,12 +1455,12 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       <Card style={{padding:'16px',marginBottom:'16px'}}>
         <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}><strong style={{color:C.text}}>Patient:</strong> {foundPatient?.full_name||patientSearch||'Not set'}</div>
         {lineItems.map((li,i)=>(
-          <div key={i} style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{li.planName} - HK${li.premium}/mo{li.riderNames.length>0?` (+${li.riderNames.join(', ')})`:''}</div>
+          <div key={i} style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>{li.planName}{li.wardClass?` (${li.wardClass.replace('_',' ')})`:''} - HK${li.premium}/mo{li.riderNames.length>0?` (+${li.riderNames.join(', ')})`:''}</div>
         ))}
-        {bundleDiscountNum>0&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Bundle discount: -HK${bundleDiscountNum}/mo</div>}
+        {bundleDiscountNum>0&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'4px'}}>Discount: -HK${bundleDiscountNum}/mo</div>}
         <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>Total: HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</div>
         <div style={{fontSize:'12px',color:C.textSub}}>{startDate?`Starts ${startDate}`:'Start date not set'}{renewalDate?` · renews ${renewalDate}`:''}</div>
-        <div style={{fontSize:'12px',color:C.textSub}}>{wardClass?wardClass.replace('_',' '):'Ward class not set'} · {paymentFrequency}</div>
+        <div style={{fontSize:'12px',color:C.textSub}}>{paymentFrequency}</div>
         <div style={{fontSize:'12px',color:C.textSub}}>Goes to the underwriter on submit{healthDeclarationAck?' · declaration accepted':' · declaration still needed'}</div>
       </Card>
 
@@ -2415,7 +2482,10 @@ export default function AgentApp() {
     // Captive agents only ever see their own insurer's policies.
     // Independent agents see everything tied to their agent_id, spanning
     // whichever insurers they've written business with.
-    let query = supabase.from('agent_policies').select('*, institutions(name)').eq('agent_id', a.id)
+    // Real gap found live-testing: no order at all before this - rows
+    // came back in whatever order the database felt like, so the list
+    // reshuffled on every reload. Newest first, like everything else.
+    let query = supabase.from('agent_policies').select('*, institutions(name)').eq('agent_id', a.id).order('created_at', { ascending: false })
     const { data: policyRows } = await query
     setPolicies(policyRows||[])
 

@@ -1541,6 +1541,7 @@ function StaffScreen({ company }) {
   const [decidingAppointmentId,setDecidingAppointmentId]=useState(null)
   const [rejectReasonId,setRejectReasonId]=useState(null)
   const [rejectReason,setRejectReason]=useState('')
+  const [decisionNotice,setDecisionNotice]=useState(null)
   const [bulkRows,setBulkRows]=useState([])
   const [bulkFileName,setBulkFileName]=useState('')
   const [bulkRunning,setBulkRunning]=useState(false)
@@ -1565,7 +1566,7 @@ function StaffScreen({ company }) {
   }
   useEffect(() => { load() }, [company.id])
 
-  async function decideAppointment(reqId, approve, reason) {
+  async function decideAppointment(reqId, approve, reason, agentName) {
     setDecidingAppointmentId(reqId)
     await supabase.from('agent_institution_appointments').update({
       status: approve?'active':'rejected',
@@ -1574,6 +1575,12 @@ function StaffScreen({ company }) {
     }).eq('id', reqId)
     setDecidingAppointmentId(null)
     setRejectReasonId(null); setRejectReason('')
+    // Real gap found live-testing: this worked correctly the whole time
+    // (the request really was rejected/approved and saved) - the card
+    // just vanished from the list the instant the request stopped being
+    // pending, with nothing confirming what had actually happened. Read
+    // as "did that even do anything?" even though it had.
+    setDecisionNotice(`${agentName||'That agent'} ${approve?'appointed':'rejected'}.`)
     load()
   }
 
@@ -1752,6 +1759,7 @@ function StaffScreen({ company }) {
         </div>}
       </div>
 
+      {decisionNotice&&<div style={{background:C.greenXLight,border:`0.5px solid ${C.green}`,borderRadius:'8px',padding:'10px 14px',marginTop:'16px',fontSize:'12px',color:C.green,fontWeight:600}}>✓ {decisionNotice}</div>}
       {appointmentRequests.length>0&&<div style={{background:C.navyLight,border:`1px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginTop:'16px'}}>
         <div style={{fontSize:'13px',fontWeight:700,color:C.navy,marginBottom:'4px'}}>Agent appointment requests ({appointmentRequests.length})</div>
         <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>An agent asking to sell your plans - your own call whether they're actually appointed, same as any real licensing decision.</div>
@@ -1765,12 +1773,12 @@ function StaffScreen({ company }) {
                 <textarea value={rejectReason} onChange={e=>setRejectReason(e.target.value)} rows={2} placeholder="Reason (optional)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',boxSizing:'border-box',fontFamily:'inherit',marginBottom:'8px'}}/>
                 <div style={{display:'flex',gap:'8px'}}>
                   <Btn style={{flex:1,fontSize:'12px'}} onClick={()=>{setRejectReasonId(null);setRejectReason('')}}>Cancel</Btn>
-                  <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,false,rejectReason)}>Confirm reject</Btn>
+                  <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,false,rejectReason,r.agents?.full_name)}>Confirm reject</Btn>
                 </div>
               </div>
             ) : (
               <div style={{display:'flex',gap:'8px'}}>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,true)}>{decidingAppointmentId===r.id?'Saving…':'✓ Appoint'}</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>decideAppointment(r.id,true,null,r.agents?.full_name)}>{decidingAppointmentId===r.id?'Saving…':'✓ Appoint'}</Btn>
                 <Btn variant="danger" style={{flex:1,fontSize:'12px'}} disabled={decidingAppointmentId===r.id} onClick={()=>setRejectReasonId(r.id)}>✕ Reject</Btn>
               </div>
             )}
