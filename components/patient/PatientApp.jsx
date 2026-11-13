@@ -4932,7 +4932,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           they're still visually distinguishable as two different flows. */}
       {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accentMid} 0%,${__theme.accent} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit a claim from a visit on file':'從已存檔的診症提交索償'}</div>
-        <div style={{fontSize:'12px',fontWeight:500,opacity:0.95,marginBottom:'14px',lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
+        <div style={{fontSize:'12px',fontWeight:600,opacity:1,marginBottom:'14px',lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
 
         {visitsWithData.length===0
           ? <div style={{fontSize:'12px',opacity:0.8,fontStyle:'italic'}}>{isEn?'No visits on file yet.':'暫無已存檔的診症記錄。'}</div>
@@ -4991,31 +4991,46 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
         <strong>{isEn?`${resubmitReminder.claimRef} was rejected:`:`${resubmitReminder.claimRef} 已被拒絕:`}</strong> {resubmitReminder.reason}
         <div style={{marginTop:'4px',opacity:0.85}}>{isEn?'Resubmit below once you\'ve addressed this - if it isn\'t a document issue, contact your agent or insurer directly instead.':'處理後請於下方重新提交 - 若非文件問題,請直接聯絡您的代理人或保險公司。'}</div>
       </div>}
+      {/* Real gap found live-testing: "Submit an out-of-network receipt"
+          was too narrow a name for what this form actually does - it's
+          also the generic resubmission path (which could be fixing
+          anything, not just a receipt) and it already lets you reuse
+          something already in My Documents, not just upload fresh. Also
+          reordered: your existing documents first (the likely answer
+          when you're already holding files from an earlier attempt),
+          upload-new second, clinic name moved down and marked optional
+          since it only matters for an off-network visit - this whole
+          section used to read as one undifferentiated block, now it's
+          three labeled steps. */}
       {activePolicy&&<div ref={manualFormRef} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
-        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</div>
-        <div style={{fontSize:'12px',fontWeight:500,opacity:0.95,marginBottom:'14px',lineHeight:1.5}}>{isEn
-          ?'For a clinic not on Medsa - upload a receipt (and diagnosis letter, if it\'s a separate document).'
-          :'適用於非Medsa診所 - 上傳收據(如診斷證明為獨立文件,請一併上傳)。'}</div>
+        <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit supporting documents':'提交支持文件'}</div>
+        <div style={{fontSize:'12px',fontWeight:600,marginBottom:'14px',lineHeight:1.5}}>{isEn
+          ?'A receipt, diagnosis letter, or anything else your claim needs - from a clinic not on Medsa, or already sitting in My Documents.'
+          :'收據、診斷證明,或您的索償所需的任何文件 - 來自非Medsa診所,或已存於「我的文件」中。'}</div>
 
         <div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
-          <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
-          <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital':'例如:明德國際醫院'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px',background:'#fff',color:C.text}}/>
-          {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',opacity:0.75,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
-          {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',opacity:manualClinicCheck.verified?1:0.75,fontWeight:manualClinicCheck.verified?600:400,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
+          <div style={{fontSize:'11px',fontWeight:700,marginBottom:'6px'}}>{isEn?'1. From your documents':'1. 來自您的文件'}</div>
+          {attachments.length===0
+            ? <div style={{fontSize:'12px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Nothing unclaimed yet - upload below instead.':'暫無未提交的文件 - 請於下方上傳。'}</div>
+            : attachments.map(a=>(
+              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'0.5px solid rgba(255,255,255,0.25)',cursor:'pointer'}}>
+                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.6)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
+                <div style={{fontSize:'13px',fontWeight:500}}>{a.file_name||a.category}</div>
+              </div>
+            ))}
 
-          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
-            {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a receipt or document':'+ 上傳收據或文件')}
+          <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'2. Or upload something new':'2. 或上傳新文件'}</div>
+          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'4px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
+            {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a file':'+ 上傳文件')}
             <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
           </label>
           {uploadError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{uploadError}</div>}
-          {attachments.length===0
-            ? <div style={{fontSize:'12px',opacity:0.7,fontStyle:'italic',marginBottom:'10px'}}>{isEn?'No unclaimed uploads yet.':'暫無未提交的上傳文件。'}</div>
-            : attachments.map(a=>(
-              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'0.5px solid rgba(255,255,255,0.25)',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.5)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
-                <div style={{fontSize:'13px'}}>{a.file_name||a.category}</div>
-              </div>
-            ))}
+
+          <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'3. Details':'3. 詳情'}</div>
+          <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,marginBottom:'4px'}}>{isEn?'Clinic name (only if from a clinic not on Medsa)':'診所名稱(僅適用於非Medsa診所)'}</div>
+          <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital (optional)':'例如:明德國際醫院(可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px',background:'#fff',color:C.text}}/>
+          {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
+          {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',fontWeight:manualClinicCheck.verified?700:500,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
 
           {heldPolicies.length>1&&<>
             <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
@@ -12097,13 +12112,15 @@ export default function PatientApp({ liveData={} }) {
   // pregnant, so pink has no business showing there even if bumpActive
   // somehow resolved true for that id. Only the main account can go pink.
   // Real bug found live-testing: #F48FB1/#F8BBD0 (Material pink 200/100)
-  // are light enough that white text set on them - every gradient banner
-  // and card everywhere in the app assumes accent/accentMid are dark
-  // enough for that - read as thin and barely visible. Darkened to the
-  // same pink family (still clearly distinct from green/yellow/teal),
-  // just with the contrast every white-on-accent surface needs.
-  const themeAccent = isKidDependent ? '#E8A400' : isOtherDependent ? '#43A879' : bumpActive ? '#C2255C' : C.green
-  const themeAccentMid = isKidDependent ? '#F5C242' : isOtherDependent ? '#6FC89D' : bumpActive ? '#DB5088' : C.greenMid
+  // were too light for white text on them to read well. First fix went
+  // too far the other way (#C2255C read as a deep rose, not the baby
+  // pink you actually wanted back) - this is the middle ground: still
+  // recognizably the same soft baby pink, just a shade deeper than the
+  // original two, with every white-text label on it now bold (see the
+  // claims-tab and unread-banner changes) rather than leaning on color
+  // alone for legibility.
+  const themeAccent = isKidDependent ? '#E8A400' : isOtherDependent ? '#43A879' : bumpActive ? '#DE6A93' : C.green
+  const themeAccentMid = isKidDependent ? '#F5C242' : isOtherDependent ? '#6FC89D' : bumpActive ? '#EC9FBB' : C.greenMid
   const themeAccentLight = isKidDependent ? '#FFF3CD' : isOtherDependent ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
   const themeAccentXLight = isKidDependent ? '#FFFBF0' : isOtherDependent ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
 
