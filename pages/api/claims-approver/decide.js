@@ -20,20 +20,26 @@ export default async function handler(req, res) {
 
   const { data: claim } = await supabase.from('insurance_claims').select('id, status, patient_copay_amount, deductible_applied').eq('id', claimId).maybeSingle()
   if (!claim) return res.status(404).json({ status: 'ERROR', message: 'Claim not found.' })
-  if (claim.status !== 'pending') return res.status(400).json({ status: 'ERROR', message: 'This claim is no longer pending review.' })
+  // Real bug this fixes: this only ever accepted status='pending', so a
+  // 'pending_review' claim (the other real pending state list_queue.js's
+  // own queue now correctly surfaces, see its header comment) always
+  // failed here with a misleading "someone else already decided it" -
+  // nobody had, the WHERE clause below just never matched that status.
+  const PENDING_STATUSES = ['pending', 'pending_review']
+  if (!PENDING_STATUSES.includes(claim.status)) return res.status(400).json({ status: 'ERROR', message: 'This claim is no longer pending review.' })
 
   if (action === 'approve') {
     const payable = (claim.patient_copay_amount || 0) + (claim.deductible_applied || 0)
-    // Atomic conditional update (status='pending' in the WHERE itself,
-    // not just the earlier SELECT) - two approvers deciding the same
-    // claim within the same second can't both "win": whichever commits
-    // first flips it out of 'pending', the second's WHERE matches
-    // nothing, caught below instead of assumed.
+    // Atomic conditional update (status still one of PENDING_STATUSES in
+    // the WHERE itself, not just the earlier SELECT) - two approvers
+    // deciding the same claim within the same second can't both "win":
+    // whichever commits first flips it out of pending, the second's
+    // WHERE matches nothing, caught below instead of assumed.
     const { data: updated } = await supabase.from('insurance_claims').update({
       status: payable === 0 ? 'settled' : 'approved',
       settled_at: payable === 0 ? new Date().toISOString() : null,
       decided_at: new Date().toISOString(), decision_by: approverName || null,
-    }).eq('id', claimId).eq('status', 'pending').select('id')
+    }).eq('id', claimId).in('status', PENDING_STATUSES).select('id')
     if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this claim.' })
     // Same real gap AgentClaimView's own approve path already closes -
     // approving a claim with attached documents IS a human having checked
@@ -48,7 +54,7 @@ export default async function handler(req, res) {
     if (!reason?.trim()) return res.status(400).json({ status: 'ERROR', message: 'A rejection needs a reason - the patient sees this.' })
     const { data: updated } = await supabase.from('insurance_claims').update({
       status: 'rejected', rejection_reason: reason.trim(), decided_at: new Date().toISOString(), decision_by: approverName || null,
-    }).eq('id', claimId).eq('status', 'pending').select('id')
+    }).eq('id', claimId).in('status', PENDING_STATUSES).select('id')
     if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this claim.' })
   }
 

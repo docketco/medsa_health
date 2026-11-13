@@ -1634,8 +1634,16 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     // own screen - it was never meant to sit in a claim queue for an
     // agent to work, so it's excluded here rather than showing up as a
     // dead lead nobody needs to act on.
+    // 30-day cutoff, per your call: this bucket is already labeled as the
+    // rare exception (nothing eligible gets left unclaimed under normal
+    // round-robin), so an old row sitting here forever is stale clutter,
+    // not a real lead still worth claiming - same 30-day window the
+    // declaration itself is valid for (match_plan_suitability.js), so an
+    // inquiry this old couldn't be converted on its original declaration
+    // anyway without a fresh one.
+    const unclaimedCutoff = new Date(Date.now() - 30*24*60*60*1000).toISOString()
     const { data: unclaimedRows } = myCompanyNames.length===0 ? { data: [] } : await supabase.from('plan_inquiries').select('*, insurance_plans!inner(plan_name, company_name)')
-      .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames).order('created_at',{ascending:false})
+      .is('claimed_by_agent_id', null).or('mode.is.null,mode.neq.auto').in('insurance_plans.company_name', myCompanyNames).gte('created_at', unclaimedCutoff).order('created_at',{ascending:false})
     const { data: mineRows } = await supabase.from('plan_inquiries').select('*, insurance_plans(plan_name, company_name)')
       .eq('claimed_by_agent_id', agent.id).order('claimed_at',{ascending:false})
     setMine(mineRows||[])
