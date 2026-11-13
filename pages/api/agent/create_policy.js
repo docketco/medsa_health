@@ -31,6 +31,11 @@ export default async function handler(req, res) {
     // record and to relay to the insurer, never read or acted on by
     // Medsa's own matching/billing logic anywhere.
     payerBankName, payerAccountNumber, payerAccountHolderName,
+    // Real gap: "type the name in manually" was the only field offered
+    // for a client who isn't a Medsa patient - a real application
+    // always collects more than a name. Optional, only used when there's
+    // no real patientId to read these from instead.
+    manualPatientPhone, manualPatientEmail, manualPatientHkid, manualPatientDob,
   } = req.body || {}
 
   if (!agentId) return res.status(400).json({ status: 'ERROR', message: 'agentId is required.' })
@@ -87,6 +92,10 @@ export default async function handler(req, res) {
         underwriter_submitted_at: new Date().toISOString(),
         payer_bank_name: payerBankName || null, payer_account_number: payerAccountNumber || null,
         payer_account_holder_name: payerAccountHolderName || null,
+        manual_patient_phone: patientId ? null : (manualPatientPhone || null),
+        manual_patient_email: patientId ? null : (manualPatientEmail || null),
+        manual_patient_hkid: patientId ? null : (manualPatientHkid || null),
+        manual_patient_dob: patientId ? null : (manualPatientDob || null),
       }).select().maybeSingle()
       if (pErr) throw pErr
       createdPolicyIds.push(pol.id)

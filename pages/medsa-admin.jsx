@@ -26,6 +26,18 @@ export default function MedsaAdminPage() {
   // partway down the last one looked blank/confusing until you noticed
   // you had to scroll up first.
   useEffect(() => { window.scrollTo(0, 0) }, [tab])
+
+  // Real gap found live-testing: a self-signed-up agent waiting on
+  // license verification had no signal anywhere on this page - the only
+  // way to notice was to happen to open Agent Verification and check.
+  // Same real alert the insurer-portal's own Team tile now has for an
+  // agent appointment request - this is medsa-admin's side of the same
+  // gap (two different reviewers, two different pending queues).
+  const [pendingAgentCount, setPendingAgentCount] = useState(0)
+  useEffect(() => {
+    supabase.from('agents').select('id', { count: 'exact', head: true }).eq('verification_status', 'pending')
+      .then(({ count }) => setPendingAgentCount(count || 0))
+  }, [tab])
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',maxWidth:560,margin:'0 auto',fontFamily:'system-ui,sans-serif'}}>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'2px'}}>Medsa Admin</div>
@@ -53,7 +65,8 @@ export default function MedsaAdminPage() {
             is now scoped to. ConfinementHelpersTab and VerifiedProsTab
             left defined/untouched below (frozen, not deleted). */}
         {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
-          <div key={k} onClick={()=>setTab(k)} style={{flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
+          <div key={k} onClick={()=>setTab(k)} style={{position:'relative',flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
+            {k==='agentverification'&&pendingAgentCount>0&&<span style={{position:'absolute',top:'4px',right:'6px',minWidth:'16px',height:'16px',padding:'0 3px',borderRadius:'8px',background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>{pendingAgentCount}</span>}
             <Icon name={ic} size={18}/>
             {l}
           </div>

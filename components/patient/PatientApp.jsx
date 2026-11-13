@@ -832,8 +832,14 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
               banner reads as a notification, not just another flat tab/
               chip in the same rounded-rectangle shape as everything else
               on Home. */}
-          <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'rgba(255,255,255,0.25)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-            <span style={{fontSize:'17px',color:'#fff',fontWeight:700}}>✉</span>
+          <div style={{position:'relative',width:'32px',height:'32px',flexShrink:0}}>
+            <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'rgba(255,255,255,0.25)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <span style={{fontSize:'17px',color:'#fff',fontWeight:700}}>✉</span>
+            </div>
+            {/* A number on the icon itself, same corner-badge pattern as a
+                phone app icon - the line of text next to it already said
+                the count, this makes it readable at a glance too. */}
+            <span style={{position:'absolute',top:'-4px',right:'-4px',minWidth:'16px',height:'16px',padding:'0 3px',borderRadius:'8px',background:'#fff',color:themeAccent,fontSize:'10px',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>{totalUnreadMessages>99?'99+':totalUnreadMessages}</span>
           </div>
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${totalUnreadMessages} unread message${totalUnreadMessages>1?'s':''}`:`${totalUnreadMessages}則未讀訊息`}</div>
@@ -4918,9 +4924,15 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           action on this tab - a highlighted card, not a plain section,
           since this covers the common case (a Medsa-network visit) with
           nothing to upload at all. */}
-      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${C.navy} 0%,${C.blue} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
+      {/* Real gap found live-testing: this card was hardcoded navy/blue
+          regardless of theme, while Path 2 right below it already used
+          the real __theme accent - on a Bump (pink) profile the two
+          looked like they belonged to different apps. Same accent
+          family now, gradient direction reversed from Path 2's so
+          they're still visually distinguishable as two different flows. */}
+      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accentMid} 0%,${__theme.accent} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit a claim from a visit on file':'從已存檔的診症提交索償'}</div>
-        <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
+        <div style={{fontSize:'12px',fontWeight:500,opacity:0.95,marginBottom:'14px',lineHeight:1.5}}>{isEn?'For a visit at a Medsa-connected clinic - the receipt and diagnosis are already on file, nothing to upload.':'適用於在Medsa診所的診症 - 收據及診斷已存檔,無需上傳任何文件。'}</div>
 
         {visitsWithData.length===0
           ? <div style={{fontSize:'12px',opacity:0.8,fontStyle:'italic'}}>{isEn?'No visits on file yet.':'暫無已存檔的診症記錄。'}</div>
@@ -4938,7 +4950,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
 
           {heldPolicies.length>1
             ? <>
-                <div style={{fontSize:'11px',opacity:0.8,marginBottom:'4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
+                <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,marginBottom:'4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
                 <select value={visitPlanId} onChange={e=>setVisitPlanId(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}>
                   {heldPolicies.map(p=><option key={p.id} value={p.plan_id}>{p.plan_name}</option>)}
                 </select>
@@ -4954,7 +4966,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           {visitSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{visitSubmitError}</div>}
           {visitSubmitSuccess
             ? <div style={{background:'#fff',borderRadius:'8px',padding:'10px 12px',fontSize:'12px',color:__theme.accent,fontWeight:600}}>✓ {isEn?`Submitted as ${visitSubmitSuccess}. Your insurer will verify it independently.`:`已提交,索償編號 ${visitSubmitSuccess}。您的保險公司將自行核實。`}</div>
-            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:C.navy}} disabled={visitSubmitting||isDuplicateForSelectedPlan||visitPastFilingDeadline} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
+            : <Btn variant="primary" style={{width:'100%',background:'#fff',color:__theme.accent}} disabled={visitSubmitting||isDuplicateForSelectedPlan||visitPastFilingDeadline} onClick={handleSubmitFromVisit}>{visitSubmitting?(isEn?'Submitting…':'提交中…'):(isEn?'Submit this visit as a claim':'提交此診症索償')}</Btn>}
         </div>}
       </div>}
 
@@ -4963,25 +4975,35 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           form) - a plain white Card sitting right under a bold gradient
           one read as "the real option and the afterthought," when both
           are equally legitimate, equally common ways to submit a claim.
-          A different gradient (green, not navy) keeps the two visually
+          Gradient direction reversed from Path 1's (both now the real
+          theme accent, not a hardcoded navy) keeps the two visually
           distinguishable as different flows without one outranking the
           other. */}
-      {resubmitReminder&&<div style={{margin:'16px 16px 0',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.red,lineHeight:1.6}}>
-        <strong>{isEn?`Fixing ${resubmitReminder.claimRef}:`:`修正 ${resubmitReminder.claimRef}:`}</strong> {resubmitReminder.reason}
+      {/* Real gap found live-testing: "Fixing CLM-X: {reason}" above the
+          generic upload form presumed every rejection is a document
+          problem this form can fix - a reason like "wrong amount" or
+          "policy lapsed" has nothing to do with a receipt, and framing
+          it that way read as the app telling the patient something
+          false about their own case. Neutral framing now: the reason is
+          just shown as context for whatever you resubmit, with an
+          explicit out if this form genuinely isn't the right fix. */}
+      {resubmitReminder&&<div style={{margin:'16px 16px 0',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',fontWeight:500,color:C.red,lineHeight:1.6}}>
+        <strong>{isEn?`${resubmitReminder.claimRef} was rejected:`:`${resubmitReminder.claimRef} 已被拒絕:`}</strong> {resubmitReminder.reason}
+        <div style={{marginTop:'4px',opacity:0.85}}>{isEn?'Resubmit below once you\'ve addressed this - if it isn\'t a document issue, contact your agent or insurer directly instead.':'處理後請於下方重新提交 - 若非文件問題,請直接聯絡您的代理人或保險公司。'}</div>
       </div>}
       {activePolicy&&<div ref={manualFormRef} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</div>
-        <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn
+        <div style={{fontSize:'12px',fontWeight:500,opacity:0.95,marginBottom:'14px',lineHeight:1.5}}>{isEn
           ?'For a clinic not on Medsa - upload a receipt (and diagnosis letter, if it\'s a separate document).'
           :'適用於非Medsa診所 - 上傳收據(如診斷證明為獨立文件,請一併上傳)。'}</div>
 
         <div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
-          <div style={{fontSize:'11px',opacity:0.8,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
+          <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,marginBottom:'4px'}}>{isEn?'Clinic name':'診所名稱'}</div>
           <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital':'例如:明德國際醫院'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px',background:'#fff',color:C.text}}/>
           {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',opacity:0.75,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
           {manualClinicCheck&&manualClinicCheck!=='checking'&&<div style={{fontSize:'11px',opacity:manualClinicCheck.verified?1:0.75,fontWeight:manualClinicCheck.verified?600:400,marginBottom:'10px'}}>{manualClinicCheck.verified?'✓':'◇'} {manualClinicCheck.label}</div>}
 
-          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.5)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',fontWeight:500,opacity:uploadingReceipt?0.6:1}}>
+          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'10px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
             {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a receipt or document':'+ 上傳收據或文件')}
             <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
           </label>
@@ -4996,13 +5018,13 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
             ))}
 
           {heldPolicies.length>1&&<>
-            <div style={{fontSize:'11px',opacity:0.8,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
+            <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,margin:'10px 0 4px'}}>{isEn?'Bill against which policy?':'向哪份保單提交?'}</div>
             <select value={manualPlanId} onChange={e=>setManualPlanId(e.target.value)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',background:'#fff',color:C.text}}>
               {heldPolicies.map(p=><option key={p.id} value={p.plan_id}>{p.plan_name}</option>)}
             </select>
           </>}
 
-          <div style={{fontSize:'11px',opacity:0.8,margin:'10px 0 4px'}}>{isEn?'Date of service':'診症日期'}</div>
+          <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,margin:'10px 0 4px'}}>{isEn?'Date of service':'診症日期'}</div>
           <input value={manualServiceDate} onChange={e=>setManualServiceDate(e.target.value)} type="date" max={new Date().toISOString().slice(0,10)} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'10px',background:'#fff',color:C.text}}/>
           <input value={manualAmount} onChange={e=>setManualAmount(e.target.value)} type="number" placeholder={isEn?'Amount you’re claiming, HK$ (optional)':'索償金額(港幣,可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',margin:'10px 0',background:'#fff',color:C.text}}/>
           {manualSubmitError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{manualSubmitError}</div>}
@@ -12074,8 +12096,14 @@ export default function PatientApp({ liveData={} }) {
   // Dependent-ness checked FIRST, not Bump - a dependent profile is never
   // pregnant, so pink has no business showing there even if bumpActive
   // somehow resolved true for that id. Only the main account can go pink.
-  const themeAccent = isKidDependent ? '#E8A400' : isOtherDependent ? '#43A879' : bumpActive ? '#F48FB1' : C.green
-  const themeAccentMid = isKidDependent ? '#F5C242' : isOtherDependent ? '#6FC89D' : bumpActive ? '#F8BBD0' : C.greenMid
+  // Real bug found live-testing: #F48FB1/#F8BBD0 (Material pink 200/100)
+  // are light enough that white text set on them - every gradient banner
+  // and card everywhere in the app assumes accent/accentMid are dark
+  // enough for that - read as thin and barely visible. Darkened to the
+  // same pink family (still clearly distinct from green/yellow/teal),
+  // just with the contrast every white-on-accent surface needs.
+  const themeAccent = isKidDependent ? '#E8A400' : isOtherDependent ? '#43A879' : bumpActive ? '#C2255C' : C.green
+  const themeAccentMid = isKidDependent ? '#F5C242' : isOtherDependent ? '#6FC89D' : bumpActive ? '#DB5088' : C.greenMid
   const themeAccentLight = isKidDependent ? '#FFF3CD' : isOtherDependent ? '#E3F3EA' : bumpActive ? '#FCE4EC' : C.greenLight
   const themeAccentXLight = isKidDependent ? '#FFFBF0' : isOtherDependent ? '#F3FAF6' : bumpActive ? '#FFF5F8' : C.greenXLight
 

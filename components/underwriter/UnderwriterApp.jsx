@@ -251,7 +251,14 @@ function QueueScreen({ underwriter }) {
 
   return (
     <PageWrap>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px'}}>Underwriting Queue</h2>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+        <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px'}}>Underwriting Queue</h2>
+        {/* This only ever loads once per login - a case decided by a
+            colleague in another session won't disappear here without a
+            real reload. Same gap found and fixed this round on the
+            agent/insurer portals. */}
+        <div onClick={load} style={{fontSize:'12px',color:C.blue,cursor:'pointer'}}>↻ Refresh</div>
+      </div>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{underwriter.institutions?.name||'Your insurer'}</div>
 
       <SecLabel>Flagged - needs real review ({flagged.length})</SecLabel>

@@ -590,7 +590,13 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
           ))}
         </div>
       </div>}
-      <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+      {/* A view filter on what's already on file - never a per-policy
+          status setter. Relabeled with "Show:" per your call, since this
+          pair of pills (Quotes/Active) looks exactly like the old
+          quote/active toggle that WAS removed (NewPolicyScreen, see its
+          own header comment) - easy to mistake for it still being there. */}
+      <div style={{display:'flex',gap:'8px',marginBottom:'16px',alignItems:'center'}}>
+        <span style={{fontSize:'11px',color:C.textMuted,fontWeight:600}}>Show:</span>
         {[['all','All'],['quote','Quotes'],['active','Active'],['lapsed','Lapsed']].map(([k,l])=>(
           <div key={k} onClick={()=>setFilter(k)} style={{fontSize:'12px',padding:'7px 14px',borderRadius:'20px',cursor:'pointer',background:filter===k?C.green:C.card,color:filter===k?'#fff':C.textSub,fontWeight:500}}>{l}</div>
         ))}
@@ -606,6 +612,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   <div style={{fontSize:'14px',fontWeight:600}}>{p.patient_name}</div>
                   <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name} - {p.policy_number||'No policy number yet'}</div>
                   {agent.agent_type==='independent'&&<div style={{fontSize:'11px',color:C.purple,marginTop:'2px'}}>{p.institutions?.name||'Unknown insurer'}</div>}
+                  {!p.patient_id&&(p.manual_patient_phone||p.manual_patient_email||p.manual_patient_hkid)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{[p.manual_patient_phone,p.manual_patient_email,p.manual_patient_hkid&&`HKID ${p.manual_patient_hkid}`].filter(Boolean).join(' · ')}</div>}
                 </div>
                 <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
                   <Badge text={p.status} type={p.status==='active'?'ok':p.status==='quote'?'waiting':'due'}/>
@@ -625,9 +632,20 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
               </div>}
               <div style={{marginTop:'10px'}}><Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setTransferringPolicy(p)}>Request transfer to another agent</Btn></div>
               <div style={{marginTop:'10px'}}>
+                {/* Per your call: push now also fires automatically at
+                    submission, underwriter decision, and payment confirmed
+                    - this button is a manual retry, not the only way it
+                    happens. pushed_to_insurer_at flips the moment ANY of
+                    those succeed, so this line is the real "yes, it went
+                    through" signal either way. Still shows the button
+                    (not a dead "pending" state) when nothing's gone
+                    through yet, since that's usually because this test
+                    insurer has no real webhook configured - tapping it
+                    tells you that directly instead of leaving you to guess
+                    why it still says this. */}
                 {p.pushed_to_insurer_at
                   ? <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>{'✓'} Pushed to insurer {new Date(p.pushed_to_insurer_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
-                  : <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handlePushPolicy(p.id)} disabled={pushingId===p.id}>{pushingId===p.id?'Pushing…':'Push to insurer'}</Btn>}
+                  : <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handlePushPolicy(p.id)} disabled={pushingId===p.id}>{pushingId===p.id?'Pushing…':'Not yet pushed - tap to try'}</Btn>}
                 {pushNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:pushNotice.ok?C.green:C.red}}>{pushNotice.text}</div>}
               </div>
               {/* Separate from "Push to insurer" above - that's for an
@@ -703,6 +721,17 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [step,setStep]=useState(prefillInquiry?.patient_id ? 2 : 1)
   const [patientSearch,setPatientSearch]=useState(prefillInquiry?.applicant_full_name || '')
   const [foundPatient,setFoundPatient]=useState(prefillInquiry?.patient_id ? { id: prefillInquiry.patient_id, full_name: prefillInquiry.applicant_full_name, medsa_id: null } : null)
+  // Real gap found live-testing: "you can still type the name in
+  // manually" (below) was true, but name was LITERALLY the only field -
+  // no phone, email, HKID or DOB for a client who isn't a Medsa patient,
+  // even though a real application always collects these. Optional
+  // (a quick quote doesn't need them yet), but there when the agent has
+  // them - and manualEmail doubles as the nudge step's prefill so the
+  // agent isn't asked for the same email twice.
+  const [manualPhone,setManualPhone]=useState('')
+  const [manualEmail,setManualEmail]=useState('')
+  const [manualHkid,setManualHkid]=useState('')
+  const [manualDob,setManualDob]=useState('')
   const [patientAge,setPatientAge]=useState(null)
   const [patientDetails,setPatientDetails]=useState(null) // {date_of_birth, phone, email, hkid} - what an agent actually needs to see to work the case
   const [insurers,setInsurers]=useState([])
@@ -1006,6 +1035,10 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           referralFeeHkd: prefillInquiry && referralFee ? referralFeeNum : null,
           wardClass: wardClass||null, paymentFrequency, healthDeclarationAcknowledged: healthDeclarationAck,
           payerBankName: payerBankName||null, payerAccountNumber: payerAccountNumber||null, payerAccountHolderName: payerAccountHolderName||null,
+          manualPatientPhone: !foundPatient?.id ? (manualPhone.trim()||null) : null,
+          manualPatientEmail: !foundPatient?.id ? (manualEmail.trim()||null) : null,
+          manualPatientHkid: !foundPatient?.id ? (manualHkid.trim()||null) : null,
+          manualPatientDob: !foundPatient?.id ? (manualDob||null) : null,
         }),
       })
       const data = await res.json()
@@ -1030,7 +1063,10 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       // above), but nothing ever offered to bring them onto the platform
       // afterward - the policy just sat there, visible only to the agent.
       // One-time nudge, skippable - never required.
-      if (!foundPatient?.id) setNudge({ patientName: foundPatient?.full_name||patientSearch, planName: lineItems[0]?.planName })
+      if (!foundPatient?.id) {
+        if (manualEmail.trim()) setNudgeEmail(manualEmail.trim())
+        setNudge({ patientName: foundPatient?.full_name||patientSearch, planName: lineItems[0]?.planName })
+      }
       else onSaved()
     } catch (e) {
       setError(e.message)
@@ -1102,7 +1138,15 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           {patientDetails?.hkid&&` · HKID ${patientDetails.hkid}`}
         </div>
       </div>}
-      {!foundPatient&&patientSearch&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>No match yet - you can still type the name in manually and continue without linking a Medsa profile.</div>}
+      {!foundPatient&&patientSearch&&<>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>No match yet - you can still continue without linking a Medsa profile. Everything below is optional.</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'16px'}}>
+          <input value={manualPhone} onChange={e=>setManualPhone(e.target.value)} placeholder="Phone" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={manualEmail} onChange={e=>setManualEmail(e.target.value)} placeholder="Email" type="email" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={manualHkid} onChange={e=>setManualHkid(e.target.value)} placeholder="HKID" style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+          <input value={manualDob} onChange={e=>setManualDob(e.target.value)} placeholder="Date of birth" type="date" max={new Date().toISOString().slice(0,10)} style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',boxSizing:'border-box'}}/>
+        </div>
+      </>}
       </>)}
 
       {step===2 && (<>
@@ -1305,12 +1349,25 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>
         {anyLineItemMissingCommissionRate ? "The insurer hasn't set a commission rate for this plan yet - not something you enter." : "Set by the insurer's own published rate for this plan, not something you enter."}
       </div>
+      {/* Real gap found live-testing: bundling two plans with different
+          rates used to show both rates jammed into one string ("5%, 8%")
+          next to a single combined dollar figure, with no way to tell
+          which plan contributed what. One row per line item now, each
+          showing its own premium × rate = amount, then the real sum. */}
+      {lineItems.length>1&&!anyLineItemMissingCommissionRate&&<div style={{border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'10px',overflow:'hidden'}}>
+        {lineItems.map((l,i)=>(
+          <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'8px 12px',fontSize:'11px',color:C.textSub,borderBottom:i<lineItems.length-1?`0.5px solid ${C.border}`:'none'}}>
+            <span>{l.planName} - HK${l.premium} × {l.commissionRatePct}%</span>
+            <span style={{fontWeight:600,color:C.text}}>HK${(l.premium*(l.commissionRatePct||0)/100).toFixed(2)}</span>
+          </div>
+        ))}
+      </div>}
       <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'16px'}}>
         <div style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',background:C.beige,color:C.textSub,fontWeight:600}}>
           {anyLineItemMissingCommissionRate ? 'Rate not set' : `${lineItems.map(l=>l.commissionRatePct).filter((v,idx,arr)=>arr.indexOf(v)===idx).join(', ')}%`}
         </div>
         <div style={{color:C.textMuted,fontSize:'13px'}}>→</div>
-        <input value={brokerCommission} disabled type="number" placeholder="HK$" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
+        <input value={brokerCommission} disabled type="number" placeholder="HK$ (sum of all lines)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',boxSizing:'border-box',background:C.beige,color:C.textSub}}/>
       </div>
       {REFERRAL_FEE_ENABLED && prefillInquiry&&<>
         <SecLabel>Referral fee owed to Medsa</SecLabel>
@@ -1836,7 +1893,10 @@ function PlanInquiriesScreen({ agent, onConvert }) {
 
   return (
     <PageWrap>
-      <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>New Plan Inquiries</div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}}>
+        <div style={{fontSize:'20px',fontWeight:700}}>New Plan Inquiries</div>
+        <div onClick={load} style={{fontSize:'12px',color:C.blue,cursor:'pointer'}}>↻ Refresh</div>
+      </div>
       {claimNotice&&<div style={{background:C.amberLight,color:C.amber,borderRadius:'8px',padding:'10px 14px',marginBottom:'14px',fontSize:'12px'}}>{claimNotice}</div>}
 
       {/* Real gap found live-testing: round-robin now pushes every new
