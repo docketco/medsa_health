@@ -823,13 +823,23 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           scrolls straight to the full list below rather than duplicating
           it up here. ── */}
       {totalUnreadMessages>0&&(
-        <div onClick={()=>messagesSectionRef.current?.scrollIntoView({behavior:'smooth',block:'start'})} style={{margin:'14px 16px 0',background:themeAccent,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
-          <span style={{fontSize:'20px'}}>✉</span>
+        <div onClick={()=>messagesSectionRef.current?.scrollIntoView({behavior:'smooth',block:'start'})} style={{margin:'14px 16px 0',background:themeAccent,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer',boxShadow:'0 2px 10px rgba(0,0,0,0.12)'}}>
+          {/* Real gap found live-testing: the envelope glyph had no color
+              set at all, so it rendered in the browser's default text
+              color (near-black) against a solid-color banner where every
+              other character was explicitly white - looked like a stray
+              dark smudge. Given its own white circular badge too, so this
+              banner reads as a notification, not just another flat tab/
+              chip in the same rounded-rectangle shape as everything else
+              on Home. */}
+          <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'rgba(255,255,255,0.25)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <span style={{fontSize:'17px',color:'#fff',fontWeight:700}}>✉</span>
+          </div>
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${totalUnreadMessages} unread message${totalUnreadMessages>1?'s':''}`:`${totalUnreadMessages}則未讀訊息`}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?'Tap to view':'點擊查看'}</div>
           </div>
-          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
+          <span style={{color:'#fff',fontSize:'16px',fontWeight:700}}>›</span>
         </div>
       )}
 
@@ -4689,6 +4699,23 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   const [manualSubmitting,setManualSubmitting]=useState(false)
   const [manualSubmitError,setManualSubmitError]=useState(null)
   const [manualSubmitSuccess,setManualSubmitSuccess]=useState(null)
+  // Real gap found live-testing: a rejected claim just dead-ended - no
+  // reason shown (rejection_reason was always on the row, just never
+  // read anywhere in this file), and no path back in other than
+  // starting completely from scratch. Per your call, this isn't a
+  // message/attach-file thread with the approver (nobody's actually
+  // going to review a chat message there) - it's a real resubmission:
+  // jump the patient straight to the out-of-network form (the one that
+  // always works regardless of how the original claim was filed), with
+  // the rejection reason kept visible as a reminder of what to fix.
+  const [resubmitReminder,setResubmitReminder]=useState(null) // {claimRef, reason}
+  const manualFormRef = useRef(null)
+  function handleResubmit(c) {
+    setResubmitReminder({ claimRef: c.claim_ref, reason: c.rejection_reason })
+    if (c.plan_id) setManualPlanId(c.plan_id)
+    manualSubmitSuccess && setManualSubmitSuccess(null)
+    setTimeout(() => manualFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
 
   async function loadAttachments() {
     if (!patient?.id) return
@@ -4840,6 +4867,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
     setManualSelectedIds(new Set()); setManualAmount(''); setManualServiceDate(''); setManualClinicName(''); setManualClinicCheck(null)
     setManualSubmitSuccess(claimRef)
     setManualSubmitting(false)
+    setResubmitReminder(null)
   }
 
   return (
@@ -4878,6 +4906,8 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
               </div>
             </div>
             {c.verification_flag==='patient_unverified_receipt'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{isEn?'Submitted by you - your insurer verifies this independently.':'由您提交 - 您的保險公司將自行核實此索償。'}</div>}
+            {c.status==='rejected'&&c.rejection_reason&&<div style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'11px',color:C.red}}>{c.rejection_reason}</div>}
+            {c.status==='rejected'&&<div onClick={()=>handleResubmit(c)} style={{marginTop:'8px',fontSize:'11px',color:__theme.accent,fontWeight:600,cursor:'pointer'}}>↻ {isEn?'Resubmit this claim':'重新提交此索償'}</div>}
           </Card>
         )
       })}
@@ -4936,7 +4966,10 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           A different gradient (green, not navy) keeps the two visually
           distinguishable as different flows without one outranking the
           other. */}
-      {activePolicy&&<div style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
+      {resubmitReminder&&<div style={{margin:'16px 16px 0',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'12px',padding:'12px 14px',fontSize:'12px',color:C.red,lineHeight:1.6}}>
+        <strong>{isEn?`Fixing ${resubmitReminder.claimRef}:`:`修正 ${resubmitReminder.claimRef}:`}</strong> {resubmitReminder.reason}
+      </div>}
+      {activePolicy&&<div ref={manualFormRef} style={{margin:'16px 16px 0',background:`linear-gradient(135deg,${__theme.accent} 0%,${__theme.accentMid} 100%)`,borderRadius:'16px',padding:'18px',color:'#fff'}}>
         <div style={{fontSize:'15px',fontWeight:700,marginBottom:'4px'}}>{isEn?'Submit an out-of-network receipt':'提交非Medsa診所收據'}</div>
         <div style={{fontSize:'12px',opacity:0.85,marginBottom:'14px',lineHeight:1.5}}>{isEn
           ?'For a clinic not on Medsa - upload a receipt (and diagnosis letter, if it\'s a separate document).'
@@ -5866,6 +5899,21 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       </div>
 
       {tab==='coverage'&&<>
+      {/* cc-03: moved to right under the tabs, per your call - this used
+          to sit after every policy card, so on a long coverage tab it was
+          easy to scroll straight past the one thing that actually needs a
+          tap (an unread message, a pending review) before ever seeing it.
+          Now it's the first thing shown, before any policy detail. */}
+      {(coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'0 16px 10px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'6px 16px'}}>
+        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${__theme.accentLight}`:'none',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
+          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
+        </div>}
+        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',cursor:'pointer'}}>
+          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
+          <span style={{color:__theme.accent,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
+        </div>}
+      </div>}
       {/* Real gap this closes: "too long" was still true after the first
           compacting pass - each card repeated its own "Policy on file"
           label, and 16px of top margin per card added up fast with
@@ -6071,16 +6119,6 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
           policy's own status in full). No coverage and nothing pending -
           a real empty state instead of nothing at all. */}
       {heldPolicies.length===0&&lapsedPolicies.length===0&&coverageSummary.pendingCount===0&&coverageSummary.unreadCount===0&&<div style={{margin:'0 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'20px 16px',textAlign:'center',fontSize:'12px',color:C.textSub}}>{isEn?'No coverage on file yet - browse Compare plans, or add a policy you already hold above.':'暫無保障記錄 - 可瀏覽比較計劃,或於上方新增您已持有的保單。'}</div>}
-      {(coverageSummary.pendingCount>0||coverageSummary.unreadCount>0)&&<div style={{margin:'0 16px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accentLight}`,borderRadius:'14px',padding:'6px 16px'}}>
-        {coverageSummary.pendingCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:coverageSummary.unreadCount>0?`0.5px solid ${__theme.accentLight}`:'none',cursor:'pointer'}}>
-          <div style={{fontSize:'12px',color:C.amber,fontWeight:600}}>⚠ {coverageSummary.pendingCount} {isEn?'pending underwriter review':'等待核保'}</div>
-          <span style={{color:C.textMuted,fontSize:'14px'}}>›</span>
-        </div>}
-        {coverageSummary.unreadCount>0&&<div onClick={()=>{setLocalJumpId(coverageSummary.firstPendingId);setTab('inquiries')}} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',cursor:'pointer'}}>
-          <div style={{fontSize:'12px',color:C.textSub}}>{coverageSummary.unreadCount} {isEn?'unread message(s)':'則未讀訊息'}</div>
-          <span style={{color:__theme.accent,fontSize:'11px',fontWeight:600}}>{isEn?'See all →':'查看全部 →'}</span>
-        </div>}
-      </div>}
       </>}
 
       {/* ── PLANS & COMPARISON ── */}

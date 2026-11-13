@@ -66,7 +66,7 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
 // again - Medsa has no view-tracking anywhere, so there's no honest number
 // to show. The other three are real counts off this company's own plans.
 function InsuranceDashboard({ onNav, company }) {
-  const [stats, setStats] = useState({ loading: true, activePlans: 0, newInquiries30d: 0, pendingClaims: 0 })
+  const [stats, setStats] = useState({ loading: true, activePlans: 0, newInquiries30d: 0, pendingClaims: 0, pendingAppointments: 0 })
   // Real gap found live-testing: these counts only ever load once, when
   // this screen first mounts - a plan added/removed from a different tab
   // (or even this same portal's own Plans screen, if that nav doesn't
@@ -78,16 +78,23 @@ function InsuranceDashboard({ onNav, company }) {
     let cancelled = false
     async function load() {
       if (!company?.name) { setStats(s => ({ ...s, loading: false })); return }
+      // Real gap found live-testing: an agent requesting appointment
+      // (My Insurers, agent_institution_appointments) had no signal
+      // anywhere on this dashboard - the insurer only found out by
+      // happening to open Team and check, same gap the other three
+      // stats already closed for plans/inquiries/claims.
+      const { count: pendingAppointments } = await supabase.from('agent_institution_appointments')
+        .select('id', { count: 'exact', head: true }).eq('institution_id', company.institutionRefId).eq('status', 'pending_review')
       const { data: plans } = await supabase.from('insurance_plans').select('id, status').eq('company_name', company.name)
       const planIds = (plans || []).map(p => p.id)
       const activePlans = (plans || []).filter(p => p.status === 'active').length
-      if (planIds.length === 0) { if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: 0, pendingClaims: 0 }); return }
+      if (planIds.length === 0) { if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: 0, pendingClaims: 0, pendingAppointments: pendingAppointments || 0 }); return }
       const since30d = new Date(Date.now() - 30*24*60*60*1000).toISOString()
       const [{ count: newInquiries30d }, { count: pendingClaims }] = await Promise.all([
         supabase.from('plan_inquiries').select('id', { count: 'exact', head: true }).in('plan_id', planIds).gte('created_at', since30d),
         supabase.from('insurance_claims').select('id', { count: 'exact', head: true }).in('plan_id', planIds).in('status', ['pending', 'pending_review']),
       ])
-      if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: newInquiries30d || 0, pendingClaims: pendingClaims || 0 })
+      if (!cancelled) setStats({ loading: false, activePlans, newInquiries30d: newInquiries30d || 0, pendingClaims: pendingClaims || 0, pendingAppointments: pendingAppointments || 0 })
     }
     load()
     return () => { cancelled = true }
@@ -125,7 +132,7 @@ function InsuranceDashboard({ onNav, company }) {
         ].map(item=>(
           <div key={item.key} onClick={()=>onNav(item.key)} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px',marginBottom:'10px',cursor:'pointer',display:'flex',alignItems:'center',gap:'14px'}}>
             <div style={{width:40,height:40,background:C.navyLight,borderRadius:'12px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'20px',color:C.navy,flexShrink:0}}>{item.icon}</div>
-            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
+            <div style={{flex:1}}><div style={{fontSize:'14px',fontWeight:500}}>{item.label}{item.key==='staff'&&stats.pendingAppointments>0&&<span style={{marginLeft:'8px',fontSize:'10px',fontWeight:700,color:'#fff',background:C.red,borderRadius:'10px',padding:'2px 7px'}}>{stats.pendingAppointments}</span>}</div><div style={{fontSize:'12px',color:C.textSub}}>{item.sub}</div></div>
             <span style={{color:C.textMuted,fontSize:'18px'}}>›</span>
           </div>
         ))}
