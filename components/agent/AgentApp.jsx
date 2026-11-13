@@ -737,6 +737,24 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [referralFee,setReferralFee]=useState('')
   const [saving,setSaving]=useState(false)
   const [error,setError]=useState(null)
+  const [nudge,setNudge]=useState(null) // {patientName, planName} - set once, right after a save for a non-Medsa client
+  const [nudgeEmail,setNudgeEmail]=useState('')
+  const [nudgeSending,setNudgeSending]=useState(false)
+  const [nudgeResult,setNudgeResult]=useState(null)
+  async function sendNudge() {
+    setNudgeSending(true); setNudgeResult(null)
+    try {
+      const res = await fetch('/api/agent/send_patient_invite', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ email: nudgeEmail, patientName: nudge.patientName, planName: nudge.planName, agentName: agent.full_name }),
+      })
+      const data = await res.json()
+      setNudgeResult(data.sent ? 'Sent.' : (data.reason || 'Could not send.'))
+    } catch {
+      setNudgeResult('Could not reach Medsa - try again.')
+    }
+    setNudgeSending(false)
+  }
   // Mirrors what the automated patient-side purchase now also collects
   // (see PatientApp.jsx's purchase flow) - an agent-issued policy should
   // carry the same details, not less, than one a patient bought without
@@ -1007,7 +1025,13 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           }
         }
       }
-      onSaved()
+      // Real build this round, per your call: a client without a Medsa
+      // account was always writable (see canAdvanceStep's step 1 check
+      // above), but nothing ever offered to bring them onto the platform
+      // afterward - the policy just sat there, visible only to the agent.
+      // One-time nudge, skippable - never required.
+      if (!foundPatient?.id) setNudge({ patientName: foundPatient?.full_name||patientSearch, planName: lineItems[0]?.planName })
+      else onSaved()
     } catch (e) {
       setError(e.message)
     } finally {
@@ -1018,9 +1042,29 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   function canAdvanceStep(s) {
     if (s===1) return !!(foundPatient || patientSearch.trim())
     if (s===2) return lineItems.length>0
-    if (s===3) return status!=='active' || healthDeclarationAck
+    // Real bug found this round: this used to read `status!=='active' ||
+    // healthDeclarationAck` - a leftover from when status was a picker.
+    // Since status is now always the fixed 'quote' const, `status!=='active'`
+    // is always true, which short-circuited the whole check regardless of
+    // the box being ticked. The server-side gate in create_policy.js still
+    // caught it (never saved an unacknowledged policy), just with a late,
+    // confusing error instead of simply not letting you past this step.
+    if (s===3) return healthDeclarationAck
     return true
   }
+
+  if (nudge) return (
+    <PageWrap maxWidth={560}>
+      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'8px',textAlign:'center'}}>Policy saved</h2>
+      <div style={{fontSize:'13px',color:C.textSub,textAlign:'center',marginBottom:'20px'}}>{nudge.patientName} isn't a Medsa patient yet. Send them a link to track this policy, message you, and submit claims later - entirely optional.</div>
+      <input value={nudgeEmail} onChange={e=>setNudgeEmail(e.target.value)} placeholder="Client's email (optional)" type="email" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
+      {nudgeResult&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{nudgeResult}</div>}
+      <div style={{display:'flex',gap:'8px'}}>
+        <Btn style={{flex:1}} onClick={onSaved}>Skip</Btn>
+        <Btn variant="primary" style={{flex:1}} disabled={!nudgeEmail.trim()||nudgeSending} onClick={async()=>{await sendNudge();onSaved()}}>{nudgeSending?'Sending…':'Send link & finish'}</Btn>
+      </div>
+    </PageWrap>
+  )
 
   return (
     <PageWrap maxWidth={560}>
@@ -1647,6 +1691,13 @@ function PlanInquiriesScreen({ agent, onConvert }) {
   const [unclaimed,setUnclaimed]=useState([])
   const [mine,setMine]=useState([])
   const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Map())
+  // Real gap found live-testing: a fully-resolved claimed inquiry (its
+  // policy already active, or declined and done with) sat in this
+  // working list forever - nothing here was left to do, but it never
+  // left to make room for what still needed attention. "Approved,
+  // awaiting payment" (the agent still has to mark it paid) stays
+  // visible by design - only truly-done ones hide, and only by default.
+  const [showCompleted,setShowCompleted]=useState(false)
   // plan_id -> [team_id, ...] authorized to sell it. A plan with no entry
   // here has no team gating at all - the old flat claim race still
   // applies unchanged. A plan that DOES have team authorizations can only
@@ -1721,7 +1772,7 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     // approved or declined it - decide.js posts that outcome into the
     // message thread, but nothing on the collapsed card itself reflected
     // it, so you'd have to open the thread just to find out what happened.
-    const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id, underwriter_status, underwriter_decision_reason').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
+    const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id, status, underwriter_status, underwriter_decision_reason').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
     setConvertedInquiryIds(new Map((convertedRows||[]).map(r=>[r.inquiry_id, r])))
 
     setUnclaimed(unclaimedRows||[])
@@ -1775,6 +1826,14 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     load()
   }
 
+  const isFullyDone = i => {
+    const converted = convertedInquiryIds.get(i.id)
+    if (!converted) return false
+    return converted.underwriter_status==='declined' || (converted.underwriter_status==='approved' && converted.status==='active')
+  }
+  const visibleMine = showCompleted ? mine : mine.filter(i=>!isFullyDone(i))
+  const doneCount = mine.length - mine.filter(i=>!isFullyDone(i)).length
+
   return (
     <PageWrap>
       <div style={{fontSize:'20px',fontWeight:700,marginBottom:'16px'}}>New Plan Inquiries</div>
@@ -1807,10 +1866,14 @@ function PlanInquiriesScreen({ agent, onConvert }) {
         ))}
       </div>
 
-      <SecLabel>Your claimed inquiries</SecLabel>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+        <SecLabel>Your claimed inquiries</SecLabel>
+        {doneCount>0&&<div onClick={()=>setShowCompleted(s=>!s)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',textDecoration:'underline',marginRight:'4px'}}>{showCompleted?'Hide completed':`Show ${doneCount} completed`}</div>}
+      </div>
       {!loading&&mine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>None claimed yet.</div>}
+      {!loading&&mine.length>0&&visibleMine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing left to work - everything claimed is done.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {mine.map(i=>{
+        {visibleMine.map(i=>{
           const converted = convertedInquiryIds.get(i.id)
           return (
           <Card key={i.id} style={{padding:'14px 16px'}}>

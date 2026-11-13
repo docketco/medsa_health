@@ -101,6 +101,21 @@ export default async function handler(req, res) {
       // that's expected, not a reason to fail a real policy save.
       await pushPolicyToInsurer(supabase, pol.id, 'new_policy').catch(()=>{})
     }
+    // Real bug found live-testing: converting a claimed inquiry into a
+    // policy never marked the SOURCE plan_inquiries row as 'converted' -
+    // the self-serve auto-purchase path already does this
+    // (lib/completeAutoPurchase.js), this path just never had the
+    // equivalent line. Left at 'new' forever, it stayed "the open,
+    // non-converted inquiry" that match_plan_suitability.js's own dedup-
+    // in-place lookup (.neq('status','converted')) would find and AMEND
+    // if the same patient ever re-declared against the same plan again -
+    // silently rewriting the source record behind an already-issued,
+    // possibly-already-active real policy. Status flips to 'converted'
+    // here now; this is cosmetic for the agent's own claimed-inquiries
+    // card (which already reads the real outcome from agent_policies via
+    // convertedInquiryIds, not from this status) but closes the real data
+    // gap underneath it.
+    if (inquiryId) await supabase.from('plan_inquiries').update({ status: 'converted' }).eq('id', inquiryId)
     return res.status(200).json({ status: 'OK', policyIds: createdPolicyIds, bundleId })
   } catch (e) {
     return res.status(500).json({ status: 'ERROR', message: e.message })
