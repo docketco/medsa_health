@@ -67,6 +67,13 @@ function StatCard({ icon, label, value, sub, color=C.navy, bg=C.navyLight }) {
 // to show. The other three are real counts off this company's own plans.
 function InsuranceDashboard({ onNav, company }) {
   const [stats, setStats] = useState({ loading: true, activePlans: 0, newInquiries30d: 0, pendingClaims: 0 })
+  // Real gap found live-testing: these counts only ever load once, when
+  // this screen first mounts - a plan added/removed from a different tab
+  // (or even this same portal's own Plans screen, if that nav doesn't
+  // actually unmount this one) never updates them without a full reload.
+  // refreshKey gives a visible, explicit way to force a refetch instead
+  // of the user having to guess whether reloading the whole page helped.
+  const [refreshKey, setRefreshKey] = useState(0)
   useEffect(() => {
     let cancelled = false
     async function load() {
@@ -84,7 +91,7 @@ function InsuranceDashboard({ onNav, company }) {
     }
     load()
     return () => { cancelled = true }
-  }, [company?.name])
+  }, [company?.name, refreshKey])
 
   return (
     <div style={{background:C.beige,flex:1}}>
@@ -93,7 +100,10 @@ function InsuranceDashboard({ onNav, company }) {
         <div style={{fontSize:'18px',fontWeight:700,marginTop:'4px'}}>Welcome back</div>
         <div style={{fontSize:'13px',opacity:0.8,marginTop:'2px'}}>{company?.medsaId?`Insurer · ${company.medsaId}`:'Insurer'}</div>
       </div>
-      <SecLabel>Performance</SecLabel>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+        <SecLabel>Performance</SecLabel>
+        <div onClick={()=>setRefreshKey(k=>k+1)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',marginRight:'16px'}}>{stats.loading?'Refreshing…':'↻ Refresh'}</div>
+      </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'10px',padding:'0 16px'}}>
         <StatCard icon="▣" label="Active plans" value={stats.loading?'…':stats.activePlans} sub="listed on Medsa"/>
         <StatCard icon="◈" label="New inquiries" value={stats.loading?'…':stats.newInquiries30d} sub="last 30 days" color={C.green} bg={C.greenLight}/>

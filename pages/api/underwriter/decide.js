@@ -16,6 +16,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { assignInquiryToNextAgent } from '../../../lib/agentAssignment'
 import { sendEmail } from '../../../lib/email'
+import { pushPolicyToInsurer } from '../../../lib/pushPolicyToInsurer'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -44,16 +45,16 @@ export default async function handler(req, res) {
       // UPDATE commits first flips the row out of 'pending', and the
       // second one's WHERE clause then matches nothing - caught below by
       // checking the affected row actually came back, not assumed.
-      // status flips to 'active' here too, not just underwriter_status -
-      // real gap found live-testing: every agent-written policy now
-      // starts 'quote' with no way for the agent to set 'active'
-      // themselves (create_policy.js), so approval has to be the one
-      // place that actually turns it on, or an approved policy would sit
-      // 'quote' forever and never surface as "Policy on file" to the
-      // patient (PatientApp.jsx's own held-policy query checks both
-      // status='active' AND underwriter_status='approved').
+      // status does NOT flip to 'active' here any more (reverted, per
+      // your call on how agents really handle this in HK: the agent is
+      // the one who delivers the outcome and actually collects the
+      // premium, the insurer never touches the client directly at this
+      // stage) - a policy now sits status='quote' + underwriter_status=
+      // 'approved' ("approved, awaiting payment") until the agent marks
+      // the payment received (pages/api/agent/confirm_payment.js), which
+      // is the only place status ever becomes 'active'.
       const { data: updated } = await supabase.from('agent_policies').update({
-        status: 'active', underwriter_status: 'approved', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
+        underwriter_status: 'approved', underwriter_id: underwriterId || null, underwriter_decided_at: nowIso, underwriter_decision_reason: reason || null,
       }).eq('id', policyId).eq('underwriter_status', 'pending').select('id')
       if (!updated || updated.length === 0) return res.status(409).json({ status: 'ERROR', message: 'Someone else already decided this case.' })
       await supabase.from('underwriting_audit_log').insert({
@@ -62,14 +63,16 @@ export default async function handler(req, res) {
       // Real gap: an approved policy used to just sit there with no
       // signal at all back to the thread both sides already read (see
       // "on file for both agent and patient since it's under the same
-      // thread") - this is that signal.
+      // thread") - this is that signal. Wording no longer says "on file"
+      // - it isn't, until payment is actually confirmed.
       if (policy.inquiry_id) {
         await supabase.from('inquiry_messages').insert({
           inquiry_id: policy.inquiry_id, sender_type: 'underwriter', sender_name: underwriterName || 'Underwriter',
-          body: `✓ Your policy for ${policy.plan_name} has been approved by the underwriter - it's now on file.`,
+          body: `✓ Your policy for ${policy.plan_name} has been approved by the underwriter - your agent will be in touch to arrange payment before it's active.`,
           read_by_patient: false, read_by_agent: false,
         })
       }
+      await pushPolicyToInsurer(supabase, policyId, 'underwriter_decision').catch(()=>{})
     } else {
       if (!reason?.trim()) return res.status(400).json({ status: 'ERROR', message: 'A decline needs a reason - the agent sees this.' })
       const { data: updated } = await supabase.from('agent_policies').update({
@@ -86,6 +89,7 @@ export default async function handler(req, res) {
           read_by_patient: false, read_by_agent: false,
         })
       }
+      await pushPolicyToInsurer(supabase, policyId, 'underwriter_decision').catch(()=>{})
     }
     return res.status(200).json({ status: 'OK' })
   }

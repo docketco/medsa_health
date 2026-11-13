@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createClient } from '@supabase/supabase-js'
+import { pushPolicyToInsurer } from '../../../lib/pushPolicyToInsurer'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -92,6 +93,13 @@ export default async function handler(req, res) {
       if (li.riderIds?.length > 0) {
         await supabase.from('agent_policy_riders').insert(li.riderIds.map(riderId => ({ policy_id: pol.id, rider_id: riderId })))
       }
+      // Automated per your call - submission to the underwriter (above)
+      // and the push to the insurer's own system are two different real
+      // recipients, so both happen the moment this is saved instead of
+      // the agent having to remember a separate "Push to insurer" tap.
+      // Silently no-ops for a test insurer with no webhook configured -
+      // that's expected, not a reason to fail a real policy save.
+      await pushPolicyToInsurer(supabase, pol.id, 'new_policy').catch(()=>{})
     }
     return res.status(200).json({ status: 'OK', policyIds: createdPolicyIds, bundleId })
   } catch (e) {

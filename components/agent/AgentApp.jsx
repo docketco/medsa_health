@@ -472,7 +472,37 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [confirmingCancelId,setConfirmingCancelId]=useState(null)
   const [pushingId,setPushingId]=useState(null)
   const [pushNotice,setPushNotice]=useState(null)
+  const [receiptFiles,setReceiptFiles]=useState({})
+  const [confirmingPaymentId,setConfirmingPaymentId]=useState(null)
+  const [paymentNotice,setPaymentNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
+
+  // The real third step, per your call: the agent delivers the approval
+  // and collects the premium, so THEY mark it paid - never automatic the
+  // moment the underwriter approves. A receipt upload is optional (not
+  // every real collection method produces one on the spot) but kept on
+  // file alongside the policy's other documents when given.
+  async function handleConfirmPayment(p) {
+    setConfirmingPaymentId(p.id); setPaymentNotice(null)
+    try {
+      const file = receiptFiles[p.id]
+      if (file) {
+        const path = `agent-policies/${p.id}/payment-receipt-${Date.now()}-${file.name}`
+        const { error: upErr } = await supabase.storage.from('policy-contracts').upload(path, file)
+        if (!upErr) await supabase.from('agent_policy_documents').insert({ policy_id: p.id, file_path: path, file_name: file.name })
+      }
+      const res = await fetch('/api/agent/confirm_payment', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ policyId: p.id, agentId: agent.id }),
+      })
+      const data = await res.json()
+      if (res.ok) { setReceiptFiles(f=>({...f,[p.id]:null})); onReload?.() }
+      else setPaymentNotice({ id: p.id, text: data.message || 'Could not confirm payment.' })
+    } catch {
+      setPaymentNotice({ id: p.id, text: 'Could not reach Medsa - try again.' })
+    }
+    setConfirmingPaymentId(null)
+  }
 
   // Incoming transfer requests addressed to THIS agent - decided by them
   // directly now, no team-lead middleman (team structure is gone, see
@@ -536,7 +566,14 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
     <PageWrap maxWidth={720}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
         <h2 style={{fontSize:'20px',fontWeight:700}}>Policies</h2>
-        <Btn variant="primary" onClick={onNewPolicy}>+ Issue policy / quote</Btn>
+        <div style={{display:'flex',gap:'10px',alignItems:'center'}}>
+          {/* A decision made elsewhere (underwriter approval, payment
+              confirmed) won't show here until this screen's own data
+              reloads - an explicit refresh beats asking the user to
+              guess whether a full page reload will do it. */}
+          <div onClick={onReload} style={{fontSize:'12px',color:C.blue,cursor:'pointer'}}>↻ Refresh</div>
+          <Btn variant="primary" onClick={onNewPolicy}>+ Issue policy / quote</Btn>
+        </div>
       </div>
       {incomingTransfers.length>0&&<div style={{marginBottom:'20px'}}>
         <SecLabel>Transfer requests for you</SecLabel>
@@ -607,6 +644,18 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                 <div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px',fontSize:'11px',color:C.red}}>{p.underwriter_decision_reason}</div>}
               {(p.underwriter_status==='pending')&&<div style={{marginTop:'10px'}}>
                 <div style={{fontSize:'11px',color:C.blue,fontWeight:600}}>{p.underwriter_submitted_at?`Submitted ${new Date(p.underwriter_submitted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})} - `:''}Awaiting underwriter approval</div>
+              </div>}
+              {/* Approved, but not active yet - real life: you (the agent)
+                  deliver this news and arrange payment with the client
+                  directly, the insurer isn't involved at this stage.
+                  Confirm it here once the premium is actually in hand -
+                  a receipt/proof of payment is optional but kept on file
+                  alongside the policy's other documents when attached. */}
+              {p.underwriter_status==='approved'&&p.status!=='active'&&<div style={{marginTop:'10px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'10px 12px'}}>
+                <div style={{fontSize:'11px',fontWeight:600,color:C.amber,marginBottom:'6px'}}>Approved - awaiting payment from client</div>
+                <input type="file" onChange={e=>setReceiptFiles(f=>({...f,[p.id]:e.target.files[0]||null}))} style={{fontSize:'10px',marginBottom:'8px',display:'block'}}/>
+                <Btn style={{fontSize:'11px',padding:'6px 10px',width:'100%'}} disabled={confirmingPaymentId===p.id} onClick={()=>handleConfirmPayment(p)}>{confirmingPaymentId===p.id?'Confirming…':'✓ Mark payment received'}</Btn>
+                {paymentNotice?.id===p.id&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{paymentNotice.text}</div>}
               </div>}
             </Card>
           )
@@ -1738,8 +1787,8 @@ function PlanInquiriesScreen({ agent, onConvert }) {
           that shipped, or a company with no eligible agent at all. Kept
           (not removed) as a manual fallback for exactly that case, but
           relabelled so it reads as the exception, not the normal flow. */}
-      <SecLabel>Unclaimed - legacy/manual fallback only</SecLabel>
-      <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-8px',marginBottom:'12px',lineHeight:1.5}}>New inquiries are assigned automatically to an eligible agent the moment they're submitted - see "Your claimed inquiries" below. This section only ever holds something left over from before that shipped, or a company with no eligible agent on file.</div>
+      <SecLabel>Unclaimed (should normally be empty)</SecLabel>
+      <div style={{fontSize:'11px',color:C.textMuted,marginTop:'-8px',marginBottom:'12px',lineHeight:1.5}}>Every new inquiry is handed straight to one specific agent automatically - it shows up under "Your claimed inquiries" below for them right away, nobody has to grab it from here. This list is only ever non-empty in two cases: an old inquiry from before that automatic hand-off existed, or an insurer with no agent on file to assign to at all.</div>
       {loading&&<div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div>}
       {!loading&&unclaimed.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'20px'}}>No unclaimed inquiries you're eligible to work right now.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:'24px'}}>

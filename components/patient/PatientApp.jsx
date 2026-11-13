@@ -648,7 +648,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   const [recentPolicyDecisions,setRecentPolicyDecisions]=useState([])
   useEffect(() => {
     if (!homePatientId) { setRecentPolicyDecisions([]); return }
-    supabase.from('agent_policies').select('id, plan_name, underwriter_status, underwriter_decided_at, underwriter_decision_reason')
+    supabase.from('agent_policies').select('id, plan_name, status, underwriter_status, underwriter_decided_at, underwriter_decision_reason')
       .eq('patient_id', homePatientId).in('underwriter_status', ['approved','declined'])
       .gt('underwriter_decided_at', new Date(Date.now()-14*24*60*60*1000).toISOString())
       .order('underwriter_decided_at', { ascending: false })
@@ -1075,11 +1075,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             key:`policy:${p.id}`,
             dot: p.underwriter_status==='approved'?themeAccent:C.red,
             title: isEn
-              ? (p.underwriter_status==='approved'?'Policy approved':'Policy declined')
-              : (p.underwriter_status==='approved'?'保單已批核':'保單已被拒絕'),
-            body: p.underwriter_status==='approved'
-              ? (isEn?`${p.plan_name} is now on file.`:`${p.plan_name}已記錄在案。`)
-              : (isEn?`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`:`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`),
+              ? (p.underwriter_status!=='approved'?'Policy declined':p.status==='active'?'Policy active':'Policy approved')
+              : (p.underwriter_status!=='approved'?'保單已被拒絕':p.status==='active'?'保單已生效':'保單已批核'),
+            body: p.underwriter_status!=='approved'
+              ? (isEn?`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`:`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`)
+              : p.status==='active'
+                ? (isEn?`${p.plan_name} is now on file.`:`${p.plan_name}已記錄在案。`)
+                : (isEn?`${p.plan_name} - your agent will be in touch to arrange payment.`:`${p.plan_name} - 您的代理將聯絡您安排付款。`),
           }))
           // Admin-authored general advisories - see homeNotices above.
           homeNotices.forEach(n => realAlerts.push({
@@ -3985,7 +3987,6 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
 function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, onConsumeDeepLink }) {
   const __theme = useContext(ThemeContext)
   const [inquiries,setInquiries]=useState([])
-  const [agentQuotes,setAgentQuotes]=useState([])
   const [loading,setLoading]=useState(true)
   const [expandedId,setExpandedId]=useState(null)
   const [switching,setSwitching]=useState(null)
@@ -4023,23 +4024,6 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
       .select('*, insurance_plans(plan_name, company_name, waiting_period_days, pre_existing_condition_policy, additional_terms), agents:claimed_by_agent_id(full_name)')
       .eq('patient_id', patient.id).neq('status', 'withdrawn').order('created_at',{ascending:false})
     setInquiries(data||[])
-    // Real gap: an agent building a policy directly (Issue Policy / Quote)
-    // never showed up anywhere in the patient's own app - the plain
-    // inquiry card above (when one even exists) shows the plan/company/
-    // agent badge, never the actual quoted premium. A "quote" (not yet
-    // active) now shows here regardless of whether it's linked back to a
-    // real plan_inquiries row - excluding the linked ones was the actual
-    // bug found live-testing: those never showed their premium anywhere
-    // either, since the plain inquiry card doesn't carry it.
-    // Once "talk to an agent" vs the automated path (lib/planSuitability.js)
-    // gets its own upload/matching rebuild, this should be revisited -
-    // an auto-issued policy is meant to land under a real "My plans" view
-    // instead, not this list.
-    const { data: quotes } = await supabase.from('agent_policies')
-      .select('*, institutions(name), agents(full_name)')
-      .eq('patient_id', patient.id).eq('status', 'quote')
-      .order('created_at', { ascending: false })
-    setAgentQuotes(quotes || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [patient?.id])
@@ -4106,23 +4090,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   return (
     <div style={{padding:'16px'}}>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'Loading...':'載入中...'}</div>}
-      {!loading&&inquiries.length===0&&agentQuotes.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No plan inquiries yet - ask about a plan from Compare plans.':'暫無計劃查詢 - 請於「比較計劃」查詢。'}</div>}
-      {agentQuotes.length>0&&<div style={{display:'flex',flexDirection:'column',gap:'10px',marginBottom:inquiries.length>0?'16px':0}}>
-        {agentQuotes.map(q=>(
-          <Card key={q.id}>
-            <div style={{padding:'14px 16px'}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
-                <div>
-                  <div style={{fontSize:'14px',fontWeight:500}}>{q.plan_name}</div>
-                  <div style={{fontSize:'12px',color:C.textSub}}>{q.institutions?.name||''}{q.premium?` - HK$${q.premium}/mo`:''}</div>
-                </div>
-                <span style={{fontSize:'11px',background:__theme.accentLight,color:__theme.accent,padding:'4px 10px',borderRadius:'20px',fontWeight:500}}>{isEn?'Agent':'代理'}: {q.agents?.full_name||'—'}</span>
-              </div>
-              <div style={{fontSize:'12px',color:C.textMuted,marginTop:'8px'}}>{isEn?'A licensed agent has quoted this plan for you - not active yet, still a quote.':'持牌代理已為您報價此計劃 - 尚未生效,仍為報價階段。'}</div>
-            </div>
-          </Card>
-        ))}
-      </div>}
+      {!loading&&inquiries.length===0&&<div style={{textAlign:'center',padding:'40px 20px',color:C.textMuted,fontSize:'13px'}}>{isEn?'No plan inquiries yet - ask about a plan from Compare plans.':'暫無計劃查詢 - 請於「比較計劃」查詢。'}</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
         {visibleInquiries.map(i=>{
           // A patient's real return path to a flagged/pending 'auto'
