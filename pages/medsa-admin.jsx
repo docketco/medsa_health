@@ -1648,7 +1648,7 @@ function CarouselTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK' })
+  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
   const [approving, setApproving] = useState(null)
   const [priceInputs, setPriceInputs] = useState({}) // submissionId -> string
   const [requestingPaymentId, setRequestingPaymentId] = useState(null)
@@ -1674,11 +1674,17 @@ function CarouselTab() {
       item_type: form.item_type, title: form.title.trim(), subtitle: form.subtitle.trim()||null,
       image_url: form.image_url.trim()||null, sponsor_name: form.sponsor_name.trim()||null,
       link_url: form.link_url.trim()||null, content: form.content.trim()||null,
-      display_order: parseInt(form.display_order)||0, active: true, location: form.location,
+      display_order: parseInt(form.display_order)||0, active: true, location: form.location.trim()||'HK',
+      // Real gap found live-testing: ends_at is a real column
+      // (components/patient/PatientApp.jsx's own carousel query already
+      // filters by it) but this form never had a field for it, so every
+      // card created here got ends_at=null and just ran forever
+      // regardless of intent - there was no way to actually test expiry.
+      ends_at: form.ends_at ? new Date(`${form.ends_at}T23:59:59`).toISOString() : null,
     })
     setSaving(false)
     setCreating(false)
-    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK' })
+    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
     load()
   }
 
@@ -1772,12 +1778,22 @@ function CarouselTab() {
             <div key={t} onClick={()=>setForm(f=>({...f,item_type:t}))} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:form.item_type===t?C.green:C.card,color:form.item_type===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
+        {/* Real gap: this was a fixed HK/Global dropdown with nowhere to
+            type a third market once Medsa actually expands - a text
+            input with a datalist of whatever's already in use (plus the
+            two defaults) lets you add a new one on the spot instead of
+            needing a code change first. */}
+        <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'8px'}}>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, or type a new market</label>
+          <input value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} list="carousel-locations" placeholder="HK" style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <datalist id="carousel-locations">
+            <option value="HK"/><option value="Global"/>
+            {[...new Set(items.map(i=>i.location).filter(Boolean))].map(loc=><option key={loc} value={loc}/>)}
+          </datalist>
+        </div>
         <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}}>
-          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere</label>
-          <select value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
-            <option value="HK">HK</option>
-            <option value="Global">Global</option>
-          </select>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional - leave blank to run until you deactivate it)</label>
+          <input type="date" value={form.ends_at} onChange={e=>setForm(f=>({...f,ends_at:e.target.value}))} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         </div>
         {[['title','Title'],['subtitle','Subtitle'],['sponsor_name','Sponsor / brand name (optional)']].map(([field,ph]) => (
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
@@ -1803,6 +1819,7 @@ function CarouselTab() {
             <div>
               <div style={{fontSize:'14px',fontWeight:600}}>{item.title}</div>
               <div style={{fontSize:'12px',color:C.textSub}}>{item.item_type}{item.sponsor_name?` · ${item.sponsor_name}`:''} · order {item.display_order} · {item.location||'HK'}</div>
+              <div style={{fontSize:'11px',color:item.ends_at&&new Date(item.ends_at)<new Date()?C.red:C.textMuted,marginTop:'2px'}}>{item.ends_at?`${new Date(item.ends_at)<new Date()?'Expired':'Expires'} ${new Date(item.ends_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:'No expiry set'}</div>
             </div>
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:item.active?C.greenLight:C.card,color:item.active?C.green:C.textMuted,fontWeight:600}}>{item.active?'active':'inactive'}</span>
           </div>
@@ -1978,7 +1995,7 @@ function AdminClaimsTab() {
     return (
       <div>
         <button onClick={()=>setOpenClaimRef(null)} style={{marginBottom:'12px',padding:'8px 14px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>← Back to claims</button>
-        <AgentClaimView claimRef={openClaimRef}/>
+        <AgentClaimView claimRef={openClaimRef} readOnly/>
       </div>
     )
   }
@@ -1995,7 +2012,7 @@ function AdminClaimsTab() {
   const filtered = companies.filter(c => !search.trim() || c.name.toLowerCase().includes(search.trim().toLowerCase()))
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick an insurer to view and decide their claims - the manual fallback for one with no real API/webhook of their own yet. An insurer who does have one calls /api/v1/decide_claim.js directly instead; both write to the same record.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick an insurer to see their claims for counts/reference only - Medsa never decides a claim itself, that's the insurer's own claims-approver role (/claims-portal) or their own API (/api/v1/decide_claim.js).</div>
       <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search insurers…" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'14px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
       {!loading&&filtered.length===0&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>No insurers found.</div>}
@@ -2243,13 +2260,20 @@ function NoticesTab() {
           <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional, defaults to 30 days out)</label>
           <input type="date" value={form.expires_at} onChange={e=>setForm({...form,expires_at:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         </div>
+        {/* Real gap: this was a fixed HK/Global dropdown with no way to
+            actually type the "any other market code" the label itself
+            promised - a free-text field (with a datalist of what's
+            already in use) now lets you add a new one on the spot. */}
         <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, 'HK' (or any other market code) only there once Medsa expands and patients carry their own location</label>
-          <select value={form.location} onChange={e=>setForm({...form,location:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
-            <option value="HK">HK</option>
-            <option value="Global">Global</option>
-          </select>
-          <button onClick={addNotice} disabled={saving} style={{marginLeft:'auto',padding:'8px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add notice'}</button>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, or type a new market code</label>
+          <input value={form.location} onChange={e=>setForm({...form,location:e.target.value})} list="notice-locations" placeholder="HK" style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+          <datalist id="notice-locations">
+            <option value="HK"/><option value="Global"/>
+            {[...new Set(notices.map(n=>n.location).filter(Boolean))].map(loc=><option key={loc} value={loc}/>)}
+          </datalist>
+        </div>
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:'10px'}}>
+          <button onClick={addNotice} disabled={saving} style={{padding:'8px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add notice'}</button>
         </div>
       </div>
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}

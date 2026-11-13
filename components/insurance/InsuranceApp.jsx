@@ -2420,7 +2420,7 @@ function ClaimsPluginSettings({ companyId }) {
 // pages/claim-review.jsx), same pattern as the /referral-portal?receive=
 // and /share links elsewhere. Was previously a single hardcoded claim
 // object with no props at all - approve/reject never wrote anywhere.
-export function AgentClaimView({ claimRef }) {
+export function AgentClaimView({ claimRef, readOnly=false }) {
   const [decision,setDecision]=useState(null)
   const [reason,setReason]=useState('')
   const [otherReason,setOtherReason]=useState('')
@@ -2624,6 +2624,18 @@ export function AgentClaimView({ claimRef }) {
           </div>
         ))}
       </Card>
+      {/* Real gap: medsa-admin's own Claims tab reused this same decide
+          UI, letting Medsa staff approve/reject a claim directly - but
+          the whole point of this design (see the InsuranceDashboard
+          disclaimer: "Medsa never computes or decides a claim itself")
+          is that it's the INSURER's own call, made through their claims-
+          approver role, never Medsa's. medsa-admin passes readOnly now -
+          counts/reference only, no decide UI rendered at all. */}
+      {readOnly ? (
+        <div style={{margin:'0 16px 24px',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'12px',color:C.navy}}>
+          Reference only - Medsa doesn't decide claims. Current status: <strong>{decidedStatusLabel}</strong>{claim.rejection_reason?` - ${claim.rejection_reason}`:''}. The insurer's own claims-approver decides this.
+        </div>
+      ) : (<>
       <SecLabel>{alreadyDecided?`Override decision (currently ${decidedStatusLabel})`:'Your decision'}</SecLabel>
       {alreadyDecided&&<div style={{margin:'0 16px 12px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:C.amber}}>{'⚠'} This claim already has a decision. Choosing below replaces it, not a first-time decision.</div>}
       <div style={{padding:'0 16px',display:'flex',gap:'10px',marginBottom:'12px'}}>
@@ -2657,6 +2669,7 @@ export function AgentClaimView({ claimRef }) {
           {decision==='reject'&&!reason&&<div style={{fontSize:'11px',color:C.amber,textAlign:'center',marginTop:'8px'}}>Please select a rejection reason before submitting.</div>}
         </div>
       )}
+      </>)}
     </div>
   )
 }
