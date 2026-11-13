@@ -5026,7 +5026,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
           :'收據、診斷證明,或您的索償所需的任何文件 - 來自非Medsa診所,或已存於「我的文件」中。'}</div>
 
         <div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
-          <div style={{fontSize:'11px',fontWeight:700,marginBottom:'6px'}}>{isEn?'1. From your documents':'1. 來自您的文件'}</div>
+          <div style={{fontSize:'11px',fontWeight:700,marginBottom:'6px'}}>{isEn?'1. Submit from your documents, or upload a file':'1. 從您的文件提交,或上傳新文件'}</div>
           {attachments.length===0
             ? <div style={{fontSize:'12px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Nothing available yet - upload below instead.':'暫無可用文件 - 請於下方上傳。'}</div>
             : <>
@@ -5044,14 +5044,13 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
               </div>}
             </>}
 
-          <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'2. Or upload something new':'2. 或上傳新文件'}</div>
-          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'4px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
-            {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Upload a file':'+ 上傳文件')}
+          <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',margin:'10px 0 4px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
+            {uploadingReceipt?(isEn?'Uploading…':'上傳中…'):(isEn?'+ Or upload a new file':'+ 或上傳新文件')}
             <input type="file" style={{display:'none'}} disabled={uploadingReceipt} onChange={e=>{const f=e.target.files?.[0]; e.target.value=''; if(f) handleUploadReceipt(f)}}/>
           </label>
           {uploadError&&<div style={{fontSize:'12px',color:'#ffb3b3',marginBottom:'8px'}}>{uploadError}</div>}
 
-          <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'3. Details':'3. 詳情'}</div>
+          <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'2. Details':'2. 詳情'}</div>
           <div style={{fontSize:'11px',fontWeight:600,opacity:0.95,marginBottom:'4px'}}>{isEn?'Clinic name (only if from a clinic not on Medsa)':'診所名稱(僅適用於非Medsa診所)'}</div>
           <input value={manualClinicName} onChange={e=>setManualClinicName(e.target.value)} onBlur={()=>checkClinicName(manualClinicName)} placeholder={isEn?'e.g. Matilda International Hospital (optional)':'例如:明德國際醫院(可留空)'} style={{width:'100%',border:'none',borderRadius:'8px',padding:'9px 12px',fontSize:'13px',outline:'none',fontFamily:'inherit',boxSizing:'border-box',marginBottom:'4px',background:'#fff',color:C.text}}/>
           {manualClinicCheck==='checking'&&<div style={{fontSize:'11px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Checking…':'檢查中…'}</div>}
