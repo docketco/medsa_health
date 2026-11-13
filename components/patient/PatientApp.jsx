@@ -790,11 +790,16 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           used to be buried inside Account Settings → Medsa Bump, never
           visible just from opening the app. Shown right here whenever
           there's a current pregnancy on file. ── */}
+      {/* Real bug found live-testing: this card hardcoded the old, too-
+          light pink gradient (#F48FB1/#F8BBD0) directly, instead of
+          reading it off ThemeContext like everything else - so the Bump
+          contrast fix a few rounds back never touched it. Same accent
+          tokens now. */}
       {bumpSizeComparison&&(
-        <div onClick={()=>onNav&&onNav('bumphealth')} style={{margin:'14px 16px 0',background:'linear-gradient(135deg,#F48FB1 0%,#F8BBD0 100%)',borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+        <div onClick={()=>onNav&&onNav('bumphealth')} style={{margin:'14px 16px 0',background:`linear-gradient(135deg,${themeAccent} 0%,${themeAccentMid} 100%)`,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
           <span style={{fontSize:'26px'}}>{bumpSizeComparison.emoji}</span>
           <div style={{flex:1}}>
-            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)'}}>{isEn?`Week ${bumpDisplayWeek}`:`第${bumpDisplayWeek}週`}</div>
+            <div style={{fontSize:'11px',fontWeight:600,color:'rgba(255,255,255,0.9)'}}>{isEn?`Week ${bumpDisplayWeek}`:`第${bumpDisplayWeek}週`}</div>
             <div style={{fontSize:'13px',fontWeight:600,color:'#fff'}}>{isEn?`Your baby is about the size of ${bumpSizeComparison.en}`:`您的寶寶現時大約是${bumpSizeComparison.zh}的大小`}</div>
           </div>
           <span style={{color:'#fff',fontSize:'16px'}}>›</span>
@@ -4697,6 +4702,11 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   const [visitSubmitSuccess,setVisitSubmitSuccess]=useState(null)
 
   const [manualSelectedIds,setManualSelectedIds]=useState(new Set())
+  // Real gap found live-testing: this list used to render every document
+  // inline, always expanded - with several files on file (a receipt, an
+  // ID scan, a maternal summary...) it just added to "this whole page is
+  // messy." Collapsed behind a real dropdown now, closed by default.
+  const [docsOpen,setDocsOpen]=useState(false)
   const [manualAmount,setManualAmount]=useState('')
   const [manualServiceDate,setManualServiceDate]=useState('')
   const [manualClinicName,setManualClinicName]=useState('')
@@ -4731,9 +4741,16 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
     // uploaded it for continuity of care) was never a receipt for
     // something paid out of pocket, so there's no claim to build from it.
     const { data } = await supabase.from('medical_record_attachments')
-      .select('id, category, file_name, uploaded_at, insurance_claim_id').eq('patient_id', patient.id)
-      .is('insurance_claim_id', null).eq('is_government_record', false).order('uploaded_at',{ascending:false})
-    setAttachments(data||[])
+      .select('id, category, file_name, uploaded_at, insurance_claim_id, insurance_claims(status)').eq('patient_id', patient.id)
+      .eq('is_government_record', false).order('uploaded_at',{ascending:false})
+    // Real gap found live-testing: a document attached to a REJECTED
+    // claim used to be permanently excluded here (insurance_claim_id
+    // not null, filtered out at the query itself) - meaning the exact
+    // file you'd actually want to resubmit, right after that claim got
+    // rejected, was invisible. Only a claim that's still pending/settled/
+    // approved actually "holds" its attachment that way; a rejected
+    // one releases it back to the pool.
+    setAttachments((data||[]).filter(a => !a.insurance_claim_id || a.insurance_claims?.status === 'rejected'))
   }
   useEffect(() => { loadAttachments() }, [patient?.id])
 
@@ -5011,13 +5028,21 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
         <div style={{background:'rgba(255,255,255,0.12)',borderRadius:'10px',padding:'14px'}}>
           <div style={{fontSize:'11px',fontWeight:700,marginBottom:'6px'}}>{isEn?'1. From your documents':'1. 來自您的文件'}</div>
           {attachments.length===0
-            ? <div style={{fontSize:'12px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Nothing unclaimed yet - upload below instead.':'暫無未提交的文件 - 請於下方上傳。'}</div>
-            : attachments.map(a=>(
-              <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:'0.5px solid rgba(255,255,255,0.25)',cursor:'pointer'}}>
-                <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?'#fff':'rgba(255,255,255,0.6)'}`,background:manualSelectedIds.has(a.id)?'#fff':'transparent',color:__theme.accent,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
-                <div style={{fontSize:'13px',fontWeight:500}}>{a.file_name||a.category}</div>
+            ? <div style={{fontSize:'12px',opacity:0.85,marginBottom:'10px'}}>{isEn?'Nothing available yet - upload below instead.':'暫無可用文件 - 請於下方上傳。'}</div>
+            : <>
+              <div onClick={()=>setDocsOpen(o=>!o)} style={{display:'flex',justifyContent:'space-between',alignItems:'center',background:'#fff',borderRadius:'8px',padding:'10px 12px',cursor:'pointer',marginBottom:docsOpen?'6px':'0'}}>
+                <span style={{fontSize:'13px',color:C.text,fontWeight:500}}>{manualSelectedIds.size>0?(isEn?`${manualSelectedIds.size} selected`:`已選${manualSelectedIds.size}項`):(isEn?`Choose from ${attachments.length} document${attachments.length>1?'s':''}`:`從${attachments.length}份文件中選擇`)}</span>
+                <span style={{color:__theme.accent,fontSize:'12px'}}>{docsOpen?'▲':'▼'}</span>
               </div>
-            ))}
+              {docsOpen&&<div style={{background:'#fff',borderRadius:'8px',padding:'4px 10px',maxHeight:'220px',overflowY:'auto'}}>
+                {attachments.map(a=>(
+                  <div key={a.id} onClick={()=>toggleManualAttachment(a.id)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderBottom:`0.5px solid ${C.border}`,cursor:'pointer'}}>
+                    <div style={{width:18,height:18,borderRadius:'5px',border:`1.5px solid ${manualSelectedIds.has(a.id)?__theme.accent:C.border}`,background:manualSelectedIds.has(a.id)?__theme.accent:'transparent',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',flexShrink:0,fontWeight:700}}>{manualSelectedIds.has(a.id)?'✓':''}</div>
+                    <div style={{fontSize:'13px',fontWeight:500,color:C.text}}>{a.file_name||a.category}</div>
+                  </div>
+                ))}
+              </div>}
+            </>}
 
           <div style={{fontSize:'11px',fontWeight:700,margin:'14px 0 6px'}}>{isEn?'2. Or upload something new':'2. 或上傳新文件'}</div>
           <label style={{display:'block',textAlign:'center',border:'1.5px dashed rgba(255,255,255,0.7)',borderRadius:'10px',padding:'16px',cursor:uploadingReceipt?'default':'pointer',marginBottom:'4px',fontSize:'13px',fontWeight:700,opacity:uploadingReceipt?0.6:1}}>
@@ -5672,6 +5697,12 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 
   const [plans,setPlans]=useState([])
   const [plansLoading,setPlansLoading]=useState(true)
+  // Real gap found live-testing: Plans is one tab inside this always-
+  // mounted screen (switching tabs never remounts it), and the load
+  // effect below only ever depended on patient.medsa_id - so a plan an
+  // insurer just edited on their own portal never showed here without a
+  // full page reload, even after navigating away and back to this tab.
+  const [plansRefreshKey,setPlansRefreshKey]=useState(0)
   const [planSearch,setPlanSearch]=useState('')
   const [patientConditions,setPatientConditions]=useState([])
   // "Find me a plan" (aq2-09) - the guided entry point, matching your
@@ -5815,7 +5846,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
       setPlansLoading(false)
     }
     loadPlansAndMatch()
-  }, [patient?.medsa_id])
+  }, [patient?.medsa_id, plansRefreshKey])
 
   // These plan terms were never translated at all - shown in English
   // regardless of selected language. Rather than restructure the whole
@@ -6160,8 +6191,11 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 
       {/* ── PLANS & COMPARISON ── */}
       {tab==='plans'&&<>
+        <div style={{display:'flex',justifyContent:'flex-end',margin:'16px 16px 0'}}>
+          <div onClick={()=>setPlansRefreshKey(k=>k+1)} style={{fontSize:'11px',color:__theme.accent,cursor:'pointer'}}>{plansLoading?'Refreshing…':'↻ Refresh plans'}</div>
+        </div>
         {/* How Medsa connects patients to insurers — neutral comparison, not advice */}
-        <div style={{margin:'16px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
+        <div style={{margin:'10px 16px 0',background:C.navyLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'14px 16px'}}>
           <div style={{fontSize:'13px',fontWeight:600,color:C.navy,marginBottom:'6px'}}>◈ {isEn?'How Medsa connects you to insurers':'Medsa如何連接您與保險公司'}</div>
           <div style={{fontSize:'12px',color:C.textSub,lineHeight:1.7}}>
             {isEn

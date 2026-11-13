@@ -850,10 +850,15 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [searchedPlan,setSearchedPlan]=useState(null)
 
   useEffect(() => {
+    // Real bug found live-testing: this listed every insurer institution
+    // on Medsa, period - an independent agent could pick one they have
+    // no real appointment with at all. Scoped to active appointments now,
+    // same real source MyPlansScreen's own insurer picker already uses.
     if (agent.agent_type==='independent') {
-      supabase.from('institutions').select('id,name').eq('institution_type','insurer').then(({data})=>setInsurers(data||[]))
+      supabase.from('agent_institution_appointments').select('institutions(id,name)').eq('agent_id', agent.id).eq('status','active')
+        .then(({data})=>setInsurers((data||[]).map(d=>d.institutions).filter(Boolean)))
     }
-  }, [agent.agent_type])
+  }, [agent.agent_type, agent.id])
 
   // Real gap found live-testing: an agent building or converting a policy
   // had no way to actually see the patient they were writing it for - not
@@ -1815,13 +1820,6 @@ function PlanInquiriesScreen({ agent, onConvert }) {
   const [unclaimed,setUnclaimed]=useState([])
   const [mine,setMine]=useState([])
   const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Map())
-  // Real gap found live-testing: a fully-resolved claimed inquiry (its
-  // policy already active, or declined and done with) sat in this
-  // working list forever - nothing here was left to do, but it never
-  // left to make room for what still needed attention. "Approved,
-  // awaiting payment" (the agent still has to mark it paid) stays
-  // visible by design - only truly-done ones hide, and only by default.
-  const [showCompleted,setShowCompleted]=useState(false)
   // plan_id -> [team_id, ...] authorized to sell it. A plan with no entry
   // here has no team gating at all - the old flat claim race still
   // applies unchanged. A plan that DOES have team authorizations can only
@@ -1955,8 +1953,13 @@ function PlanInquiriesScreen({ agent, onConvert }) {
     if (!converted) return false
     return converted.underwriter_status==='declined' || (converted.underwriter_status==='approved' && converted.status==='active')
   }
-  const visibleMine = showCompleted ? mine : mine.filter(i=>!isFullyDone(i))
-  const doneCount = mine.length - mine.filter(i=>!isFullyDone(i)).length
+  // Real gap found live-testing: the previous hide-behind-a-toggle
+  // version was confusing on its own terms (the toggle itself only
+  // showed up once something was hidden, which read as broken when
+  // there was nothing to show yet) - simpler now: nothing is ever
+  // hidden, a done inquiry just sorts to the bottom so what still needs
+  // attention surfaces first without anything disappearing.
+  const visibleMine = [...mine].sort((a,b) => (isFullyDone(a)?1:0) - (isFullyDone(b)?1:0))
 
   return (
     <PageWrap>
@@ -1993,17 +1996,13 @@ function PlanInquiriesScreen({ agent, onConvert }) {
         ))}
       </div>
 
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
-        <SecLabel>Your claimed inquiries</SecLabel>
-        {doneCount>0&&<div onClick={()=>setShowCompleted(s=>!s)} style={{fontSize:'11px',color:C.textMuted,cursor:'pointer',textDecoration:'underline',marginRight:'4px'}}>{showCompleted?'Hide completed':`Show ${doneCount} completed`}</div>}
-      </div>
+      <SecLabel>Your claimed inquiries</SecLabel>
       {!loading&&mine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>None claimed yet.</div>}
-      {!loading&&mine.length>0&&visibleMine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing left to work - everything claimed is done.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
         {visibleMine.map(i=>{
           const converted = convertedInquiryIds.get(i.id)
           return (
-          <Card key={i.id} style={{padding:'14px 16px'}}>
+          <Card key={i.id} style={{padding:'14px 16px',opacity:isFullyDone(i)?0.65:1}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
                 <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
