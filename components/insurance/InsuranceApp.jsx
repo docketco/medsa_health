@@ -1631,7 +1631,18 @@ function StaffScreen({ company }) {
           }),
         })
         const data = await res.json()
-        results.push({ email: row.email, ok: data.status==='OK', message: data.status==='OK' ? (data.isNew?'created & appointed':'appointed') : (data.message||'failed') })
+        // Real gap found live-testing: a brand-new agent's temp password
+        // only ever went out by email (sendEmail, lib/email.js) - with
+        // no RESEND_API_KEY configured, emailSent comes back false and
+        // that password was simply lost, nowhere on screen, no way for
+        // this insurer to hand it to the agent another way. Surfaced
+        // directly here now whenever the email didn't actually go out.
+        const needsManualPassword = data.status==='OK' && data.isNew && !data.emailSent
+        results.push({
+          email: row.email, ok: data.status==='OK',
+          message: data.status==='OK' ? (data.isNew?'created & appointed':'appointed') : (data.message||'failed'),
+          tempPassword: needsManualPassword ? data.tempPassword : null,
+        })
       } catch (e) {
         results.push({ email: row.email, ok: false, message: e.message })
       }
@@ -1756,6 +1767,10 @@ function StaffScreen({ company }) {
         {bulkResults&&<div style={{marginTop:'10px',fontSize:'12px'}}>
           <div style={{color:C.green,fontWeight:600}}>{bulkResults.filter(r=>r.ok).length} of {bulkResults.length} appointed.</div>
           {bulkResults.filter(r=>!r.ok).length>0&&<div style={{color:C.red,marginTop:'6px'}}>{bulkResults.filter(r=>!r.ok).map((r,i)=><div key={i}>{r.email}: {r.message}</div>)}</div>}
+          {bulkResults.some(r=>r.tempPassword)&&<div style={{marginTop:'8px',background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'8px',padding:'8px 10px',color:C.amber}}>
+            <div style={{fontWeight:600,marginBottom:'4px'}}>Email didn't go out for these - send the login yourself:</div>
+            {bulkResults.filter(r=>r.tempPassword).map((r,i)=><div key={i}>{r.email}: <strong>{r.tempPassword}</strong></div>)}
+          </div>}
         </div>}
       </div>
 
