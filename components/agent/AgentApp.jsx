@@ -1173,10 +1173,18 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
           onboarding style) built from the plan's own on-file terms and
           whatever the inquiry already declared, meant to be reviewed
           together with the patient before issuing an active policy. */}
-      <div style={{marginBottom:'8px'}}>
+      {/* Real fix: made more obvious, per your call - this is a required
+          gate now (every policy submits straight to the underwriter), not
+          an optional checkbox, so it needed to read as one: a bordered
+          amber card instead of a plain button blending into the rest of
+          the step, with explicit "Required" wording. */}
+      <div style={{marginBottom:'16px'}}>
         {healthDeclarationAck
-          ? <div style={{fontSize:'12px',color:C.green,fontWeight:600}}>✓ Health declaration & terms reviewed and accepted with the patient.</div>
-          : <Btn style={{width:'100%'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration with patient</Btn>}
+          ? <div style={{background:C.greenXLight,border:`1px solid ${C.green}`,borderRadius:'10px',padding:'12px 14px',fontSize:'13px',color:C.green,fontWeight:600}}>✓ Health declaration & terms reviewed and accepted with the patient.</div>
+          : <div style={{background:C.amberLight,border:`1px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px'}}>
+              <div style={{fontSize:'12px',fontWeight:700,color:C.amber,marginBottom:'8px'}}>⚠ Required before you can submit</div>
+              <Btn variant="primary" style={{width:'100%'}} onClick={()=>setTermsModalOpen(true)}>Review & accept health declaration with patient</Btn>
+            </div>}
       </div>
       <TermsAgreementModal
         open={termsModalOpen} onClose={()=>setTermsModalOpen(false)} isEn={true}
@@ -1187,8 +1195,6 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         additionalTerms={lineItems[0]?.additionalTerms}
         onAccept={()=>{setHealthDeclarationAck(true);setTermsModalOpen(false)}}
       />
-      {!healthDeclarationAck&&<div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Needed before you can submit - every policy now goes to the underwriter the moment you save it, so this has to be reviewed with the patient first.</div>}
-
       <SecLabel>Documents for the underwriter</SecLabel>
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px',lineHeight:1.5}}>Attach everything you'd hand an underwriter in real life (signed application, supporting documents) - optional, but this is your one chance to include them: saving below submits straight to the underwriter, there's no separate submit step afterward.</div>
       <input type="file" multiple onChange={e=>setUnderwriterFiles(e.target.files)} style={{fontSize:'11px',marginBottom:'16px'}}/>
@@ -1486,6 +1492,32 @@ function RenewPolicyModal({ policy, onClose, onRenewed }) {
 // to switch agents, the inquiry is simply released back into the
 // unclaimed pool for the next agent to claim, rather than routing
 // through Medsa Admin.
+// Real bug found live-testing: a patient's attachment never showed here
+// at all - PatientInquiryThread (PatientApp.jsx) sends it as a reference
+// to a medical_record_attachments row (attachment_record_id), a private
+// bucket needing a fresh signed URL each time, while this screen only
+// ever checked attachment_url (the old-style public link an agent's own
+// upload uses). Same resolve-on-click pattern as the patient side.
+function InquiryMessageAttachment({ m }) {
+  const [opening,setOpening]=useState(false)
+  async function openLinkedRecord() {
+    setOpening(true)
+    const { data: rec } = await supabase.from('medical_record_attachments').select('file_url').eq('id', m.attachment_record_id).maybeSingle()
+    if (rec?.file_url) {
+      const { data, error } = await supabase.storage.from('patient-uploaded-records').createSignedUrl(rec.file_url, 300)
+      if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+    }
+    setOpening(false)
+  }
+  if (m.attachment_record_id) {
+    return <span onClick={openLinkedRecord} style={{fontSize:'12px',color:C.green,cursor:'pointer'}}>{'📎'} {opening?'Opening…':(m.attachment_name||'Attachment')}</span>
+  }
+  if (m.attachment_url) {
+    return <a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>
+  }
+  return null
+}
+
 function InquiryMessageThread({ inquiry, agentName }) {
   const [messages,setMessages]=useState([])
   const [loading,setLoading]=useState(true)
@@ -1545,7 +1577,7 @@ function InquiryMessageThread({ inquiry, agentName }) {
           <div key={m.id} style={{alignSelf:m.sender_type==='agent'?'flex-end':'flex-start',maxWidth:'80%',background:m.sender_type==='agent'?C.greenLight:C.card,borderRadius:'8px',padding:'8px 10px'}}>
             <div style={{fontSize:'10px',color:C.textMuted,marginBottom:'2px'}}>{m.sender_name||(m.sender_type==='agent'?'You':'Patient')} · {new Date(m.created_at).toLocaleString('en-HK',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
             {m.body&&<div style={{fontSize:'13px'}}>{m.body}</div>}
-            {m.attachment_url&&<a href={m.attachment_url} target="_blank" rel="noreferrer" style={{fontSize:'12px',color:C.green}}>{'📎'} {m.attachment_name||'Attachment'}</a>}
+            <InquiryMessageAttachment m={m}/>
           </div>
         ))}
       </div>
@@ -1565,7 +1597,7 @@ function InquiryMessageThread({ inquiry, agentName }) {
 function PlanInquiriesScreen({ agent, onConvert }) {
   const [unclaimed,setUnclaimed]=useState([])
   const [mine,setMine]=useState([])
-  const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Set())
+  const [convertedInquiryIds,setConvertedInquiryIds]=useState(new Map())
   // plan_id -> [team_id, ...] authorized to sell it. A plan with no entry
   // here has no team gating at all - the old flat claim race still
   // applies unchanged. A plan that DOES have team authorizations can only
@@ -1626,9 +1658,14 @@ function PlanInquiriesScreen({ agent, onConvert }) {
       setUnreadByInquiry({})
     }
     // Which claimed inquiries already converted to a real policy - so
-    // "Convert to policy" only ever shows once, not every visit.
-    const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
-    setConvertedInquiryIds(new Set((convertedRows||[]).map(r=>r.inquiry_id)))
+    // "Convert to policy" only ever shows once, not every visit. Real gap
+    // found live-testing: the card only ever showed a static "Converted
+    // to policy" badge forever after, even once the underwriter actually
+    // approved or declined it - decide.js posts that outcome into the
+    // message thread, but nothing on the collapsed card itself reflected
+    // it, so you'd have to open the thread just to find out what happened.
+    const { data: convertedRows } = await supabase.from('agent_policies').select('inquiry_id, underwriter_status, underwriter_decision_reason').eq('agent_id', agent.id).not('inquiry_id', 'is', null)
+    setConvertedInquiryIds(new Map((convertedRows||[]).map(r=>[r.inquiry_id, r])))
 
     setUnclaimed(unclaimedRows||[])
     setLoading(false)
@@ -1716,17 +1753,22 @@ function PlanInquiriesScreen({ agent, onConvert }) {
       <SecLabel>Your claimed inquiries</SecLabel>
       {!loading&&mine.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>None claimed yet.</div>}
       <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
-        {mine.map(i=>(
-          <Card key={i.id} style={{padding:'14px 16px',cursor:'pointer'}} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
+        {mine.map(i=>{
+          const converted = convertedInquiryIds.get(i.id)
+          return (
+          <Card key={i.id} style={{padding:'14px 16px'}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
               <div>
-                <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                  <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
-                  {unreadByInquiry[i.id]?.count>0&&<span style={{background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',minWidth:18,height:18,padding:'0 5px',display:'inline-flex',alignItems:'center',justifyContent:'center'}}>{unreadByInquiry[i.id].count}</span>}
-                </div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{i.applicant_full_name||'Unnamed applicant'}</div>
                 <div style={{fontSize:'12px',color:C.textSub}}>{i.insurance_plans?.plan_name} - {i.insurance_plans?.company_name}</div>
                 <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{i.applicant_phone||''} {i.applicant_email||''}</div>
-                {!convertedInquiryIds.has(i.id)&&(()=>{
+                {/* Real gap: the declaration's own 30-day validity
+                    (declaration_expires_at, match_plan_suitability.js) had
+                    nowhere to show on this card - an agent working a stale
+                    lead had no way to know without opening the plan's own
+                    declaration flow themselves. */}
+                {i.declaration_expires_at&&<div style={{fontSize:'10px',color:new Date(i.declaration_expires_at)<new Date()?C.red:C.textMuted,marginTop:'2px'}}>{new Date(i.declaration_expires_at)<new Date()?'Declaration expired':'Declaration valid until'} {new Date(i.declaration_expires_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
+                {!converted&&(()=>{
                   const countdown = formatReassignCountdown(i.response_due_at)
                   return countdown&&<div style={{marginTop:'6px'}}><Badge text={countdown.text} type={countdown.urgent?'full':'due'}/></div>
                 })()}
@@ -1734,14 +1776,25 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'6px'}}>
                 {i.is_switch_request&&<Badge text="⇄ Plan switch request" type="due"/>}
                 {i.switch_requested_at&&<Badge text="Switch requested earlier" type="due"/>}
-                {convertedInquiryIds.has(i.id)
-                  ? <Badge text="Converted to policy" type="ok"/>
-                  : <div style={{display:'flex',gap:'6px'}}>
-                      <Btn style={{fontSize:'11px',padding:'6px 10px'}} disabled={claimingId===i.id} onClick={e=>{e.stopPropagation();handleDeclineInquiry(i)}}>Decline</Btn>
-                      <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={e=>{e.stopPropagation();onConvert?.(i)}}>Convert to policy</Btn>
-                    </div>}
+                {converted&&<Badge text={converted.underwriter_status==='approved'?'✓ Underwriter approved':converted.underwriter_status==='declined'?'✕ Underwriter declined':'Awaiting underwriter'} type={converted.underwriter_status==='approved'?'ok':converted.underwriter_status==='declined'?'full':'waiting'}/>}
+                <div style={{display:'flex',gap:'6px'}}>
+                  {!converted&&<>
+                    <Btn style={{fontSize:'11px',padding:'6px 10px'}} disabled={claimingId===i.id} onClick={()=>handleDeclineInquiry(i)}>Decline</Btn>
+                    <Btn variant="primary" style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>onConvert?.(i)}>Convert to policy</Btn>
+                  </>}
+                  {/* Real gap: the whole card used to be the only way to
+                      open the thread (tap anywhere to toggle) - confusing,
+                      since nothing marked it as clickable. A plain, always-
+                      visible Message button replaces that - unread count
+                      shown right on it, no hidden behavior to discover. */}
+                  <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>setExpandedId(expandedId===i.id?null:i.id)}>
+                    ✉ Message{unreadByInquiry[i.id]?.count>0?` (${unreadByInquiry[i.id].count})`:''}
+                  </Btn>
+                </div>
               </div>
             </div>
+            {converted?.underwriter_status==='declined'&&converted.underwriter_decision_reason&&
+              <div style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'11px',color:C.red}}>{converted.underwriter_decision_reason}</div>}
             {/* Pre-computed suitability read (lib/planSuitabilityMatch.js),
                 run the moment the patient submitted this inquiry - lower
                 agent workload was the whole point: this isn't a blank
@@ -1761,13 +1814,12 @@ function PlanInquiriesScreen({ agent, onConvert }) {
               {i.suitability_verdict==='flagged'&&i.flag_category&&<div style={{marginTop:'2px'}}>Reason category: {i.flag_category}</div>}
               {i.suitability_verdict==='declined'&&<div style={{marginTop:'2px'}}>Doesn't work for this patient - consider another plan from your basket.</div>}
             </div>}
-            {/* Real gap found live-testing: the message thread already
-                existed below (claim → expand) but a collapsed card gave
-                no sign a message or attachment was even waiting - "no
-                place to receive" was really "no visible reason to open
-                it." This preview is the link to the conversation: tapping
-                it (or the card) opens the thread directly. */}
-            {expandedId!==i.id&&unreadByInquiry[i.id]&&<div onClick={e=>{e.stopPropagation();setExpandedId(i.id)}} style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.text,cursor:'pointer',display:'flex',justifyContent:'space-between',gap:'8px'}}>
+            {/* Real gap found live-testing: a collapsed card gave no sign
+                a message or attachment was even waiting. This preview is
+                a second way into the conversation (the Message button
+                above is the primary, always-visible one) - tapping it
+                opens the thread the same way. */}
+            {expandedId!==i.id&&unreadByInquiry[i.id]&&<div onClick={()=>setExpandedId(i.id)} style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'12px',color:C.text,cursor:'pointer',display:'flex',justifyContent:'space-between',gap:'8px'}}>
               <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>✉ {unreadByInquiry[i.id].preview || 'New message'}</span>
               <span style={{color:C.red,fontWeight:600,flexShrink:0}}>View ›</span>
             </div>}
@@ -1775,15 +1827,15 @@ function PlanInquiriesScreen({ agent, onConvert }) {
                 (modeled on AIA's own contact-us form) - only set for
                 agent-mode inquiries submitted after that shipped, so
                 older rows just show nothing here. */}
-            {expandedId===i.id&&i.preferred_contact_method&&<div onClick={e=>e.stopPropagation()} style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>
+            {expandedId===i.id&&i.preferred_contact_method&&<div style={{marginTop:'8px',background:C.beige,borderRadius:'8px',padding:'10px 12px',fontSize:'11.5px',color:C.textSub,lineHeight:1.6}}>
               <div style={{fontWeight:600,color:C.text,marginBottom:'2px'}}>How they'd like to be contacted</div>
               Via {i.preferred_contact_method}, in {i.preferred_language}{i.preferred_contact_date?`, on ${new Date(i.preferred_contact_date).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}`:''}{i.preferred_contact_time&&i.preferred_contact_time!=='anytime'?` (${i.preferred_contact_time.toUpperCase()})`:' (anytime)'}.
               {i.has_existing_policy&&<div style={{marginTop:'2px'}}>Already holds an individual policy with this insurer.</div>}
               {i.inquiry_message&&<div style={{marginTop:'6px',fontStyle:'italic'}}>&ldquo;{i.inquiry_message}&rdquo;</div>}
             </div>}
-            {expandedId===i.id&&<div onClick={e=>e.stopPropagation()}><InquiryMessageThread inquiry={i} agentName={agent.name}/></div>}
+            {expandedId===i.id&&<InquiryMessageThread inquiry={i} agentName={agent.name}/>}
           </Card>
-        ))}
+        )})}
       </div>
     </PageWrap>
   )

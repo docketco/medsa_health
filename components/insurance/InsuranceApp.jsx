@@ -1778,7 +1778,7 @@ function PolicyRosterScreen({ company }) {
   async function load() {
     setLoading(true)
     const { data } = await supabase.from('agent_policies')
-      .select('id, patient_name, plan_name, policy_number, status, premium, start_date, renewal_date, underwriter_status, agents(full_name)')
+      .select('id, patient_name, plan_name, policy_number, status, premium, start_date, renewal_date, underwriter_status, underwriter_decision_reason, agents(full_name)')
       .eq('institution_id', company.institutionRefId).order('created_at', { ascending: false })
     setPolicies(data||[])
     setLoading(false)
@@ -1809,6 +1809,13 @@ function PolicyRosterScreen({ company }) {
             </span>
           </div>
           <div style={{fontSize:'11px',color:C.textMuted}}>HK${p.premium}/mo · {p.status}{p.renewal_date?` · renews ${new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}`:''}</div>
+          {/* Real gap: a declined policy showed the badge but never why -
+              the reason only ever lived in the agent portal's own card
+              and the inquiry's message thread, neither reachable from
+              here, so the insurer had no way to see their own
+              underwriter's stated reason without asking the agent. */}
+          {p.underwriter_status==='declined'&&p.underwriter_decision_reason&&
+            <div style={{marginTop:'8px',background:C.redLight,borderRadius:'8px',padding:'8px 10px',fontSize:'11px',color:C.red}}>{p.underwriter_decision_reason}</div>}
         </Card>
       ))}
     </div>

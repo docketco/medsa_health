@@ -584,7 +584,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   // underwriter replies) - same shared inquiry_messages thread the My
   // Inquiries tab reads/writes, surfaced here too so a reply doesn't sit
   // invisible until the patient happens to reopen that specific inquiry.
-  const [inquiryThreadsUnread,setInquiryThreadsUnread]=useState([]) // [{inquiryId, planName, companyName, count, preview}]
+  const [inquiryThreadsUnread,setInquiryThreadsUnread]=useState([]) // [{inquiryId, planName, companyName, count, preview, createdAt}]
   async function loadInquiryMessageSummary(patientRowId) {
     if (!patientRowId) return
     const { data: myInquiries } = await supabase.from('plan_inquiries')
@@ -595,13 +595,17 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
       .in('inquiry_id', ids).eq('read_by_patient', false).order('created_at',{ascending:true})
     const byInquiry = {}
     for (const m of (unreadMsgs||[])) {
-      if (!byInquiry[m.inquiry_id]) byInquiry[m.inquiry_id] = { count: 0, preview: null }
+      if (!byInquiry[m.inquiry_id]) byInquiry[m.inquiry_id] = { count: 0, preview: null, createdAt: m.created_at }
       byInquiry[m.inquiry_id].count += 1
       byInquiry[m.inquiry_id].preview = m.body || (m.attachment_name ? `📎 ${m.attachment_name}` : '')
+      // Latest message's own timestamp, not the first - this is what
+      // sorts the merged "Messages" list below, same as a doctor thread's
+      // own latest-message-wins ordering (doctorThreadsLatestFirst).
+      byInquiry[m.inquiry_id].createdAt = m.created_at
     }
     const planById = Object.fromEntries((myInquiries||[]).map(i=>[i.id, i.insurance_plans]))
     setInquiryThreadsUnread(Object.entries(byInquiry).map(([inquiryId, v]) => ({
-      inquiryId, count: v.count, preview: v.preview,
+      inquiryId, count: v.count, preview: v.preview, createdAt: v.createdAt,
       planName: planById[inquiryId]?.plan_name, companyName: planById[inquiryId]?.company_name,
     })))
   }
@@ -619,7 +623,37 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
 
   const urgentMessages = doctorThreadsLatestFirst.filter(m=>m.urgent && !m.read_by_patient)
 
+  // One flat "Messages" list now, per your call - a doctor's message and
+  // a reply on an insurance inquiry are both just a message, not two
+  // categories a patient has to mentally sort between. Merged and sorted
+  // by whichever is actually most recent, not shown as two separate
+  // blocks each in their own order.
+  const combinedMessages = [
+    ...doctorThreadsLatestFirst.map(m=>({ kind:'doctor', key:`doctor:${m.id}`, createdAt:m.created_at, unread:!m.read_by_patient, data:m })),
+    ...inquiryThreadsUnread.map(t=>({ kind:'inquiry', key:`inquiry:${t.inquiryId}`, createdAt:t.createdAt, unread:true, data:t })),
+  ].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt))
+  const messagesSectionRef = useRef(null)
+  // Excludes urgent unread doctor messages - those already get their own
+  // red banner above, so this count never double-announces the same thing.
+  const totalUnreadMessages = doctorThreadsLatestFirst.filter(m=>!m.read_by_patient && !m.urgent).length + inquiryUnreadTotal
+
   useEffect(() => { loadInquiryMessageSummary(homePatientId) }, [homePatientId])
+
+  // Real gap found live-testing: approving or declining a policy
+  // (pages/api/underwriter/decide.js) only ever posted into that one
+  // inquiry's own message thread - nothing surfaced on Home the way a
+  // claim decision already does (see recentClaim below), so a patient
+  // had no reason to think to go look unless they happened to reopen
+  // that specific inquiry. Same 14-day window as recentClaim.
+  const [recentPolicyDecisions,setRecentPolicyDecisions]=useState([])
+  useEffect(() => {
+    if (!homePatientId) { setRecentPolicyDecisions([]); return }
+    supabase.from('agent_policies').select('id, plan_name, underwriter_status, underwriter_decided_at, underwriter_decision_reason')
+      .eq('patient_id', homePatientId).in('underwriter_status', ['approved','declined'])
+      .gt('underwriter_decided_at', new Date(Date.now()-14*24*60*60*1000).toISOString())
+      .order('underwriter_decided_at', { ascending: false })
+      .then(({ data }) => setRecentPolicyDecisions(data || []))
+  }, [homePatientId])
 
   function getThreadFrom(list, m) {
     const key = msgThreadKey(m)
@@ -774,6 +808,26 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           <div style={{flex:1}}>
             <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${urgentMessages.length} urgent message${urgentMessages.length>1?'s':''} from your doctor`:`${urgentMessages.length}則來自醫生的緊急訊息`}</div>
             <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{urgentMessages[0].doctor_name} · {urgentMessages[0].subject||urgentMessages[0].body}</div>
+          </div>
+          <span style={{color:'#fff',fontSize:'16px'}}>›</span>
+        </div>
+      )}
+
+      {/* ── Unread messages banner — real gap: the combined Messages
+          section lived far down the page (past the carousel and quick-
+          access tiles), so a reply from a doctor or an agent could sit
+          unseen for a while. This surfaces the same count right at the
+          top, same prominent-banner pattern as the blocks around it;
+          urgent doctor messages above already get their own red banner,
+          so this only ever counts what that one doesn't. Clicking
+          scrolls straight to the full list below rather than duplicating
+          it up here. ── */}
+      {totalUnreadMessages>0&&(
+        <div onClick={()=>messagesSectionRef.current?.scrollIntoView({behavior:'smooth',block:'start'})} style={{margin:'14px 16px 0',background:themeAccent,borderRadius:'14px',padding:'14px 16px',display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'}}>
+          <span style={{fontSize:'20px'}}>✉</span>
+          <div style={{flex:1}}>
+            <div style={{fontSize:'13px',fontWeight:700,color:'#fff'}}>{isEn?`${totalUnreadMessages} unread message${totalUnreadMessages>1?'s':''}`:`${totalUnreadMessages}則未讀訊息`}</div>
+            <div style={{fontSize:'11px',color:'rgba(255,255,255,0.85)',marginTop:'2px'}}>{isEn?'Tap to view':'點擊查看'}</div>
           </div>
           <span style={{color:'#fff',fontSize:'16px'}}>›</span>
         </div>
@@ -1015,6 +1069,18 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             title: isEn?'Insurance claim approved':'保險索賠已批准',
             body: isEn?`Claim ${recentClaim.claim_ref} — HK$${recentClaim.insurer_covered_amount||recentClaim.amount} approved.`:`索賠 ${recentClaim.claim_ref} 已批准。`,
           })
+          // Real gap this closes: policy approve/decline never showed
+          // here before - see recentPolicyDecisions above.
+          recentPolicyDecisions.forEach(p => realAlerts.push({
+            key:`policy:${p.id}`,
+            dot: p.underwriter_status==='approved'?themeAccent:C.red,
+            title: isEn
+              ? (p.underwriter_status==='approved'?'Policy approved':'Policy declined')
+              : (p.underwriter_status==='approved'?'保單已批核':'保單已被拒絕'),
+            body: p.underwriter_status==='approved'
+              ? (isEn?`${p.plan_name} is now on file.`:`${p.plan_name}已記錄在案。`)
+              : (isEn?`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`:`${p.plan_name}${p.underwriter_decision_reason?` - ${p.underwriter_decision_reason}`:''}`),
+          }))
           // Admin-authored general advisories - see homeNotices above.
           homeNotices.forEach(n => realAlerts.push({
             key:`notice:${n.id}`,
@@ -1030,43 +1096,37 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
             <span onClick={()=>dismissAlert(m.key)} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0}} title={isEn?'Dismiss':'關閉'}>✕</span>
           </div>
         ))}
-        <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages':'訊息'}</div>
+        <div ref={messagesSectionRef} style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages':'訊息'}</div>
         {messagesLoading&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'Loading…':'載入中…'}</div>}
-        {!messagesLoading&&doctorThreadsLatestFirst.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
-        {doctorThreadsLatestFirst.map((m,i)=>(
-          <div key={m.id} onClick={()=>handleOpenDoctorMsg(m)} style={{padding:'10px 14px',borderBottom:i<doctorThreadsLatestFirst.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer',background:m.urgent&&!m.read_by_patient?C.redLight:'transparent'}}>
-            <div style={{width:8,height:8,borderRadius:'50%',background:m.urgent?C.red:(!m.read_by_patient?themeAccent:C.border),marginTop:'5px',flexShrink:0}}/>
+        {!messagesLoading&&combinedMessages.length===0&&<div style={{padding:'14px',textAlign:'center',fontSize:'11px',color:C.textMuted}}>{isEn?'No messages yet.':'暫無訊息。'}</div>}
+        {/* One merged, time-sorted list now, per your call - a doctor's
+            message and a reply on an insurance inquiry (PatientInquiryThread,
+            same shared inquiry_messages table) are both just a message,
+            not two separate categories in their own separately-ordered
+            blocks. Tapping either jumps straight into that conversation. */}
+        {combinedMessages.map((entry,i)=>entry.kind==='doctor'?(
+          <div key={entry.key} onClick={()=>handleOpenDoctorMsg(entry.data)} style={{padding:'10px 14px',borderBottom:i<combinedMessages.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer',background:entry.data.urgent&&!entry.data.read_by_patient?C.redLight:'transparent'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:entry.data.urgent?C.red:(entry.unread?themeAccent:C.border),marginTop:'5px',flexShrink:0}}/>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                <span style={{fontSize:'12px',fontWeight:!m.read_by_patient?700:500}}>{m.doctor_name}</span>
-                {m.urgent&&<span style={{fontSize:'8px',background:C.red,color:'#fff',padding:'1px 6px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
+                <span style={{fontSize:'12px',fontWeight:entry.unread?700:500}}>{entry.data.doctor_name}</span>
+                {entry.data.urgent&&<span style={{fontSize:'8px',background:C.red,color:'#fff',padding:'1px 6px',borderRadius:'20px',fontWeight:700,textTransform:'uppercase'}}>Urgent</span>}
               </div>
-              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{m.sender_type==='patient'?(isEn?'You: ':'您：')+m.body:(m.subject||m.body)}</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{entry.data.sender_type==='patient'?(isEn?'You: ':'您：')+entry.data.body:(entry.data.subject||entry.data.body)}</div>
             </div>
-            <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(m.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
-            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(m)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
+            <span style={{fontSize:'10px',color:C.textMuted,flexShrink:0}}>{new Date(entry.data.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</span>
+            <span onClick={(e)=>{e.stopPropagation();handleDeleteConversation(entry.data)}} style={{fontSize:'12px',color:C.textMuted,cursor:'pointer',flexShrink:0,marginLeft:'4px'}} title={isEn?'Delete conversation':'刪除對話'}>✕</span>
+          </div>
+        ):(
+          <div key={entry.key} onClick={()=>onOpenInquiry&&onOpenInquiry(entry.data.inquiryId)} style={{padding:'10px 14px',borderBottom:i<combinedMessages.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:themeAccent,marginTop:'5px',flexShrink:0}}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'12px',fontWeight:700}}>{entry.data.planName||''}{entry.data.companyName?` - ${entry.data.companyName}`:''}</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{entry.data.preview}</div>
+            </div>
+            <span style={{background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',minWidth:18,height:18,padding:'0 5px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{entry.data.count}</span>
           </div>
         ))}
-        {/* Real gap found live-testing: a reply from an agent or
-            underwriter on an insurance inquiry (PatientInquiryThread,
-            same shared inquiry_messages table) never showed anywhere on
-            the home screen - only inside that one inquiry's own card in
-            My Inquiries, which nothing here pointed to. Same
-            dot/preview/tap-to-open pattern as the doctor messages above,
-            tapping jumps straight into that inquiry's conversation. */}
-        {inquiryThreadsUnread.length>0&&<>
-          <div style={{padding:'10px 14px',borderBottom:`0.5px solid ${C.border}`,fontSize:'13px',fontWeight:500,color:themeAccent}}>◉ {isEn?'Messages about your applications':'關於您申請的訊息'}</div>
-          {inquiryThreadsUnread.map((t,i)=>(
-            <div key={t.inquiryId} onClick={()=>onOpenInquiry&&onOpenInquiry(t.inquiryId)} style={{padding:'10px 14px',borderBottom:i<inquiryThreadsUnread.length-1?`0.5px solid ${C.border}`:'none',display:'flex',gap:'10px',alignItems:'flex-start',cursor:'pointer'}}>
-              <div style={{width:8,height:8,borderRadius:'50%',background:themeAccent,marginTop:'5px',flexShrink:0}}/>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'12px',fontWeight:700}}>{t.planName||''}{t.companyName?` - ${t.companyName}`:''}</div>
-                <div style={{fontSize:'11px',color:C.textSub,marginTop:'2px',lineHeight:1.4}}>{t.preview}</div>
-              </div>
-              <span style={{background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,borderRadius:'10px',minWidth:18,height:18,padding:'0 5px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{t.count}</span>
-            </div>
-          ))}
-        </>}
       </Card>
       <div style={{margin:'0 16px 16px',background:C.brownLight,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'12px 14px',display:'flex',gap:'10px',alignItems:'center'}}>
         <span style={{color:C.brown}}>◇</span>
@@ -4033,7 +4093,14 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   // headers made it impossible to tell which one the link actually
   // meant. The fix is narrower: add ONLY the specific deep-linked
   // inquiry as an exception to the declutter, never the whole hidden set.
-  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => shownIdPerPlan.get(i.plan_id) === i.id || i.id === initialExpandedId)
+  // Real gap: an inquiry whose health declaration had already expired
+  // (declaration_expires_at, 30 days - match_plan_suitability.js) still
+  // counted as "the one to show" for its plan under the per-plan declutter
+  // above, so an old, no-longer-actionable card could sit in the default
+  // view indefinitely - part of why the tab felt crowded. A pending case
+  // or the deep-linked target always stays visible regardless.
+  const isExpired = i => i.declaration_expires_at && new Date(i.declaration_expires_at) < new Date() && i.underwriter_status !== 'pending' && i.status !== 'converted'
+  const visibleInquiries = showAllInquiries ? inquiries : inquiries.filter(i => (shownIdPerPlan.get(i.plan_id) === i.id && !isExpired(i)) || i.id === initialExpandedId)
   const hiddenCount = inquiries.length - visibleInquiries.length
 
   return (
@@ -4080,6 +4147,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                       tell them apart. A submission date makes each one
                       distinguishable at a glance. */}
                   <div style={{fontSize:'10px',color:C.textMuted,marginTop:'2px'}}>{new Date(i.created_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>
+                  {i.declaration_expires_at&&<div style={{fontSize:'10px',color:isExpired(i)?C.red:C.textMuted,marginTop:'1px'}}>{isExpired(i)?(isEn?'Declaration expired ':'申報已過期 '):(isEn?'Declaration valid until ':'申報有效期至 ')}{new Date(i.declaration_expires_at).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}</div>}
                 </div>
                 {isAuto
                   ? <div style={{textAlign:'right',flexShrink:0}}>
