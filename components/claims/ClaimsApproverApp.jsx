@@ -143,7 +143,10 @@ function ClaimsQueueScreen({ approver }) {
 
   return (
     <PageWrap>
-      <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px'}}>Claims Queue</h2>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}>
+        <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'4px'}}>Claims Queue</h2>
+        <div onClick={load} style={{fontSize:'12px',color:C.blue,cursor:'pointer'}}>↻ Refresh</div>
+      </div>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{approver.institutions?.name||'Your insurer'}</div>
       {claims.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>Nothing pending right now.</div>}
       {claims.map(c=><ClaimCard key={c.id} claim={c} approver={approver} onDecided={load}/>)}
