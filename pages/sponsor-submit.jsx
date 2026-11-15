@@ -48,7 +48,7 @@ function ImagePicker({ label, value, onChange }) {
 }
 
 export default function SponsorSubmitPage() {
-  const [stage, setStage] = useState('form') // form | submitting | done
+  const [stage, setStage] = useState('form') // form | preview | submitting | done
   const [itemType, setItemType] = useState('ad')
   const [sponsorName, setSponsorName] = useState('')
   const [sponsorEmail, setSponsorEmail] = useState('')
@@ -70,10 +70,22 @@ export default function SponsorSubmitPage() {
     setBlocks(b => b.filter((_,idx)=>idx!==i))
   }
 
-  async function handleSubmit() {
+  // Real gap found live-testing: this used to go straight from the form
+  // to a live database insert with no way to see how any of it would
+  // actually look first - a sponsor had to submit blind and wait for
+  // Medsa to tell them if something read wrong. Now it's draft-first:
+  // this just validates and shows the real preview (same markup
+  // PatientApp.jsx's carousel card and article view use) - nothing is
+  // written until they confirm from there.
+  function handleReviewDraft() {
     setError(null)
     if (!title.trim()) { setError('Title is required.'); return }
     if (!sponsorName.trim() || !sponsorEmail.trim()) { setError('Your name/company and email are required, so Medsa can reach you about this submission.'); return }
+    setStage('preview')
+  }
+
+  async function handleSubmit() {
+    setError(null)
     const cleanBlocks = blocks.filter(b => (b.type==='paragraph' && b.text.trim()) || (b.type==='image' && b.url.trim()))
     setStage('submitting')
     const { error: insErr } = await supabase.from('home_carousel_submissions').insert({
@@ -83,7 +95,7 @@ export default function SponsorSubmitPage() {
       content_blocks: cleanBlocks.length>0 ? cleanBlocks : null,
       status: 'pending',
     })
-    if (insErr) { setError(insErr.message); setStage('form'); return }
+    if (insErr) { setError(insErr.message); setStage('preview'); return }
     setStage('done')
     // Best-effort - a missing/failed email never blocks the submission
     // itself, which already succeeded above.
@@ -91,6 +103,53 @@ export default function SponsorSubmitPage() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ sponsorEmail: sponsorEmail.trim(), sponsorName: sponsorName.trim(), title: title.trim() }),
     }).catch(()=>{})
+  }
+
+  // Draft preview - same markup PatientApp.jsx's carousel card and
+  // article view actually use, so this is a real preview, not a
+  // guess at what it'll look like. Nothing is written to the database
+  // until "Submit for review" below.
+  if (stage==='preview' || stage==='submitting') {
+    const cleanBlocks = blocks.filter(b => (b.type==='paragraph' && b.text.trim()) || (b.type==='image' && b.url.trim()))
+    return (
+      <div style={{background:C.beige,minHeight:'100vh',padding:'24px',fontFamily:'system-ui,sans-serif'}}>
+        <div style={{maxWidth:520,margin:'0 auto',background:'#fff',borderRadius:'16px',padding:'28px'}}>
+          <div style={{fontSize:'19px',fontWeight:700,marginBottom:'4px'}}>Your draft</div>
+          <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>This is exactly how it'll look if Medsa approves it. Nothing's submitted yet.</div>
+
+          <div style={{fontSize:'12px',fontWeight:600,color:C.textMuted,marginBottom:'8px'}}>As a card on the home screen</div>
+          <div style={{borderRadius:'14px',overflow:'hidden',background:C.beige,border:`0.5px solid ${C.border}`,maxWidth:280,marginBottom:'24px'}}>
+            {thumbnail&&<img src={thumbnail} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+            <div style={{padding:'12px 14px'}}>
+              <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:itemType==='ad'?C.amber:C.green}}>{itemType==='ad'?(sponsorName?`Sponsored · ${sponsorName}`:'Sponsored'):'Newsletter'}</span>
+              <div style={{fontSize:'13px',fontWeight:600,marginTop:'4px',marginBottom:'2px'}}>{title||'(no headline yet)'}</div>
+              {subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{subtitle}</div>}
+            </div>
+          </div>
+
+          <div style={{fontSize:'12px',fontWeight:600,color:C.textMuted,marginBottom:'8px'}}>When a patient taps it open</div>
+          <div style={{border:`0.5px solid ${C.border}`,borderRadius:'12px',overflow:'hidden',marginBottom:'20px'}}>
+            {thumbnail&&<img src={thumbnail} alt="" style={{width:'100%',height:180,objectFit:'cover',display:'block'}}/>}
+            <div style={{padding:'16px'}}>
+              <span style={{fontSize:'10px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:itemType==='ad'?C.amber:C.green}}>{itemType==='ad'?(sponsorName?`Sponsored · ${sponsorName}`:'Sponsored'):'Newsletter'}</span>
+              <div style={{fontSize:'20px',fontWeight:700,margin:'8px 0 4px',lineHeight:1.3}}>{title||'(no headline yet)'}</div>
+              {subtitle&&<div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px',lineHeight:1.5}}>{subtitle}</div>}
+              {cleanBlocks.length===0&&<div style={{fontSize:'13px',color:C.textMuted,marginBottom:'16px'}}>No further content added yet.</div>}
+              {cleanBlocks.map((blk,i)=>blk.type==='image'
+                ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'10px',margin:'12px 0',display:'block'}}/>
+                : <p key={i} style={{fontSize:'14px',color:C.text,lineHeight:1.8,margin:'0 0 14px'}}>{blk.text}</p>)}
+              {linkUrl&&<div style={{textAlign:'center',padding:'12px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'13px',fontWeight:600,marginTop:'8px'}}>{ctaLabel||'Learn more'} ↗</div>}
+            </div>
+          </div>
+
+          {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>setStage('form')} disabled={stage==='submitting'} style={{flex:1,padding:'12px',background:C.card,color:C.text,border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>← Edit</button>
+            <button onClick={handleSubmit} disabled={stage==='submitting'} style={{flex:2,padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>{stage==='submitting'?'Submitting…':'Submit for review'}</button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (stage==='done') return (
@@ -144,7 +203,7 @@ export default function SponsorSubmitPage() {
         <input value={ctaLabel} onChange={e=>setCtaLabel(e.target.value)} placeholder="Button text, e.g. Visit our site - defaults to Learn more" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'18px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
 
         {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{error}</div>}
-        <button onClick={handleSubmit} disabled={stage==='submitting'} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>{stage==='submitting'?'Submitting…':'Submit for review'}</button>
+        <button onClick={handleReviewDraft} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>Preview →</button>
       </div>
     </div>
   )
