@@ -168,11 +168,20 @@ export default async function handler(req, res) {
       if (sub && sub.payment_status !== 'paid') {
         const { data: items } = await supabase.from('home_carousel_items').select('display_order').order('display_order', {ascending:false}).limit(1)
         const maxOrder = items?.[0]?.display_order || 0
+        // Redesigned flow: the sponsor picked these on their own self-serve
+        // pay page (create_scheduled_checkout.js), carried here as Stripe
+        // metadata (strings, YYYY-MM-DD) - this is what actually schedules
+        // the real go-live/expiry instead of publishing immediately
+        // forever, same ends_at column the admin-created path already uses.
+        const startsAt = session.metadata?.starts_at
+        const endsAt = session.metadata?.ends_at
         await supabase.from('home_carousel_items').insert({
           item_type: sub.item_type, title: sub.title, subtitle: sub.subtitle,
           image_url: sub.image_url, sponsor_name: sub.sponsor_name,
           link_url: sub.link_url, cta_label: sub.cta_label, content_blocks: sub.content_blocks,
           display_order: maxOrder+1, active: true,
+          starts_at: startsAt ? new Date(`${startsAt}T00:00:00`).toISOString() : null,
+          ends_at: endsAt ? new Date(`${endsAt}T23:59:59`).toISOString() : null,
         })
         await supabase.from('home_carousel_submissions').update({
           status: 'approved', payment_status: 'paid', paid_at: new Date().toISOString(),
