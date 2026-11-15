@@ -1568,18 +1568,23 @@ function StaffScreen({ company }) {
 
   async function decideAppointment(reqId, approve, reason, agentName) {
     setDecidingAppointmentId(reqId)
-    await supabase.from('agent_institution_appointments').update({
+    // Real bug found live-testing: this never checked whether the write
+    // actually landed - update()'s error/empty-result was ignored, so a
+    // reject that silently failed (or hit a row that no longer matched
+    // .eq('id', reqId), e.g. a stale list after a second tab decided it
+    // first) still showed "✓ rejected" and reloaded, which then showed
+    // the SAME request back in the pending list - reads exactly like "I
+    // rejected it and it jumped back," because nothing ever actually
+    // changed underneath that false-positive confirmation.
+    const { data: updated, error } = await supabase.from('agent_institution_appointments').update({
       status: approve?'active':'rejected',
       appointed_at: approve?new Date().toISOString():null,
       decided_at: new Date().toISOString(), decision_reason: approve?null:(reason||null),
-    }).eq('id', reqId)
+    }).eq('id', reqId).eq('status','pending_review').select().maybeSingle()
     setDecidingAppointmentId(null)
     setRejectReasonId(null); setRejectReason('')
-    // Real gap found live-testing: this worked correctly the whole time
-    // (the request really was rejected/approved and saved) - the card
-    // just vanished from the list the instant the request stopped being
-    // pending, with nothing confirming what had actually happened. Read
-    // as "did that even do anything?" even though it had.
+    if (error) { setDecisionNotice(`Error: ${error.message}`); load(); return }
+    if (!updated) { setDecisionNotice(`Could not ${approve?'appoint':'reject'} ${agentName||'that agent'} - this request isn't pending any more (someone else may have just decided it, or the page was out of date). Reloading the list.`); load(); return }
     setDecisionNotice(`${agentName||'That agent'} ${approve?'appointed':'rejected'}.`)
     load()
   }
