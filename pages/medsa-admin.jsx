@@ -2739,7 +2739,8 @@ function InsurerTestRosterScreen() {
 // Never touches anything the webhook doesn't also touch, and every write
 // is scoped to one row the admin explicitly picked.
 // Two-step, human-reviewed sweep for Kids profiles that aged out
-// (dependent_relationship='child', turned 19+) with no adult_transfer_
+// (dependent_relationship='child', turned 18+ - HK's real age of
+// majority, not 19 as this originally read) with no adult_transfer_
 // choice on file. Your call: permanent read-only, never auto-deleted -
 // real childhood medical history (vaccination records especially) has
 // genuine value far later in life, and storage is cheap compared to
@@ -2759,12 +2760,12 @@ function AdultTransfersTab() {
 
   async function load() {
     setLoading(true)
-    const nineteenYearsAgo = new Date(); nineteenYearsAgo.setFullYear(nineteenYearsAgo.getFullYear()-19)
+    const eighteenYearsAgo = new Date(); eighteenYearsAgo.setFullYear(eighteenYearsAgo.getFullYear()-18)
     const { data } = await supabase.from('patients')
       .select('id, full_name, medsa_id, date_of_birth, parent_patient_id, adult_transfer_choice, pending_deletion_at')
       .eq('account_type','kids').or('dependent_relationship.is.null,dependent_relationship.eq.child')
       .is('adult_transfer_choice', null)
-      .lte('date_of_birth', nineteenYearsAgo.toISOString().slice(0,10))
+      .lte('date_of_birth', eighteenYearsAgo.toISOString().slice(0,10))
       .order('date_of_birth')
     setOverdue((data||[]).filter(p=>!p.pending_deletion_at))
     setPendingDeletion((data||[]).filter(p=>p.pending_deletion_at))
@@ -2794,7 +2795,7 @@ function AdultTransfersTab() {
   return (
     <div>
       <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
-        Kids profiles (dependent_relationship 'child') that turned 19+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Flagging starts a real 30-day grace window, after which the profile goes permanently read-only on its own (never deleted). "Delete now" below is a rare, manual, one-at-a-time action - not the expected outcome. Always check first whether the parent is mid-flow before acting.
+        Kids profiles (dependent_relationship 'child') that turned 18+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Flagging starts a real 30-day grace window, after which the profile goes permanently read-only on its own (never deleted). "Delete now" below is a rare, manual, one-at-a-time action - not the expected outcome. Always check first whether the parent is mid-flow before acting.
       </div>
       {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'12px'}}>{notice}</div>}
       {loading ? <div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div> : <>
