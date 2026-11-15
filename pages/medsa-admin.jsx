@@ -1642,26 +1642,47 @@ function AdminImagePicker({ label, value, onChange, bucket='carousel-images' }) 
   )
 }
 
+// Real preview of how a submission will actually render on the patient
+// home screen - same markup as PatientApp.jsx's own carousel card. Used
+// both for a pending submission here (so you're approving what it'll
+// really look like, not just raw fields) and reused as-is on the
+// sponsor's own /sponsor-pay page.
+function CarouselPreviewCard({ sub }) {
+  return (
+    <div style={{borderRadius:'14px',overflow:'hidden',background:C.beige,border:`0.5px solid ${C.border}`,maxWidth:280,marginBottom:'10px'}}>
+      {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+      <div style={{padding:'12px 14px'}}>
+        <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:sub.item_type==='ad'?C.amber:C.green}}>{sub.item_type==='ad'?(sub.sponsor_name?`Sponsored · ${sub.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
+        <div style={{fontSize:'13px',fontWeight:600,marginTop:'4px',marginBottom:'2px'}}>{sub.title}</div>
+        {sub.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{sub.subtitle}</div>}
+      </div>
+    </div>
+  )
+}
+
 function CarouselTab() {
   const [items, setItems] = useState([])
   const [submissions, setSubmissions] = useState([])
+  const [awaitingPayment, setAwaitingPayment] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
   const [approving, setApproving] = useState(null)
-  const [priceInputs, setPriceInputs] = useState({}) // submissionId -> string
-  const [requestingPaymentId, setRequestingPaymentId] = useState(null)
-  const [paymentResults, setPaymentResults] = useState({}) // submissionId -> {paymentUrl, emailSent, ...} | {error}
+  const [rateInputs, setRateInputs] = useState({}) // submissionId -> string, HK$/month
+  const [approvingForPaymentId, setApprovingForPaymentId] = useState(null)
+  const [approveResults, setApproveResults] = useState({}) // submissionId -> {payLink, emailSent, ...} | {error}
 
   async function load() {
     setLoading(true)
-    const [{data:i},{data:s}] = await Promise.all([
+    const [{data:i},{data:s},{data:awp}] = await Promise.all([
       supabase.from('home_carousel_items').select('*').order('display_order'),
       supabase.from('home_carousel_submissions').select('*').eq('status','pending').order('submitted_at',{ascending:false}),
+      supabase.from('home_carousel_submissions').select('*').eq('status','approved_awaiting_payment').order('reviewed_at',{ascending:false}),
     ])
     setItems(i||[])
     setSubmissions(s||[])
+    setAwaitingPayment(awp||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -1717,53 +1738,68 @@ function CarouselTab() {
     load()
   }
 
-  // Sponsor payment - the submission is NOT posted here. This just
-  // requests payment (real Stripe Checkout once STRIPE_SECRET_KEY is
-  // set in Vercel); the item only goes live once Stripe confirms the
-  // charge via the webhook, which is the only thing that actually
-  // inserts into home_carousel_items for a paid slot.
-  async function handleRequestPayment(sub) {
-    const amount = parseFloat(priceInputs[sub.id])
-    if (!amount || amount <= 0) return
-    setRequestingPaymentId(sub.id)
-    const res = await fetch('/api/sponsor/create_checkout_session', {
+  // Redesigned, per your call: Medsa still reviews content first (this is
+  // a health app - a bad ad going live unreviewed is a real risk, unlike
+  // Sponsored Listings which only reorders an already-vetted plan), but
+  // the SPONSOR now picks their own duration and start date and pays,
+  // same self-serve pattern Sponsored Listings already uses - not an
+  // admin-driven one-off Stripe link for a fixed total. This only sets
+  // the monthly rate and emails them where to go next
+  // (/sponsor-pay?id=...); nothing is charged here, and nothing goes live
+  // until they've paid for real (/api/sponsor/create_scheduled_checkout.js
+  // + the webhook/verify-on-return fallback).
+  async function handleApproveForPayment(sub) {
+    const rate = parseFloat(rateInputs[sub.id])
+    if (!rate || rate <= 0) return
+    setApprovingForPaymentId(sub.id)
+    const res = await fetch('/api/sponsor/approve_for_payment', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ submissionId: sub.id, amountHKD: amount }),
+      body: JSON.stringify({ submissionId: sub.id, rateHkdPerMonth: rate }),
     })
     const data = await res.json()
-    setPaymentResults(prev => ({...prev, [sub.id]: data}))
-    setRequestingPaymentId(null)
+    setApproveResults(prev => ({...prev, [sub.id]: data}))
+    setApprovingForPaymentId(null)
+    load()
   }
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you approve it below.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Approve it free, or approve it for payment - the sponsor then picks their own duration and start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
 
       {submissions.length>0&&<>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Pending submissions ({submissions.length})</div>
         {submissions.map(sub=>(
           <div key={sub.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
-            {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',maxHeight:120,objectFit:'cover',borderRadius:'8px',marginBottom:'8px'}}/>}
-            <div style={{fontSize:'14px',fontWeight:600}}>{sub.title}</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>How it'll actually look:</div>
+            <CarouselPreviewCard sub={sub}/>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.item_type} · from {sub.sponsor_name} ({sub.sponsor_contact_email})</div>
-            {sub.subtitle&&<div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.subtitle}</div>}
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{(sub.content_blocks||[]).length} content block{(sub.content_blocks||[]).length===1?'':'s'}{sub.link_url?' · has a CTA link':''}</div>
             <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
               <button onClick={()=>handleReject(sub)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
               <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>
             </div>
             <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or charge the sponsor before it goes live - the amount below is what Medsa receives; the sponsor's card is charged slightly more to cover Stripe's processing fee (est. ~3.4% + HK$2.35), so Medsa's cut isn't reduced by it:</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or approve for payment - the sponsor picks their own duration and start date and pays, at the monthly rate you set here:</div>
               <div style={{display:'flex',gap:'6px'}}>
-                <input type="number" step="0.01" value={priceInputs[sub.id]||''} onChange={e=>setPriceInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="Amount Medsa receives (HK$)" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-                <button onClick={()=>handleRequestPayment(sub)} disabled={requestingPaymentId===sub.id||!priceInputs[sub.id]} style={{padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{requestingPaymentId===sub.id?'Requesting…':'Request payment'}</button>
+                <input type="number" step="0.01" value={rateInputs[sub.id]||''} onChange={e=>setRateInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="HK$ per month" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id||!rateInputs[sub.id]} style={{padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
               </div>
-              {paymentResults[sub.id]?.status==='NOT_CONFIGURED'&&<div style={{fontSize:'11px',color:C.amber,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
-              {paymentResults[sub.id]?.status==='CREATED'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
-                Sponsor will be charged HK${paymentResults[sub.id].grossAmountHKD?.toFixed(2)} (includes est. HK${paymentResults[sub.id].estimatedFeeHKD?.toFixed(2)} processing fee) so Medsa nets the full amount. Payment link {paymentResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + paymentResults[sub.id].emailReason + ')'}: <a href={paymentResults[sub.id].paymentUrl} target="_blank" rel="noreferrer">{paymentResults[sub.id].paymentUrl}</a>
+              {approveResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{approveResults[sub.id].message}</div>}
+              {approveResults[sub.id]?.status==='OK'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
+                Approved at HK${rateInputs[sub.id]}/month. Scheduling link {approveResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + approveResults[sub.id].emailReason + ')'}: <a href={approveResults[sub.id].payLink} target="_blank" rel="noreferrer">{approveResults[sub.id].payLink}</a>
               </div>}
-              {paymentResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{paymentResults[sub.id].message}</div>}
             </div>
+          </div>
+        ))}
+      </>}
+
+      {awaitingPayment.length>0&&<>
+        <div style={{fontSize:'15px',fontWeight:600,margin:'20px 0 10px'}}>Awaiting sponsor payment ({awaitingPayment.length})</div>
+        {awaitingPayment.map(sub=>(
+          <div key={sub.id} style={{background:C.navyLight,border:`0.5px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{sub.title}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.sponsor_name} - approved at HK${sub.price_hkd}/month{sub.months?`, picked ${sub.months} mo${sub.starts_at?` starting ${sub.starts_at}`:''}`:' - hasn\'t picked a duration/start date yet'}</div>
+            <div style={{fontSize:'11px',color:C.textMuted}}>Scheduling link (resend manually if needed): <a href={`/sponsor-pay?id=${sub.id}`} target="_blank" rel="noreferrer">{`${typeof window!=='undefined'?window.location.origin:''}/sponsor-pay?id=${sub.id}`}</a></div>
           </div>
         ))}
       </>}
@@ -1778,18 +1814,23 @@ function CarouselTab() {
             <div key={t} onClick={()=>setForm(f=>({...f,item_type:t}))} style={{flex:1,padding:'8px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:form.item_type===t?C.green:C.card,color:form.item_type===t?'#fff':C.text,textTransform:'capitalize'}}>{t}</div>
           ))}
         </div>
-        {/* Real gap: this was a fixed HK/Global dropdown with nowhere to
-            type a third market once Medsa actually expands - a text
-            input with a datalist of whatever's already in use (plus the
-            two defaults) lets you add a new one on the spot instead of
-            needing a code change first. */}
+        {/* Reverted back to a fixed HK/Global picker, per your call -
+            letting this be free text would have been a real footgun, not
+            a feature: the patient-side query that actually loads these
+            (PatientApp.jsx's loadCarousel) is itself hardcoded to
+            .in('location', ['HK','Global']) - there's no patient-location
+            concept anywhere yet, every patient is treated as HK. Typing
+            any third value here would silently make that card invisible
+            to every patient, no error shown anywhere. Pinned until Medsa
+            actually expands abroad and that query (plus a real patient-
+            location field) gets built for real - then this becomes free
+            text again, backed by something that actually reads it. */}
         <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'8px'}}>
-          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, or type a new market</label>
-          <input value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} list="carousel-locations" placeholder="HK" style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-          <datalist id="carousel-locations">
-            <option value="HK"/><option value="Global"/>
-            {[...new Set(items.map(i=>i.location).filter(Boolean))].map(loc=><option key={loc} value={loc}/>)}
-          </datalist>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere</label>
+          <select value={form.location} onChange={e=>setForm(f=>({...f,location:e.target.value}))} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+            <option value="HK">HK</option>
+            <option value="Global">Global</option>
+          </select>
         </div>
         <div style={{display:'flex',gap:'8px',alignItems:'center',marginBottom:'10px'}}>
           <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional - leave blank to run until you deactivate it)</label>
@@ -2260,17 +2301,20 @@ function NoticesTab() {
           <label style={{fontSize:'11px',color:C.textMuted}}>Expires on (optional, defaults to 30 days out)</label>
           <input type="date" value={form.expires_at} onChange={e=>setForm({...form,expires_at:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         </div>
-        {/* Real gap: this was a fixed HK/Global dropdown with no way to
-            actually type the "any other market code" the label itself
-            promised - a free-text field (with a datalist of what's
-            already in use) now lets you add a new one on the spot. */}
+        {/* Reverted back to a fixed HK/Global picker, per your call - free
+            text here would have been a footgun: PatientApp.jsx's own
+            notices query is itself hardcoded to
+            .in('location', ['HK','Global']), with no patient-location
+            concept anywhere yet (every patient reads as HK). A third
+            typed value would silently vanish from every patient's feed,
+            no error shown. Pinned until Medsa actually expands abroad and
+            that query gets built for real. */}
         <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere, or type a new market code</label>
-          <input value={form.location} onChange={e=>setForm({...form,location:e.target.value})} list="notice-locations" placeholder="HK" style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-          <datalist id="notice-locations">
-            <option value="HK"/><option value="Global"/>
-            {[...new Set(notices.map(n=>n.location).filter(Boolean))].map(loc=><option key={loc} value={loc}/>)}
-          </datalist>
+          <label style={{fontSize:'11px',color:C.textMuted}}>Location - 'Global' shows everywhere</label>
+          <select value={form.location} onChange={e=>setForm({...form,location:e.target.value})} style={{padding:'6px 8px',fontSize:'12px',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}>
+            <option value="HK">HK</option>
+            <option value="Global">Global</option>
+          </select>
         </div>
         <div style={{display:'flex',justifyContent:'flex-end',marginTop:'10px'}}>
           <button onClick={addNotice} disabled={saving} style={{padding:'8px 16px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add notice'}</button>
