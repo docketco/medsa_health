@@ -21,6 +21,14 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/adult_transfer_auto_flag",
+      "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/deletion_consent_requests",
+      "schedule": "0 9 * * *"
+    },
+    {
       "path": "/api/cron/reassign_stale_plan_inquiries",
       "schedule": "0 10 * * *"
     }

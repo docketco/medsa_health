@@ -1357,6 +1357,8 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
   const ageYears = patient.date_of_birth ? (Date.now()-new Date(patient.date_of_birth).getTime())/(1000*60*60*24*365.25) : null
   const isChildDependent = patient.account_type==='kids' && (patient.dependent_relationship==null||patient.dependent_relationship==='child')
   const show = isChildDependent && !patient.adult_transfer_choice && ageYears!=null && ageYears>=16
+  // Locks at 19 now (a full year past 18), per your call - matches
+  // adult_transfer_auto_flag.js's own real lock point, not the old 18.
   const overdue = show && ageYears>=19
   const [transferModalOpen,setTransferModalOpen]=useState(false)
   const [transferHkid,setTransferHkid]=useState(patient.hkid||'')
@@ -1366,6 +1368,37 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
   const [convertingGuardian,setConvertingGuardian]=useState(false)
   const [guardianConfirmOpen,setGuardianConfirmOpen]=useState(false)
   const [exportingKeepsake,setExportingKeepsake]=useState(false)
+  // Deletion is never automatic (your call) - once locked (pending_deletion_at
+  // set) for 6+ more years (age 25, Hong Kong's general clinical-record
+  // retention guidance applied from adulthood), this asks the parent
+  // directly, same cadence as the email cron (deletion_consent_requests.js) -
+  // showing it here IS the ask, so it won't show again for about a year
+  // either way, same as a "not now" would do.
+  const deletionConsentDue = !!patient.pending_deletion_at
+    && (Date.now() - new Date(patient.pending_deletion_at).getTime()) >= 6*365.25*86400000
+    && (!patient.deletion_consent_asked_at || (Date.now() - new Date(patient.deletion_consent_asked_at).getTime()) >= 365*86400000)
+  const [deleteConfirmOpen,setDeleteConfirmOpen]=useState(false)
+  const [deleteConfirmName,setDeleteConfirmName]=useState('')
+  const [deleting,setDeleting]=useState(false)
+  const askedRef = useRef(false)
+  useEffect(() => {
+    if (deletionConsentDue && !askedRef.current) {
+      askedRef.current = true
+      supabase.from('patients').update({ deletion_consent_asked_at: new Date().toISOString() }).eq('id', patient.id)
+    }
+  }, [deletionConsentDue, patient.id])
+
+  async function confirmPermanentDeletion() {
+    setDeleting(true)
+    const { error } = await supabase.from('patients').delete().eq('id', patient.id)
+    setDeleting(false)
+    if (error) return
+    setDeleteConfirmOpen(false)
+    if (patient.parent_patient_id) {
+      const { data: parentRow } = await supabase.from('patients').select('*').eq('id', patient.parent_patient_id).maybeSingle()
+      if (parentRow) onSwitchToPatient && onSwitchToPatient(parentRow)
+    }
+  }
 
   // Detaches from the parent account entirely and sets real login
   // credentials (HKID + phone), same fields LoginFlow checks - this IS
@@ -1455,10 +1488,10 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
       <div style={{margin:'0 0 16px',padding:'14px',background:overdue?C.redLight:C.amberLight,border:`0.5px solid ${overdue?C.red:C.amber}`,borderRadius:'10px'}}>
         <div style={{fontSize:'12.5px',color:overdue?C.red:C.amber,fontWeight:700,marginBottom:'4px'}}>
           {overdue
-            ? (isEn?`${patient.full_name||'This profile'} turned 18 over a year ago - this profile will be deleted a year after turning 18 if nothing's done. All history is unrecoverable once that happens.`:`${patient.full_name||'此檔案'}已滿18歲超過一年 - 若未作任何選擇,此檔案將於滿18歲一年後刪除。屆時所有記錄將無法復原。`)
+            ? (isEn?`${patient.full_name||'This profile'} is 19+ and now permanently read-only - no history is ever deleted automatically. Transfer, convert, or export below to unlock it again.`:`${patient.full_name||'此檔案'}已滿19歲,現為永久唯讀 - 系統不會自動刪除任何記錄。請於下方選擇轉移、轉換或匯出以重新解鎖。`)
             : (isEn?`${patient.full_name||'This profile'} is 16+ - time to decide what happens to this profile as an adult.`:`${patient.full_name||'此檔案'}已年滿16歲 - 請決定此檔案成年後的去向。`)}
         </div>
-        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Transfer it to their own account (all history goes with them), convert it to a Guardian dependent if you're staying in control of their care, or export everything now and let the profile be deleted after a year of being unclaimed past 18.":'可轉移為其本人帳戶(所有記錄將一併轉移)、轉為Guardian受養人(由您繼續管理其照護)、或現在匯出所有記錄,並讓檔案在滿18歲一年後(如未被認領)自動刪除。'}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Transfer it to their own account (all history goes with them), convert it to a Guardian dependent if you're staying in control of their care, or export a keepsake copy now. Nothing is ever deleted automatically - the real records stay on file indefinitely unless you later choose to delete them yourself, years from now.":'可轉移為其本人帳戶(所有記錄將一併轉移)、轉為Guardian受養人(由您繼續管理其照護)、或現在匯出紀念副本。系統不會自動刪除任何記錄 - 除非您日後(多年後)主動選擇刪除,否則記錄將永久保留。'}</div>
         <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
           <Btn variant="primary" style={{flex:'1 1 140px'}} onClick={()=>setTransferModalOpen(true)}>{isEn?'Transfer to their own account':'轉移為本人帳戶'}</Btn>
           <Btn style={{flex:'1 1 140px'}} onClick={()=>setGuardianConfirmOpen(true)}>{isEn?'Convert to Guardian dependent':'轉為Guardian受養人'}</Btn>
@@ -1487,6 +1520,32 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
             <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
+          </div>
+        </div>
+      </div>}
+
+      {/* Separate from the three options above - this only ever appears
+          6+ years after locking (age 25+), Hong Kong's general clinical-
+          record retention guidance applied from adulthood. Deletion is
+          never automatic (your call): this is the real ask, and doing
+          nothing has the exact same effect as "Not now" - it stays
+          exactly as it is, and this asks again in about a year either
+          way (same cadence as the matching email,
+          deletion_consent_requests.js). */}
+      {deletionConsentDue && <div style={{margin:'0 0 16px',padding:'14px',background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px'}}>
+        <div style={{fontSize:'12.5px',fontWeight:700,marginBottom:'4px'}}>{isEn?`It's been a long time - permanently delete ${patient.full_name||'this profile'}'s records?`:`已過了很長時間 - 是否永久刪除${patient.full_name||'此檔案'}的記錄?`}</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"This profile has been unclaimed and read-only for several years. Nothing happens unless you say so - if you'd rather keep it (or just aren't ready to decide), do nothing and we'll ask again next year.":'此檔案已長年未被認領並處於唯讀狀態。除非您主動選擇,否則不會有任何變動 - 若希望保留(或尚未決定),您無需採取任何行動,我們將於明年再次詢問。'}</div>
+        <Btn style={{color:C.red,borderColor:C.red}} onClick={()=>setDeleteConfirmOpen(true)}>{isEn?'Permanently delete…':'永久刪除…'}</Btn>
+      </div>}
+
+      {deleteConfirmOpen && <div onClick={()=>setDeleteConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
+          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px',color:C.red}}>{isEn?'This cannot be undone':'此操作無法復原'}</div>
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?`Every growth, teeth, immunisation, and visit record for ${patient.full_name||'this profile'} will be permanently erased - there is no backup, no recovery. Type their full name to confirm.`:`${patient.full_name||'此檔案'}的所有生長、牙齒、疫苗及就診記錄將被永久刪除 - 無備份,無法復原。請輸入其全名以確認。`}</div>
+          <input value={deleteConfirmName} onChange={e=>setDeleteConfirmName(e.target.value)} placeholder={patient.full_name||''} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <Btn style={{flex:1}} onClick={()=>{setDeleteConfirmOpen(false);setDeleteConfirmName('')}}>{isEn?'Cancel':'取消'}</Btn>
+            <Btn style={{flex:1,background:C.red,color:'#fff',borderColor:C.red}} disabled={deleting||deleteConfirmName.trim()!==(patient.full_name||'').trim()} onClick={confirmPermanentDeletion}>{deleting?(isEn?'Deleting…':'刪除中…'):(isEn?'Delete permanently':'永久刪除')}</Btn>
           </div>
         </div>
       </div>}
@@ -6812,7 +6871,7 @@ function KidsGrowthScreen({ isEn, patient={}, onNav, onPatientUpdated }) {
   // Every write function below checks this first and no-ops if true;
   // the only way out is one of the 3 actions on Home's banner (transfer/
   // convert/export), none of which live in this component anymore.
-  const isReadOnly = !!patient.pending_deletion_at && (Date.now() - new Date(patient.pending_deletion_at).getTime() >= 30*86400000)
+  const isReadOnly = !!patient.pending_deletion_at // Per your call: the 30-day grace window after flagging is gone - locking now happens at 19 (a full year past 18), which is already a long warning period on its own, so read-only applies the moment pending_deletion_at is set, no further wait.
   const [showGrowthConfetti,setShowGrowthConfetti] = useState(false)
   useEffect(() => {
     if (pastWhoRange && patient.id && !patient.growth_journal_transition_seen_at) {
@@ -9970,7 +10029,7 @@ function PrescriptionsScreen({ isEn, medications=[], onNav, patient={}, onReload
   // Same permanently-read-only guard every other self-entry feature in
   // this app uses (KidsGrowthScreen, allergies, etc.) - an adult-transfer
   // profile over a year past 18 with no choice made can't add new data.
-  const isReadOnly = !!patient.pending_deletion_at && (Date.now() - new Date(patient.pending_deletion_at).getTime() >= 30*86400000)
+  const isReadOnly = !!patient.pending_deletion_at // Per your call: the 30-day grace window after flagging is gone - locking now happens at 19 (a full year past 18), which is already a long warning period on its own, so read-only applies the moment pending_deletion_at is set, no further wait.
   // Real request: let ANY patient log their own supplements/OTC stuff
   // they're taking, not just something gated behind a paid tier - there
   // was no self-entry here at all before, only clinic-prescribed rows.

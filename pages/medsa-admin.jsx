@@ -2818,22 +2818,28 @@ function InsurerTestRosterScreen() {
 // successful payment, just triggered by hand instead of a real charge.
 // Never touches anything the webhook doesn't also touch, and every write
 // is scoped to one row the admin explicitly picked.
-// Two-step, human-reviewed sweep for Kids profiles that aged out
-// (dependent_relationship='child', turned 18+ - HK's real age of
-// majority, not 19 as this originally read) with no adult_transfer_
-// choice on file. Your call: permanent read-only, never auto-deleted -
-// real childhood medical history (vaccination records especially) has
-// genuine value far later in life, and storage is cheap compared to
-// the cost of someone losing it for good. Step 1 (Flag) stamps
-// pending_deletion_at, starting a real 30-day grace window; once that
-// passes, the profile goes read-only automatically (PatientApp.jsx's
-// own isReadOnly check, computed live - nothing to do here for that
-// part). "Delete now" below stays only for a genuine manual request
-// (e.g. GDPR-style) - never the expected outcome, and still requires a
-// click naming the exact patient.
+// Per your call (this round's redesign): locking moved from 18 to 19 (a
+// full year past 18 - plenty of time to turn it into a regular/guardian
+// account manually, on top of adult_transfer_reminders.js's own 3-year
+// countdown). Flagging is automatic now (pages/api/cron/
+// adult_transfer_auto_flag.js, daily) - this tab's "Flag" button is just
+// an early-override for a parent who wants it locked before 19; the
+// 30-day grace window that used to follow a manual flag is gone too
+// (redundant on top of a whole extra year of warning) - read-only applies
+// the instant pending_deletion_at is set, no further wait. Still never
+// auto-deleted: real childhood medical history has genuine value far
+// later in life. Once locked for 6 more years (age 25 - HK's general
+// clinical-record retention guidance, applied from adulthood since a
+// minor's own record needs longer protection than the usual baseline),
+// pages/api/cron/deletion_consent_requests.js and PatientApp.jsx's own
+// AdultTransferBanner ask the parent directly whether to delete it for
+// real - never on an unattended schedule. "Delete now" below stays only
+// for a genuine manual request (e.g. GDPR-style) - never the expected
+// outcome, and still requires a click naming the exact patient.
 function AdultTransfersTab() {
   const [overdue,setOverdue] = useState([])
   const [pendingDeletion,setPendingDeletion] = useState([])
+  const [awaitingConsent,setAwaitingConsent] = useState([])
   const [loading,setLoading] = useState(true)
   const [busyId,setBusyId] = useState(null)
   const [notice,setNotice] = useState(null)
@@ -2842,13 +2848,15 @@ function AdultTransfersTab() {
     setLoading(true)
     const eighteenYearsAgo = new Date(); eighteenYearsAgo.setFullYear(eighteenYearsAgo.getFullYear()-18)
     const { data } = await supabase.from('patients')
-      .select('id, full_name, medsa_id, date_of_birth, parent_patient_id, adult_transfer_choice, pending_deletion_at')
+      .select('id, full_name, medsa_id, date_of_birth, parent_patient_id, adult_transfer_choice, pending_deletion_at, deletion_consent_asked_at')
       .eq('account_type','kids').or('dependent_relationship.is.null,dependent_relationship.eq.child')
       .is('adult_transfer_choice', null)
       .lte('date_of_birth', eighteenYearsAgo.toISOString().slice(0,10))
       .order('date_of_birth')
+    const sixYearsMs = 6*365.25*86400000
     setOverdue((data||[]).filter(p=>!p.pending_deletion_at))
-    setPendingDeletion((data||[]).filter(p=>p.pending_deletion_at))
+    setPendingDeletion((data||[]).filter(p=>p.pending_deletion_at && (Date.now()-new Date(p.pending_deletion_at).getTime())<sixYearsMs))
+    setAwaitingConsent((data||[]).filter(p=>p.pending_deletion_at && (Date.now()-new Date(p.pending_deletion_at).getTime())>=sixYearsMs))
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -2858,7 +2866,7 @@ function AdultTransfersTab() {
     const { error } = await supabase.from('patients').update({ pending_deletion_at: new Date().toISOString() }).eq('id', p.id)
     setBusyId(null)
     if (error) { setNotice(`Error: ${error.message}`); return }
-    setNotice(`${p.full_name} flagged - goes permanently read-only from ${new Date(Date.now()+30*86400000).toLocaleDateString('en-HK')} if still unclaimed.`)
+    setNotice(`${p.full_name} flagged - now permanently read-only immediately.`)
     load()
   }
   async function deleteNow(p) {
@@ -2870,16 +2878,16 @@ function AdultTransfersTab() {
     load()
   }
   function ageYears(dob) { return Math.floor((Date.now()-new Date(dob).getTime())/(365.25*86400000)) }
-  function pastGraceWindow(pendingAt) { return Date.now() - new Date(pendingAt).getTime() >= 30*86400000 }
 
   return (
     <div>
       <div style={{background:C.card,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.textSub,lineHeight:1.6}}>
-        Kids profiles (dependent_relationship 'child') that turned 18+ with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. Flagging starts a real 30-day grace window, after which the profile goes permanently read-only on its own (never deleted). "Delete now" below is a rare, manual, one-at-a-time action - not the expected outcome. Always check first whether the parent is mid-flow before acting.
+        Kids profiles (dependent_relationship 'child') with no adult_transfer_choice on file - the parent never transferred it, converted it to a Guardian dependent, or dismissed the prompt. 18-19 year olds below are early-override candidates only - the real lock happens automatically at 19. "Delete now" is a rare, manual, one-at-a-time action - not the expected outcome; real deletion otherwise only ever happens after the parent is asked directly and says yes (see "Awaiting deletion consent" below). Always check first whether the parent is mid-flow before acting.
       </div>
       {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')?C.red:C.green,marginBottom:'12px'}}>{notice}</div>}
       {loading ? <div style={{fontSize:'12px',color:C.textMuted}}>Loading…</div> : <>
-        <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>Overdue, not yet flagged ({overdue.length})</div>
+        <div style={{fontSize:'13px',fontWeight:700,marginBottom:'8px'}}>18+, not yet flagged ({overdue.length})</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>18-year-olds here are expected - the real lock is at 19, this is just early visibility (flag early only for a specific reason). A 19+ one here should be rare/brief - the auto-flag cron runs daily, so it's just waiting for tomorrow's run.</div>
         {overdue.length===0 && <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>None right now.</div>}
         {overdue.map(p=>(
           <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
@@ -2887,23 +2895,31 @@ function AdultTransfersTab() {
               <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
               <div style={{fontSize:'11px',color:C.textMuted}}>Turned {ageYears(p.date_of_birth)} · DOB {p.date_of_birth}</div>
             </div>
-            <button onClick={()=>flagForDeletion(p)} disabled={busyId===p.id} style={{padding:'7px 14px',border:`0.5px solid ${C.amber}`,borderRadius:'8px',background:'#fff',color:C.amber,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===p.id?'…':'Flag for deletion'}</button>
+            <button onClick={()=>flagForDeletion(p)} disabled={busyId===p.id} style={{padding:'7px 14px',border:`0.5px solid ${C.amber}`,borderRadius:'8px',background:'#fff',color:C.amber,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===p.id?'…':'Flag now'}</button>
           </div>
         ))}
-        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Flagged ({pendingDeletion.length})</div>
-        {pendingDeletion.length===0 && <div style={{fontSize:'12px',color:C.textMuted}}>None right now.</div>}
-        {pendingDeletion.map(p=>{
-          const ready = pastGraceWindow(p.pending_deletion_at)
-          return (
-            <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${ready?C.border:C.amber}`,borderRadius:'8px',marginBottom:'8px'}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
-                <div style={{fontSize:'11px',color:C.textMuted}}>Flagged {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')} · {ready?'now permanently read-only (automatic)':`goes read-only from ${new Date(new Date(p.pending_deletion_at).getTime()+30*86400000).toLocaleDateString('en-HK')}`}</div>
-              </div>
-              <button onClick={()=>{ if(confirm(`Permanently delete ${p.full_name}'s profile and all its records? This cannot be undone - only do this for a genuine manual deletion request.`)) deleteNow(p) }} disabled={!ready||busyId===p.id} title="Rare manual action - the profile is already read-only on its own" style={{padding:'7px 14px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',color:ready?C.red:C.border,fontSize:'12px',fontWeight:600,cursor:ready?'pointer':'not-allowed'}}>{busyId===p.id?'…':'Delete now (manual)'}</button>
+        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Flagged, read-only ({pendingDeletion.length})</div>
+        {pendingDeletion.length===0 && <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px'}}>None right now.</div>}
+        {pendingDeletion.map(p=>(
+          <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Flagged {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')} - permanently read-only</div>
             </div>
-          )
-        })}
+            <button onClick={()=>{ if(confirm(`Permanently delete ${p.full_name}'s profile and all its records? This cannot be undone - only do this for a genuine manual deletion request.`)) deleteNow(p) }} disabled={busyId===p.id} title="Rare manual action" style={{padding:'7px 14px',border:`0.5px solid ${C.border}`,borderRadius:'8px',background:'#fff',color:C.red,fontSize:'12px',fontWeight:600,cursor:'pointer'}}>{busyId===p.id?'…':'Delete now (manual)'}</button>
+          </div>
+        ))}
+        <div style={{fontSize:'13px',fontWeight:700,margin:'20px 0 8px'}}>Awaiting deletion consent, 6+ years read-only ({awaitingConsent.length})</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>Visibility only - the actual ask and decision happen with the parent (email + in-app banner), never here.</div>
+        {awaitingConsent.length===0 && <div style={{fontSize:'12px',color:C.textMuted}}>None right now.</div>}
+        {awaitingConsent.map(p=>(
+          <div key={p.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px 12px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',marginBottom:'8px'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{p.full_name} <span style={{fontWeight:400,color:C.textMuted}}>· {p.medsa_id}</span></div>
+              <div style={{fontSize:'11px',color:C.textMuted}}>Read-only since {new Date(p.pending_deletion_at).toLocaleDateString('en-HK')}{p.deletion_consent_asked_at?` · parent last asked ${new Date(p.deletion_consent_asked_at).toLocaleDateString('en-HK')}`:' · not yet asked'}</div>
+            </div>
+          </div>
+        ))}
       </>}
     </div>
   )
