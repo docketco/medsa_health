@@ -437,15 +437,22 @@ function MyInsurersScreen({ agent }) {
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'16px'}}>Hong Kong's Insurance Authority caps an individual agent at 4 appointed insurers (at most 2 long-term/life) - each appointment is the insurer's own call, so a request here is reviewed by their staff before it's real, not active on submission.</div>
       {activeCount>=4&&<div style={{fontSize:'12px',color:C.amber,background:C.amberLight,borderRadius:'8px',padding:'10px 12px',marginBottom:'14px'}}>You're at the typical IA cap of 4 appointed insurers - a new one may need your existing insurers' consent first.</div>}
       {appointments.map(a=>(
-        <Card key={a.id} style={{padding:'12px 16px',marginBottom:'8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div style={{fontSize:'14px',fontWeight:600}}>{a.institutions?.name}</div>
-          <span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:a.status==='active'?C.greenLight:a.status==='rejected'?C.redLight:C.amberLight,color:a.status==='active'?C.green:a.status==='rejected'?C.red:C.amber}}>
-            {a.status==='active'?'Appointed':a.status==='rejected'?'Rejected':'Pending review'}
-          </span>
+        <Card key={a.id} style={{padding:'12px 16px',marginBottom:'8px'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div style={{fontSize:'14px',fontWeight:600}}>{a.institutions?.name}</div>
+            <span style={{fontSize:'10px',fontWeight:700,padding:'3px 9px',borderRadius:'20px',background:a.status==='active'?C.greenLight:a.status==='rejected'?C.redLight:C.amberLight,color:a.status==='active'?C.green:a.status==='rejected'?C.red:C.amber}}>
+              {a.status==='active'?'Appointed':a.status==='rejected'?'Rejected':'Pending review'}
+            </span>
+          </div>
+          {/* Real bug found live-testing: the reason was real and saved
+              correctly, it just rendered as a separate, tiny, muted line
+              after EVERY institution card instead of inside the one it
+              was actually about - easy to miss entirely, read as "no
+              reason shown" even though the data was right there. */}
+          {a.status==='rejected'&&a.decision_reason&&
+            <div style={{fontSize:'12px',color:C.red,marginTop:'6px'}}>{a.decision_reason}</div>}
         </Card>
       ))}
-      {appointments.some(a=>a.status==='rejected'&&a.decision_reason)&&
-        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'14px'}}>{appointments.filter(a=>a.status==='rejected').map(a=><div key={a.id}>{a.institutions?.name}: {a.decision_reason}</div>)}</div>}
 
       {!requesting
         ? <Btn variant="primary" style={{width:'100%'}} onClick={()=>setRequesting(true)}>+ Request appointment with another insurer</Btn>
