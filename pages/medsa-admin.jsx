@@ -591,15 +591,28 @@ function AccountRecoveryTab() {
 // show up here.
 function AgentVerificationTab() {
   const [agents, setAgents] = useState([])
+  const [recentlyDecided, setRecentlyDecided] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
   const [rejectingId, setRejectingId] = useState(null)
+  const [notice, setNotice] = useState(null)
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('agents').select('id, full_name, email, phone, license_number, license_proof_path, created_at')
-      .eq('verification_status', 'pending').order('created_at')
-    setAgents(data||[])
+    const [{data:pending},{data:decided}] = await Promise.all([
+      supabase.from('agents').select('id, full_name, email, phone, license_number, license_proof_path, created_at')
+        .eq('verification_status', 'pending').order('created_at'),
+      // Real gap found live-testing: once decided, a self-signup vanished
+      // from this screen for good, with nothing anywhere confirming a
+      // reject (or approve) had actually stuck - looked identical to a
+      // silently-failed decide() that left it pending, which this same
+      // round's agent-appointment bug turned out to really be. This
+      // gives you a real, visible record that it landed.
+      supabase.from('agents').select('id, full_name, email, verification_status, created_at')
+        .in('verification_status', ['verified','rejected']).order('created_at',{ascending:false}).limit(8),
+    ])
+    setAgents(pending||[])
+    setRecentlyDecided(decided||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -609,10 +622,23 @@ function AgentVerificationTab() {
     if (data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
-  async function decide(id, verified) {
-    setBusyId(id)
-    await supabase.from('agents').update({ verification_status: verified?'verified':'rejected' }).eq('id', id)
+  // Real bug found live-testing: this never checked whether the write
+  // actually landed - a reject that silently failed (or hit a row that
+  // had already been decided elsewhere) still called load() right after,
+  // which then still showed it pending - reads exactly like "I rejected
+  // it and it reappeared," because nothing ever actually changed. Same
+  // fix shape as decideAppointment's own fix this round: guard on the
+  // row still being pending, read back what was actually written, and
+  // only claim success when a row really came back.
+  async function decide(id, verified, fullName) {
+    setBusyId(id); setNotice(null)
+    const { data: updated, error } = await supabase.from('agents')
+      .update({ verification_status: verified?'verified':'rejected' })
+      .eq('id', id).eq('verification_status','pending').select().maybeSingle()
     setBusyId(null); setRejectingId(null)
+    if (error) { setNotice(`Error: ${error.message}`); load(); return }
+    if (!updated) { setNotice(`Could not decide ${fullName||'that agent'} - they're not pending any more (already decided elsewhere, or the page was out of date). Reloading the list.`); load(); return }
+    setNotice(`${fullName||'That agent'} ${verified?'verified and approved':'rejected'}.`)
     load()
   }
 
@@ -622,6 +648,7 @@ function AgentVerificationTab() {
         An agent who self-registered (not onboarded by an insurer or team - that path is already trusted and skips this queue). Most onboarding should go through an insurer or a partner management company instead; self-signup is the fallback for an independent agent nobody's appointed yet, so check it carefully.<br/><br/>
         <strong>How to verify:</strong> open the IA's own public register at <a href="https://iir.ia.org.hk/searchLicenceNo.html" target="_blank" rel="noreferrer">iir.ia.org.hk/searchLicenceNo.html</a>, search the license number below, and confirm the name and status ("Active") on the result match what's declared here. There's no API for this - it's a real manual lookup every time, same as it would be for any other individual license check. If it doesn't match (or the license is lapsed/revoked), reject.
       </div>
+      {notice&&<div style={{fontSize:'12px',color:notice.startsWith('Error')||notice.startsWith('Could not')?C.red:C.green,marginBottom:'12px',fontWeight:600}}>{notice}</div>}
       {loading && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Loading…</div>}
       {!loading && agents.length===0 && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No pending agent sign-ups.</div>}
       {agents.map(a => (
@@ -633,16 +660,25 @@ function AgentVerificationTab() {
           {rejectingId===a.id ? (
             <div style={{display:'flex',gap:'8px'}}>
               <button onClick={()=>setRejectingId(null)} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Cancel</button>
-              <button onClick={()=>decide(a.id,false)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.red,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Confirm reject'}</button>
+              <button onClick={()=>decide(a.id,false,a.full_name)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.red,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Confirm reject'}</button>
             </div>
           ) : (
             <div style={{display:'flex',gap:'8px'}}>
               <button onClick={()=>setRejectingId(a.id)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
-              <button onClick={()=>decide(a.id,true)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Verify & approve'}</button>
+              <button onClick={()=>decide(a.id,true,a.full_name)} disabled={busyId===a.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===a.id?'…':'Verify & approve'}</button>
             </div>
           )}
         </div>
       ))}
+      {recentlyDecided.length>0&&<>
+        <div style={{fontSize:'13px',fontWeight:600,color:C.textMuted,margin:'20px 0 10px'}}>Recently decided</div>
+        {recentlyDecided.map(a=>(
+          <div key={a.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',fontSize:'12px'}}>
+            <span>{a.full_name} <span style={{color:C.textMuted}}>({a.email})</span></span>
+            <span style={{fontWeight:600,color:a.verification_status==='verified'?C.green:C.red}}>{a.verification_status==='verified'?'Verified':'Rejected'}</span>
+          </div>
+        ))}
+      </>}
     </div>
   )
 }

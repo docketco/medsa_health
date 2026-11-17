@@ -71,6 +71,14 @@ export default async function handler(req, res) {
     tempPassword = `Temp${Math.floor(1000 + Math.random() * 9000)}!`
     const { error: pwErr } = await supabase.rpc('set_agent_password', { p_agent_id: agentId, p_new_password: tempPassword })
     if (pwErr) return res.status(500).json({ status: 'ERROR', message: `Agent created but password could not be set: ${pwErr.message}` })
+    // Real gap: "please change this password once you're in" was only
+    // ever advisory text in the email - nothing actually required it.
+    // A generated temp password now forces a real change-password screen
+    // on first login (AgentLogin), before anything else in the portal is
+    // reachable. Not set for self-signup (self_signup.js) - there the
+    // agent already chose their own real password, nothing temporary to
+    // force a change away from.
+    await supabase.from('agents').update({ must_change_password: true }).eq('id', agentId)
   }
 
   const { error: apptErr } = await supabase.from('agent_institution_appointments')

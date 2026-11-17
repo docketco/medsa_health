@@ -70,12 +70,21 @@ function AgentLogin({ onLogin }) {
   const [password,setPassword]=useState('')
   const [checking,setChecking]=useState(false)
   const [error,setError]=useState(null)
+  // Real gap: a generated temp password's "please change this once
+  // you're in" was only ever advisory email text - nothing enforced it.
+  // mustChangeAgent holds the real agent row once a temp-password login
+  // succeeds, gating everything else behind a real change-password step.
+  const [mustChangeAgent,setMustChangeAgent]=useState(null)
+  const [newPassword,setNewPassword]=useState('')
+  const [newPassword2,setNewPassword2]=useState('')
+  const [changingPassword,setChangingPassword]=useState(false)
+  const [changeError,setChangeError]=useState(null)
 
   async function handleLogin() {
     setChecking(true)
     setError(null)
     const { data: agent } = await supabase.from('agents')
-      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, my_plans_last_viewed_at, verification_status, institutions(name)')
+      .select('id, full_name, agent_type, institution_id, team_id, medsa_id, my_plans_last_viewed_at, verification_status, must_change_password, institutions(name)')
       .ilike('email', email.trim()).maybeSingle()
     if (!agent) { setChecking(false); setError('No agent account matches that email.'); return }
     const { data: ok } = await supabase.rpc('verify_agent_password', { p_agent_id: agent.id, p_password: password })
@@ -83,7 +92,46 @@ function AgentLogin({ onLogin }) {
     if (!ok) { setError('Incorrect password.'); return }
     if (agent.verification_status === 'pending') { setError("Your account is still being verified against your license - you'll be able to sign in once that's done."); return }
     if (agent.verification_status === 'rejected') { setError('Your account could not be verified. Contact your Medsa account manager.'); return }
+    if (agent.must_change_password) { setMustChangeAgent(agent); return }
     onLogin(agent)
+  }
+
+  async function handleChangePassword() {
+    setChangeError(null)
+    if (newPassword.length < 8) { setChangeError('New password must be at least 8 characters.'); return }
+    if (newPassword !== newPassword2) { setChangeError("Passwords don't match."); return }
+    setChangingPassword(true)
+    try {
+      const res = await fetch('/api/agent/change_password', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ agentId: mustChangeAgent.id, currentPassword: password, newPassword }),
+      })
+      const data = await res.json()
+      if (data.status !== 'OK') { setChangeError(data.message || 'Could not change password.'); setChangingPassword(false); return }
+      onLogin(mustChangeAgent)
+    } catch {
+      setChangeError('Could not reach Medsa - try again.')
+      setChangingPassword(false)
+    }
+  }
+
+  if (mustChangeAgent) {
+    return (
+      <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+        <div style={{width:'100%',maxWidth:380}}>
+          <div style={{textAlign:'center',marginBottom:'28px'}}>
+            <div style={{fontSize:'22px',fontWeight:700,color:C.text}}>Set a real password</div>
+            <div style={{fontSize:'13px',color:C.textSub,marginTop:'4px'}}>You're signing in with a temporary password - pick a real one before continuing.</div>
+          </div>
+          <div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'14px',padding:'20px'}}>
+            <input type="password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="New password (8+ characters)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'10px',boxSizing:'border-box'}}/>
+            <input type="password" value={newPassword2} onChange={e=>setNewPassword2(e.target.value)} placeholder="Confirm new password" onKeyDown={e=>e.key==='Enter'&&handleChangePassword()} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+            {changeError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'12px'}}>{changeError}</div>}
+            <Btn variant="primary" style={{width:'100%'}} onClick={handleChangePassword} disabled={changingPassword||!newPassword||!newPassword2}>{changingPassword?'Saving\u2026':'Set password & continue'}</Btn>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -624,6 +672,7 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   <div style={{fontSize:'12px',color:C.textSub}}>{p.plan_name} - {p.policy_number||'No policy number yet'}</div>
                   {agent.agent_type==='independent'&&<div style={{fontSize:'11px',color:C.purple,marginTop:'2px'}}>{p.institutions?.name||'Unknown insurer'}</div>}
                   {!p.patient_id&&(p.manual_patient_phone||p.manual_patient_email||p.manual_patient_hkid)&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>{[p.manual_patient_phone,p.manual_patient_email,p.manual_patient_hkid&&`HKID ${p.manual_patient_hkid}`].filter(Boolean).join(' · ')}</div>}
+                  {p.transferredFrom&&<div style={{fontSize:'11px',color:C.purple,marginTop:'2px'}}>Transferred from {p.transferredFrom.from?.full_name||'another agent'}{p.transferredFrom.reason?` - ${p.transferredFrom.reason}`:''}</div>}
                 </div>
                 <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'4px'}}>
                   <Badge text={p.status} type={p.status==='active'?'ok':p.status==='quote'?'waiting':'due'}/>
@@ -2509,7 +2558,22 @@ export default function AgentApp() {
     // reshuffled on every reload. Newest first, like everything else.
     let query = supabase.from('agent_policies').select('*, institutions(name)').eq('agent_id', a.id).order('created_at', { ascending: false })
     const { data: policyRows } = await query
-    setPolicies(policyRows||[])
+    // Real gap found live-testing: a policy that arrived via transfer
+    // showed no sign of that at all on the receiving agent's side - no
+    // way to tell it apart from one they wrote themselves, or see who it
+    // came from. Only ever matters here (who currently owns it), not on
+    // the sender's own list, so this is a read-only lookup, not a new
+    // column - the real approved transfer already on file is the source
+    // of truth.
+    const policyIds = (policyRows||[]).map(p=>p.id)
+    let transfersByPolicy = {}
+    if (policyIds.length>0) {
+      const { data: transfers } = await supabase.from('agent_client_transfer_requests')
+        .select('policy_id, reason, decided_at, from:from_agent_id(full_name)')
+        .in('policy_id', policyIds).eq('to_agent_id', a.id).eq('status','approved').order('decided_at',{ascending:false})
+      for (const t of (transfers||[])) { if (!transfersByPolicy[t.policy_id]) transfersByPolicy[t.policy_id] = t }
+    }
+    setPolicies((policyRows||[]).map(p => ({ ...p, transferredFrom: transfersByPolicy[p.id] || null })))
 
     // Same insurer-scoping PlanInquiriesScreen.load() applies to the actual
     // list - this badge counted every unclaimed inquiry system-wide before,
