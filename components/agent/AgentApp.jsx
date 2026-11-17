@@ -559,34 +559,6 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
     setConfirmingPaymentId(null)
   }
 
-  // Incoming transfer requests addressed to THIS agent - decided by them
-  // directly now, no team-lead middleman (team structure is gone, see
-  // TransferRequestModal's own header comment).
-  const [incomingTransfers,setIncomingTransfers]=useState([])
-  const [decidingTransferId,setDecidingTransferId]=useState(null)
-  async function loadIncomingTransfers() {
-    // Real bug found live-testing: ordered by created_at, a column this
-    // table has never had (only requested_at) - the query errored every
-    // single time, data||[] silently swallowed it, and no agent ever saw
-    // an incoming transfer request no matter who sent what.
-    const { data } = await supabase.from('agent_client_transfer_requests')
-      .select('*, agent_policies(patient_name, plan_name), from:from_agent_id(full_name)')
-      .eq('to_agent_id', agent.id).eq('status','pending').order('requested_at',{ascending:false})
-    setIncomingTransfers(data||[])
-  }
-  useEffect(() => { loadIncomingTransfers() }, [agent.id])
-
-  async function decideIncomingTransfer(reqRow, approve) {
-    setDecidingTransferId(reqRow.id)
-    await supabase.from('agent_client_transfer_requests').update({
-      status: approve?'approved':'rejected', decided_at: new Date().toISOString(), decided_by_agent_id: agent.id,
-    }).eq('id', reqRow.id)
-    if (approve) await supabase.from('agent_policies').update({ agent_id: agent.id }).eq('id', reqRow.policy_id)
-    setDecidingTransferId(null)
-    loadIncomingTransfers()
-    onReload?.()
-  }
-
   // Write-back half of policy issuance - mirrors InsuranceAdminClaimsLog's
   // "Push to your system" for claims exactly, just for a newly-issued
   // policy instead. Medsa never decides anything on the other end
@@ -634,21 +606,6 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
           <Btn variant="primary" onClick={onNewPolicy}>+ Issue policy / quote</Btn>
         </div>
       </div>
-      {incomingTransfers.length>0&&<div style={{marginBottom:'20px'}}>
-        <SecLabel>Transfer requests for you</SecLabel>
-        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
-          {incomingTransfers.map(r=>(
-            <Card key={r.id} style={{padding:'14px 16px'}}>
-              <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
-              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>From {r.from?.full_name||'another agent'}{r.reason?`: ${r.reason}`:''}</div>
-              <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
-                <Btn style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,false)}>Decline</Btn>
-                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,true)}>{decidingTransferId===r.id?'…':'Accept'}</Btn>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>}
       {/* A view filter on what's already on file - never a per-policy
           status setter. Relabeled with "Show:" per your call, since this
           pair of pills (Quotes/Active) looks exactly like the old
@@ -2473,9 +2430,46 @@ function ClaimsReviewScreen({ agent }) {
 // Not insurer-scoped - a referral exists independently of which plan
 // eventually processes the claim it supports, so every agent sees the
 // same shared queue here.
-function ReferralsScreen({ agent }) {
+// Agent-to-agent transfer requests moved here too, per your call - this
+// is "things waiting on your decision, or that you've asked someone
+// else to decide," which both really are. They used to be split between
+// here (nothing, since this screen was accidentally showing unrelated
+// clinical referrals) and buried inside the Policies screen, which is
+// exactly the "where did I even do that" confusion that prompted the
+// move. Initiating a transfer (the "Request transfer to another agent"
+// button + modal) stays on Policies - that's an action tied to a
+// specific policy card, not a thing waiting to be decided.
+function ReferralsScreen({ agent, onReload }) {
   const [referrals, setReferrals] = useState([])
   const [loading, setLoading] = useState(true)
+  const [incomingTransfers, setIncomingTransfers] = useState([])
+  const [sentTransfers, setSentTransfers] = useState([])
+  const [decidingTransferId, setDecidingTransferId] = useState(null)
+
+  async function loadTransfers() {
+    const [{data:incoming},{data:sent}] = await Promise.all([
+      supabase.from('agent_client_transfer_requests')
+        .select('*, agent_policies(patient_name, plan_name), from:from_agent_id(full_name)')
+        .eq('to_agent_id', agent.id).eq('status','pending').order('requested_at',{ascending:false}),
+      supabase.from('agent_client_transfer_requests')
+        .select('*, agent_policies(patient_name, plan_name), to:to_agent_id(full_name)')
+        .eq('from_agent_id', agent.id).order('requested_at',{ascending:false}).limit(10),
+    ])
+    setIncomingTransfers(incoming||[])
+    setSentTransfers(sent||[])
+  }
+  useEffect(() => { loadTransfers() }, [agent.id])
+
+  async function decideIncomingTransfer(reqRow, approve) {
+    setDecidingTransferId(reqRow.id)
+    await supabase.from('agent_client_transfer_requests').update({
+      status: approve?'approved':'rejected', decided_at: new Date().toISOString(), decided_by_agent_id: agent.id,
+    }).eq('id', reqRow.id)
+    if (approve) await supabase.from('agent_policies').update({ agent_id: agent.id }).eq('id', reqRow.policy_id)
+    setDecidingTransferId(null)
+    loadTransfers()
+    onReload?.()
+  }
 
   async function load() {
     setLoading(true)
@@ -2509,6 +2503,38 @@ function ReferralsScreen({ agent }) {
     <PageWrap maxWidth={680}>
       <h2 style={{fontSize:'20px',fontWeight:700,marginBottom:'6px',textAlign:'center'}}>Referrals</h2>
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'20px',textAlign:'center'}}>Submitted through the out-of-network referral portal. Approving one is what lets a plan requiring a referral treat the matching claim as covered.</div>
+
+      {incomingTransfers.length>0&&<div style={{marginBottom:'20px'}}>
+        <SecLabel>Transfer requests for you</SecLabel>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {incomingTransfers.map(r=>(
+            <Card key={r.id} style={{padding:'14px 16px'}}>
+              <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
+              <div style={{fontSize:'12px',color:C.textSub,marginTop:'2px'}}>From {r.from?.full_name||'another agent'}{r.reason?`: ${r.reason}`:''}</div>
+              <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
+                <Btn style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,false)}>Decline</Btn>
+                <Btn variant="primary" style={{flex:1,fontSize:'12px'}} disabled={decidingTransferId===r.id} onClick={()=>decideIncomingTransfer(r,true)}>{decidingTransferId===r.id?'…':'Accept'}</Btn>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>}
+      {sentTransfers.length>0&&<div style={{marginBottom:'20px'}}>
+        <SecLabel>Your sent transfer requests</SecLabel>
+        <div style={{display:'flex',flexDirection:'column',gap:'8px'}}>
+          {sentTransfers.map(r=>(
+            <Card key={r.id} style={{padding:'12px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <div>
+                <div style={{fontSize:'13px',fontWeight:600}}>{r.agent_policies?.patient_name} - {r.agent_policies?.plan_name}</div>
+                <div style={{fontSize:'11px',color:C.textMuted,marginTop:'2px'}}>To {r.to?.full_name||'another agent'}</div>
+              </div>
+              <Badge text={r.status} type={r.status==='approved'?'ok':r.status==='rejected'?'full':'waiting'}/>
+            </Card>
+          ))}
+        </div>
+      </div>}
+
+      <SecLabel>Out-of-network claim referrals</SecLabel>
       {loading&&<div style={{textAlign:'center',fontSize:'12px',color:C.textMuted}}>Loading...</div>}
       {!loading&&referrals.length===0&&<div style={{textAlign:'center',fontSize:'13px',color:C.textMuted,padding:'20px'}}>No referrals waiting for review.</div>}
       {referrals.map(r=>(
@@ -2662,7 +2688,7 @@ export default function AgentApp() {
         {false&&screen==='inquiries'&&<ClaimInquiriesScreen agent={agent} inquiries={[]} onStatusChange={()=>{}}/>}
         {!loading&&screen==='planinquiries'&&<PlanInquiriesScreen agent={agent} onConvert={(inq)=>{setPrefillInquiry(inq);setScreen('newpolicy')}}/>}
         {false&&screen==='claimsreview'&&<ClaimsReviewScreen agent={agent}/>}
-        {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent}/>}
+        {!loading&&screen==='referrals'&&<ReferralsScreen agent={agent} onReload={()=>loadData(agent)}/>}
         {!loading&&screen==='renewals'&&<RenewalsScreen agent={agent} policies={policies} onRenewed={()=>loadData(agent)}/>}
         {false&&screen==='team'&&myLeadTeam&&<TeamLeadScreen agent={agent} team={myLeadTeam}/>}
       </div>
