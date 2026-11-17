@@ -517,9 +517,13 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [incomingTransfers,setIncomingTransfers]=useState([])
   const [decidingTransferId,setDecidingTransferId]=useState(null)
   async function loadIncomingTransfers() {
+    // Real bug found live-testing: ordered by created_at, a column this
+    // table has never had (only requested_at) - the query errored every
+    // single time, data||[] silently swallowed it, and no agent ever saw
+    // an incoming transfer request no matter who sent what.
     const { data } = await supabase.from('agent_client_transfer_requests')
       .select('*, agent_policies(patient_name, plan_name), from:from_agent_id(full_name)')
-      .eq('to_agent_id', agent.id).eq('status','pending').order('created_at',{ascending:false})
+      .eq('to_agent_id', agent.id).eq('status','pending').order('requested_at',{ascending:false})
     setIncomingTransfers(data||[])
   }
   useEffect(() => { loadIncomingTransfers() }, [agent.id])
@@ -2426,7 +2430,19 @@ function ReferralsScreen({ agent }) {
 
   async function load() {
     setLoading(true)
-    const { data } = await supabase.from('referrals').select('*, patients(full_name)').eq('status', 'submitted').order('created_at', { ascending: false })
+    // Real bug found live-testing: status defaults to 'submitted' for
+    // EVERY row in this table, including ClinicOps' own doctor-to-doctor
+    // clinical referrals (Thread C) - that flow never touches status at
+    // all, only its own separate clinical_status column, so every one of
+    // those sat here looking like an "out-of-network referral awaiting
+    // claim-eligibility review" to every agent, system-wide. The real
+    // distinguishing field already exists (insurance_claim_id) - a
+    // clinical handoff was never tied to a claim; this screen's whole
+    // premise is. Confirmed live: 0 of the real referrals on file have
+    // ever had insurance_claim_id set, so nothing currently writes it -
+    // this screen correctly shows empty now rather than showing clinical
+    // data it was never meant to.
+    const { data } = await supabase.from('referrals').select('*, patients(full_name)').eq('status', 'submitted').not('insurance_claim_id', 'is', null).order('created_at', { ascending: false })
     setReferrals(data || [])
     setLoading(false)
   }
