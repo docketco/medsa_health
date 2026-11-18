@@ -14,6 +14,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
 import { COMMUNITY_ENABLED } from '../lib/featureFlags'
+import { AD_PRICING_MONTH_OPTIONS, monthsLabel } from '../lib/adPricingMenu'
 import { REFERRAL_FEE_ENABLED } from '../lib/featureFlags'
 import Icon from '../components/shared/Icon'
 import { SecLabel } from '../components/shared/UI'
@@ -1726,35 +1727,37 @@ function CarouselTab() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
   const [approving, setApproving] = useState(null)
-  // Redesigned again, per your call: "price menu should be one for all
-  // not quote by quote" - the duration/price menu (e.g. "2 weeks -
-  // HK$500", "1 month - HK$900") is now set ONCE here, globally, not
-  // re-typed every time a submission is approved. Approving a submission
-  // just snapshots whatever this menu currently holds onto that
-  // submission - see approve_for_payment.js.
+  // Redesigned twice now, per your calls: "price menu should be one for
+  // all not quote by quote" (set ONCE here, globally, not re-typed every
+  // time a submission is approved - approving just snapshots whatever
+  // this menu currently holds, see approve_for_payment.js), and "can it
+  // just be month-wise like 1/3/6 month and a year? why would anyone
+  // calculate the days?" - durations are now exactly these four fixed
+  // calendar-month options (lib/adPricingMenu.js), never a typed-in day
+  // count. A blank price just means that duration isn't offered.
   const [pricingMenu, setPricingMenu] = useState([])
-  const [menuEditing, setMenuEditing] = useState(false)
-  const [menuDraft, setMenuDraft] = useState([])
+  const [menuPrices, setMenuPrices] = useState({}) // months -> price string
   const [savingMenu, setSavingMenu] = useState(false)
+
+  function syncMenuPricesFrom(menu) {
+    const next = {}
+    for (const m of AD_PRICING_MONTH_OPTIONS) {
+      const row = menu.find(o=>o.months===m)
+      next[m] = row ? String(row.price_hkd) : ''
+    }
+    setMenuPrices(next)
+  }
   const [approvingForPaymentId, setApprovingForPaymentId] = useState(null)
   const [approveResults, setApproveResults] = useState({}) // submissionId -> {payLink, emailSent, ...} | {error}
 
-  function startEditingMenu() {
-    setMenuDraft(pricingMenu.length>0 ? pricingMenu.map(o=>({label:o.label,days:String(o.days),priceHkd:String(o.price_hkd)})) : [{label:'',days:'',priceHkd:''}])
-    setMenuEditing(true)
-  }
-  function addMenuRow() { setMenuDraft(prev => [...prev, {label:'',days:'',priceHkd:''}]) }
-  function removeMenuRow(idx) { setMenuDraft(prev => prev.filter((_,i)=>i!==idx)) }
-  function updateMenuRow(idx, field, value) { setMenuDraft(prev => prev.map((o,i)=>i===idx?{...o,[field]:value}:o)) }
   async function saveMenu() {
-    const rows = menuDraft.filter(o=>o.label.trim()&&o.days&&o.priceHkd)
     setSavingMenu(true)
     await supabase.from('carousel_ad_pricing_options').delete().neq('id','00000000-0000-0000-0000-000000000000')
+    const rows = AD_PRICING_MONTH_OPTIONS.filter(m=>menuPrices[m]).map(m=>({months:m,price_hkd:parseFloat(menuPrices[m])}))
     if (rows.length>0) {
-      await supabase.from('carousel_ad_pricing_options').insert(rows.map((r,i)=>({label:r.label.trim(),days:parseInt(r.days),price_hkd:parseFloat(r.priceHkd),sort_order:i})))
+      await supabase.from('carousel_ad_pricing_options').insert(rows)
     }
     setSavingMenu(false)
-    setMenuEditing(false)
     load()
   }
 
@@ -1764,12 +1767,13 @@ function CarouselTab() {
       supabase.from('home_carousel_items').select('*').order('display_order'),
       supabase.from('home_carousel_submissions').select('*').eq('status','pending').order('submitted_at',{ascending:false}),
       supabase.from('home_carousel_submissions').select('*').eq('status','approved_awaiting_payment').order('reviewed_at',{ascending:false}),
-      supabase.from('carousel_ad_pricing_options').select('*').order('sort_order').order('created_at'),
+      supabase.from('carousel_ad_pricing_options').select('*').order('months'),
     ])
     setItems(i||[])
     setSubmissions(s||[])
     setAwaitingPayment(awp||[])
     setPricingMenu(menu||[])
+    syncMenuPricesFrom(menu||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -1851,31 +1855,18 @@ function CarouselTab() {
       <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Newsletter articles (Medsa's own editorial content) can post free; sponsored ads are the real revenue, so they only ever go live through payment - the sponsor picks one of the options below plus a start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
 
       <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'20px'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
-          <div style={{fontSize:'13px',fontWeight:600}}>Ad pricing menu</div>
-          {!menuEditing&&<span onClick={startEditingMenu} style={{fontSize:'11px',color:C.blue,cursor:'pointer',fontWeight:600}}>{pricingMenu.length>0?'Edit':'+ Set up'}</span>}
-        </div>
-        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>One menu for every ad, not set per submission - every &ldquo;Approve for payment&rdquo; below offers exactly this list.</div>
-        {!menuEditing&&(pricingMenu.length>0
-          ? <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>{pricingMenu.map(o=>(
-              <span key={o.id} style={{fontSize:'11px',background:C.beige,borderRadius:'6px',padding:'5px 9px'}}>{o.label} · HK${Number(o.price_hkd).toLocaleString()} ({o.days}d)</span>
-            ))}</div>
-          : <div style={{fontSize:'11px',color:C.amber}}>No options set yet - sponsored ads can&rsquo;t be approved for payment until you add at least one.</div>)}
-        {menuEditing&&<div>
-          {menuDraft.map((row,idx)=>(
-            <div key={idx} style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
-              <input value={row.label} onChange={e=>updateMenuRow(idx,'label',e.target.value)} placeholder="e.g. 2 weeks" style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-              <input type="number" value={row.days} onChange={e=>updateMenuRow(idx,'days',e.target.value)} placeholder="Days" style={{flex:'0 1 60px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-              <input type="number" step="0.01" value={row.priceHkd} onChange={e=>updateMenuRow(idx,'priceHkd',e.target.value)} placeholder="HK$" style={{flex:'0 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-              {menuDraft.length>1&&<span onClick={()=>removeMenuRow(idx)} style={{fontSize:'11px',color:C.red,cursor:'pointer',alignSelf:'center'}}>✕</span>}
+        <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Ad pricing menu</div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>One menu for every ad, not set per submission - every &ldquo;Approve for payment&rdquo; below offers exactly this. Fixed calendar-length durations, no day counting - leave a price blank to not offer that length.</div>
+        <div style={{display:'flex',gap:'6px',marginBottom:'8px',flexWrap:'wrap'}}>
+          {AD_PRICING_MONTH_OPTIONS.map(m=>(
+            <div key={m} style={{flex:'1 1 100px'}}>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'3px'}}>{monthsLabel(m)}</div>
+              <input type="number" step="0.01" value={menuPrices[m]||''} onChange={e=>setMenuPrices(prev=>({...prev,[m]:e.target.value}))} placeholder="HK$ (blank = not offered)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
             </div>
           ))}
-          <div style={{display:'flex',gap:'6px',marginTop:'4px'}}>
-            <button onClick={addMenuRow} style={{padding:'6px 10px',background:'#fff',border:`1px dashed ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>+ Add another option</button>
-            <button onClick={()=>setMenuEditing(false)} style={{padding:'6px 10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>Cancel</button>
-            <button onClick={saveMenu} disabled={savingMenu} style={{flex:1,padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{savingMenu?'Saving…':'Save menu'}</button>
-          </div>
-        </div>}
+        </div>
+        <button onClick={saveMenu} disabled={savingMenu} style={{width:'100%',padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{savingMenu?'Saving…':'Save menu'}</button>
+        {pricingMenu.length===0&&<div style={{fontSize:'11px',color:C.amber,marginTop:'8px'}}>No options set yet - sponsored ads can&rsquo;t be approved for payment until at least one duration has a price.</div>}
       </div>
 
       {submissions.length>0&&<>
@@ -1897,7 +1888,7 @@ function CarouselTab() {
             </div>
             <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
               <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{pricingMenu.length>0
-                ? <>Approving will offer: {pricingMenu.map(o=>`${o.label} (HK$${Number(o.price_hkd).toLocaleString()})`).join(', ')} - edit the menu above if this isn&rsquo;t right.</>
+                ? <>Approving will offer: {pricingMenu.map(o=>`${monthsLabel(o.months)} (HK$${Number(o.price_hkd).toLocaleString()})`).join(', ')} - edit the menu above if this isn&rsquo;t right.</>
                 : <>No ad pricing menu set yet - add one above first.</>}</div>
               <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id||pricingMenu.length===0} style={{width:'100%',padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
               {approveResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{approveResults[sub.id].message}</div>}

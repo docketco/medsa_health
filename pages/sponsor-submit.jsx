@@ -11,6 +11,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
+import { monthsLabel } from '../lib/adPricingMenu'
 
 function ImagePicker({ label, value, onChange }) {
   const [mode, setMode] = useState('url')
@@ -58,14 +59,14 @@ function ImagePicker({ label, value, onChange }) {
 function AdPricingMenuNote() {
   const [menu, setMenu] = useState(null)
   useEffect(() => {
-    supabase.from('carousel_ad_pricing_options').select('*').order('sort_order').order('created_at').then(({data})=>setMenu(data||[]))
+    supabase.from('carousel_ad_pricing_options').select('*').order('months').then(({data})=>setMenu(data||[]))
   }, [])
   if (menu===null || menu.length===0) return null
   return (
     <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px'}}>
       <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Sponsored ads only go live through payment, at one of these durations - you'll pick one (and your start date) only after Medsa approves your content, not here:</div>
       <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>{menu.map(o=>(
-        <span key={o.id} style={{fontSize:'11px',background:'#fff',borderRadius:'6px',padding:'4px 8px'}}>{o.label} · HK${Number(o.price_hkd).toLocaleString()}</span>
+        <span key={o.id} style={{fontSize:'11px',background:'#fff',borderRadius:'6px',padding:'4px 8px'}}>{monthsLabel(o.months)} · HK${Number(o.price_hkd).toLocaleString()}</span>
       ))}</div>
     </div>
   )

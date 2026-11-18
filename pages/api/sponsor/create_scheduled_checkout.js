@@ -1,9 +1,11 @@
 // pages/api/sponsor/create_scheduled_checkout.js
 // ─────────────────────────────────────────────────────────────────────────────
 // The sponsor's own self-serve half of the redesigned carousel flow (see
-// approve_for_payment.js) - the sponsor picks ONE of Medsa's own real
-// duration/price options (never an open rate they multiply themselves) plus
-// a start date; the end date is computed from that option's own day count.
+// approve_for_payment.js) - the sponsor picks ONE of Medsa's own real,
+// fixed calendar-month options (1/3/6/12 months, never a typed-in day
+// count) plus a start date; the end date is computed with real calendar
+// months (setMonth), so "1 month" from Jan 31 lands on Feb 28/29 like a
+// person would expect, not a fixed 30-day offset.
 // startsAt/endsAt/chosen option travel as Stripe metadata (strings) so the
 // webhook (or verify_scheduled_checkout.js, if the webhook never fires) can
 // write them straight onto home_carousel_items once payment clears -
@@ -13,6 +15,7 @@
 import { createClient } from '@supabase/supabase-js'
 import Stripe from 'stripe'
 import { grossUpForStripeFee } from '../../../lib/paymentFees'
+import { addMonthsToDateString } from '../../../lib/adPricingMenu'
 
 const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
 
@@ -38,8 +41,7 @@ export default async function handler(req, res) {
   const option = (sub.pricing_options || [])[optionIndex]
   if (!option) return res.status(400).json({ status: 'ERROR', message: 'That option is no longer available - reload and pick again.' })
 
-  const endDate = new Date(startDate)
-  endDate.setDate(endDate.getDate() + option.days)
+  const endDate = addMonthsToDateString(startsAt, option.months)
   const endsAt = endDate.toISOString().slice(0,10)
 
   const { grossAmountHKD } = grossUpForStripeFee(option.priceHkd)
@@ -67,7 +69,7 @@ export default async function handler(req, res) {
   // review screen can show what the sponsor actually picked even before
   // payment clears.
   await supabase.from('home_carousel_submissions').update({
-    chosen_option_label: option.label, chosen_duration_days: option.days, starts_at: startsAt, ends_at: endsAt,
+    chosen_option_label: option.label, chosen_duration_months: option.months, starts_at: startsAt, ends_at: endsAt,
     gross_amount_hkd: grossAmountHKD, processing_fee_hkd: grossAmountHKD - option.priceHkd,
     stripe_checkout_session_id: session.id, stripe_payment_link: session.url,
   }).eq('id', submissionId)
