@@ -1802,6 +1802,14 @@ function CarouselTab() {
   // Same editor here now, writing the same column, so this path and the
   // sponsor path produce identical cards.
   const [formBlocks, setFormBlocks] = useState([{ type:'paragraph', text:'' }])
+  // Real call: "the add a card myself should have a review too" - this
+  // used to go straight from the form to a live insert with no way to
+  // see how it would actually look first, unlike every sponsor
+  // submission which already gets a real draft preview before anything
+  // is saved. Reuses CarouselPreviewCard (the same expandable preview
+  // the submissions-review list already uses) so this is the exact same
+  // rendering, not a second guess at it.
+  const [formStage, setFormStage] = useState('edit') // edit | preview
   function addFormBlock(type) { setFormBlocks(b => [...b, type==='paragraph' ? { type:'paragraph', text:'' } : { type:'image', url:'' }]) }
   function updateFormBlock(i, field, value) { setFormBlocks(b => b.map((blk,idx) => idx===i ? {...blk,[field]:value} : blk)) }
   function removeFormBlock(i) { setFormBlocks(b => b.filter((_,idx)=>idx!==i)) }
@@ -1876,6 +1884,7 @@ function CarouselTab() {
     })
     setSaving(false)
     setCreating(false)
+    setFormStage('edit')
     setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', display_order:0, location:'HK', ends_at:'' })
     setFormBlocks([{ type:'paragraph', text:'' }])
     load()
@@ -1996,7 +2005,21 @@ function CarouselTab() {
       <div style={{fontSize:'15px',fontWeight:600,margin:'20px 0 10px'}}>Live cards</div>
       {!creating&&<button onClick={()=>setCreating(true)} style={{width:'100%',padding:'12px',background:C.green,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer',marginBottom:'20px'}}>+ Add card yourself</button>}
 
-      {creating&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+      {creating&&formStage==='preview'&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
+        <div style={{fontSize:'15px',fontWeight:600,marginBottom:'4px'}}>Preview</div>
+        <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'12px'}}>This is exactly how it'll look once added - tap to see the full card, not just the home-screen preview. Nothing's saved yet.</div>
+        <CarouselPreviewCard sub={{
+          item_type: form.item_type, title: form.title, subtitle: form.subtitle,
+          image_url: form.image_url, sponsor_name: form.sponsor_name, link_url: form.link_url,
+          content_blocks: formBlocks.filter(b=>(b.type==='paragraph'&&b.text.trim())||(b.type==='image'&&b.url.trim())),
+        }}/>
+        <div style={{display:'flex',gap:'8px',marginTop:'14px'}}>
+          <button onClick={()=>setFormStage('edit')} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>← Edit</button>
+          <button onClick={handleSubmit} disabled={saving} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add card'}</button>
+        </div>
+      </div>}
+
+      {creating&&formStage==='edit'&&<div style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'20px',marginBottom:'20px'}}>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'14px'}}>New card</div>
         <div style={{display:'flex',gap:'8px',marginBottom:'10px'}}>
           {['ad','newsletter'].map(t=>(
@@ -2049,7 +2072,7 @@ function CarouselTab() {
         </div>
         <div style={{display:'flex',gap:'8px'}}>
           <button onClick={()=>{setCreating(false);setFormBlocks([{type:'paragraph',text:''}])}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
-          <button onClick={handleSubmit} disabled={saving||!form.title.trim()||(!form.link_url.trim()&&!formBlocks.some(b=>(b.type==='paragraph'&&b.text.trim())||(b.type==='image'&&b.url.trim())))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add card'}</button>
+          <button onClick={()=>setFormStage('preview')} disabled={!form.title.trim()||(!form.link_url.trim()&&!formBlocks.some(b=>(b.type==='paragraph'&&b.text.trim())||(b.type==='image'&&b.url.trim())))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>Preview →</button>
         </div>
       </div>}
 

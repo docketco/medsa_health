@@ -43,8 +43,12 @@ export default function EmergencyPage() {
       <div style={{maxWidth:440,margin:'0 auto'}}>
         <div style={{fontSize:'11px',color:C.textMuted,textAlign:'center',marginBottom:'14px',letterSpacing:'0.5px',textTransform:'uppercase'}}>Medsa Emergency Card</div>
         <div style={{background:C.redLight,border:`1px solid ${C.red}`,borderRadius:'14px',padding:'18px'}}>
-          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'2px'}}>{p.full_name}</div>
-          <div style={{fontSize:'12.5px',color:C.textSub,marginBottom:'14px'}}>{p.date_of_birth ? `DOB ${new Date(p.date_of_birth).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})} · ` : ''}{p.medsa_id}</div>
+          {/* Real call: DOB and medsa_id are both sensitive on a page
+              anyone who scans a physical card can open, no login - exact
+              DOB is an identity-theft vector, medsa_id can be used to
+              target the real account. Neither is fetched by the API any
+              more either, not just hidden here. */}
+          <div style={{fontSize:'18px',fontWeight:700,marginBottom:'14px'}}>{p.full_name}</div>
           <div style={{display:'flex',gap:'10px',marginBottom:'14px'}}>
             <div style={{flex:1,background:'rgba(192,57,43,0.12)',borderRadius:'10px',padding:'12px',textAlign:'center'}}>
               <div style={{fontSize:'10px',color:C.red}}>Blood type</div>
