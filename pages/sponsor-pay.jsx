@@ -3,14 +3,13 @@
 // Public, no-login page - the sponsor's own half of the redesigned carousel
 // flow. Medsa still reviews content first (pages/sponsor-submit.jsx lands in
 // home_carousel_submissions as 'pending'; medsa-admin's Carousel tab reviews
-// it and sets a monthly rate via /api/sponsor/approve_for_payment.js, which
-// emails the sponsor the link here). Once here, the sponsor - not Medsa -
-// picks their own duration and start date and pays, same self-serve pattern
-// as Sponsored Listings (components/insurance/InsuranceApp.jsx's
-// SponsoredListings). Nothing goes live until Stripe confirms payment (see
-// /api/webhooks/stripe.js and this page's own verify-on-return fallback) -
-// and even then, it's scheduled to the exact start/end date picked here, not
-// published immediately forever.
+// it and sets a real menu of duration/price options via
+// /api/sponsor/approve_for_payment.js, which emails the sponsor the link
+// here). Once here, the sponsor only picks ONE of Medsa's own options plus a
+// start date - never an open rate they multiply themselves. Nothing goes
+// live until Stripe confirms payment (see /api/webhooks/stripe.js and this
+// page's own verify-on-return fallback) - and even then, it's scheduled to
+// the exact start/end date picked here, not published immediately forever.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState, useEffect } from 'react'
@@ -34,7 +33,7 @@ function PreviewCard({ sub }) {
 export default function SponsorPayPage() {
   const [stage, setStage] = useState('loading') // loading | ready | not_found | wrong_status | already_paid | paying | done | error
   const [sub, setSub] = useState(null)
-  const [months, setMonths] = useState(1)
+  const [optionIndex, setOptionIndex] = useState(0)
   const [startsAt, setStartsAt] = useState(new Date().toISOString().slice(0,10))
   const [error, setError] = useState(null)
   const [returnNotice, setReturnNotice] = useState(null)
@@ -75,7 +74,7 @@ export default function SponsorPayPage() {
     try {
       const res = await fetch('/api/sponsor/create_scheduled_checkout', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ submissionId: sub.id, months, startsAt }),
+        body: JSON.stringify({ submissionId: sub.id, optionIndex, startsAt }),
       })
       const data = await res.json()
       if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
@@ -87,10 +86,11 @@ export default function SponsorPayPage() {
     }
   }
 
-  const rate = sub?.price_hkd || 0
-  const netAmountHKD = rate * months
+  const options = sub?.pricing_options || []
+  const option = options[optionIndex] || null
+  const netAmountHKD = option?.priceHkd || 0
   const { grossAmountHKD } = grossUpForStripeFee(netAmountHKD)
-  const endDate = (() => { const d = new Date(`${startsAt}T00:00:00`); if (isNaN(d.getTime())) return null; d.setMonth(d.getMonth()+months); return d })()
+  const endDate = (() => { if (!option) return null; const d = new Date(`${startsAt}T00:00:00`); if (isNaN(d.getTime())) return null; d.setDate(d.getDate()+option.days); return d })()
 
   const Shell = ({ children }) => (
     <div style={{background:C.beige,minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',fontFamily:'system-ui,sans-serif'}}>
@@ -110,15 +110,16 @@ export default function SponsorPayPage() {
   return (
     <Shell>
       <div style={{fontSize:'17px',fontWeight:700,marginBottom:'4px'}}>Schedule your placement</div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Approved at HK${rate.toLocaleString()}/month. Pick how long and when it starts.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Pick one of the options Medsa approved, and when it starts.</div>
       {returnNotice&&<div style={{marginBottom:'14px',padding:'10px 12px',borderRadius:'10px',fontSize:'12px',lineHeight:1.5,background:returnNotice.ok?C.greenXLight:C.redLight,border:`0.5px solid ${returnNotice.ok?C.green:C.red}`,color:returnNotice.ok?C.green:C.red}}>{returnNotice.text}</div>}
       {sub&&<div style={{marginBottom:'16px'}}><PreviewCard sub={sub}/></div>}
 
-      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Duration</div>
-      <div style={{display:'flex',gap:'8px',marginBottom:'12px'}}>
-        {[1,3,6].map(m=>(
-          <div key={m} onClick={()=>setMonths(m)} style={{flex:1,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'12px',fontWeight:500,cursor:'pointer',background:months===m?C.navy:C.beige,color:months===m?'#fff':C.text,border:`0.5px solid ${months===m?C.navy:C.border}`}}>{m} mo · HK${(rate*m).toLocaleString()}</div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Option</div>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'12px'}}>
+        {options.map((o,i)=>(
+          <div key={i} onClick={()=>setOptionIndex(i)} style={{padding:'10px 12px',borderRadius:'8px',fontSize:'13px',fontWeight:500,cursor:'pointer',display:'flex',justifyContent:'space-between',background:optionIndex===i?C.navy:C.beige,color:optionIndex===i?'#fff':C.text,border:`0.5px solid ${optionIndex===i?C.navy:C.border}`}}><span>{o.label}</span><span>HK${o.priceHkd.toLocaleString()}</span></div>
         ))}
+        {options.length===0&&<div style={{fontSize:'12px',color:C.textMuted}}>No pricing options are set on this submission yet - contact Medsa.</div>}
       </div>
 
       <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>Start date</div>
@@ -128,7 +129,7 @@ export default function SponsorPayPage() {
       <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'16px'}}>Actual card charge: HK${grossAmountHKD.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (includes Stripe's card processing fee - Medsa receives the full HK${netAmountHKD.toLocaleString()} quoted).</div>
 
       {error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{error}</div>}
-      <button onClick={handlePay} disabled={stage==='paying'} style={{width:'100%',padding:'12px',background:C.navy,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>{stage==='paying'?'Opening checkout…':`Pay HK$${grossAmountHKD.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} & schedule`}</button>
+      <button onClick={handlePay} disabled={stage==='paying'||!option} style={{width:'100%',padding:'12px',background:C.navy,color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:600,cursor:'pointer'}}>{stage==='paying'?'Opening checkout…':`Pay HK$${grossAmountHKD.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} & schedule`}</button>
     </Shell>
   )
 }
