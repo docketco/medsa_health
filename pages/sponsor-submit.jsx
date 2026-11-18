@@ -74,7 +74,7 @@ function AdPricingMenuNote() {
 
 export default function SponsorSubmitPage() {
   const [stage, setStage] = useState('form') // form | preview | submitting | done
-  const [itemType, setItemType] = useState('ad')
+  const itemType = 'ad'
   const [sponsorName, setSponsorName] = useState('')
   const [sponsorEmail, setSponsorEmail] = useState('')
   const [title, setTitle] = useState('')
@@ -163,7 +163,7 @@ export default function SponsorSubmitPage() {
               {cleanBlocks.map((blk,i)=>blk.type==='image'
                 ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'10px',margin:'12px 0',display:'block'}}/>
                 : <p key={i} style={{fontSize:'14px',color:C.text,lineHeight:1.8,margin:'0 0 14px'}}>{blk.text}</p>)}
-              {linkUrl&&<div style={{textAlign:'center',padding:'12px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'13px',fontWeight:600,marginTop:'8px'}}>{ctaLabel||'Learn more'} ↗</div>}
+              {linkUrl&&<a href={linkUrl} target="_blank" rel="noopener noreferrer" style={{display:'block',textAlign:'center',padding:'12px',background:C.green,color:'#fff',borderRadius:'10px',fontSize:'13px',fontWeight:600,marginTop:'8px',textDecoration:'none'}}>{ctaLabel||'Learn more'} ↗</a>}
             </div>
           </div>
 
@@ -190,15 +190,14 @@ export default function SponsorSubmitPage() {
   return (
     <div style={{background:C.beige,minHeight:'100vh',padding:'24px',fontFamily:'system-ui,sans-serif'}}>
       <div style={{maxWidth:520,margin:'0 auto',background:'#fff',borderRadius:'16px',padding:'28px'}}>
-        <div style={{fontSize:'19px',fontWeight:700,marginBottom:'4px'}}>Submit content for Medsa</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>Ads and newsletter articles shown to patients on the Medsa home screen. Fill this in yourself - Medsa reviews and posts it, but doesn't write it for you. Nothing goes live until approved.</div>
-
-        <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
-          {[['ad','Sponsored ad'],['newsletter','Newsletter article']].map(([k,l])=>(
-            <div key={k} onClick={()=>setItemType(k)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:itemType===k?C.green:C.card,color:itemType===k?'#fff':C.text}}>{l}</div>
-          ))}
-        </div>
-        {itemType==='ad'&&<AdPricingMenuNote/>}
+        <div style={{fontSize:'19px',fontWeight:700,marginBottom:'4px'}}>Submit a sponsored ad</div>
+        {/* Real call: newsletter articles are Medsa's own editorial
+            content, written by Medsa staff directly in medsa-admin's
+            "+ Add card yourself" - never something the public form
+            offers, since anyone submitting here is always a sponsor, not
+            Medsa itself. itemType is fixed to 'ad', not a user choice. */}
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.6}}>Sponsored ads shown to patients on the Medsa home screen. Fill this in yourself - Medsa reviews and posts it, but doesn't write it for you. Nothing goes live until approved and paid for.</div>
+        <AdPricingMenuNote/>
 
         <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>Your details</div>
         <input value={sponsorName} onChange={e=>setSponsorName(e.target.value)} placeholder="Your name / company" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>

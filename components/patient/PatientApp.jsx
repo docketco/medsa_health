@@ -481,20 +481,23 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
     setCarouselIndex(Math.round(el.scrollLeft / cardWidth))
   }
 
-  useEffect(() => {
-    async function loadCarousel() {
-      const now = new Date().toISOString()
-      // Same hardcoded-for-now ('HK','Global') filter as patient_notices -
-      // every patient is HK-based until patients carry their own location.
-      const { data } = await supabase.from('home_carousel_items').select('*')
-        .eq('active', true).in('location', ['HK','Global']).order('display_order')
-      // Scheduling window checked client-side, not in the query - keeps
-      // this simple to read and the table is small (a handful of cards,
-      // not thousands of rows).
-      setCarouselItems((data||[]).filter(c => (!c.starts_at || c.starts_at <= now) && (!c.ends_at || c.ends_at >= now)))
-    }
-    loadCarousel()
-  }, [])
+  // Real gap found live-testing: this only ever loaded once on mount - a
+  // sponsor who paid and got scheduled on /sponsor-pay would never see
+  // their ad appear back on Home without a full page reload, since the
+  // explicit "Refresh" button below never touched this. Pulled out of the
+  // effect so that button (and pull-to-refresh) can call it too.
+  async function loadCarousel() {
+    const now = new Date().toISOString()
+    // Same hardcoded-for-now ('HK','Global') filter as patient_notices -
+    // every patient is HK-based until patients carry their own location.
+    const { data } = await supabase.from('home_carousel_items').select('*')
+      .eq('active', true).in('location', ['HK','Global']).order('display_order')
+    // Scheduling window checked client-side, not in the query - keeps
+    // this simple to read and the table is small (a handful of cards,
+    // not thousands of rows).
+    setCarouselItems((data||[]).filter(c => (!c.starts_at || c.starts_at <= now) && (!c.ends_at || c.ends_at >= now)))
+  }
+  useEffect(() => { loadCarousel() }, [])
 
   function msgThreadKey(m) { return m.thread_id || m.id }
 
@@ -768,7 +771,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   }, [patient?.medsa_id])
 
   return (
-    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus(), onRefreshData?.()]) }}>
+    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus(), loadCarousel(), onRefreshData?.()]) }}>
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
 
       {/* A real, always-visible, clickable refresh - pull-to-refresh is
@@ -776,7 +779,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           miss even on touch. This works the same way every time,
           regardless of device. */}
       <div style={{display:'flex',justifyContent:'flex-end',padding:'10px 16px 0'}}>
-        <div onClick={async()=>{ if(manualRefreshing) return; setManualRefreshing(true); await Promise.all([loadDoctorMessages(), loadQueueStatus(), onRefreshData?.()]); setManualRefreshing(false) }} style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:C.textSub,cursor:'pointer'}}>
+        <div onClick={async()=>{ if(manualRefreshing) return; setManualRefreshing(true); await Promise.all([loadDoctorMessages(), loadQueueStatus(), loadCarousel(), onRefreshData?.()]); setManualRefreshing(false) }} style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:C.textSub,cursor:'pointer'}}>
           <span style={{display:'inline-block',transition:'transform 0.5s',transform:manualRefreshing?'rotate(360deg)':'none'}}>{'⟳'}</span>
           {manualRefreshing?(isEn?'Refreshing…':'刷新中…'):(isEn?'Refresh':'刷新')}
         </div>

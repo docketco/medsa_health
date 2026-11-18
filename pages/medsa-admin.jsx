@@ -1778,7 +1778,7 @@ function CarouselPreviewCard({ sub }) {
           {blocks.map((blk,i)=>blk.type==='image'
             ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'8px',margin:'10px 0',display:'block'}}/>
             : <p key={i} style={{fontSize:'13px',color:C.text,lineHeight:1.7,margin:'0 0 10px'}}>{blk.text}</p>)}
-          {sub.link_url&&<div style={{textAlign:'center',padding:'10px',background:C.green,color:'#fff',borderRadius:'8px',fontSize:'12px',fontWeight:600,marginTop:'6px'}}>{sub.cta_label||'Learn more'} ↗</div>}
+          {sub.link_url&&<a href={sub.link_url} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{display:'block',textAlign:'center',padding:'10px',background:C.green,color:'#fff',borderRadius:'8px',fontSize:'12px',fontWeight:600,marginTop:'6px',textDecoration:'none'}}>{sub.cta_label||'Learn more'} ↗</a>}
         </>}
         <div onClick={()=>setExpanded(e=>!e)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',marginTop:expanded?'12px':'8px',fontWeight:600}}>{expanded?'▲ Collapse':'▼ View full card'}</div>
       </div>
@@ -1920,7 +1920,7 @@ function CarouselTab() {
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Newsletter articles (Medsa's own editorial content) can post free; sponsored ads are the real revenue, so they only ever go live through payment - the sponsor picks one of the options below plus a start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen. Newsletter articles are Medsa's own editorial content - write those yourself below with &ldquo;+ Add card yourself&rdquo;, they post free immediately, no review step. Sponsored ads are the real revenue and the only thing <strong>medsa.health/sponsor-submit</strong> ever creates - nothing from that public form goes live until you review it below, and it only ever goes live through payment: the sponsor picks one of the options below plus a start date and pays, scheduled to go live/expire on exactly those dates.</div>
 
       <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'20px'}}>
         <div style={{fontSize:'13px',fontWeight:600,marginBottom:'8px'}}>Ad pricing menu</div>
