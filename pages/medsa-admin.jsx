@@ -65,7 +65,7 @@ export default function MedsaAdminPage() {
             neither is core to the insurer/agent/patient bridge this app
             is now scoped to. ConfinementHelpersTab and VerifiedProsTab
             left defined/untouched below (frozen, not deleted). */}
-        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
+        {[['carousel','slides','Carousel'],['plans','records','Plans'],['claims','alert','Claims'],...(COMMUNITY_ENABLED?[['forum','community','Forum']]:[]),['partners','insurance','Insurers'],['agentverification','badge','Agent Verification'],['clinics','building','Clinics'],['apiclients','badge','API Clients'],['recovery','badge','Recovery'],['accountrequests','alert','Account Requests'],['roster','records','Policy Roster'],['adulttransfers','alert','Adult Transfers'],['notices','alert','Notices'],['qa','alert','QA Tools']].map(([k,ic,l])=>(
           <div key={k} onClick={()=>setTab(k)} style={{position:'relative',flex:1,minWidth:70,padding:'10px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:600,cursor:'pointer',background:tab===k?C.green:C.card,color:tab===k?'#fff':C.text,display:'flex',flexDirection:'column',alignItems:'center',gap:'4px'}}>
             {k==='agentverification'&&pendingAgentCount>0&&<span style={{position:'absolute',top:'4px',right:'6px',minWidth:'16px',height:'16px',padding:'0 3px',borderRadius:'8px',background:C.red,color:'#fff',fontSize:'10px',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center'}}>{pendingAgentCount}</span>}
             <Icon name={ic} size={18}/>
@@ -87,6 +87,7 @@ export default function MedsaAdminPage() {
       {false&&tab==='tpa' && <TpaClinicsTab/>}
       {tab==='apiclients' && <ApiClientsTab/>}
       {tab==='recovery' && <AccountRecoveryTab/>}
+      {tab==='accountrequests' && <AccountActionRequestsTab/>}
       {tab==='roster' && <InsurerTestRosterScreen/>}
       {tab==='adulttransfers' && <AdultTransfersTab/>}
       {tab==='notices' && <NoticesTab/>}
@@ -576,6 +577,73 @@ function AccountRecoveryTab() {
           <div style={{display:'flex',gap:'8px'}}>
             <button onClick={()=>handleReject(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Reject'}</button>
             <button onClick={()=>handleApprove(req)} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Approve'}</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Real request: "a button for deleting own account/turning into pdf...
+// give them a reason multiple choice with an 'other' choice, just so we
+// have the data and we can still process it" - a LIVING patient's own
+// self-service request to close their account (EditProfileScreen's
+// "Close my account"), separate from the "if I die" standing preference.
+// This tab is deliberately review-only, not an execute button: actually
+// deleting a patient can fail outright on real foreign keys (active
+// policies, a parent with dependent kids profiles still linked) rather
+// than cascade silently, which is the right failure mode but not one to
+// paper over with a single auto-confirm click. Mark it approved/rejected
+// here to record the decision and who made it; carry out a delete or a
+// read-only PDF export as its own deliberate action once you have,
+// same "flag and route, don't auto-adjudicate" boundary as everywhere
+// else sensitive in this app.
+function AccountActionRequestsTab() {
+  const [requests, setRequests] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [reviewerName, setReviewerName] = useState('')
+  const [busyId, setBusyId] = useState(null)
+  const [notes, setNotes] = useState({})
+
+  async function load() {
+    setLoading(true)
+    const { data } = await supabase.from('account_action_requests')
+      .select('*, patients(full_name, hkid, medsa_id)')
+      .eq('status', 'pending').order('requested_at')
+    setRequests(data||[])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function decide(req, decision) {
+    if (!reviewerName.trim()) { alert('Enter your name before reviewing.'); return }
+    setBusyId(req.id)
+    await supabase.from('account_action_requests').update({
+      status: decision, reviewed_at: new Date().toISOString(), reviewer_name: reviewerName.trim(),
+      admin_note: notes[req.id]?.trim() || null,
+    }).eq('id', req.id)
+    setBusyId(null)
+    load()
+  }
+
+  return (
+    <div>
+      <div style={{fontSize:'12px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>
+        A patient asked, from their own Account Settings, to close their own account - never about someone else's death (see Adult Transfers for that). Marking approved here records the decision; it does NOT delete anything or generate a PDF by itself - do that deliberately once you've confirmed there's nothing in the way (active policies, dependent kids profiles still linked, etc).
+      </div>
+      <input value={reviewerName} onChange={e=>setReviewerName(e.target.value)} placeholder="Your name (recorded as reviewer)" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'16px',border:`1px solid ${C.border}`,borderRadius:'8px',boxSizing:'border-box'}}/>
+      {loading && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>Loading…</div>}
+      {!loading && requests.length===0 && <div style={{fontSize:'13px',color:C.textMuted,textAlign:'center',padding:'20px'}}>No pending account requests.</div>}
+      {requests.map(req => (
+        <div key={req.id} style={{background:C.card,borderRadius:'10px',padding:'16px',marginBottom:'12px'}}>
+          <div style={{fontSize:'14px',fontWeight:700,marginBottom:'2px'}}>{req.patients?.full_name || 'Unknown'}</div>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>{req.patients?.medsa_id} · HKID {req.patients?.hkid||'(none on file)'}</div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'6px'}}>Wants: <strong>{req.request_type==='delete'?'Account deleted entirely':'Turned into a permanent read-only PDF'}</strong></div>
+          <div style={{fontSize:'12px',color:C.text,marginBottom:'10px'}}>Reason: <strong>{req.reason}</strong>{req.reason_other?` - "${req.reason_other}"`:''}</div>
+          <input value={notes[req.id]||''} onChange={e=>setNotes(prev=>({...prev,[req.id]:e.target.value}))} placeholder="Admin note (optional)" style={{width:'100%',padding:'8px 10px',fontSize:'12px',marginBottom:'10px',border:`1px solid ${C.border}`,borderRadius:'6px',boxSizing:'border-box'}}/>
+          <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>decide(req,'rejected')} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:'#fff',border:`1px solid ${C.red}`,color:C.red,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Reject'}</button>
+            <button onClick={()=>decide(req,'approved')} disabled={busyId===req.id} style={{flex:1,padding:'8px',background:C.green,border:'none',color:'#fff',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{busyId===req.id?'…':'Approve'}</button>
           </div>
         </div>
       ))}
