@@ -1647,6 +1647,11 @@ function AdminImagePicker({ label, value, onChange, bucket='carousel-images' }) 
   const [mode, setMode] = useState('url')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  // Same real report as sponsor-submit.jsx's ImagePicker: a pasted page
+  // link (Pinterest pin, search result, social post) instead of a direct
+  // image file never renders in an <img> tag - flag it directly here too.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const looksLikeAPageNotAnImage = /pinterest\.[a-z.]+\/pin\//i.test(value||'') || /\/(search|photos|watch|status)[/?]/i.test(value||'')
 
   async function handleFile(file) {
     setUploading(true)
@@ -1667,13 +1672,14 @@ function AdminImagePicker({ label, value, onChange, bucket='carousel-images' }) 
           <div key={k} onClick={()=>setMode(k)} style={{flex:1,padding:'6px',borderRadius:'6px',textAlign:'center',fontSize:'11px',cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub}}>{l}</div>
         ))}
       </div>
-      {mode==='url'&&<input value={value||''} onChange={e=>onChange(e.target.value)} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+      {mode==='url'&&<input value={value||''} onChange={e=>{onChange(e.target.value);setLoadFailed(false)}} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
       {mode==='upload'&&<label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
         {uploading?'Uploading…':(value?'Uploaded ✓ - tap to replace':'Tap to upload (JPG/PNG)')}
         <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
       </label>}
       {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {uploadError}</div>}
-      {value&&<img src={value} alt="" style={{width:'100%',maxHeight:100,objectFit:'cover',borderRadius:'8px',marginTop:'6px'}}/>}
+      {value&&(loadFailed||looksLikeAPageNotAnImage)&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px',lineHeight:1.5}}>This looks like a link to a <b>page</b> (Pinterest pin, search result, social post), not the image file itself - right-click the actual photo and &ldquo;Copy image address&rdquo; instead (often a different domain, e.g. i.pinimg.com not pinterest.com), or upload a file.</div>}
+      {value&&<img src={value} alt="" onLoad={()=>setLoadFailed(false)} onError={()=>setLoadFailed(true)} style={{width:'100%',maxHeight:100,objectFit:'cover',borderRadius:'8px',marginTop:'6px',background:C.beige}}/>}
     </div>
   )
 }
@@ -1720,31 +1726,50 @@ function CarouselTab() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
   const [approving, setApproving] = useState(null)
-  // Real redesign, per your call: Medsa sets the real duration/price menu
-  // itself (e.g. "2 weeks - HK$500", "1 month - HK$900") - the sponsor
-  // only ever picks one of THESE on /sponsor-pay, plus a start date.
-  // Never an open monthly rate they multiply themselves.
-  const [optionDrafts, setOptionDrafts] = useState({}) // submissionId -> [{label,days,priceHkd}]
+  // Redesigned again, per your call: "price menu should be one for all
+  // not quote by quote" - the duration/price menu (e.g. "2 weeks -
+  // HK$500", "1 month - HK$900") is now set ONCE here, globally, not
+  // re-typed every time a submission is approved. Approving a submission
+  // just snapshots whatever this menu currently holds onto that
+  // submission - see approve_for_payment.js.
+  const [pricingMenu, setPricingMenu] = useState([])
+  const [menuEditing, setMenuEditing] = useState(false)
+  const [menuDraft, setMenuDraft] = useState([])
+  const [savingMenu, setSavingMenu] = useState(false)
   const [approvingForPaymentId, setApprovingForPaymentId] = useState(null)
   const [approveResults, setApproveResults] = useState({}) // submissionId -> {payLink, emailSent, ...} | {error}
 
-  function draftFor(subId) { return optionDrafts[subId] || [{label:'',days:'',priceHkd:''}] }
-  function addOptionRow(subId) { setOptionDrafts(prev => ({...prev, [subId]: [...draftFor(subId), {label:'',days:'',priceHkd:''}]})) }
-  function removeOptionRow(subId, idx) { setOptionDrafts(prev => ({...prev, [subId]: draftFor(subId).filter((_,i)=>i!==idx)})) }
-  function updateOptionRow(subId, idx, field, value) {
-    setOptionDrafts(prev => ({...prev, [subId]: draftFor(subId).map((o,i)=>i===idx?{...o,[field]:value}:o)}))
+  function startEditingMenu() {
+    setMenuDraft(pricingMenu.length>0 ? pricingMenu.map(o=>({label:o.label,days:String(o.days),priceHkd:String(o.price_hkd)})) : [{label:'',days:'',priceHkd:''}])
+    setMenuEditing(true)
+  }
+  function addMenuRow() { setMenuDraft(prev => [...prev, {label:'',days:'',priceHkd:''}]) }
+  function removeMenuRow(idx) { setMenuDraft(prev => prev.filter((_,i)=>i!==idx)) }
+  function updateMenuRow(idx, field, value) { setMenuDraft(prev => prev.map((o,i)=>i===idx?{...o,[field]:value}:o)) }
+  async function saveMenu() {
+    const rows = menuDraft.filter(o=>o.label.trim()&&o.days&&o.priceHkd)
+    setSavingMenu(true)
+    await supabase.from('carousel_ad_pricing_options').delete().neq('id','00000000-0000-0000-0000-000000000000')
+    if (rows.length>0) {
+      await supabase.from('carousel_ad_pricing_options').insert(rows.map((r,i)=>({label:r.label.trim(),days:parseInt(r.days),price_hkd:parseFloat(r.priceHkd),sort_order:i})))
+    }
+    setSavingMenu(false)
+    setMenuEditing(false)
+    load()
   }
 
   async function load() {
     setLoading(true)
-    const [{data:i},{data:s},{data:awp}] = await Promise.all([
+    const [{data:i},{data:s},{data:awp},{data:menu}] = await Promise.all([
       supabase.from('home_carousel_items').select('*').order('display_order'),
       supabase.from('home_carousel_submissions').select('*').eq('status','pending').order('submitted_at',{ascending:false}),
       supabase.from('home_carousel_submissions').select('*').eq('status','approved_awaiting_payment').order('reviewed_at',{ascending:false}),
+      supabase.from('carousel_ad_pricing_options').select('*').order('sort_order').order('created_at'),
     ])
     setItems(i||[])
     setSubmissions(s||[])
     setAwaitingPayment(awp||[])
+    setPricingMenu(menu||[])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -1800,23 +1825,20 @@ function CarouselTab() {
     load()
   }
 
-  // Redesigned, per your call: Medsa still reviews content first (this is
-  // a health app - a bad ad going live unreviewed is a real risk, unlike
-  // Sponsored Listings which only reorders an already-vetted plan), and
-  // now also sets the real duration/price menu itself here - the sponsor
-  // only ever picks one of these options plus a start date on
-  // /sponsor-pay, never an open rate they multiply themselves. This only
-  // sets the menu and emails them where to go next; nothing is charged
-  // here, and nothing goes live until they've paid for real
-  // (/api/sponsor/create_scheduled_checkout.js + the webhook/verify-on-
-  // return fallback).
+  // Medsa still reviews content first (this is a health app - a bad ad
+  // going live unreviewed is a real risk, unlike Sponsored Listings which
+  // only reorders an already-vetted plan). The duration/price menu is the
+  // global `pricingMenu` above, not typed in here - this just snapshots
+  // it onto the submission and emails the sponsor where to go next;
+  // nothing is charged here, and nothing goes live until they've paid for
+  // real (/api/sponsor/create_scheduled_checkout.js + the webhook/verify-
+  // on-return fallback).
   async function handleApproveForPayment(sub) {
-    const rows = draftFor(sub.id).filter(o=>o.label.trim()&&o.days&&o.priceHkd)
-    if (rows.length===0) return
+    if (pricingMenu.length===0) return
     setApprovingForPaymentId(sub.id)
     const res = await fetch('/api/sponsor/approve_for_payment', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ submissionId: sub.id, pricingOptions: rows.map(r=>({label:r.label.trim(), days:parseInt(r.days), priceHkd:parseFloat(r.priceHkd)})) }),
+      body: JSON.stringify({ submissionId: sub.id }),
     })
     const data = await res.json()
     setApproveResults(prev => ({...prev, [sub.id]: data}))
@@ -1826,7 +1848,35 @@ function CarouselTab() {
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Newsletter articles (Medsa's own editorial content) can post free; sponsored ads are the real revenue, so they only ever go live through payment - set your own duration/price menu, the sponsor picks one of your options plus a start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Newsletter articles (Medsa's own editorial content) can post free; sponsored ads are the real revenue, so they only ever go live through payment - the sponsor picks one of the options below plus a start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
+
+      <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'20px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}}>
+          <div style={{fontSize:'13px',fontWeight:600}}>Ad pricing menu</div>
+          {!menuEditing&&<span onClick={startEditingMenu} style={{fontSize:'11px',color:C.blue,cursor:'pointer',fontWeight:600}}>{pricingMenu.length>0?'Edit':'+ Set up'}</span>}
+        </div>
+        <div style={{fontSize:'11px',color:C.textSub,marginBottom:'10px'}}>One menu for every ad, not set per submission - every &ldquo;Approve for payment&rdquo; below offers exactly this list.</div>
+        {!menuEditing&&(pricingMenu.length>0
+          ? <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>{pricingMenu.map(o=>(
+              <span key={o.id} style={{fontSize:'11px',background:C.beige,borderRadius:'6px',padding:'5px 9px'}}>{o.label} · HK${Number(o.price_hkd).toLocaleString()} ({o.days}d)</span>
+            ))}</div>
+          : <div style={{fontSize:'11px',color:C.amber}}>No options set yet - sponsored ads can&rsquo;t be approved for payment until you add at least one.</div>)}
+        {menuEditing&&<div>
+          {menuDraft.map((row,idx)=>(
+            <div key={idx} style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+              <input value={row.label} onChange={e=>updateMenuRow(idx,'label',e.target.value)} placeholder="e.g. 2 weeks" style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <input type="number" value={row.days} onChange={e=>updateMenuRow(idx,'days',e.target.value)} placeholder="Days" style={{flex:'0 1 60px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              <input type="number" step="0.01" value={row.priceHkd} onChange={e=>updateMenuRow(idx,'priceHkd',e.target.value)} placeholder="HK$" style={{flex:'0 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+              {menuDraft.length>1&&<span onClick={()=>removeMenuRow(idx)} style={{fontSize:'11px',color:C.red,cursor:'pointer',alignSelf:'center'}}>✕</span>}
+            </div>
+          ))}
+          <div style={{display:'flex',gap:'6px',marginTop:'4px'}}>
+            <button onClick={addMenuRow} style={{padding:'6px 10px',background:'#fff',border:`1px dashed ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>+ Add another option</button>
+            <button onClick={()=>setMenuEditing(false)} style={{padding:'6px 10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>Cancel</button>
+            <button onClick={saveMenu} disabled={savingMenu} style={{flex:1,padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{savingMenu?'Saving…':'Save menu'}</button>
+          </div>
+        </div>}
+      </div>
 
       {submissions.length>0&&<>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Pending submissions ({submissions.length})</div>
@@ -1846,19 +1896,10 @@ function CarouselTab() {
               {sub.item_type!=='ad'&&<button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>}
             </div>
             <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Set your own duration/price menu - the sponsor picks one of these plus a start date on their own self-serve page:</div>
-              {draftFor(sub.id).map((row,idx)=>(
-                <div key={idx} style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
-                  <input value={row.label} onChange={e=>updateOptionRow(sub.id,idx,'label',e.target.value)} placeholder="e.g. 2 weeks" style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-                  <input type="number" value={row.days} onChange={e=>updateOptionRow(sub.id,idx,'days',e.target.value)} placeholder="Days" style={{flex:'0 1 60px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-                  <input type="number" step="0.01" value={row.priceHkd} onChange={e=>updateOptionRow(sub.id,idx,'priceHkd',e.target.value)} placeholder="HK$" style={{flex:'0 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-                  {draftFor(sub.id).length>1&&<span onClick={()=>removeOptionRow(sub.id,idx)} style={{fontSize:'11px',color:C.red,cursor:'pointer',alignSelf:'center'}}>✕</span>}
-                </div>
-              ))}
-              <div style={{display:'flex',gap:'6px'}}>
-                <button onClick={()=>addOptionRow(sub.id)} style={{padding:'6px 10px',background:'#fff',border:`1px dashed ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>+ Add another option</button>
-                <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id} style={{flex:1,padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
-              </div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>{pricingMenu.length>0
+                ? <>Approving will offer: {pricingMenu.map(o=>`${o.label} (HK$${Number(o.price_hkd).toLocaleString()})`).join(', ')} - edit the menu above if this isn&rsquo;t right.</>
+                : <>No ad pricing menu set yet - add one above first.</>}</div>
+              <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id||pricingMenu.length===0} style={{width:'100%',padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
               {approveResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{approveResults[sub.id].message}</div>}
               {approveResults[sub.id]?.status==='OK'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
                 Approved. Scheduling link {approveResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + approveResults[sub.id].emailReason + ')'}: <a href={approveResults[sub.id].payLink} target="_blank" rel="noreferrer">{approveResults[sub.id].payLink}</a>
