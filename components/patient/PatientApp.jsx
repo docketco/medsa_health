@@ -413,40 +413,47 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   // own "+ Add event"). This is now a generic "something's coming up"
   // reminder, same surfaced-on-Home reasoning as before.
   const [nextCalendarEvent,setNextCalendarEvent]=useState(null)
-  useEffect(() => {
+  // Pulled out of their effects, same reason as loadCarousel below - "the
+  // refresh should include everything", your real call. Every one of
+  // these used to only ever load once (or once per patient switch) with
+  // no way for the explicit Refresh button/pull-to-refresh to touch it.
+  async function loadNextCalendarEvent() {
     if (!patient?.id) { setNextCalendarEvent(null); return }
-    supabase.from('patient_calendar_events').select('*').eq('patient_id', patient.id)
+    const { data } = await supabase.from('patient_calendar_events').select('*').eq('patient_id', patient.id)
       .gt('event_at', new Date(Date.now() - 24*60*60*1000).toISOString())
       .order('event_at', { ascending: true }).limit(1).maybeSingle()
-      .then(({ data }) => setNextCalendarEvent(data || null))
-  }, [patient?.id])
+    setNextCalendarEvent(data || null)
+  }
+  useEffect(() => { loadNextCalendarEvent() }, [patient?.id])
   // Admin-authored general advisories (medsa-admin's Notices tab) for the
   // Home alerts feed - replaces a hardcoded flu-season string that used
   // to show to every patient forever with something Medsa Admin can
   // actually write and retire (patient_notices.expires_at).
   const [homeNotices,setHomeNotices]=useState([])
-  useEffect(() => {
+  async function loadHomeNotices() {
     const nowIso = new Date().toISOString()
     // Every patient is HK-based today (patients has no location field of
     // its own yet) - 'Global' is the catch-all every market sees, so
     // this hardcoded pair is the correct filter until Medsa actually
     // operates in a second market and patients carry their own location.
-    supabase.from('patient_notices').select('*').eq('active', true).in('location', ['HK','Global'])
+    const { data } = await supabase.from('patient_notices').select('*').eq('active', true).in('location', ['HK','Global'])
       .lte('starts_at', nowIso).gt('expires_at', nowIso)
       .order('created_at', { ascending: false })
-      .then(({ data }) => setHomeNotices(data || []))
-  }, [])
+    setHomeNotices(data || [])
+  }
+  useEffect(() => { loadHomeNotices() }, [])
   // Lets a patient dismiss a single Home alert without deleting the
   // record it's derived from (an appointment, a calendar event, a claim,
   // a notice) - alert_key is a stable id computed per entry in the
   // alerts list below, not a foreign key, since the list is assembled
   // fresh from several tables every render, not stored as rows itself.
   const [dismissedAlertKeys,setDismissedAlertKeys]=useState(new Set())
-  useEffect(() => {
+  async function loadDismissedAlertKeys() {
     if (!patient?.id) { setDismissedAlertKeys(new Set()); return }
-    supabase.from('patient_alert_dismissals').select('alert_key').eq('patient_id', patient.id)
-      .then(({ data }) => setDismissedAlertKeys(new Set((data||[]).map(d=>d.alert_key))))
-  }, [patient?.id])
+    const { data } = await supabase.from('patient_alert_dismissals').select('alert_key').eq('patient_id', patient.id)
+    setDismissedAlertKeys(new Set((data||[]).map(d=>d.alert_key)))
+  }
+  useEffect(() => { loadDismissedAlertKeys() }, [patient?.id])
   async function dismissAlert(key) {
     setDismissedAlertKeys(prev => new Set(prev).add(key))
     if (patient?.id) await supabase.from('patient_alert_dismissals').insert({ patient_id: patient.id, alert_key: key })
@@ -459,12 +466,13 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   // pregnant" specifically, since that's the only state this card means
   // anything for).
   const [bumpDueDate,setBumpDueDate]=useState(null)
-  useEffect(() => {
+  async function loadBumpDueDate() {
     if (!patient?.id || !bumpActive) { setBumpDueDate(null); return }
-    supabase.from('bump_subscriptions').select('predicted_due_date').eq('patient_id', patient.id)
+    const { data } = await supabase.from('bump_subscriptions').select('predicted_due_date').eq('patient_id', patient.id)
       .is('graduated_at', null).is('child_dob', null).order('created_at',{ascending:false}).limit(1).maybeSingle()
-      .then(({ data }) => setBumpDueDate(data?.predicted_due_date || null))
-  }, [patient?.id, bumpActive])
+    setBumpDueDate(data?.predicted_due_date || null)
+  }
+  useEffect(() => { loadBumpDueDate() }, [patient?.id, bumpActive])
   const bumpWeeksUntilDue = bumpDueDate ? Math.ceil((new Date(bumpDueDate) - new Date()) / (7*24*60*60*1000)) : null
   const bumpGestationalWeek = bumpWeeksUntilDue!=null ? 40-bumpWeeksUntilDue : null
   // Clamped the same way weeklySizeComparison clamps internally - a due
@@ -498,6 +506,19 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
     setCarouselItems((data||[]).filter(c => (!c.starts_at || c.starts_at <= now) && (!c.ends_at || c.ends_at >= now)))
   }
   useEffect(() => { loadCarousel() }, [])
+
+  // Real call: "shouldn't the refresh include everything" - it didn't.
+  // Every one of Home's own data sources, in one place, so neither the
+  // explicit Refresh button nor pull-to-refresh can drift out of sync
+  // with what Home actually loads again as screens get added later.
+  async function refreshHomeData() {
+    await Promise.all([
+      loadDoctorMessages(), loadQueueStatus(), loadCarousel(),
+      loadHomeAccessRequests(homePatientId), loadPendingGuardianRequests(patient?.id),
+      loadInquiryMessageSummary(homePatientId), loadNextCalendarEvent(), loadHomeNotices(),
+      loadDismissedAlertKeys(), loadBumpDueDate(), onRefreshData?.(),
+    ])
+  }
 
   function msgThreadKey(m) { return m.thread_id || m.id }
 
@@ -771,7 +792,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
   }, [patient?.medsa_id])
 
   return (
-    <PullToRefresh onRefresh={async ()=>{ await Promise.all([loadDoctorMessages(), loadQueueStatus(), loadCarousel(), onRefreshData?.()]) }}>
+    <PullToRefresh onRefresh={refreshHomeData}>
     <div style={{background:C.beige,flex:1,paddingBottom:'20px'}}>
 
       {/* A real, always-visible, clickable refresh - pull-to-refresh is
@@ -779,7 +800,7 @@ function HomeScreen({ onNav, onOpenInquiry, isEn, onOpenEmergencySetup, onOpenSh
           miss even on touch. This works the same way every time,
           regardless of device. */}
       <div style={{display:'flex',justifyContent:'flex-end',padding:'10px 16px 0'}}>
-        <div onClick={async()=>{ if(manualRefreshing) return; setManualRefreshing(true); await Promise.all([loadDoctorMessages(), loadQueueStatus(), loadCarousel(), onRefreshData?.()]); setManualRefreshing(false) }} style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:C.textSub,cursor:'pointer'}}>
+        <div onClick={async()=>{ if(manualRefreshing) return; setManualRefreshing(true); await refreshHomeData(); setManualRefreshing(false) }} style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'11px',color:C.textSub,cursor:'pointer'}}>
           <span style={{display:'inline-block',transition:'transform 0.5s',transform:manualRefreshing?'rotate(360deg)':'none'}}>{'⟳'}</span>
           {manualRefreshing?(isEn?'Refreshing…':'刷新中…'):(isEn?'Refresh':'刷新')}
         </div>

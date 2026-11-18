@@ -1793,7 +1793,18 @@ function CarouselTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
+  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', display_order:0, location:'HK', ends_at:'' })
+  // Real call: "the add a card myself should have the same format as the
+  // ad - why can't I add image in between paragraphs?" - this used to be
+  // one plain textarea (home_carousel_items.content, a legacy string
+  // field), while every sponsor-submitted card already used the real
+  // block editor (content_blocks - paragraphs and images, in any order).
+  // Same editor here now, writing the same column, so this path and the
+  // sponsor path produce identical cards.
+  const [formBlocks, setFormBlocks] = useState([{ type:'paragraph', text:'' }])
+  function addFormBlock(type) { setFormBlocks(b => [...b, type==='paragraph' ? { type:'paragraph', text:'' } : { type:'image', url:'' }]) }
+  function updateFormBlock(i, field, value) { setFormBlocks(b => b.map((blk,idx) => idx===i ? {...blk,[field]:value} : blk)) }
+  function removeFormBlock(i) { setFormBlocks(b => b.filter((_,idx)=>idx!==i)) }
   const [approving, setApproving] = useState(null)
   // Redesigned twice now, per your calls: "price menu should be one for
   // all not quote by quote" (set ONCE here, globally, not re-typed every
@@ -1848,12 +1859,13 @@ function CarouselTab() {
 
   async function handleSubmit() {
     if (!form.title.trim()) return
-    if (!form.link_url.trim() && !form.content.trim()) return
+    const cleanBlocks = formBlocks.filter(b => (b.type==='paragraph' && b.text.trim()) || (b.type==='image' && b.url.trim()))
+    if (!form.link_url.trim() && cleanBlocks.length===0) return
     setSaving(true)
     await supabase.from('home_carousel_items').insert({
       item_type: form.item_type, title: form.title.trim(), subtitle: form.subtitle.trim()||null,
       image_url: form.image_url.trim()||null, sponsor_name: form.sponsor_name.trim()||null,
-      link_url: form.link_url.trim()||null, content: form.content.trim()||null,
+      link_url: form.link_url.trim()||null, content_blocks: cleanBlocks.length>0 ? cleanBlocks : null,
       display_order: parseInt(form.display_order)||0, active: true, location: form.location.trim()||'HK',
       // Real gap found live-testing: ends_at is a real column
       // (components/patient/PatientApp.jsx's own carousel query already
@@ -1864,7 +1876,8 @@ function CarouselTab() {
     })
     setSaving(false)
     setCreating(false)
-    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
+    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', display_order:0, location:'HK', ends_at:'' })
+    setFormBlocks([{ type:'paragraph', text:'' }])
     load()
   }
 
@@ -2021,11 +2034,22 @@ function CarouselTab() {
           <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
-        <textarea value={form.content} onChange={e=>setForm(f=>({...f,content:e.target.value}))} rows={4} placeholder="In-app content (for a newsletter article - leave blank if using an external link instead)"
-          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px',resize:'vertical',fontFamily:'inherit'}}/>
+        <div style={{fontSize:'11px',color:C.textSub,margin:'4px 0 8px'}}>In-app content (for a newsletter article - leave blank if using an external link instead) - add paragraphs and images in whatever order they should appear, same as a sponsor's own submission</div>
+        {formBlocks.map((blk,i) => (
+          <div key={i} style={{background:C.beige,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
+            {blk.type==='paragraph'
+              ? <textarea value={blk.text} onChange={e=>updateFormBlock(i,'text',e.target.value)} rows={3} placeholder="Paragraph text" style={{width:'100%',padding:'8px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'6px',fontFamily:'inherit',resize:'vertical'}}/>
+              : <AdminImagePicker label="" value={blk.url} onChange={v=>updateFormBlock(i,'url',v)}/>}
+            <div onClick={()=>removeFormBlock(i)} style={{fontSize:'11px',color:C.red,cursor:'pointer',marginTop:'6px'}}>Remove this block</div>
+          </div>
+        ))}
+        <div style={{display:'flex',gap:'8px',marginBottom:'14px'}}>
+          <button onClick={()=>addFormBlock('paragraph')} style={{flex:1,padding:'8px',background:C.card,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add paragraph</button>
+          <button onClick={()=>addFormBlock('image')} style={{flex:1,padding:'8px',background:C.card,border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>+ Add image</button>
+        </div>
         <div style={{display:'flex',gap:'8px'}}>
-          <button onClick={()=>setCreating(false)} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
-          <button onClick={handleSubmit} disabled={saving||!form.title.trim()||(!form.link_url.trim()&&!form.content.trim())} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add card'}</button>
+          <button onClick={()=>{setCreating(false);setFormBlocks([{type:'paragraph',text:''}])}} style={{flex:1,padding:'10px',background:C.card,border:'none',borderRadius:'8px',fontSize:'13px',cursor:'pointer'}}>Cancel</button>
+          <button onClick={handleSubmit} disabled={saving||!form.title.trim()||(!form.link_url.trim()&&!formBlocks.some(b=>(b.type==='paragraph'&&b.text.trim())||(b.type==='image'&&b.url.trim())))} style={{flex:1,padding:'10px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'13px',fontWeight:600,cursor:'pointer'}}>{saving?'Saving…':'Add card'}</button>
         </div>
       </div>}
 
