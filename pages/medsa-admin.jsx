@@ -1683,14 +1683,29 @@ function AdminImagePicker({ label, value, onChange, bucket='carousel-images' }) 
 // both for a pending submission here (so you're approving what it'll
 // really look like, not just raw fields) and reused as-is on the
 // sponsor's own /sponsor-pay page.
+// Real gap found live-testing: this only ever showed the compact home-
+// screen card - the admin reviewing/approving a submission never actually
+// saw the full article (body paragraphs/images, CTA) before posting it
+// live. Expandable now into the same full view a patient would open,
+// reusing PatientApp.jsx's CarouselArticleView markup.
 function CarouselPreviewCard({ sub }) {
+  const [expanded, setExpanded] = useState(false)
+  const blocks = sub.content_blocks || []
   return (
-    <div style={{borderRadius:'14px',overflow:'hidden',background:C.beige,border:`0.5px solid ${C.border}`,maxWidth:280,marginBottom:'10px'}}>
-      {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',height:110,objectFit:'cover',display:'block'}}/>}
+    <div style={{borderRadius:'14px',overflow:'hidden',background:C.beige,border:`0.5px solid ${C.border}`,maxWidth:expanded?420:280,marginBottom:'10px'}}>
+      {sub.image_url&&<img src={sub.image_url} alt="" style={{width:'100%',height:expanded?180:110,objectFit:'cover',display:'block'}}/>}
       <div style={{padding:'12px 14px'}}>
         <span style={{fontSize:'9px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',color:sub.item_type==='ad'?C.amber:C.green}}>{sub.item_type==='ad'?(sub.sponsor_name?`Sponsored · ${sub.sponsor_name}`:'Sponsored'):'Newsletter'}</span>
-        <div style={{fontSize:'13px',fontWeight:600,marginTop:'4px',marginBottom:'2px'}}>{sub.title}</div>
-        {sub.subtitle&&<div style={{fontSize:'11px',color:C.textSub,lineHeight:1.4}}>{sub.subtitle}</div>}
+        <div style={{fontSize:expanded?'17px':'13px',fontWeight:600,marginTop:'4px',marginBottom:'2px'}}>{sub.title}</div>
+        {sub.subtitle&&<div style={{fontSize:expanded?'12px':'11px',color:C.textSub,lineHeight:1.4,marginBottom:expanded?'12px':0}}>{sub.subtitle}</div>}
+        {expanded&&<>
+          {blocks.length===0&&<div style={{fontSize:'12px',color:C.textMuted,marginBottom:'10px'}}>No further content added.</div>}
+          {blocks.map((blk,i)=>blk.type==='image'
+            ? <img key={i} src={blk.url} alt="" style={{width:'100%',borderRadius:'8px',margin:'10px 0',display:'block'}}/>
+            : <p key={i} style={{fontSize:'13px',color:C.text,lineHeight:1.7,margin:'0 0 10px'}}>{blk.text}</p>)}
+          {sub.link_url&&<div style={{textAlign:'center',padding:'10px',background:C.green,color:'#fff',borderRadius:'8px',fontSize:'12px',fontWeight:600,marginTop:'6px'}}>{sub.cta_label||'Learn more'} ↗</div>}
+        </>}
+        <div onClick={()=>setExpanded(e=>!e)} style={{fontSize:'11px',color:C.blue,cursor:'pointer',marginTop:expanded?'12px':'8px',fontWeight:600}}>{expanded?'▲ Collapse':'▼ View full card'}</div>
       </div>
     </div>
   )
@@ -1705,9 +1720,20 @@ function CarouselTab() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', content:'', display_order:0, location:'HK', ends_at:'' })
   const [approving, setApproving] = useState(null)
-  const [rateInputs, setRateInputs] = useState({}) // submissionId -> string, HK$/month
+  // Real redesign, per your call: Medsa sets the real duration/price menu
+  // itself (e.g. "2 weeks - HK$500", "1 month - HK$900") - the sponsor
+  // only ever picks one of THESE on /sponsor-pay, plus a start date.
+  // Never an open monthly rate they multiply themselves.
+  const [optionDrafts, setOptionDrafts] = useState({}) // submissionId -> [{label,days,priceHkd}]
   const [approvingForPaymentId, setApprovingForPaymentId] = useState(null)
   const [approveResults, setApproveResults] = useState({}) // submissionId -> {payLink, emailSent, ...} | {error}
+
+  function draftFor(subId) { return optionDrafts[subId] || [{label:'',days:'',priceHkd:''}] }
+  function addOptionRow(subId) { setOptionDrafts(prev => ({...prev, [subId]: [...draftFor(subId), {label:'',days:'',priceHkd:''}]})) }
+  function removeOptionRow(subId, idx) { setOptionDrafts(prev => ({...prev, [subId]: draftFor(subId).filter((_,i)=>i!==idx)})) }
+  function updateOptionRow(subId, idx, field, value) {
+    setOptionDrafts(prev => ({...prev, [subId]: draftFor(subId).map((o,i)=>i===idx?{...o,[field]:value}:o)}))
+  }
 
   async function load() {
     setLoading(true)
@@ -1776,21 +1802,21 @@ function CarouselTab() {
 
   // Redesigned, per your call: Medsa still reviews content first (this is
   // a health app - a bad ad going live unreviewed is a real risk, unlike
-  // Sponsored Listings which only reorders an already-vetted plan), but
-  // the SPONSOR now picks their own duration and start date and pays,
-  // same self-serve pattern Sponsored Listings already uses - not an
-  // admin-driven one-off Stripe link for a fixed total. This only sets
-  // the monthly rate and emails them where to go next
-  // (/sponsor-pay?id=...); nothing is charged here, and nothing goes live
-  // until they've paid for real (/api/sponsor/create_scheduled_checkout.js
-  // + the webhook/verify-on-return fallback).
+  // Sponsored Listings which only reorders an already-vetted plan), and
+  // now also sets the real duration/price menu itself here - the sponsor
+  // only ever picks one of these options plus a start date on
+  // /sponsor-pay, never an open rate they multiply themselves. This only
+  // sets the menu and emails them where to go next; nothing is charged
+  // here, and nothing goes live until they've paid for real
+  // (/api/sponsor/create_scheduled_checkout.js + the webhook/verify-on-
+  // return fallback).
   async function handleApproveForPayment(sub) {
-    const rate = parseFloat(rateInputs[sub.id])
-    if (!rate || rate <= 0) return
+    const rows = draftFor(sub.id).filter(o=>o.label.trim()&&o.days&&o.priceHkd)
+    if (rows.length===0) return
     setApprovingForPaymentId(sub.id)
     const res = await fetch('/api/sponsor/approve_for_payment', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ submissionId: sub.id, rateHkdPerMonth: rate }),
+      body: JSON.stringify({ submissionId: sub.id, pricingOptions: rows.map(r=>({label:r.label.trim(), days:parseInt(r.days), priceHkd:parseFloat(r.priceHkd)})) }),
     })
     const data = await res.json()
     setApproveResults(prev => ({...prev, [sub.id]: data}))
@@ -1800,29 +1826,42 @@ function CarouselTab() {
 
   return (
     <div>
-      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Approve it free, or approve it for payment - the sponsor then picks their own duration and start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
+      <div style={{fontSize:'13px',color:C.textSub,marginBottom:'16px'}}>Ads and newsletter cards shown on the patient home screen, plus articles sponsors submit themselves at <strong>medsa.health/sponsor-submit</strong> - nothing from that form goes live until you review it below. Newsletter articles (Medsa's own editorial content) can post free; sponsored ads are the real revenue, so they only ever go live through payment - set your own duration/price menu, the sponsor picks one of your options plus a start date and pays, and it's scheduled to go live/expire on exactly those dates.</div>
 
       {submissions.length>0&&<>
         <div style={{fontSize:'15px',fontWeight:600,marginBottom:'10px'}}>Pending submissions ({submissions.length})</div>
         {submissions.map(sub=>(
           <div key={sub.id} style={{background:C.cream,border:`0.5px solid ${C.amber}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
-            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>How it'll actually look:</div>
+            <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'8px'}}>How it'll actually look - tap to see the full card, not just the home-screen preview:</div>
             <CarouselPreviewCard sub={sub}/>
             <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.item_type} · from {sub.sponsor_name} ({sub.sponsor_contact_email})</div>
             <div style={{fontSize:'11px',color:C.textMuted,marginBottom:'10px'}}>{(sub.content_blocks||[]).length} content block{(sub.content_blocks||[]).length===1?'':'s'}{sub.link_url?' · has a CTA link':''}</div>
             <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
               <button onClick={()=>handleReject(sub)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Reject</button>
-              <button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>
+              {/* Real question raised live-testing: why post an AD for free
+                  at all - that undercuts the entire paid-placement model.
+                  Free posting is for Medsa's own editorial content
+                  (newsletter type) only now; a sponsored ad only ever goes
+                  live through the payment menu below. */}
+              {sub.item_type!=='ad'&&<button onClick={()=>handleApprove(sub)} disabled={approving===sub.id} style={{flex:1,padding:'8px',background:C.green,color:'#fff',border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{approving===sub.id?'Posting…':'Approve & post free'}</button>}
             </div>
             <div style={{background:C.card,borderRadius:'8px',padding:'10px'}}>
-              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Or approve for payment - the sponsor picks their own duration and start date and pays, at the monthly rate you set here:</div>
+              <div style={{fontSize:'11px',color:C.textSub,marginBottom:'8px'}}>Set your own duration/price menu - the sponsor picks one of these plus a start date on their own self-serve page:</div>
+              {draftFor(sub.id).map((row,idx)=>(
+                <div key={idx} style={{display:'flex',gap:'6px',marginBottom:'6px'}}>
+                  <input value={row.label} onChange={e=>updateOptionRow(sub.id,idx,'label',e.target.value)} placeholder="e.g. 2 weeks" style={{flex:'1 1 90px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                  <input type="number" value={row.days} onChange={e=>updateOptionRow(sub.id,idx,'days',e.target.value)} placeholder="Days" style={{flex:'0 1 60px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                  <input type="number" step="0.01" value={row.priceHkd} onChange={e=>updateOptionRow(sub.id,idx,'priceHkd',e.target.value)} placeholder="HK$" style={{flex:'0 1 80px',border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
+                  {draftFor(sub.id).length>1&&<span onClick={()=>removeOptionRow(sub.id,idx)} style={{fontSize:'11px',color:C.red,cursor:'pointer',alignSelf:'center'}}>✕</span>}
+                </div>
+              ))}
               <div style={{display:'flex',gap:'6px'}}>
-                <input type="number" step="0.01" value={rateInputs[sub.id]||''} onChange={e=>setRateInputs(prev=>({...prev,[sub.id]:e.target.value}))} placeholder="HK$ per month" style={{flex:1,border:`0.5px solid ${C.border}`,borderRadius:'6px',padding:'7px 8px',fontSize:'12px',boxSizing:'border-box'}}/>
-                <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id||!rateInputs[sub.id]} style={{padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
+                <button onClick={()=>addOptionRow(sub.id)} style={{padding:'6px 10px',background:'#fff',border:`1px dashed ${C.border}`,borderRadius:'6px',fontSize:'11px',cursor:'pointer'}}>+ Add another option</button>
+                <button onClick={()=>handleApproveForPayment(sub)} disabled={approvingForPaymentId===sub.id} style={{flex:1,padding:'7px 12px',background:C.navy,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12px',cursor:'pointer',whiteSpace:'nowrap'}}>{approvingForPaymentId===sub.id?'Approving…':'Approve for payment'}</button>
               </div>
               {approveResults[sub.id]?.status==='ERROR'&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>{approveResults[sub.id].message}</div>}
               {approveResults[sub.id]?.status==='OK'&&<div style={{fontSize:'11px',color:C.green,marginTop:'6px'}}>
-                Approved at HK${rateInputs[sub.id]}/month. Scheduling link {approveResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + approveResults[sub.id].emailReason + ')'}: <a href={approveResults[sub.id].payLink} target="_blank" rel="noreferrer">{approveResults[sub.id].payLink}</a>
+                Approved. Scheduling link {approveResults[sub.id].emailSent?'emailed to the sponsor':'created (email not sent - ' + approveResults[sub.id].emailReason + ')'}: <a href={approveResults[sub.id].payLink} target="_blank" rel="noreferrer">{approveResults[sub.id].payLink}</a>
               </div>}
             </div>
           </div>
@@ -1834,7 +1873,8 @@ function CarouselTab() {
         {awaitingPayment.map(sub=>(
           <div key={sub.id} style={{background:C.navyLight,border:`0.5px solid ${C.navy}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
             <div style={{fontSize:'14px',fontWeight:600}}>{sub.title}</div>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.sponsor_name} - approved at HK${sub.price_hkd}/month{sub.months?`, picked ${sub.months} mo${sub.starts_at?` starting ${sub.starts_at}`:''}`:' - hasn\'t picked a duration/start date yet'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.sponsor_name} - options offered: {(sub.pricing_options||[]).map(o=>`${o.label} (HK$${o.priceHkd})`).join(', ')||'none set'}</div>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'6px'}}>{sub.chosen_option_label?`Picked: ${sub.chosen_option_label}${sub.starts_at?`, starting ${sub.starts_at}`:''}`:'Hasn\'t picked an option/start date yet'}</div>
             <div style={{fontSize:'11px',color:C.textMuted}}>Scheduling link (resend manually if needed): <a href={`/sponsor-pay?id=${sub.id}`} target="_blank" rel="noreferrer">{`${typeof window!=='undefined'?window.location.origin:''}/sponsor-pay?id=${sub.id}`}</a></div>
           </div>
         ))}
