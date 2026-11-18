@@ -42,9 +42,11 @@ function daysUntil(dateStr) {
 
 // Visible warning for how long this lead has left before the daily
 // reassign_stale_plan_inquiries cron moves it to the next eligible agent
-// (lib/agentAssignment.js's responseWindowHours, 72h by default) - so
-// an agent sitting on a lead can see it's about to slip away instead of
-// only finding out after the fact.
+// (lib/agentAssignment.js's responseWindowHours, 24h by default now -
+// matches the cron's own once-daily cadence, per your call, since a
+// shorter window never actually sped anything up) - so an agent sitting
+// on a lead can see it's about to slip away instead of only finding out
+// after the fact.
 function formatReassignCountdown(dueAtStr) {
   if (!dueAtStr) return null
   const diffMs = new Date(dueAtStr).getTime() - Date.now()
