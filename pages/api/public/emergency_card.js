@@ -33,8 +33,13 @@ export default async function handler(req, res) {
   const NOT_FOUND = { found: false }
   if (!token) return res.status(200).json(NOT_FOUND)
 
+  // Real call: date_of_birth and medsa_id are both sensitive identifiers
+  // (exact DOB is an identity-theft vector elsewhere; medsa_id can be
+  // used to look up or target the real account) - neither is fetched
+  // here any more, not just hidden in the UI, so a public response can
+  // never leak them even if the page changes later.
   const { data: patient } = await supabase.from('patients')
-    .select('full_name,date_of_birth,medsa_id,blood_type,emergency_contact_name,emergency_contact_rel,emergency_contact_phone,emergency_card_active,id')
+    .select('full_name,blood_type,emergency_contact_name,emergency_contact_rel,emergency_contact_phone,emergency_card_active,id')
     .eq('emergency_card_token', token).maybeSingle()
   if (!patient || !patient.emergency_card_active) return res.status(200).json(NOT_FOUND)
 
@@ -48,8 +53,6 @@ export default async function handler(req, res) {
   return res.status(200).json({
     found: true,
     full_name: patient.full_name,
-    date_of_birth: patient.date_of_birth,
-    medsa_id: patient.medsa_id,
     blood_type: patient.blood_type,
     emergency_contact_name: patient.emergency_contact_name,
     emergency_contact_rel: patient.emergency_contact_rel,
