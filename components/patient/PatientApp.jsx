@@ -1541,11 +1541,16 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
       {deleteConfirmOpen && <div onClick={()=>setDeleteConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
         <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
           <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px',color:C.red}}>{isEn?'This cannot be undone':'此操作無法復原'}</div>
-          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?`Every growth, teeth, immunisation, and visit record for ${patient.full_name||'this profile'} will be permanently erased - there is no backup, no recovery. Type their full name to confirm.`:`${patient.full_name||'此檔案'}的所有生長、牙齒、疫苗及就診記錄將被永久刪除 - 無備份,無法復原。請輸入其全名以確認。`}</div>
-          <input value={deleteConfirmName} onChange={e=>setDeleteConfirmName(e.target.value)} placeholder={patient.full_name||''} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+          {/* Real call: HKID, not a typed name, confirms this - a name can
+              have typos or duplicates (especially multi-part Chinese/
+              English names); HKID is the one unambiguous identity check.
+              Falls back to full name only if this profile genuinely has
+              no HKID on file. */}
+          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'14px',lineHeight:1.5}}>{isEn?`Every growth, teeth, immunisation, and visit record for ${patient.full_name||'this profile'} will be permanently erased - there is no backup, no recovery. Type their ${patient.hkid?'HKID':'full name'} to confirm.`:`${patient.full_name||'此檔案'}的所有生長、牙齒、疫苗及就診記錄將被永久刪除 - 無備份,無法復原。請輸入其${patient.hkid?'身份證號碼':'全名'}以確認。`}</div>
+          <input value={deleteConfirmName} onChange={e=>setDeleteConfirmName(e.target.value)} placeholder={patient.hkid||patient.full_name||''} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
           <div style={{display:'flex',gap:'8px'}}>
             <Btn style={{flex:1}} onClick={()=>{setDeleteConfirmOpen(false);setDeleteConfirmName('')}}>{isEn?'Cancel':'取消'}</Btn>
-            <Btn style={{flex:1,background:C.red,color:'#fff',borderColor:C.red}} disabled={deleting||deleteConfirmName.trim()!==(patient.full_name||'').trim()} onClick={confirmPermanentDeletion}>{deleting?(isEn?'Deleting…':'刪除中…'):(isEn?'Delete permanently':'永久刪除')}</Btn>
+            <Btn style={{flex:1,background:C.red,color:'#fff',borderColor:C.red}} disabled={deleting||deleteConfirmName.trim()!==(patient.hkid||patient.full_name||'').trim()} onClick={confirmPermanentDeletion}>{deleting?(isEn?'Deleting…':'刪除中…'):(isEn?'Delete permanently':'永久刪除')}</Btn>
           </div>
         </div>
       </div>}
@@ -10211,6 +10216,38 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
     onSaved?.()
   }
 
+  // Real request, separate from the "if I die" preference above - a
+  // LIVING patient closing their own account right now, for any reason.
+  // This only ever files a request (account_action_requests) - it does
+  // NOT delete or archive anything itself. Medsa staff review the reason
+  // and actually carry it out manually; "so we have the data and we can
+  // still process it" was the explicit point of capturing a reason here,
+  // not auto-executing something this irreversible unattended.
+  const CLOSE_ACCOUNT_REASONS = [
+    ['switching', { en:'Switching to another app/provider', zh:'轉用其他應用程式/服務提供者' }],
+    ['privacy', { en:'Privacy concerns', zh:'私隱疑慮' }],
+    ['not_needed', { en:'No longer need the service', zh:'不再需要此服務' }],
+    ['too_complicated', { en:'Too complicated to use', zh:'使用過於複雜' }],
+    ['other', { en:'Other', zh:'其他' }],
+  ]
+  const [closeAccountOpen,setCloseAccountOpen]=useState(false)
+  const [closeAccountType,setCloseAccountType]=useState('delete') // delete | readonly_pdf
+  const [closeAccountReason,setCloseAccountReason]=useState(null)
+  const [closeAccountOther,setCloseAccountOther]=useState('')
+  const [closeAccountHkid,setCloseAccountHkid]=useState('')
+  const [closeAccountSaving,setCloseAccountSaving]=useState(false)
+  const [closeAccountDone,setCloseAccountDone]=useState(false)
+  const closeAccountConfirmValue = (patient.hkid||'').trim()
+  async function submitCloseAccountRequest() {
+    setCloseAccountSaving(true)
+    await supabase.from('account_action_requests').insert({
+      patient_id: patient.id, request_type: closeAccountType,
+      reason: closeAccountReason, reason_other: closeAccountReason==='other' ? closeAccountOther.trim() : null,
+    })
+    setCloseAccountSaving(false)
+    setCloseAccountDone(true)
+  }
+
   // Default on for everyone (patients table default), one standing
   // setting instead of a checkbox re-asked on every single plan
   // declaration - PlanDetailFlow.jsx and the "Find me a plan" flow both
@@ -10465,6 +10502,45 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
         ))}
         {deathPref&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{isEn?'Tap your selection again to clear it.':'再次點擊您的選擇以清除。'}{savingDeathPref?(isEn?' Saving…':' 儲存中…'):''}</div>}
       </div>
+
+      <SecLabel>{isEn?'Close my account':'關閉我的帳戶'}</SecLabel>
+      <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'12px'}}>{isEn?"Not because of a death - if you'd simply rather stop using Medsa. This files a request for Medsa to review, it doesn't happen instantly.":'並非因為離世 - 若您只是想停止使用Medsa。這會提交一項請求供Medsa審核,並非即時生效。'}</div>
+        <Btn style={{color:C.red,borderColor:C.red,width:'100%'}} onClick={()=>setCloseAccountOpen(true)}>{isEn?'Request to delete or archive my account':'要求刪除或封存我的帳戶'}</Btn>
+      </div>
+
+      {closeAccountOpen&&<div onClick={()=>{setCloseAccountOpen(false);setCloseAccountDone(false)}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:400,width:'100%',maxHeight:'85vh',overflowY:'auto'}}>
+          {closeAccountDone ? <>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?'Request sent':'請求已送出'}</div>
+            <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"Medsa will review this and follow up - nothing on your account has changed yet.":'Medsa將審核此請求並跟進 - 您的帳戶目前尚未有任何變動。'}</div>
+            <Btn variant="primary" style={{width:'100%'}} onClick={()=>{setCloseAccountOpen(false);setCloseAccountDone(false);setCloseAccountReason(null);setCloseAccountOther('');setCloseAccountHkid('')}}>{isEn?'Done':'完成'}</Btn>
+          </> : <>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'12px'}}>{isEn?'Request to delete or archive my account':'要求刪除或封存我的帳戶'}</div>
+            <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>{isEn?'What would you like?':'您希望如何處理?'}</div>
+            {[['delete',isEn?'Delete my account entirely':'完全刪除我的帳戶'],['readonly_pdf',isEn?'Turn it into a permanent read-only PDF':'轉為永久唯讀PDF']].map(([k,l])=>(
+              <div key={k} onClick={()=>setCloseAccountType(k)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px',borderRadius:'8px',cursor:'pointer',background:closeAccountType===k?__theme.accentLight:C.beige,marginBottom:'6px'}}>
+                <div style={{width:'14px',height:'14px',borderRadius:'50%',border:`2px solid ${closeAccountType===k?__theme.accent:C.border}`,background:closeAccountType===k?__theme.accent:'transparent',flexShrink:0}}/>
+                <span style={{fontSize:'12.5px'}}>{l}</span>
+              </div>
+            ))}
+            <div style={{fontSize:'11px',color:C.textSub,margin:'12px 0 6px'}}>{isEn?'Why? (helps us process this correctly)':'原因?(有助我們正確處理此請求)'}</div>
+            {CLOSE_ACCOUNT_REASONS.map(([k,l])=>(
+              <div key={k} onClick={()=>setCloseAccountReason(k)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px',borderRadius:'8px',cursor:'pointer',background:closeAccountReason===k?__theme.accentLight:C.beige,marginBottom:'6px'}}>
+                <div style={{width:'14px',height:'14px',borderRadius:'50%',border:`2px solid ${closeAccountReason===k?__theme.accent:C.border}`,background:closeAccountReason===k?__theme.accent:'transparent',flexShrink:0}}/>
+                <span style={{fontSize:'12.5px'}}>{isEn?l.en:l.zh}</span>
+              </div>
+            ))}
+            {closeAccountReason==='other'&&<textarea value={closeAccountOther} onChange={e=>setCloseAccountOther(e.target.value)} rows={2} placeholder={isEn?'Tell us more (optional)':'請詳述(選填)'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'9px 12px',fontSize:'13px',marginTop:'4px',marginBottom:'4px',boxSizing:'border-box',fontFamily:'inherit',resize:'vertical'}}/>}
+            <div style={{fontSize:'11px',color:C.textSub,margin:'12px 0 6px',lineHeight:1.5}}>{isEn?`Type your HKID${closeAccountConfirmValue?'':' - none on file, so type your full name instead'} to confirm:`:`輸入您的身份證號碼${closeAccountConfirmValue?'':'(檔案中沒有記錄,請輸入全名代替)'}以確認:`}</div>
+            <input value={closeAccountHkid} onChange={e=>setCloseAccountHkid(e.target.value)} placeholder={closeAccountConfirmValue||patient.full_name||''} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'14px',marginBottom:'14px',boxSizing:'border-box'}}/>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setCloseAccountOpen(false);setCloseAccountReason(null);setCloseAccountOther('');setCloseAccountHkid('')}}>{isEn?'Cancel':'取消'}</Btn>
+              <Btn style={{flex:1,background:C.red,color:'#fff',borderColor:C.red}} disabled={closeAccountSaving||!closeAccountReason||(closeAccountReason==='other'&&!closeAccountOther.trim())||closeAccountHkid.trim()!==(closeAccountConfirmValue||(patient.full_name||'').trim())} onClick={submitCloseAccountRequest}>{closeAccountSaving?(isEn?'Sending…':'傳送中…'):(isEn?'Send request':'送出請求')}</Btn>
+            </div>
+          </>}
+        </div>
+      </div>}
 
       {onSignOut&&<div style={{margin:'24px 16px 0',textAlign:'center'}}>
         <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>
