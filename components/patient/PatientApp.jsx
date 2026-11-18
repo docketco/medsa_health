@@ -10192,6 +10192,25 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
     onSaved?.()
   }
 
+  // Real request: "in case someone died, which happens" - a standing
+  // instruction left on file now, not something that fires on its own
+  // (Medsa has no way to detect a death). A family member/executor still
+  // has to contact Medsa with proof for this to actually be carried out -
+  // this just removes the ambiguity of what the patient would have
+  // wanted, instead of leaving it to be guessed at the worst possible
+  // time. Unset by default - no preference is its own valid state, not
+  // defaulted to either option.
+  const [deathPref,setDeathPref]=useState(patient.death_preference||null)
+  const [savingDeathPref,setSavingDeathPref]=useState(false)
+  async function handleSetDeathPref(pref) {
+    const next = deathPref===pref ? null : pref
+    setDeathPref(next)
+    setSavingDeathPref(true)
+    await supabase.from('patients').update({ death_preference: next }).eq('id', patient.id)
+    setSavingDeathPref(false)
+    onSaved?.()
+  }
+
   // Default on for everyone (patients table default), one standing
   // setting instead of a checkbox re-asked on every single plan
   // declaration - PlanDetailFlow.jsx and the "Find me a plan" flow both
@@ -10434,6 +10453,18 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
         <input value={newFhNotes} onChange={e=>setNewFhNotes(e.target.value)} placeholder={isEn?'Notes (optional, e.g. age of onset)':'備註（選填，例如：發病年齡）'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box'}}/>
         <Btn variant="primary" style={{width:'100%'}} onClick={handleAddFamilyHistory} disabled={savingFh||!newFhRelationship.trim()||!newFhCondition.trim()}>{savingFh?'Adding…':(isEn?'+ Add family history':'+ 新增家族病史')}</Btn>
       </Card>
+
+      <SecLabel>{isEn?'If something happens to me':'萬一我發生不測'}</SecLabel>
+      <div style={{background:C.card,border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'14px',marginBottom:'12px'}}>
+        <div style={{fontSize:'11.5px',color:C.textSub,lineHeight:1.6,marginBottom:'12px'}}>{isEn?"Tell Medsa what you'd want done with your profile if you pass away, so it's on file rather than guessed at a hard time. This only sets your preference - it doesn't happen automatically. A family member or executor would still need to contact Medsa directly with proof (e.g. a death certificate) for either option to actually be carried out.":'請告訴Medsa,萬一您不幸離世,您希望如何處理您的個人檔案,以便有記錄可循,而非在艱難時刻才作猜測。這僅是設定您的意願 - 並不會自動執行。家人或遺囑執行人仍需直接聯絡Medsa並提供證明(例如死亡證明書),方可執行任何一個選項。'}</div>
+        {[['delete',isEn?'Delete my profile entirely':'完全刪除我的檔案'],['readonly_archive',isEn?'Keep a permanent read-only record':'保留永久唯讀記錄']].map(([k,l])=>(
+          <div key={k} onClick={()=>handleSetDeathPref(k)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'10px',borderRadius:'8px',cursor:'pointer',background:deathPref===k?__theme.accentLight:C.beige,marginBottom:'8px'}}>
+            <div style={{width:'16px',height:'16px',borderRadius:'50%',border:`2px solid ${deathPref===k?__theme.accent:C.border}`,background:deathPref===k?__theme.accent:'transparent',flexShrink:0}}/>
+            <span style={{fontSize:'13px',fontWeight:deathPref===k?600:400}}>{l}</span>
+          </div>
+        ))}
+        {deathPref&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'4px'}}>{isEn?'Tap your selection again to clear it.':'再次點擊您的選擇以清除。'}{savingDeathPref?(isEn?' Saving…':' 儲存中…'):''}</div>}
+      </div>
 
       {onSignOut&&<div style={{margin:'24px 16px 0',textAlign:'center'}}>
         <span onClick={onSignOut} style={{fontSize:'13px',color:C.red,cursor:'pointer'}}>{isEn?'Sign out':'登出'}</span>

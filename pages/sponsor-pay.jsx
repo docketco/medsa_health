@@ -16,6 +16,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
 import { grossUpForStripeFee } from '../lib/paymentFees'
+import { addMonthsToDateString } from '../lib/adPricingMenu'
 
 function PreviewCard({ sub }) {
   return (
@@ -90,7 +91,7 @@ export default function SponsorPayPage() {
   const option = options[optionIndex] || null
   const netAmountHKD = option?.priceHkd || 0
   const { grossAmountHKD } = grossUpForStripeFee(netAmountHKD)
-  const endDate = (() => { if (!option) return null; const d = new Date(`${startsAt}T00:00:00`); if (isNaN(d.getTime())) return null; d.setDate(d.getDate()+option.days); return d })()
+  const endDate = option ? addMonthsToDateString(startsAt, option.months) : null
 
   const Shell = ({ children }) => (
     <div style={{background:C.beige,minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',fontFamily:'system-ui,sans-serif'}}>
