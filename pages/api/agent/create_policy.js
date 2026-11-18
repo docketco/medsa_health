@@ -21,7 +21,7 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
   const {
-    agentId, patientId, patientName, lineItems, bundleDiscountHkd,
+    agentId, patientId, patientName, lineItems, bundleDiscountHkd, discountProofPath,
     policyNumber, startDate, renewalDate, inquiryId,
     brokerCommissionHkd, referralFeeHkd, paymentFrequency, healthDeclarationAcknowledged,
     // Real gap: nothing in this form ever collected the client's payment
@@ -92,6 +92,11 @@ export default async function handler(req, res) {
         patient_name: patientName, plan_name: li.planName, plan_id: li.planId,
         policy_number: policyNumber || null, status: 'quote', premium: li.premium, deductible_hkd: li.deductibleHkd,
         discount_hkd: discountByLineItem[idx] || null,
+        // Real request: a disability (or any other) discount needs real
+        // backing proof on file - the same file is attached to every
+        // line item in a bundle, since the discount itself was one
+        // negotiated figure before being split proportionally above.
+        discount_proof_path: discountProofPath || null,
         start_date: startDate || null, renewal_date: renewalDate || null, bundle_id: bundleId,
         inquiry_id: inquiryId || null,
         broker_commission_hkd: inquiryId && brokerCommissionHkd != null ? brokerCommissionHkd : null,
