@@ -8,7 +8,7 @@
 // intake form), so it's deliberately left out of middleware.js's matcher.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import C from '../components/shared/colours'
 
@@ -16,6 +16,13 @@ function ImagePicker({ label, value, onChange }) {
   const [mode, setMode] = useState('url')
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState(null)
+  // Real report, live-testing: "photo not working for image links" -
+  // traced to a pasted Pinterest PIN PAGE url (pinterest.com/pin/...),
+  // not an actual image file - an <img> tag can never render a webpage,
+  // same as it couldn't on any other site. Flags that specific, common
+  // mistake directly instead of leaving a silent broken-image icon.
+  const [loadFailed, setLoadFailed] = useState(false)
+  const looksLikeAPageNotAnImage = /pinterest\.[a-z.]+\/pin\//i.test(value||'') || /\/(search|photos|watch|status)[/?]/i.test(value||'')
 
   async function handleFile(file) {
     setUploading(true)
@@ -36,13 +43,30 @@ function ImagePicker({ label, value, onChange }) {
           <div key={k} onClick={()=>setMode(k)} style={{flex:1,padding:'7px',borderRadius:'8px',textAlign:'center',fontSize:'11px',fontWeight:500,cursor:'pointer',background:mode===k?C.green:C.card,color:mode===k?'#fff':C.textSub}}>{l}</div>
         ))}
       </div>
-      {mode==='url'&&<input value={value||''} onChange={e=>onChange(e.target.value)} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
+      {mode==='url'&&<input value={value||''} onChange={e=>{onChange(e.target.value);setLoadFailed(false)}} placeholder="https://…" style={{width:'100%',padding:'10px',fontSize:'13px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>}
       {mode==='upload'&&<label style={{display:'block',width:'100%',padding:'10px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer',boxSizing:'border-box'}}>
         {uploading?'Uploading…':(value?'Uploaded ✓ - tap to replace':'Tap to upload (JPG/PNG)')}
         <input type="file" accept="image/*" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleFile(e.target.files[0])}/>
       </label>}
       {uploadError&&<div style={{fontSize:'11px',color:C.red,marginTop:'6px'}}>Upload failed: {uploadError}</div>}
-      {value&&<img src={value} alt="" style={{width:'100%',maxHeight:140,objectFit:'cover',borderRadius:'8px',marginTop:'8px'}}/>}
+      {value&&(loadFailed||looksLikeAPageNotAnImage)&&<div style={{fontSize:'11px',color:C.red,marginTop:'8px',lineHeight:1.5}}>This looks like a link to a <b>page</b> (like a Pinterest pin, a search result, or a social post), not a direct link to the image file itself - that's why it won't show here or in the app. On the site where you found it, open the photo full-size, then right-click it and choose &ldquo;Copy image address&rdquo; (not &ldquo;Copy link&rdquo;) - the real address usually ends in .jpg/.png and often lives on a different domain (e.g. i.pinimg.com, not pinterest.com). Or just use &ldquo;Upload a file&rdquo; above instead.</div>}
+      {value&&<img src={value} alt="" onLoad={()=>setLoadFailed(false)} onError={()=>setLoadFailed(true)} style={{width:'100%',maxHeight:140,objectFit:'cover',borderRadius:'8px',marginTop:'8px',background:C.beige}}/>}
+    </div>
+  )
+}
+
+function AdPricingMenuNote() {
+  const [menu, setMenu] = useState(null)
+  useEffect(() => {
+    supabase.from('carousel_ad_pricing_options').select('*').order('sort_order').order('created_at').then(({data})=>setMenu(data||[]))
+  }, [])
+  if (menu===null || menu.length===0) return null
+  return (
+    <div style={{background:C.beige,borderRadius:'8px',padding:'10px 12px',marginBottom:'16px'}}>
+      <div style={{fontSize:'11px',color:C.textSub,marginBottom:'6px'}}>Sponsored ads only go live through payment, at one of these durations - you'll pick one (and your start date) only after Medsa approves your content, not here:</div>
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>{menu.map(o=>(
+        <span key={o.id} style={{fontSize:'11px',background:'#fff',borderRadius:'6px',padding:'4px 8px'}}>{o.label} · HK${Number(o.price_hkd).toLocaleString()}</span>
+      ))}</div>
     </div>
   )
 }
@@ -173,6 +197,7 @@ export default function SponsorSubmitPage() {
             <div key={k} onClick={()=>setItemType(k)} style={{flex:1,padding:'9px',borderRadius:'8px',textAlign:'center',fontSize:'13px',fontWeight:500,cursor:'pointer',background:itemType===k?C.green:C.card,color:itemType===k?'#fff':C.text}}>{l}</div>
           ))}
         </div>
+        {itemType==='ad'&&<AdPricingMenuNote/>}
 
         <div style={{fontSize:'12px',fontWeight:600,marginBottom:'10px'}}>Your details</div>
         <input value={sponsorName} onChange={e=>setSponsorName(e.target.value)} placeholder="Your name / company" style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>

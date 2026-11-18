@@ -1,20 +1,25 @@
 // pages/api/test/mock_claims_webhook.js
 // ─────────────────────────────────────────────────────────────────────────────
-// A stand-in for a real insurer's own claims-intake endpoint, so the claims
-// plug-in (insurance_companies.claims_plugin_enabled + claims_webhook_url -
-// see /api/insurer/push_claim) can be tested end to end without a real
-// insurer having built one, same reasoning as mock_insurer_endpoint.js for
-// eligibility lookups. Accepts whatever push_claim.js sends and just
-// confirms receipt - a real insurer's endpoint would actually file the claim
-// into their own system, which isn't something Medsa can simulate on their
-// behalf.
+// A stand-in for a real insurer's own intake endpoint. insurance_companies'
+// claims_plugin_enabled + claims_webhook_url is shared by TWO senders, not
+// just claims: /api/insurer/push_claim (a claim decision) AND
+// lib/pushPolicyToInsurer.js (every policy lifecycle event - new_policy,
+// underwriter_decision, payment_confirmed - fired automatically, never
+// behind a button, for any insurer that's "partnered" i.e. has this
+// configured). Same reasoning as mock_insurer_endpoint.js for eligibility
+// lookups - accepts whatever either sender posts and just confirms receipt;
+// a real insurer's endpoint would actually file it into their own system,
+// which isn't something Medsa can simulate on their behalf.
 //
 // To test: in medsa-admin, enable the claims plug-in for a test insurer
-// (e.g. Test Insurer Co), then set its webhook URL (insurer portal or
-// set_claims_plugin_config) to this route's full URL. Any claim pushed to a
-// PENDING_REVIEW outcome for that insurer will show up in this route's logs
-// (check Vercel function logs, or query-string-less - nothing is persisted
-// here on purpose, this is a receipt-confirmation stub, not a real inbox).
+// (e.g. Test Insurer Co) and set its webhook URL to this route's full URL
+// (already done for Test Insurer Co). Any claim pushed to a PENDING_REVIEW
+// outcome, or any policy lifecycle event, for that insurer will show up in
+// this route's logs (Vercel function logs) - nothing is persisted here on
+// purpose, this is a receipt-confirmation stub, not a real inbox. The
+// policy side's own real success signal is agent_policies.pushed_to_insurer_at,
+// which only ever flips once this endpoint (or a real one) actually
+// answers 200 - see AgentApp.jsx's "✓ Pushed to insurer" line.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function handler(req, res) {
