@@ -534,6 +534,11 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
   const [paymentNotice,setPaymentNotice]=useState(null)
   const displayed = filter==='all' ? policies : policies.filter(p=>p.status===filter)
 
+  async function viewDiscountProof(path) {
+    const { data } = await supabase.storage.from('policy-contracts').createSignedUrl(path, 300)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
   // The real third step, per your call: the agent delivers the approval
   // and collects the premium, so THEY mark it paid - never automatic the
   // moment the underwriter approves. A receipt upload is optional (not
@@ -640,8 +645,9 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                   {p.underwriter_status==='pending'&&p.underwriter_submitted_at&&<Badge text="Awaiting underwriter" type="waiting"/>}
                 </div>
               </div>
-              <div style={{display:'flex',gap:'16px',fontSize:'11px',color:C.textMuted}}>
+              <div style={{display:'flex',gap:'16px',fontSize:'11px',color:C.textMuted,flexWrap:'wrap'}}>
                 <span>Premium: HK${p.premium}/mo{p.discount_hkd>0?` (-HK$${p.discount_hkd} discount)`:''}</span>
+                {p.discount_hkd>0&&p.discount_proof_path&&<span onClick={()=>viewDiscountProof(p.discount_proof_path)} style={{color:C.blue,cursor:'pointer'}}>📎 View discount proof</span>}
                 {p.renewal_date&&<span style={{color:d!==null&&d<=30?C.amber:C.textMuted}}>Renews {new Date(p.renewal_date).toLocaleDateString('en-HK',{day:'numeric',month:'short',year:'numeric'})}{d!==null&&d<=30&&d>=0?` (${d}d)`:''}</span>}
               </div>
               {p.cancellation_requested_at&&<div style={{marginTop:'10px',background:C.redLight,borderRadius:'8px',padding:'10px 12px'}}>
@@ -854,6 +860,25 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
   const [builderWardClass,setBuilderWardClass]=useState(prefillInquiry?.ward_class || 'standard')
   const [lineItems,setLineItems]=useState([]) // [{planId, planName, deductibleId, deductibleHkd, riderIds:[], riderNames:[], premium, wardClass}]
   const [bundleDiscount,setBundleDiscount]=useState('')
+  // Real request: a disability discount needs real backing proof on
+  // file, same as any other negotiated figure worth defending later -
+  // not a new "dependants" data model (that's a bigger feature, held
+  // for now), just a document attached to this discount. Uploaded
+  // immediately since the policy itself doesn't exist yet at this step -
+  // create_policy.js just writes the path onto the row it creates.
+  const [discountProofPath,setDiscountProofPath]=useState(null)
+  const [discountProofName,setDiscountProofName]=useState(null)
+  const [uploadingDiscountProof,setUploadingDiscountProof]=useState(false)
+  const [discountProofError,setDiscountProofError]=useState(null)
+  async function handleUploadDiscountProof(file) {
+    setUploadingDiscountProof(true); setDiscountProofError(null)
+    const path = `new/${Date.now()}-${file.name}`
+    const { error } = await supabase.storage.from('policy-contracts').upload(path, file)
+    setUploadingDiscountProof(false)
+    if (error) { setDiscountProofError(error.message); return }
+    setDiscountProofPath(path)
+    setDiscountProofName(file.name)
+  }
   // Real gap found live-testing: the old "manual plan" section let an
   // agent just type a plan name and a premium into existence, unlinked
   // to any real plan_id - no riders, no contract, no real commission
@@ -1093,7 +1118,7 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           agentId: agent.id, patientId: foundPatient?.id||null, patientName: foundPatient?.full_name||patientSearch,
-          lineItems, bundleDiscountHkd: bundleDiscountNum,
+          lineItems, bundleDiscountHkd: bundleDiscountNum, discountProofPath: discountProofPath||null,
           policyNumber: policyNumber||null, status, startDate: startDate||null, renewalDate: renewalDate||null,
           inquiryId: prefillInquiry?.id || null,
           brokerCommissionHkd: prefillInquiry && brokerCommission ? commissionNum : null,
@@ -1354,6 +1379,14 @@ function NewPolicyScreen({ agent, prefillInquiry, onBack, onSaved }) {
         <div style={{display:'flex',justifyContent:'space-between',fontSize:'12px',fontWeight:600,marginTop:'8px'}}>
           <span>Total after discount</span><span>HK${(lineItemsTotal-bundleDiscountNum).toFixed(2)}/mo</span>
         </div>
+        {bundleDiscountNum>0&&<div style={{marginTop:'10px'}}>
+          <div style={{fontSize:'11px',color:C.textSub,marginBottom:'4px'}}>Attach proof backing this discount (optional) - e.g. a disability certificate for a disability discount</div>
+          <label style={{display:'block',padding:'9px 12px',border:`1px dashed ${C.border}`,borderRadius:'8px',fontSize:'12px',color:C.textSub,textAlign:'center',cursor:'pointer'}}>
+            {uploadingDiscountProof?'Uploading…':(discountProofName?`Uploaded: ${discountProofName} - tap to replace`:'Tap to upload a document')}
+            <input type="file" style={{display:'none'}} onChange={e=>e.target.files[0]&&handleUploadDiscountProof(e.target.files[0])}/>
+          </label>
+          {discountProofError&&<div style={{fontSize:'11px',color:C.red,marginTop:'4px'}}>Upload failed: {discountProofError}</div>}
+        </div>}
       </div>
 
       {/* Real gap found live-testing: these dates apply to the whole
