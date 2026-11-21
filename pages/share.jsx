@@ -10,6 +10,12 @@ import QrScanner from '../components/QrScanner'
 // (clinic proving it's real), THEN choose the action, THEN scan - the
 // scan itself needs to already know what to do with the result the
 // moment it's decoded, so the choice has to come before it, not after.
+// Upload also takes a typed Medsa ID as a fallback to scanning - real
+// gap: results often come back days after the patient's already gone
+// home, so requiring them physically present to scan made the common
+// case impossible. Never takes HKID this way - that stays something you
+// don't type into a stranger's form; medsa_id is the one identifier
+// that's already meant to be handed around for exactly this.
 //
 // Scope: this is continuity-of-care only - getting a real document into
 // (or out of) a patient's Medsa record so their other doctors can see it.
@@ -39,6 +45,15 @@ export default function SharePage() {
   const [requestId, setRequestId] = useState(null)
   const [bundledRecords, setBundledRecords] = useState(null)
   const [noContactOnFile, setNoContactOnFile] = useState(false)
+  // Real gap: upload used to need the patient physically present with
+  // their QR (a scan is the only thing that ever resolved a patient) -
+  // useless for the common case of results coming back days later, long
+  // after the patient's left. Same resolveScannedPatient lookup, just
+  // fed a typed Medsa ID instead of decoded QR text - never HKID, which
+  // stays something you'd never ask a stranger to type into a form.
+  const [typedMedsaId, setTypedMedsaId] = useState('')
+  const [typedIdError, setTypedIdError] = useState(null)
+  const [resolvingTypedId, setResolvingTypedId] = useState(false)
 
   async function handleGateSubmit() {
     if (!clinicName.trim()) { setGateError('Clinic name is required.'); return }
@@ -114,25 +129,50 @@ export default function SharePage() {
     if (result.status === 'VERIFIED') setStage('choose')
   }
 
+  // Real gap found while fixing this: the uploaded file used to only
+  // ever land in external-clinic-uploads with nothing anywhere reading
+  // it back - no patient-facing screen, no record, it just sat there.
+  // Writes to the exact same bucket/table patient self-uploads already
+  // use (medical_record_attachments + patient-uploaded-records) so it
+  // actually shows up under the patient's own Records -> Upload tab,
+  // tagged unverified same as every other externally-sourced document.
+  async function completeUpload(patient) {
+    setStage('upload_syncing')
+    const path = `${patient.medsa_id || patient.id}/${Date.now()}-${file.name}`
+    const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
+    if (upErr) { setError(upErr.message); setStage('error'); return }
+    const { error: attErr } = await supabase.from('medical_record_attachments').insert({
+      patient_id: patient.id, category: 'other', file_url: path,
+      file_name: `${clinicName}: ${file.name}`, verification_status: 'unverified',
+    })
+    if (attErr) { setError(attErr.message); setStage('error'); return }
+    await supabase.from('external_share_requests').insert({
+      patient_id: patient.id, direction: 'upload', clinic_name: clinicName, clinic_registration_number: clinicRegNumber || businessRegNumber,
+      status: 'fulfilled', uploaded_file_url: path, uploaded_file_name: file.name,
+      responded_at: new Date().toISOString(), expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+    })
+    setStage('upload_done')
+  }
+
+  async function handleTypedIdUpload() {
+    const id = typedMedsaId.trim()
+    if (!id) return
+    setResolvingTypedId(true); setTypedIdError(null)
+    const { data: patient } = await supabase.from('patients').select('id, full_name, medsa_id').eq('medsa_id', id).maybeSingle()
+    setResolvingTypedId(false)
+    if (!patient) { setTypedIdError("No patient found with that Medsa ID - double-check it, or ask them to show you their QR code instead."); return }
+    await completeUpload(patient)
+  }
+
   async function handleQrScanned(qrData, direction) {
     const patient = await resolveScannedPatient(qrData)
     if (!patient) { setError('Could not find a patient for this QR code.'); setStage('error'); return }
 
     if (direction === 'upload') {
-      setStage('upload_syncing')
-      const path = `${clinicRegNumber}/${patient.medsa_id}/${Date.now()}-${file.name}`
-      const { error: upErr } = await supabase.storage.from('external-clinic-uploads').upload(path, file)
-      if (upErr) { setError(upErr.message); setStage('error'); return }
-      const { error: insErr } = await supabase.from('external_share_requests').insert({
-        patient_id: patient.id, direction: 'upload', clinic_name: clinicName, clinic_registration_number: clinicRegNumber,
-        status: 'fulfilled', uploaded_file_url: path, uploaded_file_name: file.name,
-        responded_at: new Date().toISOString(), expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
-      })
-      if (insErr) { setError(insErr.message); setStage('error'); return }
-      setStage('upload_done')
+      await completeUpload(patient)
     } else {
       const { data: req, error: insErr } = await supabase.from('external_share_requests').insert({
-        patient_id: patient.id, direction: 'download', clinic_name: clinicName, clinic_registration_number: clinicRegNumber,
+        patient_id: patient.id, direction: 'download', clinic_name: clinicName, clinic_registration_number: clinicRegNumber || businessRegNumber,
         status: 'pending', expires_at: new Date(Date.now() + 30*60*1000).toISOString(),
       }).select('id').maybeSingle()
       if (insErr || !req) { setError(insErr?.message || 'Could not create the request.'); setStage('error'); return }
@@ -219,7 +259,15 @@ export default function SharePage() {
           <button disabled={!file} onClick={()=>setStage('upload_scan')} style={{width:'100%',padding:'12px',background:file?C.green:C.border,color:'#fff',border:'none',borderRadius:'10px',fontWeight:600,cursor:file?'pointer':'default'}}>Submit, then scan patient QR</button>
         </>}
 
-        {stage==='upload_scan' && <QrScanner onScan={(data)=>handleQrScanned(data,'upload')} onCancel={()=>setStage('upload_file')}/>}
+        {stage==='upload_scan' && <>
+          <QrScanner onScan={(data)=>handleQrScanned(data,'upload')} onCancel={()=>setStage('upload_file')}/>
+          <div style={{marginTop:'16px',paddingTop:'16px',borderTop:`0.5px solid ${C.border}`}}>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Patient not here to scan? (e.g. a result that came back after their visit) Enter their Medsa ID instead:</div>
+            <input value={typedMedsaId} onChange={e=>{setTypedMedsaId(e.target.value);setTypedIdError(null)}} placeholder="MDS-XXXXX-HK" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            {typedIdError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{typedIdError}</div>}
+            <button onClick={handleTypedIdUpload} disabled={!typedMedsaId.trim()||resolvingTypedId} style={{width:'100%',padding:'11px',background:typedMedsaId.trim()?C.card:C.beige,border:'none',borderRadius:'8px',fontWeight:600,cursor:typedMedsaId.trim()?'pointer':'default'}}>{resolvingTypedId?'Looking up…':'Send by Medsa ID'}</button>
+          </div>
+        </>}
 
         {stage==='upload_syncing' && <div style={{textAlign:'center',fontSize:'13px',color:C.textMuted}}>Syncing to the patient's Medsa portal...</div>}
 
