@@ -1793,7 +1793,7 @@ function CarouselTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', display_order:0, location:'HK', ends_at:'' })
+  const [form, setForm] = useState({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', location:'HK', ends_at:'' })
   // Real call: "the add a card myself should have the same format as the
   // ad - why can't I add image in between paragraphs?" - this used to be
   // one plain textarea (home_carousel_items.content, a legacy string
@@ -1870,11 +1870,18 @@ function CarouselTab() {
     const cleanBlocks = formBlocks.filter(b => (b.type==='paragraph' && b.text.trim()) || (b.type==='image' && b.url.trim()))
     if (!form.link_url.trim() && cleanBlocks.length===0) return
     setSaving(true)
+    // Real bug found live-testing: this used to take whatever was typed
+    // into a free-text "Display order" field, defaulting to 0 - every
+    // card made here without someone remembering to change it collided
+    // with whatever else was already at 0. Auto-computed the same way
+    // handleApprove already does for a sponsor-approved card, so a new
+    // card always lands at the end instead of silently colliding.
+    const maxOrder = items.reduce((m,i)=>Math.max(m,i.display_order||0), 0)
     await supabase.from('home_carousel_items').insert({
       item_type: form.item_type, title: form.title.trim(), subtitle: form.subtitle.trim()||null,
       image_url: form.image_url.trim()||null, sponsor_name: form.sponsor_name.trim()||null,
       link_url: form.link_url.trim()||null, content_blocks: cleanBlocks.length>0 ? cleanBlocks : null,
-      display_order: parseInt(form.display_order)||0, active: true, location: form.location.trim()||'HK',
+      display_order: maxOrder+1, active: true, location: form.location.trim()||'HK',
       // Real gap found live-testing: ends_at is a real column
       // (components/patient/PatientApp.jsx's own carousel query already
       // filters by it) but this form never had a field for it, so every
@@ -1885,7 +1892,7 @@ function CarouselTab() {
     setSaving(false)
     setCreating(false)
     setFormStage('edit')
-    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', display_order:0, location:'HK', ends_at:'' })
+    setForm({ item_type:'ad', title:'', subtitle:'', image_url:'', sponsor_name:'', link_url:'', location:'HK', ends_at:'' })
     setFormBlocks([{ type:'paragraph', text:'' }])
     load()
   }
@@ -2072,10 +2079,11 @@ function CarouselTab() {
             style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
         ))}
         <AdminImagePicker label="Image" value={form.image_url} onChange={v=>setForm(f=>({...f,image_url:v}))}/>
-        {[['link_url','External link (opens outside the app)'],['display_order','Display order (lower shows first)']].map(([field,ph]) => (
-          <input key={field} value={form[field]} onChange={e=>setForm(f=>({...f,[field]:e.target.value}))} placeholder={ph}
-            style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
-        ))}
+        <input value={form.link_url} onChange={e=>setForm(f=>({...f,link_url:e.target.value}))} placeholder="External link (opens outside the app)"
+          style={{width:'100%',padding:'10px',fontSize:'13px',marginBottom:'10px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
+        {/* Display order is no longer typed here - it always lands at the
+            end (handleSubmit computes maxOrder+1), same as a sponsor
+            approval. Reorder it afterward with the ↑/↓ buttons below. */}
         <div style={{fontSize:'11px',color:C.textSub,margin:'4px 0 8px'}}>In-app content (for a newsletter article - leave blank if using an external link instead) - add paragraphs and images in whatever order they should appear, same as a sponsor's own submission</div>
         {formBlocks.map((blk,i) => (
           <div key={i} style={{background:C.beige,borderRadius:'8px',padding:'10px',marginBottom:'8px'}}>
