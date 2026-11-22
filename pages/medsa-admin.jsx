@@ -1900,6 +1900,25 @@ function CarouselTab() {
     load()
   }
 
+  // Real gap: display_order was only ever SET at creation (a sponsor's
+  // approval, or this tab's own "+ Add card yourself" form) - nothing let
+  // you change it on a card already live, so "the order isn't working" was
+  // right: there was no way to reorder at all once a card existed. Swaps
+  // this card's display_order with its neighbor's rather than offering a
+  // free-text number to edit, since two cards landing on the same number
+  // would make "lower shows first" ambiguous.
+  async function moveItem(item, direction) {
+    const idx = items.findIndex(i => i.id === item.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= items.length) return
+    const other = items[swapIdx]
+    await Promise.all([
+      supabase.from('home_carousel_items').update({ display_order: other.display_order }).eq('id', item.id),
+      supabase.from('home_carousel_items').update({ display_order: item.display_order }).eq('id', other.id),
+    ])
+    load()
+  }
+
   async function handleApprove(sub) {
     setApproving(sub.id)
     const maxOrder = items.reduce((m,i)=>Math.max(m,i.display_order||0), 0)
@@ -2077,7 +2096,7 @@ function CarouselTab() {
       </div>}
 
       {loading&&<div style={{textAlign:'center',padding:'20px',color:C.textMuted,fontSize:'13px'}}>Loading…</div>}
-      {!loading&&items.map(item => (
+      {!loading&&items.map((item,idx) => (
         <div key={item.id} style={{background:C.cream,border:`0.5px solid ${C.border}`,borderRadius:'12px',padding:'14px 16px',marginBottom:'10px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'8px'}}>
             <div>
@@ -2088,6 +2107,8 @@ function CarouselTab() {
             <span style={{fontSize:'10px',padding:'3px 9px',borderRadius:'20px',background:item.active?C.greenLight:C.card,color:item.active?C.green:C.textMuted,fontWeight:600}}>{item.active?'active':'inactive'}</span>
           </div>
           <div style={{display:'flex',gap:'8px'}}>
+            <button onClick={()=>moveItem(item,'up')} disabled={idx===0} style={{padding:'8px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:idx===0?'default':'pointer',opacity:idx===0?0.4:1}}>↑</button>
+            <button onClick={()=>moveItem(item,'down')} disabled={idx===items.length-1} style={{padding:'8px 12px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:idx===items.length-1?'default':'pointer',opacity:idx===items.length-1?0.4:1}}>↓</button>
             <button onClick={()=>toggleActive(item)} style={{flex:1,padding:'8px',background:C.card,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>{item.active?'Deactivate':'Reactivate'}</button>
             <button onClick={()=>handleDelete(item)} style={{flex:1,padding:'8px',background:C.redLight,color:C.red,border:'none',borderRadius:'8px',fontSize:'12px',cursor:'pointer'}}>Delete</button>
           </div>

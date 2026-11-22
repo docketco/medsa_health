@@ -10,12 +10,15 @@ import QrScanner from '../components/QrScanner'
 // (clinic proving it's real), THEN choose the action, THEN scan - the
 // scan itself needs to already know what to do with the result the
 // moment it's decoded, so the choice has to come before it, not after.
-// Upload also takes a typed Medsa ID as a fallback to scanning - real
-// gap: results often come back days after the patient's already gone
-// home, so requiring them physically present to scan made the common
-// case impossible. Never takes HKID this way - that stays something you
-// don't type into a stranger's form; medsa_id is the one identifier
-// that's already meant to be handed around for exactly this.
+// Upload also takes a typed HKID as a fallback to scanning - real gap:
+// results often come back days after the patient's already gone home, so
+// requiring them physically present to scan made the common case
+// impossible. HKID, not Medsa ID, per your call - a clinic sending results
+// days later already has the patient's HKID from their own intake/sample
+// paperwork, and would rarely have bothered asking for a Medsa ID they'd
+// have no other reason to collect. This form only reaches here after the
+// clinic itself has passed the real government-registry check above, so
+// it's not a stranger's form any more by the time this field is reachable.
 //
 // Scope: this is continuity-of-care only - getting a real document into
 // (or out of) a patient's Medsa record so their other doctors can see it.
@@ -51,7 +54,7 @@ export default function SharePage() {
   // after the patient's left. Same resolveScannedPatient lookup, just
   // fed a typed Medsa ID instead of decoded QR text - never HKID, which
   // stays something you'd never ask a stranger to type into a form.
-  const [typedMedsaId, setTypedMedsaId] = useState('')
+  const [typedHkid, setTypedHkid] = useState('')
   const [typedIdError, setTypedIdError] = useState(null)
   const [resolvingTypedId, setResolvingTypedId] = useState(false)
 
@@ -155,12 +158,12 @@ export default function SharePage() {
   }
 
   async function handleTypedIdUpload() {
-    const id = typedMedsaId.trim()
+    const id = typedHkid.trim()
     if (!id) return
     setResolvingTypedId(true); setTypedIdError(null)
-    const { data: patient } = await supabase.from('patients').select('id, full_name, medsa_id').eq('medsa_id', id).maybeSingle()
+    const { data: patient } = await supabase.from('patients').select('id, full_name, medsa_id').eq('hkid', id).maybeSingle()
     setResolvingTypedId(false)
-    if (!patient) { setTypedIdError("No patient found with that Medsa ID - double-check it, or ask them to show you their QR code instead."); return }
+    if (!patient) { setTypedIdError("No patient found with that HKID - double-check it, or ask them to show you their QR code instead."); return }
     await completeUpload(patient)
   }
 
@@ -262,10 +265,10 @@ export default function SharePage() {
         {stage==='upload_scan' && <>
           <QrScanner onScan={(data)=>handleQrScanned(data,'upload')} onCancel={()=>setStage('upload_file')}/>
           <div style={{marginTop:'16px',paddingTop:'16px',borderTop:`0.5px solid ${C.border}`}}>
-            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Patient not here to scan? (e.g. a result that came back after their visit) Enter their Medsa ID instead:</div>
-            <input value={typedMedsaId} onChange={e=>{setTypedMedsaId(e.target.value);setTypedIdError(null)}} placeholder="MDS-XXXXX-HK" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'8px'}}/>
+            <div style={{fontSize:'12px',color:C.textSub,marginBottom:'8px'}}>Patient not here to scan? (e.g. a result that came back after their visit) Enter their HKID instead - the one you already have on file from this patient's visit:</div>
+            <input value={typedHkid} onChange={e=>{setTypedHkid(e.target.value);setTypedIdError(null)}} placeholder="A123456(7)" style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'11px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'8px'}}/>
             {typedIdError&&<div style={{fontSize:'12px',color:C.red,marginBottom:'8px'}}>{typedIdError}</div>}
-            <button onClick={handleTypedIdUpload} disabled={!typedMedsaId.trim()||resolvingTypedId} style={{width:'100%',padding:'11px',background:typedMedsaId.trim()?C.card:C.beige,border:'none',borderRadius:'8px',fontWeight:600,cursor:typedMedsaId.trim()?'pointer':'default'}}>{resolvingTypedId?'Looking up…':'Send by Medsa ID'}</button>
+            <button onClick={handleTypedIdUpload} disabled={!typedHkid.trim()||resolvingTypedId} style={{width:'100%',padding:'11px',background:typedHkid.trim()?C.card:C.beige,border:'none',borderRadius:'8px',fontWeight:600,cursor:typedHkid.trim()?'pointer':'default'}}>{resolvingTypedId?'Looking up…':'Send by HKID'}</button>
           </div>
         </>}
 
