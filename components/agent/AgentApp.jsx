@@ -671,6 +671,16 @@ function PoliciesScreen({ agent, policies, onNewPolicy, onReload }) {
                 {p.pushed_to_insurer_at
                   ? <div style={{fontSize:'11px',color:C.green,fontWeight:600}}>{'✓'} Pushed to insurer {new Date(p.pushed_to_insurer_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}</div>
                   : <Btn style={{fontSize:'11px',padding:'6px 10px'}} onClick={()=>handlePushPolicy(p.id)} disabled={pushingId===p.id}>{pushingId===p.id?'Pushing…':'Not yet pushed - tap to try'}</Btn>}
+                {/* Real gap found live-testing: the automatic pushes at
+                    submission/underwriter-decision/payment fire-and-forget
+                    on purpose (an agent mid-conversation with a patient
+                    shouldn't be interrupted by a webhook error), but that
+                    used to mean a failed attempt left zero trace - no way
+                    to tell "hasn't fired yet" from "fired and failed"
+                    without tapping the button yourself. Now shown directly
+                    whenever the last automatic attempt failed, which is
+                    exactly when to use the manual button above. */}
+                {!p.pushed_to_insurer_at&&p.last_push_error&&<div style={{fontSize:'11px',marginTop:'4px',color:C.red}}>⚠ Last automatic push failed ({new Date(p.last_push_attempted_at).toLocaleDateString('en-HK',{day:'numeric',month:'short'})}): {p.last_push_error}</div>}
                 {pushNotice?.id===p.id&&<div style={{fontSize:'11px',marginTop:'4px',color:pushNotice.ok?C.green:C.red}}>{pushNotice.text}</div>}
               </div>
               {/* Separate from "Push to insurer" above - that's for an
