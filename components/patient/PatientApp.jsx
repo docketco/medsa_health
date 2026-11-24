@@ -1382,6 +1382,23 @@ function Confetti({ onDone }) {
 // EditProfileScreen can also offer it, permanently, for any patient
 // (not gated on account_type/dependent_relationship at all), while
 // AdultTransferBanner keeps using it exactly as before.
+// Real bug found live-testing: guardian_paid_profile_count is null for
+// any subscription that was already active before this column started
+// being set (at checkout verification) - null used to be read as
+// "never subscribed" everywhere, wrongly treating a guardian with a
+// REAL active subscription (just never recounted) as having only the
+// free first dependent. A genuinely active subscription with no
+// recorded count means "the base package, never recounted" (4), not
+// "nothing paid" (1) - the two are different and this is the one place
+// that tells them apart, so every caller uses this instead of reading
+// guardian_paid_profile_count directly.
+function guardianEffectivePaidCount(guardian) {
+  const today = new Date().toISOString().slice(0,10)
+  const isActive = !!guardian?.guardian_subscription_active && (!guardian?.guardian_subscription_expires_at || guardian.guardian_subscription_expires_at >= today)
+  if (guardian?.guardian_paid_profile_count != null) return { paidCount: guardian.guardian_paid_profile_count, needsPackage: !isActive }
+  return { paidCount: isActive ? 4 : 1, needsPackage: !isActive }
+}
+
 async function exportChildHealthKeepsakePdf(patient) {
   const [{ data: growthLogs }, { data: teethLogRows }, { data: immunizationRows }] = await Promise.all([
     supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at'),
@@ -1532,18 +1549,14 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
     // moment you'd expect this to be checked - and if the guardian's
     // real dependent count is already past what they've paid for, letting
     // it through silently is the same gap as never checking at all.
-    // guardian_paid_profile_count is null until a Guardian checkout has
-    // ever actually succeeded - defaults to 1 (just the free first
-    // dependent), not the package size, per your call: the 4-dependant
-    // package is itself a paid purchase, only dependent #1 is free.
     const [{ data: guardian }, { count: depCount }] = await Promise.all([
-      supabase.from('patients').select('guardian_paid_profile_count').eq('id', guardianId).maybeSingle(),
+      supabase.from('patients').select('guardian_paid_profile_count, guardian_subscription_active, guardian_subscription_expires_at').eq('id', guardianId).maybeSingle(),
       supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', guardianId),
     ])
-    const paidCount = guardian?.guardian_paid_profile_count ?? 1
+    const { paidCount, needsPackage } = guardianEffectivePaidCount(guardian)
     if ((depCount||0) > paidCount) {
       setConvertingGuardian(false)
-      setGuardianBlockReason({ depCount: depCount||0, paidCount, guardianId, needsPackage: guardian?.guardian_paid_profile_count==null })
+      setGuardianBlockReason({ depCount: depCount||0, paidCount, guardianId, needsPackage })
       return
     }
     await supabase.from('patients').update({
@@ -11196,30 +11209,28 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   if (!open) return null
   // Real-time check, not just "was Guardian active when this kid was
   // added" - a lapsed subscription actually locks access to any kid
-  // beyond the first free one, re-checked every time this opens. Same
-  // active+expiry combination already used elsewhere in this app for a
-  // paid add-on (see claims_plugin_enabled/_expires_at in medsa-admin.jsx).
-  const today = new Date().toISOString().slice(0,10)
-  const guardianActive = !!managingAdult?.guardian_subscription_active && (!managingAdult?.guardian_subscription_expires_at || managingAdult.guardian_subscription_expires_at >= today)
+  // beyond the first free one, re-checked every time this opens (see
+  // guardianEffectivePaidCount, which computes active+expiry itself).
   // Real gap found live-testing, fixed per your call: this used to be a
   // plain boolean (ANY active subscription = unlimited further
   // dependents, never checking how many were actually paid for) - once
   // past the free first one, a lapsed/never-upgraded subscription let
   // every further dependent through for free forever, with the per-head
-  // pricing never actually enforced. guardian_paid_profile_count is the
-  // real count this account has paid for (set at checkout - see
-  // verify_guardian_checkout.js) - defaults to 1 (just the free first
-  // dependent) until a Guardian checkout has ever actually succeeded,
-  // not to the package size, matching your call: the package itself
-  // isn't free, only dependent #1 is.
-  const freeCount = (guardianActive && managingAdult?.guardian_paid_profile_count!=null) ? managingAdult.guardian_paid_profile_count : 1
+  // pricing never actually enforced. A second real bug found right
+  // after shipping that fix: guardian_paid_profile_count is null for
+  // any subscription that was already active before this column started
+  // being set at checkout - that used to be read as "never subscribed"
+  // (defaulting to 1), wrongly treating a guardian with a REAL active
+  // subscription as having only the free first dependent.
+  // guardianEffectivePaidCount tells "never subscribed" (1) apart from
+  // "active, just never recounted" (4, the base package) correctly.
+  const { paidCount: freeCount, needsPackage: needsPackagePurchase } = guardianEffectivePaidCount(managingAdult)
   // Index 0 is always the adult, free. Index 1 (the first linked
   // dependent) is free too. Anything beyond that needs the real paid
   // count to actually cover it, checked precisely, not just "is there
   // any subscription at all."
   const isLocked = (idx) => idx > freeCount
   const canAddFree = profiles.length <= freeCount
-  const needsPackagePurchase = !guardianActive // no subscription at all yet - this buys the base package; once active, a further block just means topping up the per-head addon
   // Display-only hint, computed from what's already loaded - the real
   // discount decision happens server-side in create_guardian_checkout.js
   // off the same two columns, never trusted from here.
@@ -11604,13 +11615,13 @@ function CreateKidsProfileFlow({ parentPatient, onBack, onComplete }) {
     setSaving(true); setError(null)
     try {
       const [{ data: guardian }, { count: depCount }] = await Promise.all([
-        supabase.from('patients').select('guardian_paid_profile_count').eq('id', parentPatient.id).maybeSingle(),
+        supabase.from('patients').select('guardian_paid_profile_count, guardian_subscription_active, guardian_subscription_expires_at').eq('id', parentPatient.id).maybeSingle(),
         supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', parentPatient.id),
       ])
-      const paidCount = guardian?.guardian_paid_profile_count ?? 1
+      const { paidCount, needsPackage } = guardianEffectivePaidCount(guardian)
       if ((depCount||0)+1 > paidCount) {
         setSaving(false)
-        setGuardianBlock({ depCount: (depCount||0)+1, paidCount, needsPackage: guardian?.guardian_paid_profile_count==null })
+        setGuardianBlock({ depCount: (depCount||0)+1, paidCount, needsPackage })
         return
       }
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
