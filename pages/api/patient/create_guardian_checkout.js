@@ -4,9 +4,17 @@
 // Connect destination" shape as insurer/start_subscription.js since this
 // is Medsa's own revenue, not money passing through to anyone else.
 // Package covers up to GUARDIAN_PACKAGE_SIZE linked dependents;
-// GUARDIAN_ADDON_PER_HEAD_HKD is a placeholder for billing a larger
-// package later (not wired into this checkout yet - package only, matching
-// what's actually been confirmed).
+// GUARDIAN_ADDON_PER_HEAD_HKD (confirmed) bills every dependent beyond
+// that as its own separate annual line item, computed from the real
+// current dependent count - never trusted from the client, and counted
+// the same way regardless of HOW that count got there: a fresh invited
+// signup, or an aged-out Kids profile converted into a Guardian
+// dependent (see convertToGuardianDependent in PatientApp.jsx) both
+// count the same, since both increase the real number of profiles this
+// subscription is covering. Kept as its own Stripe line item rather than
+// folded into the package price, so the disability discount (which is
+// specifically "50% off the package price") never silently extends to
+// the add-on heads without that being a real, separate call.
 //
 // Switched from monthly to annual billing per the later call - the annual
 // price below is the confirmed HK$148/mo figure x12 with NO discount
@@ -39,7 +47,7 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.
 
 const GUARDIAN_PACKAGE_PRICE_HKD = 148 * 12 // = 1,776/year - straight x12 of the confirmed monthly figure, no annual discount applied
 const GUARDIAN_PACKAGE_SIZE = 4
-const GUARDIAN_ADDON_PER_HEAD_HKD = null // TODO: set the real per-extra-head add-on price once confirmed (not wired into checkout yet - package only)
+const GUARDIAN_ADDON_PER_HEAD_HKD = 320 // confirmed - per extra dependent beyond GUARDIAN_PACKAGE_SIZE, per year
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
@@ -59,6 +67,8 @@ export default async function handler(req, res) {
     .select('is_disabled, disability_proof_attachment_id').eq('parent_patient_id', patientId)
   const hasProvenDisabledDependent = (dependents||[]).some(d => d.is_disabled && d.disability_proof_attachment_id)
   const packagePriceHkd = hasProvenDisabledDependent ? GUARDIAN_PACKAGE_PRICE_HKD * 0.5 : GUARDIAN_PACKAGE_PRICE_HKD
+  const extraHeads = Math.max(0, (dependents||[]).length - GUARDIAN_PACKAGE_SIZE)
+  const addonPriceHkd = extraHeads * GUARDIAN_ADDON_PER_HEAD_HKD
 
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://medsa.health'
@@ -73,20 +83,31 @@ export default async function handler(req, res) {
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
-    line_items: [{
-      price_data: {
-        currency: 'hkd',
-        product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)${hasProvenDisabledDependent ? ' - 50% disability discount applied' : ''}` },
-        unit_amount: Math.round(packagePriceHkd * 100),
-        recurring: { interval: 'year' },
+    line_items: [
+      {
+        price_data: {
+          currency: 'hkd',
+          product_data: { name: `Medsa Guardian - up to ${GUARDIAN_PACKAGE_SIZE} managed profiles (annual)${hasProvenDisabledDependent ? ' - 50% disability discount applied' : ''}` },
+          unit_amount: Math.round(packagePriceHkd * 100),
+          recurring: { interval: 'year' },
+        },
+        quantity: 1,
       },
-      quantity: 1,
-    }],
+      ...(extraHeads > 0 ? [{
+        price_data: {
+          currency: 'hkd',
+          product_data: { name: `Medsa Guardian - ${extraHeads} additional profile${extraHeads===1?'':'s'} beyond the package (annual)` },
+          unit_amount: Math.round(GUARDIAN_ADDON_PER_HEAD_HKD * 100),
+          recurring: { interval: 'year' },
+        },
+        quantity: extraHeads,
+      }] : []),
+    ],
     success_url: `${siteUrl}/patient?guardian_started=1&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${siteUrl}/patient?guardian_cancelled=1`,
-    metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent) },
-    subscription_data: { metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent) } },
+    metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent), extra_heads: String(extraHeads) },
+    subscription_data: { metadata: { guardian_patient_id: patientId, disability_discount_applied: String(hasProvenDisabledDependent), extra_heads: String(extraHeads) } },
   })
 
-  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, discountApplied: hasProvenDisabledDependent })
+  return res.status(200).json({ status: 'CREATED', paymentUrl: session.url, discountApplied: hasProvenDisabledDependent, extraHeads, addonPriceHkd })
 }
