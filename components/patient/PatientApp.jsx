@@ -1533,16 +1533,17 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
     // real dependent count is already past what they've paid for, letting
     // it through silently is the same gap as never checking at all.
     // guardian_paid_profile_count is null until a Guardian checkout has
-    // ever actually succeeded - defaults to the free package size (4),
-    // not unlimited, so an unpaid guardian over the free cap is blocked too.
+    // ever actually succeeded - defaults to 1 (just the free first
+    // dependent), not the package size, per your call: the 4-dependant
+    // package is itself a paid purchase, only dependent #1 is free.
     const [{ data: guardian }, { count: depCount }] = await Promise.all([
       supabase.from('patients').select('guardian_paid_profile_count').eq('id', guardianId).maybeSingle(),
       supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', guardianId),
     ])
-    const paidCount = guardian?.guardian_paid_profile_count ?? 4
+    const paidCount = guardian?.guardian_paid_profile_count ?? 1
     if ((depCount||0) > paidCount) {
       setConvertingGuardian(false)
-      setGuardianBlockReason({ depCount: depCount||0, paidCount, guardianId })
+      setGuardianBlockReason({ depCount: depCount||0, paidCount, guardianId, needsPackage: guardian?.guardian_paid_profile_count==null })
       return
     }
     await supabase.from('patients').update({
@@ -1593,8 +1594,14 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
       {guardianConfirmOpen && <div onClick={()=>{setGuardianConfirmOpen(false);setGuardianBlockReason(null)}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
         <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
           {guardianBlockReason ? <>
-            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?'This Guardian plan needs an extra profile first':'此Guardian方案需先新增額外名額'}</div>
-            <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?`This would be profile #${guardianBlockReason.depCount} under this Guardian account, but only ${guardianBlockReason.paidCount} ${guardianBlockReason.paidCount===1?'is':'are'} currently paid for. Add this profile to the plan first (+HK$320/yr) before converting.`:`此檔案將是此Guardian帳戶的第${guardianBlockReason.depCount}個檔案,但目前僅已付款${guardianBlockReason.paidCount}個名額。請先將此檔案加入方案(+HK$320/年)再進行轉換。`}</div>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?(guardianBlockReason.needsPackage?'This needs a Medsa Guardian subscription first':'This Guardian plan needs an extra profile first'):(guardianBlockReason.needsPackage?'需先訂閱Medsa Guardian':'此Guardian方案需先新增額外名額')}</div>
+            <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn
+              ?(guardianBlockReason.needsPackage
+                ? "Only your first dependent is free - managing more than one needs the Medsa Guardian package (up to 4 profiles)."
+                : `This would be profile #${guardianBlockReason.depCount} under this Guardian account, but only ${guardianBlockReason.paidCount} are currently paid for. Add this profile to the plan first (+HK$320/yr) before converting.`)
+              :(guardianBlockReason.needsPackage
+                ? '只有第一位受養人是免費的 - 管理多於一位需要Medsa Guardian方案(最多4個檔案)。'
+                : `此檔案將是此Guardian帳戶的第${guardianBlockReason.depCount}個檔案,但目前僅已付款${guardianBlockReason.paidCount}個名額。請先將此檔案加入方案(+HK$320/年)再進行轉換。`)}</div>
             {guardianBlockReason.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{guardianBlockReason.error}</div>}
             <div style={{display:'flex',gap:'8px'}}>
               <Btn style={{flex:1}} onClick={()=>{setGuardianConfirmOpen(false);setGuardianBlockReason(null)}}>{isEn?'Not now':'暫不處理'}</Btn>
@@ -11194,11 +11201,25 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
   // paid add-on (see claims_plugin_enabled/_expires_at in medsa-admin.jsx).
   const today = new Date().toISOString().slice(0,10)
   const guardianActive = !!managingAdult?.guardian_subscription_active && (!managingAdult?.guardian_subscription_expires_at || managingAdult.guardian_subscription_expires_at >= today)
-  // Index 0 is always the adult, free. Index 1 (the first linked kid) is
-  // free too. Anything beyond that needs an active Guardian subscription
-  // right now, not just at the moment it was added.
-  const isLocked = (idx) => idx >= 2 && !guardianActive
-  const canAddFree = profiles.length <= 1
+  // Real gap found live-testing, fixed per your call: this used to be a
+  // plain boolean (ANY active subscription = unlimited further
+  // dependents, never checking how many were actually paid for) - once
+  // past the free first one, a lapsed/never-upgraded subscription let
+  // every further dependent through for free forever, with the per-head
+  // pricing never actually enforced. guardian_paid_profile_count is the
+  // real count this account has paid for (set at checkout - see
+  // verify_guardian_checkout.js) - defaults to 1 (just the free first
+  // dependent) until a Guardian checkout has ever actually succeeded,
+  // not to the package size, matching your call: the package itself
+  // isn't free, only dependent #1 is.
+  const freeCount = (guardianActive && managingAdult?.guardian_paid_profile_count!=null) ? managingAdult.guardian_paid_profile_count : 1
+  // Index 0 is always the adult, free. Index 1 (the first linked
+  // dependent) is free too. Anything beyond that needs the real paid
+  // count to actually cover it, checked precisely, not just "is there
+  // any subscription at all."
+  const isLocked = (idx) => idx > freeCount
+  const canAddFree = profiles.length <= freeCount
+  const needsPackagePurchase = !guardianActive // no subscription at all yet - this buys the base package; once active, a further block just means topping up the per-head addon
   // Display-only hint, computed from what's already loaded - the real
   // discount decision happens server-side in create_guardian_checkout.js
   // off the same two columns, never trusted from here.
@@ -11278,12 +11299,10 @@ function ProfileSwitcherModal({ open, onClose, activePatient, onSwitch, onAddChi
         <div style={{marginTop:'12px'}}>
           {canAddFree
             ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add a dependent profile</Btn>
-            : guardianActive
-              ? <Btn style={{width:'100%'}} onClick={()=>{onAddChild(managingAdult,false);onClose()}}>+ Add another dependent profile</Btn>
-              : <>
-                  {disabilityDiscountEligible&&<div style={{fontSize:'11px',color:C.green,textAlign:'center',marginBottom:'6px'}}>50% disability discount applies to this account</div>}
-                  <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':'Subscribe to Medsa Guardian to manage more'}</Btn>
-                </>}
+            : <>
+                {disabilityDiscountEligible&&<div style={{fontSize:'11px',color:C.green,textAlign:'center',marginBottom:'6px'}}>50% disability discount applies to this account</div>}
+                <Btn variant="primary" style={{width:'100%'}} disabled={subscribing} onClick={handleSubscribeGuardian}>{subscribing?'Starting…':needsPackagePurchase?'Subscribe to Medsa Guardian to manage more':'Add this profile to your Guardian plan (+HK$320/yr)'}</Btn>
+              </>}
           <div onClick={()=>setRedeemOpen(true)} style={{textAlign:'center',fontSize:'12px',color:__theme.accent,fontWeight:600,marginTop:'10px',cursor:'pointer'}}>I have a caregiver invite link</div>
         </div>
       </div>
@@ -11588,10 +11607,10 @@ function CreateKidsProfileFlow({ parentPatient, onBack, onComplete }) {
         supabase.from('patients').select('guardian_paid_profile_count').eq('id', parentPatient.id).maybeSingle(),
         supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', parentPatient.id),
       ])
-      const paidCount = guardian?.guardian_paid_profile_count ?? 4
+      const paidCount = guardian?.guardian_paid_profile_count ?? 1
       if ((depCount||0)+1 > paidCount) {
         setSaving(false)
-        setGuardianBlock({ depCount: (depCount||0)+1, paidCount })
+        setGuardianBlock({ depCount: (depCount||0)+1, paidCount, needsPackage: guardian?.guardian_paid_profile_count==null })
         return
       }
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
@@ -11638,8 +11657,10 @@ function CreateKidsProfileFlow({ parentPatient, onBack, onComplete }) {
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
         <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
-        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>This Guardian plan needs an extra profile first</div>
-        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>This would be profile #{guardianBlock.depCount} under this account, but only {guardianBlock.paidCount} {guardianBlock.paidCount===1?'is':'are'} currently paid for. Add this profile to the plan first (+HK$320/yr) before creating it.</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>{guardianBlock.needsPackage?'This needs a Medsa Guardian subscription first':'This Guardian plan needs an extra profile first'}</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>{guardianBlock.needsPackage
+          ? "Only your first dependent is free - managing more than one needs the Medsa Guardian package (up to 4 profiles)."
+          : `This would be profile #${guardianBlock.depCount} under this account, but only ${guardianBlock.paidCount} are currently paid for. Add this profile to the plan first (+HK$320/yr) before creating it.`}</div>
         {guardianBlock.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{guardianBlock.error}</div>}
         <div style={{display:'flex',gap:'8px'}}>
           <Btn style={{flex:1}} onClick={()=>setGuardianBlock(null)}>Not now</Btn>
