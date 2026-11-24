@@ -1371,6 +1371,52 @@ function Confetti({ onDone }) {
   )
 }
 
+// Real gap found live-testing: this used to live only inside
+// AdultTransferBanner below, whose own "show" condition goes false the
+// moment a transfer or convert decision is made (adult_transfer_choice
+// gets set) - meaning the ONE way to ever see this data again
+// disappeared forever at exactly the moment it mattered most. A growth/
+// teeth/immunisation row is never touched by transfer or convert (both
+// only ever update the patients row itself), so the data always
+// genuinely survives - it just had no door back to it. Extracted so
+// EditProfileScreen can also offer it, permanently, for any patient
+// (not gated on account_type/dependent_relationship at all), while
+// AdultTransferBanner keeps using it exactly as before.
+async function exportChildHealthKeepsakePdf(patient) {
+  const [{ data: growthLogs }, { data: teethLogRows }, { data: immunizationRows }] = await Promise.all([
+    supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at'),
+    supabase.from('kids_teeth_log').select('*').eq('patient_id', patient.id),
+    supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
+  ])
+  const GREEN = [0,98,65]
+  const { jsPDF } = await import('jspdf')
+  const doc = new jsPDF()
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Childhood Health Keepsake`
+  drawPdfHeader(doc, pageWidth, subtitle, GREEN)
+  let y = 40
+  if (growthLogs?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+    title: 'Growth log', subtitle, accentColor: GREEN,
+    dateInstitution: `${growthLogs.length} measurement${growthLogs.length===1?'':'s'}`,
+    details: [...growthLogs].reverse().map(g=>[g.recorded_at, [g.weight_kg!=null?`${g.weight_kg}kg`:null, g.height_cm!=null?`${g.height_cm}cm`:null, g.head_circumference_cm!=null?`head ${g.head_circumference_cm}cm`:null].filter(Boolean).join(' · ')]),
+  })
+  const firstTooth = teethLogRows?.find(l=>l.erupted_at)
+  const fallenOut = TEETH.map(t=>({t,logged:teethLogRows?.find(l=>l.tooth_key===t.key)})).filter(r=>r.logged?.lost_at)
+  if (firstTooth || fallenOut.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+    title: 'Teeth', subtitle, accentColor: GREEN,
+    dateInstitution: firstTooth ? `First tooth: ${TEETH.find(t=>t.key===firstTooth.tooth_key)?.en||firstTooth.tooth_key}, ${firstTooth.erupted_at}` : '',
+    details: fallenOut.map(({t,logged})=>[logged.lost_at, `${t.en} fell out`]),
+  })
+  if (immunizationRows?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
+    title: 'Immunisations (HKCIP)', subtitle, accentColor: GREEN,
+    dateInstitution: `${immunizationRows.length} dose${immunizationRows.length===1?'':'s'} recorded`,
+    details: HKCIP_SCHEDULE.flatMap(band=>band.doses).filter(d=>immunizationRows.some(c=>c.dose_key===d.key)).map(d=>['✓', `${d.vaccine.en}${d.dose.en?` - ${d.dose.en}`:''}`]),
+  })
+  doc.save(`${patient.full_name||'keepsake'}-childhood-health-record.pdf`)
+  return !!(growthLogs?.length || firstTooth || fallenOut.length || immunizationRows?.length)
+}
+
 // Lives on Home (your call - not buried in the Growth tab) for any Kids
 // dependent profile (dependent_relationship 'child' only) once it turns
 // 16, escalating once it's a year past 18. Self-contained: fetches its
@@ -1391,6 +1437,23 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
   const [transferError,setTransferError]=useState(null)
   const [convertingGuardian,setConvertingGuardian]=useState(false)
   const [guardianConfirmOpen,setGuardianConfirmOpen]=useState(false)
+  const [guardianBlockReason,setGuardianBlockReason]=useState(null) // {depCount, paidCount, guardianId}
+  const [startingGuardianCheckout,setStartingGuardianCheckout]=useState(false)
+  async function handlePayForExtraDependent() {
+    if (!guardianBlockReason) return
+    setStartingGuardianCheckout(true)
+    try {
+      const res = await fetch('/api/patient/create_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ patientId: guardianBlockReason.guardianId }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setGuardianBlockReason(r => ({ ...r, error: data.message || 'Could not start checkout.' }))
+    } finally {
+      setStartingGuardianCheckout(false)
+    }
+  }
   const [exportingKeepsake,setExportingKeepsake]=useState(false)
   // Deletion is never automatic (your call) - once locked (pending_deletion_at
   // set) for 6+ more years (age 25, Hong Kong's general clinical-record
@@ -1462,6 +1525,26 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
   // dependent on their account uniformly.
   async function convertToGuardianDependent() {
     setConvertingGuardian(true)
+    setGuardianBlockReason(null)
+    const guardianId = patient.parent_patient_id
+    // Hard block per your call: converting doesn't literally add a new
+    // row (parent_patient_id was already set), but it's exactly the
+    // moment you'd expect this to be checked - and if the guardian's
+    // real dependent count is already past what they've paid for, letting
+    // it through silently is the same gap as never checking at all.
+    // guardian_paid_profile_count is null until a Guardian checkout has
+    // ever actually succeeded - defaults to the free package size (4),
+    // not unlimited, so an unpaid guardian over the free cap is blocked too.
+    const [{ data: guardian }, { count: depCount }] = await Promise.all([
+      supabase.from('patients').select('guardian_paid_profile_count').eq('id', guardianId).maybeSingle(),
+      supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', guardianId),
+    ])
+    const paidCount = guardian?.guardian_paid_profile_count ?? 4
+    if ((depCount||0) > paidCount) {
+      setConvertingGuardian(false)
+      setGuardianBlockReason({ depCount: depCount||0, paidCount, guardianId })
+      return
+    }
     await supabase.from('patients').update({
       dependent_relationship: 'other',
       adult_transfer_choice: 'guardian_dependent', adult_transfer_choice_at: new Date().toISOString(),
@@ -1472,37 +1555,7 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
   }
   async function exportKeepsakePdf() {
     setExportingKeepsake(true)
-    const [{ data: growthLogs }, { data: teethLogRows }, { data: immunizationRows }] = await Promise.all([
-      supabase.from('kids_growth_logs').select('*').eq('patient_id', patient.id).order('recorded_at'),
-      supabase.from('kids_teeth_log').select('*').eq('patient_id', patient.id),
-      supabase.from('kids_immunization_checks').select('*').eq('patient_id', patient.id),
-    ])
-    const GREEN = [0,98,65]
-    const { jsPDF } = await import('jspdf')
-    const doc = new jsPDF()
-    const pageWidth = doc.internal.pageSize.getWidth()
-    const pageHeight = doc.internal.pageSize.getHeight()
-    const subtitle = `${patient.full_name||''} · ${patient.medsa_id||''} · Childhood Health Keepsake`
-    drawPdfHeader(doc, pageWidth, subtitle, GREEN)
-    let y = 40
-    if (growthLogs?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Growth log', subtitle, accentColor: GREEN,
-      dateInstitution: `${growthLogs.length} measurement${growthLogs.length===1?'':'s'}`,
-      details: [...growthLogs].reverse().map(g=>[g.recorded_at, [g.weight_kg!=null?`${g.weight_kg}kg`:null, g.height_cm!=null?`${g.height_cm}cm`:null, g.head_circumference_cm!=null?`head ${g.head_circumference_cm}cm`:null].filter(Boolean).join(' · ')]),
-    })
-    const firstTooth = teethLogRows?.find(l=>l.erupted_at)
-    const fallenOut = TEETH.map(t=>({t,logged:teethLogRows?.find(l=>l.tooth_key===t.key)})).filter(r=>r.logged?.lost_at)
-    if (firstTooth || fallenOut.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Teeth', subtitle, accentColor: GREEN,
-      dateInstitution: firstTooth ? `First tooth: ${TEETH.find(t=>t.key===firstTooth.tooth_key)?.en||firstTooth.tooth_key}, ${firstTooth.erupted_at}` : '',
-      details: fallenOut.map(({t,logged})=>[logged.lost_at, `${t.en} fell out`]),
-    })
-    if (immunizationRows?.length>0) y = drawPdfRecordCard(doc, y, pageWidth, pageHeight, {
-      title: 'Immunisations (HKCIP)', subtitle, accentColor: GREEN,
-      dateInstitution: `${immunizationRows.length} dose${immunizationRows.length===1?'':'s'} recorded`,
-      details: HKCIP_SCHEDULE.flatMap(band=>band.doses).filter(d=>immunizationRows.some(c=>c.dose_key===d.key)).map(d=>['✓', `${d.vaccine.en}${d.dose.en?` - ${d.dose.en}`:''}`]),
-    })
-    doc.save(`${patient.full_name||'keepsake'}-childhood-health-record.pdf`)
+    await exportChildHealthKeepsakePdf(patient)
     setExportingKeepsake(false)
   }
 
@@ -1537,14 +1590,24 @@ function AdultTransferBanner({ isEn, patient, onPatientUpdated, onSwitchToPatien
         </div>
       </div>}
 
-      {guardianConfirmOpen && <div onClick={()=>setGuardianConfirmOpen(false)} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
+      {guardianConfirmOpen && <div onClick={()=>{setGuardianConfirmOpen(false);setGuardianBlockReason(null)}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:300,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'}}>
         <div onClick={e=>e.stopPropagation()} style={{background:'#fff',borderRadius:'14px',padding:'20px',maxWidth:380,width:'100%'}}>
-          <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Convert ${patient.full_name||'this profile'} to a Guardian dependent`:`將${patient.full_name||'此檔案'}轉為Guardian受養人`}</div>
-          <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"You'll keep full control, same as today - this just moves them off the Kids-specific screens (growth charts, teeth, immunisations), since those stop being relevant once they're an adult. Their existing records stay on file.":'您將繼續完全管理此帳戶,一如以往 - 此操作僅將檔案移離兒童專屬畫面(生長圖表、牙齒、疫苗),因為成年後這些已不再適用。現有記錄將繼續保留。'}</div>
-          <div style={{display:'flex',gap:'8px'}}>
-            <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
-            <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
-          </div>
+          {guardianBlockReason ? <>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?'This Guardian plan needs an extra profile first':'此Guardian方案需先新增額外名額'}</div>
+            <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?`This would be profile #${guardianBlockReason.depCount} under this Guardian account, but only ${guardianBlockReason.paidCount} ${guardianBlockReason.paidCount===1?'is':'are'} currently paid for. Add this profile to the plan first (+HK$320/yr) before converting.`:`此檔案將是此Guardian帳戶的第${guardianBlockReason.depCount}個檔案,但目前僅已付款${guardianBlockReason.paidCount}個名額。請先將此檔案加入方案(+HK$320/年)再進行轉換。`}</div>
+            {guardianBlockReason.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'10px'}}>{guardianBlockReason.error}</div>}
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>{setGuardianConfirmOpen(false);setGuardianBlockReason(null)}}>{isEn?'Not now':'暫不處理'}</Btn>
+              <Btn variant="primary" style={{flex:1}} disabled={startingGuardianCheckout} onClick={handlePayForExtraDependent}>{startingGuardianCheckout?(isEn?'Starting…':'開始中…'):(isEn?'Add & pay':'新增並付款')}</Btn>
+            </div>
+          </> : <>
+            <div style={{fontSize:'15px',fontWeight:700,marginBottom:'6px'}}>{isEn?`Convert ${patient.full_name||'this profile'} to a Guardian dependent`:`將${patient.full_name||'此檔案'}轉為Guardian受養人`}</div>
+            <div style={{fontSize:'11.5px',color:C.textMuted,marginBottom:'16px',lineHeight:1.5}}>{isEn?"You'll keep full control, same as today - this just moves them off the Kids-specific screens (growth charts, teeth, immunisations), since those stop being relevant once they're an adult. Their existing records stay on file.":'您將繼續完全管理此帳戶,一如以往 - 此操作僅將檔案移離兒童專屬畫面(生長圖表、牙齒、疫苗),因為成年後這些已不再適用。現有記錄將繼續保留。'}</div>
+            <div style={{display:'flex',gap:'8px'}}>
+              <Btn style={{flex:1}} onClick={()=>setGuardianConfirmOpen(false)}>{isEn?'Cancel':'取消'}</Btn>
+              <Btn variant="primary" style={{flex:1}} disabled={convertingGuardian} onClick={convertToGuardianDependent}>{convertingGuardian?(isEn?'Converting…':'轉換中…'):(isEn?'Convert':'轉換')}</Btn>
+            </div>
+          </>}
         </div>
       </div>}
 
@@ -1666,6 +1729,10 @@ function drawPdfRecordCard(doc, y, pageWidth, pageHeight, { title, dateInstituti
 
 function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patient={}, transactions=[], referrals=[], onShareBundle, deepLinkRecordId=null, onConsumeDeepLink }) {
   const __theme = useContext(ThemeContext)
+  // Same pattern as every other screen swept this round - real gap: a
+  // permanently-locked profile could still upload and remove its own
+  // record attachments.
+  const isReadOnly = !!patient?.pending_deletion_at
   const [bundleMode,setBundleMode]=useState(false)
   const [selectedIds,setSelectedIds]=useState(new Set())
   const [bundleFilter,setBundleFilter]=useState('')
@@ -1830,6 +1897,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   // evidence out from under an existing claim would be a real problem,
   // not a convenience.
   async function handleRemoveUpload(id) {
+    if (isReadOnly) return
     await supabase.from('medical_record_attachments').delete().eq('id', id)
     setMyUploads(prev => prev.filter(u => u.id !== id))
   }
@@ -1907,7 +1975,7 @@ function RecordsScreen({ isEn, records=[], conditions=[], vaccinations=[], patie
   }
 
   async function proceedWithUpload({ clinicId=null, verificationStatus, isGovernmentRecord=false }) {
-    if (!pendingUploadFile || !patient?.id) return
+    if (!pendingUploadFile || !patient?.id || isReadOnly) return
     setUploading(true)
     setUploadError(null)
     const path = `${patient.medsa_id || patient.id}/${Date.now()}-${pendingUploadFile.name}`
@@ -2651,6 +2719,7 @@ function IngredientScanScreen({ isEn, patient={} }) {
 
 function DoctorsScreen({ isEn, patient={} }) {
   const __theme = useContext(ThemeContext)
+  const isReadOnly = !!patient?.pending_deletion_at
   const [outstandingClaims,setOutstandingClaims]=useState([])
   const [claimsLoading,setClaimsLoading]=useState(true)
 
@@ -3012,6 +3081,7 @@ function DoctorsScreen({ isEn, patient={} }) {
   }
 
   async function handleConfirmBooking() {
+    if (isReadOnly) return
     // Declining consent no longer blocks booking - it only means the
     // clinic won't be able to read past records for this visit. Only a
     // real save failure should stop the booking from going through.
@@ -3496,6 +3566,13 @@ function MedAlarmCard({ medId, med, schedule, dosingMode, intervalHours, default
 
 function CalendarScreen({ isEn, appointments=[], medications=[], records=[], patient, onCancelled, onReload, onViewRecord }) {
   const __theme = useContext(ThemeContext)
+  // Same pattern as KidsGrowthScreen/EditProfileScreen's own isReadOnly -
+  // real gap found live-testing: a permanently-locked (19+, pending_
+  // deletion_at set) profile could still book/cancel appointments, add
+  // reminders and add/delete calendar events, since nothing here checked
+  // this at all. "GO GLOBAL" - swept every patient-facing screen with a
+  // write path, not just the two you happened to find.
+  const isReadOnly = !!patient?.pending_deletion_at
   const [addReminderOpen,setAddReminderOpen]=useState(false)
   const [addingReminderId,setAddingReminderId]=useState(null)
 
@@ -3546,6 +3623,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
     patient_pays: 0, consult_type: null, _manual: true, _manualId: e.id,
   }))]
   async function deleteCalendarEvent(id) {
+    if (isReadOnly) return
     await supabase.from('patient_calendar_events').delete().eq('id', id)
     loadCalendarEvents()
   }
@@ -3573,6 +3651,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   const [cancelledMsg,setCancelledMsg]=useState(null)
 
   async function handleCancelAppointment(appt) {
+    if (isReadOnly) return
     setCancelling(true)
     const { error } = await supabase.from('appointments').update({ status: 'cancelled' }).eq('id', appt.id)
     // If this appointment was already checked in, cancelling it left the
@@ -3608,6 +3687,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
   }
 
   async function handleAddReminder(m) {
+    if (isReadOnly) return
     setAddingReminderId(m.id)
     await supabase.from('medications').update({ alarm_enabled: true, alarm_time: '08:00', alarm_times: ['08:00'] }).eq('id', m.id)
     setAddingReminderId(null)
@@ -3662,7 +3742,7 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
     setAddEventOpen(true)
   }
   async function saveEvent() {
-    if (!eventForm?.title?.trim() || !patient?.id) return
+    if (!eventForm?.title?.trim() || !patient?.id || isReadOnly) return
     setSavingEvent(true)
     const eventAt = hkWallTimeToUTC(...eventForm.date.split('-').map(Number), ...eventForm.time.split(':').map(Number))
     await supabase.from('patient_calendar_events').insert({ patient_id: patient.id, title: eventForm.title.trim(), event_at: eventAt.toISOString(), note: eventForm.note.trim()||null })
@@ -3720,9 +3800,10 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
       </div>
       <SecLabel>{isSameDay(selectedDate,today) ? (isEn?"Today's appointments":'今天的預約') : selectedDate.toLocaleDateString(isEn?'en-HK':'zh-HK',{weekday:'long',day:'numeric',month:'long'})}</SecLabel>
       {cancelledMsg&&<div style={{margin:'0 16px 10px',background:__theme.accentXLight,border:`0.5px solid ${__theme.accent}`,borderRadius:'10px',padding:'10px 14px',fontSize:'12px',color:__theme.accent}}>{'✓'} {cancelledMsg}</div>}
+      {isReadOnly&&<div style={{margin:'0 16px 10px',padding:'10px 14px',background:C.redLight,border:`0.5px solid ${C.red}`,borderRadius:'10px',fontSize:'12px',color:C.red}}>{isEn?'This profile is permanently read-only - nothing here can be added, changed or cancelled.':'此檔案已永久設為唯讀 - 無法新增、更改或取消任何內容。'}</div>}
       <div style={{padding:'0 16px 12px'}}>
         {!addEventOpen
-          ? <Btn style={{width:'100%'}} onClick={openAddEvent}>+ {isEn?'Add event':'新增事項'}</Btn>
+          ? <Btn style={{width:'100%'}} onClick={openAddEvent} disabled={isReadOnly}>+ {isEn?'Add event':'新增事項'}</Btn>
           : <Card style={{padding:'14px'}}>
               <input value={eventForm.title} onChange={e=>setEventForm({...eventForm,title:e.target.value})} placeholder={isEn?'Title (e.g. Dentist, school meeting)':'標題（例如：牙科、家長會）'} style={{width:'100%',padding:'9px 10px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box',border:`0.5px solid ${C.border}`,borderRadius:'8px'}}/>
               <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
@@ -3794,10 +3875,10 @@ function CalendarScreen({ isEn, appointments=[], medications=[], records=[], pat
           })()}
           {activeAppt._manual&&<>
             {activeAppt.institutions?.name&&<div style={{fontSize:'13px',color:C.text,background:C.card,borderRadius:'10px',padding:'10px 12px',marginBottom:'14px',lineHeight:1.5}}>{activeAppt.institutions.name}</div>}
-            <Btn variant="danger" style={{width:'100%'}} onClick={async()=>{await deleteCalendarEvent(activeAppt._manualId);setActiveAppt(null)}}>{isEn?'Delete event':'刪除事項'}</Btn>
+            <Btn variant="danger" style={{width:'100%'}} disabled={isReadOnly} onClick={async()=>{await deleteCalendarEvent(activeAppt._manualId);setActiveAppt(null)}}>{isEn?'Delete event':'刪除事項'}</Btn>
           </>}
           {!activeAppt._manual&&activeAppt.status!=='completed'&&activeAppt.consult_type==='video'&&<Btn variant="primary" style={{width:'100%',marginBottom:'8px'}} onClick={()=>joinPatientVideoCall(patient?.full_name, patient?.medsa_id)}>{isEn?'Join video call':'加入視像通話'}</Btn>}
-          {!activeAppt._manual&&activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
+          {!activeAppt._manual&&activeAppt.status!=='completed'&&<Btn variant="danger" style={{width:'100%'}} disabled={cancelling||isReadOnly} onClick={()=>handleCancelAppointment(activeAppt)}>{cancelling?(isEn?'Cancelling…':'取消中…'):(isEn?'Cancel appointment':'取消預約')}</Btn>}
           <Btn style={{width:'100%',marginTop:'8px'}} onClick={()=>setActiveAppt(null)}>{isEn?'Close':'關閉'}</Btn>
         </div>
       </div>}
@@ -3861,7 +3942,7 @@ function InquiryMessageAttachment({ m }) {
   return null
 }
 
-function PatientInquiryThread({ inquiry, patientName, patientId }) {
+function PatientInquiryThread({ inquiry, patientName, patientId, isReadOnly=false }) {
   const __theme = useContext(ThemeContext)
   const [messages,setMessages]=useState([])
   const [loading,setLoading]=useState(true)
@@ -3910,6 +3991,7 @@ function PatientInquiryThread({ inquiry, patientName, patientId }) {
   }
 
   async function handleFile(file) {
+    if (isReadOnly) return
     setUploading(true)
     setUploadError(null)
     const path = `${patientId}/${Date.now()}-${file.name}`
@@ -3924,7 +4006,7 @@ function PatientInquiryThread({ inquiry, patientName, patientId }) {
   }
 
   async function handleSend() {
-    if (!body.trim() && !attachment) return
+    if ((!body.trim() && !attachment) || isReadOnly) return
     setSending(true)
     await supabase.from('inquiry_messages').insert({
       inquiry_id: inquiry.id, sender_type: 'patient', sender_name: patientName,
@@ -4031,7 +4113,7 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
   const [error,setError]=useState(null)
 
   async function handlePurchase() {
-    if (!declarationAck) return
+    if (!declarationAck || patient?.pending_deletion_at) return
     setPurchasing(true); setError(null)
     try {
       const res = await fetch('/api/patient/complete_auto_purchase', {
@@ -4050,7 +4132,7 @@ function AutoInquiryPurchasePanel({ isEn, inquiry, patient, onPurchased }) {
     }
   }
 
-  if (!open) return <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} onClick={()=>setOpen(true)}>{isEn?'Proceed to buy':'繼續購買'}</Btn>
+  if (!open) return <Btn variant="primary" style={{width:'100%',marginTop:'10px',fontSize:'12px'}} disabled={!!patient?.pending_deletion_at} onClick={()=>setOpen(true)}>{isEn?'Proceed to buy':'繼續購買'}</Btn>
 
   return (
     <div style={{marginTop:'10px',background:'#fff',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'12px'}}>
@@ -4138,6 +4220,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   useEffect(() => { load() }, [patient?.id])
 
   async function handleRequestSwitch(i) {
+    if (patient?.pending_deletion_at) return
     setSwitching(i.id)
     await supabase.from('plan_inquiries').update({
       claimed_by_agent_id: null, claimed_at: null, switch_requested_at: new Date().toISOString(),
@@ -4155,6 +4238,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
   // they don't clutter the patient's own list once gone.
   const [withdrawingId,setWithdrawingId]=useState(null)
   async function handleWithdrawInquiry(i) {
+    if (patient?.pending_deletion_at) return
     setWithdrawingId(i.id)
     await supabase.from('plan_inquiries').update({
       status: 'withdrawn', claimed_by_agent_id: null, claimed_at: null, response_due_at: null,
@@ -4262,7 +4346,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                         reviews themselves in a real application. */}
                     {isPending&&i.requested_report_note&&<div style={{marginTop:'8px'}}>
                       <div style={{fontWeight:600,fontSize:'12px',color:C.text}}>{isEn?'Your underwriter has asked for more detail':'核保員要求更多資料'}</div>
-                      <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
+                      <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id} isReadOnly={!!patient?.pending_deletion_at}/>
                     </div>}
                     {isDeclined&&i.underwriter_decision_reason&&<div style={{fontSize:'11px',color:C.textMuted,marginTop:'6px'}}>{i.underwriter_decision_reason}</div>}
                     {isDeclined&&<AlternativePlansPanel isEn={isEn} inquiryId={i.id} onViewPlan={onViewPlan}/>}
@@ -4270,7 +4354,7 @@ function MyInquiriesTab({ isEn, patient={}, onViewPlan, initialExpandedId=null, 
                   </>
                 ) : (i.agents?.full_name
                   ? <>
-                    <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id}/>
+                    <PatientInquiryThread inquiry={i} patientName={patient.full_name} patientId={patient.id} isReadOnly={!!patient?.pending_deletion_at}/>
                     <div onClick={()=>handleRequestSwitch(i)} style={{fontSize:'12px',color:C.textMuted,textAlign:'center',cursor:'pointer',marginTop:'10px'}}>{switching===i.id?(isEn?'Requesting...':'請求中...'):(isEn?'Request a different agent':'請求更換代理')}</div>
                   </>
                   : <div style={{fontSize:'12px',color:C.textMuted,marginTop:'10px'}}>{isEn?'An agent will claim this inquiry and reach out shortly.':'代理將認領此查詢並盡快聯繫您。'}</div>)}
@@ -4325,6 +4409,7 @@ function DocumentPrepTab({ isEn, patient={}, records=[] }) {
   }
 
   async function updateBundleItems(bundleId, newItems) {
+    if (patient?.pending_deletion_at) return
     const allReady = newItems.length>0 && newItems.every(i=>i.attachment_id)
     const { data } = await supabase.from('document_prep_bundles')
       .update({ items: newItems, status: allReady?'ready':'in_progress', updated_at: new Date().toISOString() })
@@ -4332,6 +4417,7 @@ function DocumentPrepTab({ isEn, patient={}, records=[] }) {
     if (data) setBundles(prev => prev.map(b=>b.id===bundleId?data:b))
   }
   async function deleteBundle(bundleId) {
+    if (patient?.pending_deletion_at) return
     await supabase.from('document_prep_bundles').delete().eq('id', bundleId)
     setBundles(prev => prev.filter(b=>b.id!==bundleId))
   }
@@ -4366,7 +4452,7 @@ function DocumentPrepTab({ isEn, patient={}, records=[] }) {
       })}
 
       {!creating
-        ? <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} onClick={()=>setCreating(true)}>+ {isEn?'New document bundle':'新增文件組合'}</Btn></div>
+        ? <div style={{padding:'0 16px 20px'}}><Btn style={{width:'100%'}} disabled={!!patient?.pending_deletion_at} onClick={()=>setCreating(true)}>+ {isEn?'New document bundle':'新增文件組合'}</Btn></div>
         : <NewDocumentBundleForm isEn={isEn} patient={patient} onCancel={()=>setCreating(false)} onCreated={b=>{setCreating(false);setBundles(prev=>[b,...prev]);setOpenBundleId(b.id)}}/>}
     </div>
   )
@@ -4429,7 +4515,7 @@ function NewDocumentBundleForm({ isEn, patient, onCancel, onCreated }) {
 
   async function handleCreate() {
     const labels = [...selectedPresets, ...customItems]
-    if (!title.trim() || labels.length===0 || !patient?.id) return
+    if (!title.trim() || labels.length===0 || !patient?.id || patient?.pending_deletion_at) return
     setSaving(true); setError(null)
     // The insurer's own form/instructions, kept as a reference alongside
     // the checklist it's for - not parsed, just attached so the patient
@@ -4534,7 +4620,7 @@ function DocumentPrepBundleDetail({ isEn, patient, records=[], bundle, onBack, o
   // Medsa generated it directly from its own first-party record, not a
   // patient-provided photo/file.
   async function attachVisitRecord(idx, visit) {
-    if (attachingVisit) return
+    if (attachingVisit || patient?.pending_deletion_at) return
     setAttachingVisit(true)
     const { jsPDF } = await import('jspdf')
     const doc = new jsPDF()
@@ -4577,7 +4663,7 @@ function DocumentPrepBundleDetail({ isEn, patient, records=[], bundle, onBack, o
   }
 
   async function uploadForItem(idx, file) {
-    if (!file || !patient?.id) return
+    if (!file || !patient?.id || patient?.pending_deletion_at) return
     setUploading(true)
     const path = `${patient.medsa_id || patient.id}/docprep-${Date.now()}-${file.name}`
     const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
@@ -4883,7 +4969,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   }
 
   async function handleSubmitFromVisit() {
-    if (!selectedVisit || !visitPlanId || !patient?.id || isDuplicateForSelectedPlan) return
+    if (!selectedVisit || !visitPlanId || !patient?.id || isDuplicateForSelectedPlan || patient?.pending_deletion_at) return
     if (visitPastFilingDeadline) { setVisitSubmitError(`This visit was ${visitDaysOld} days ago - past the ${CLAIM_FILING_DEADLINE_DAYS}-day filing window, so it can't be submitted here. Contact the insurer directly if you believe an exception applies.`); return }
     setVisitSubmitting(true); setVisitSubmitError(null)
     const claimRef = `CLM-${Date.now().toString(36).toUpperCase()}`
@@ -4911,7 +4997,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   // Real upload, right on this screen - no more "go upload it somewhere
   // else first."
   async function handleUploadReceipt(file) {
-    if (!file || !patient?.id) return
+    if (!file || !patient?.id || patient?.pending_deletion_at) return
     setUploadingReceipt(true); setUploadError(null)
     const path = `${patient.medsa_id || patient.id}/claim-${Date.now()}-${file.name}`
     const { error: upErr } = await supabase.storage.from('patient-uploaded-records').upload(path, file)
@@ -4951,7 +5037,7 @@ function ClaimsTab({ isEn, claims=[], patient={}, records=[], activePolicy=null,
   }
 
   async function handleSubmitManualClaim() {
-    if (!manualPlanId || manualSelectedIds.size===0 || !patient?.id) return
+    if (!manualPlanId || manualSelectedIds.size===0 || !patient?.id || patient?.pending_deletion_at) return
     // Same filing-window rule as the visit-based path above - this form
     // has no linked visit record to read a date from, so it asks for one
     // directly instead of silently skipping the check.
@@ -5486,6 +5572,12 @@ function ForumScreen({ isEn, patient={} }) {
 
 function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInquiryId=null, onConsumeInquiryDeepLink }) {
   const __theme = useContext(ThemeContext)
+  // Same pattern as KidsGrowthScreen/EditProfileScreen/CalendarScreen's
+  // own isReadOnly - real gap found live-testing: a permanently-locked
+  // profile could still submit feedback, link/unlink plans, request a
+  // renewal or cancellation, free-look cancel, and sign a contract, since
+  // nothing here checked this at all.
+  const isReadOnly = !!patient?.pending_deletion_at
   const hasLiveClaims = claims.length > 0
   const [tab,setTab]=useState('coverage')
   // Jumping straight to a specific inquiry's conversation from the home
@@ -5631,7 +5723,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   }
 
   async function handleLinkPlan() {
-    if (!linkSelectedPlan) return
+    if (!linkSelectedPlan || isReadOnly) return
     // Policy number is required, not optional - a patient could otherwise
     // save a plan with nothing to actually identify their policy, then
     // reasonably believe they're "linked" when there's no real proof on
@@ -5660,7 +5752,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
 
   async function handleRequestRenewal(policy) {
     const target = policy || activePolicy
-    if (!target) return
+    if (!target || isReadOnly) return
     setRenewalRequested(true)
     await supabase.from('agent_policies').update({ patient_requested_renewal_at: new Date().toISOString() }).eq('id', target.id)
     loadPolicy()
@@ -5681,6 +5773,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
     return { withinFreeLook: daysInto <= 21, daysInto }
   }
   async function handleRequestCancellation(policy) {
+    if (isReadOnly) return
     setCancelling(true)
     await supabase.from('agent_policies').update({ cancellation_requested_at: new Date().toISOString() }).eq('id', policy.id)
     setCancelling(false)
@@ -5693,6 +5786,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // the spot when there's one on file, instead of just recording a request.
   const [freeLookError,setFreeLookError]=useState(null)
   async function handleFreeLookCancel(policy) {
+    if (isReadOnly) return
     setCancelling(true); setFreeLookError(null)
     try {
       const res = await fetch('/api/patient/cancel_free_look', {
@@ -5716,6 +5810,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // own record of it, not actually cancelling coverage - the patient
   // still has to contact that insurer directly for that.
   async function handleRemoveSelfLinkedPolicy(policy) {
+    if (isReadOnly) return
     setCancelling(true)
     await supabase.from('agent_policies').update({ status: 'removed' }).eq('id', policy.id)
     setCancelling(false)
@@ -5766,7 +5861,7 @@ function InsuranceScreen({ isEn, claims=[], patient={}, records=[], deepLinkInqu
   // ever awaiting signature at once.
   async function handleSignContract(policy) {
     const target = policy || activePolicy
-    if (!target) return
+    if (!target || isReadOnly) return
     const signedAt = new Date().toISOString()
     await supabase.from('agent_policies').update({ patient_signed_at: signedAt }).eq('id', target.id)
     loadPolicy()
@@ -10199,6 +10294,36 @@ function PrescriptionsScreen({ isEn, medications=[], onNav, patient={}, onReload
 
 function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHealth }) {
   const __theme = useContext(ThemeContext)
+  // Same pattern as every other screen swept this round - guards the
+  // actual record-content writes here (contact, allergies, family
+  // history), not the account-level actions (notification prefs, death
+  // preference, close-account request) which stay reachable regardless.
+  const isReadOnly = !!patient?.pending_deletion_at
+  // Real gap found live-testing: AdultTransferBanner's "Export keepsake
+  // record" is the ONLY way to ever see a childhood growth/teeth/
+  // immunisation history again, and it disappears the moment a transfer
+  // or convert decision is made - permanently, since that banner's own
+  // "show" condition goes false right then. The data itself is never
+  // touched by either action, so it's never actually gone, just
+  // unreachable. Shown here permanently instead, for ANY patient with
+  // such history on file - not gated on current account_type/
+  // dependent_relationship, since someone who transferred years ago is
+  // exactly who'd want this.
+  const [hasChildKeepsake,setHasChildKeepsake]=useState(false)
+  const [exportingChildKeepsake,setExportingChildKeepsake]=useState(false)
+  useEffect(() => {
+    if (!patient?.id) return
+    Promise.all([
+      supabase.from('kids_growth_logs').select('id',{count:'exact',head:true}).eq('patient_id', patient.id),
+      supabase.from('kids_teeth_log').select('id',{count:'exact',head:true}).eq('patient_id', patient.id),
+      supabase.from('kids_immunization_checks').select('id',{count:'exact',head:true}).eq('patient_id', patient.id),
+    ]).then(([g,t,i]) => setHasChildKeepsake((g.count||0)>0 || (t.count||0)>0 || (i.count||0)>0))
+  }, [patient?.id])
+  async function handleExportChildKeepsake() {
+    setExportingChildKeepsake(true)
+    await exportChildHealthKeepsakePdf(patient)
+    setExportingChildKeepsake(false)
+  }
   const [contact,setContact]=useState({
     name: patient.emergency_contact_name||'', rel: patient.emergency_contact_rel||'', phone: patient.emergency_contact_phone||'',
   })
@@ -10306,6 +10431,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
   useEffect(() => { loadMyAllergies() }, [patient.id])
 
   async function handleSaveContact() {
+    if (isReadOnly) return
     setSavingContact(true)
     await supabase.from('patients').update({
       emergency_contact_name: contact.name||null,
@@ -10318,7 +10444,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
   }
 
   async function handleAddAllergy() {
-    if (!newAllergen.trim()) return
+    if (!newAllergen.trim() || isReadOnly) return
     setSavingAllergy(true)
     await supabase.from('allergies').insert({
       patient_id: patient.id, allergen: newAllergen, severity: newSeverity||null,
@@ -10331,6 +10457,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
   }
 
   async function handleRemoveAllergy(id) {
+    if (isReadOnly) return
     await supabase.from('allergies').delete().eq('id', id)
     loadMyAllergies()
     onSaved?.()
@@ -10349,7 +10476,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
   const [allergyImportAdded,setAllergyImportAdded]=useState(null)
 
   async function handleAllergyImportFile(file) {
-    if (!file) return
+    if (!file || isReadOnly) return
     setAllergyImportBusy(true); setAllergyImportError(null); setAllergyImportAdded(null)
     try {
       const fileBase64 = await new Promise((resolve, reject) => {
@@ -10404,7 +10531,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
   useEffect(() => { loadFamilyHistory() }, [patient.id])
 
   async function handleAddFamilyHistory() {
-    if (!newFhRelationship.trim() || !newFhCondition.trim()) return
+    if (!newFhRelationship.trim() || !newFhCondition.trim() || isReadOnly) return
     setSavingFh(true)
     await supabase.from('family_history').insert({
       patient_id: patient.id, relationship: newFhRelationship.trim(), condition_name: newFhCondition.trim(), notes: newFhNotes.trim()||null,
@@ -10415,6 +10542,7 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
     onSaved?.()
   }
   async function handleRemoveFamilyHistory(id) {
+    if (isReadOnly) return
     await supabase.from('family_history').delete().eq('id', id)
     loadFamilyHistory()
     onSaved?.()
@@ -10422,6 +10550,13 @@ function EditProfileScreen({ isEn, patient={}, onSaved, onSignOut, onViewBumpHea
 
   return (
     <div style={{background:C.beige,flex:1,padding:'0 16px 24px'}}>
+      {hasChildKeepsake&&<>
+        <SecLabel>{isEn?'Childhood health record':'兒童健康記錄'}</SecLabel>
+        <Card style={{padding:'16px',marginBottom:'20px'}}>
+          <div style={{fontSize:'12px',color:C.textSub,marginBottom:'10px',lineHeight:1.5}}>{isEn?"Growth, teeth and immunisation history from when this was a Kids profile - still on file, and permanently reachable here regardless of a transfer/conversion decision since.":'此檔案曾為兒童檔案時的生長、牙齒及疫苗記錄 - 資料仍存檔,並且不論日後轉移或轉換,均可於此永久查閱。'}</div>
+          <Btn style={{width:'100%'}} disabled={exportingChildKeepsake} onClick={handleExportChildKeepsake}>{exportingChildKeepsake?(isEn?'Exporting…':'匯出中…'):(isEn?'📖 Download childhood health record':'📖 下載兒童健康記錄')}</Btn>
+        </Card>
+      </>}
       <SecLabel>{isEn?'Emergency contact':'緊急聯絡人'}</SecLabel>
       <Card style={{padding:'16px',marginBottom:'20px'}}>
         <input value={contact.name} onChange={e=>{setContact({...contact,name:e.target.value});setContactSaved(false)}} placeholder={isEn?'Name':'姓名'} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'8px',padding:'10px 12px',fontSize:'13px',marginBottom:'8px',boxSizing:'border-box'}}/>
@@ -11407,11 +11542,31 @@ const DEPENDENT_RELATIONSHIPS = [
   { value: 'other', label: 'Other dependent', docLabel: 'ID or proof of relationship', docNoun: 'dependent' },
 ]
 
-function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComplete }) {
+function CreateKidsProfileFlow({ parentPatient, onBack, onComplete }) {
   const __theme = useContext(ThemeContext)
   const [relationship,setRelationship]=useState('child')
   const [form,setForm]=useState({fullName:'',dob:'',sex:''})
   const [certFile,setCertFile]=useState(null)
+  // Hard block per your call: if this would push the real dependent
+  // count past what's actually paid for, this stops BEFORE creating the
+  // row rather than letting it through - null until checked, then either
+  // false or {depCount, paidCount} if blocked.
+  const [guardianBlock,setGuardianBlock]=useState(null)
+  const [startingGuardianCheckout,setStartingGuardianCheckout]=useState(false)
+  async function handlePayForExtraDependent() {
+    setStartingGuardianCheckout(true)
+    try {
+      const res = await fetch('/api/patient/create_guardian_checkout', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ patientId: parentPatient.id }),
+      })
+      const data = await res.json()
+      if (data.status === 'CREATED' && data.paymentUrl) { window.location.href = data.paymentUrl; return }
+      setGuardianBlock(b => ({ ...b, error: data.message || 'Could not start checkout.' }))
+    } finally {
+      setStartingGuardianCheckout(false)
+    }
+  }
   // Real gap from your feedback: "disabled" used to only exist as its own
   // relationship category, with no way to flag a CHILD (or parent, etc.)
   // who's also disabled without mis-labeling their relationship just to
@@ -11429,6 +11584,16 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
   async function handleSubmit() {
     setSaving(true); setError(null)
     try {
+      const [{ data: guardian }, { count: depCount }] = await Promise.all([
+        supabase.from('patients').select('guardian_paid_profile_count').eq('id', parentPatient.id).maybeSingle(),
+        supabase.from('patients').select('id', { count: 'exact', head: true }).eq('parent_patient_id', parentPatient.id),
+      ])
+      const paidCount = guardian?.guardian_paid_profile_count ?? 4
+      if ((depCount||0)+1 > paidCount) {
+        setSaving(false)
+        setGuardianBlock({ depCount: (depCount||0)+1, paidCount })
+        return
+      }
       const medsaId = 'MDS-' + Math.floor(10000+Math.random()*89999) + '-HK'
       const { data: child, error: insErr } = await supabase.from('patients').insert({
         medsa_id: medsaId, full_name: form.fullName, date_of_birth: form.dob, sex: form.sex||null,
@@ -11469,12 +11634,26 @@ function CreateKidsProfileFlow({ parentPatient, guardianRequired, onBack, onComp
     }
   }
 
+  if (guardianBlock) return (
+    <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
+        <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>This Guardian plan needs an extra profile first</div>
+        <div style={{fontSize:'13px',color:C.textSub,marginBottom:'20px',lineHeight:1.5}}>This would be profile #{guardianBlock.depCount} under this account, but only {guardianBlock.paidCount} {guardianBlock.paidCount===1?'is':'are'} currently paid for. Add this profile to the plan first (+HK$320/yr) before creating it.</div>
+        {guardianBlock.error&&<div style={{fontSize:'12px',color:C.red,marginBottom:'14px'}}>{guardianBlock.error}</div>}
+        <div style={{display:'flex',gap:'8px'}}>
+          <Btn style={{flex:1}} onClick={()=>setGuardianBlock(null)}>Not now</Btn>
+          <Btn variant="primary" style={{flex:1}} disabled={startingGuardianCheckout} onClick={handlePayForExtraDependent}>{startingGuardianCheckout?'Starting…':'Add & pay'}</Btn>
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{minHeight:'100vh',background:C.beige,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 20px'}}>
       <div style={{width:'100%',maxWidth:380}}>
         <div onClick={onBack} style={{fontSize:'13px',color:__theme.accent,cursor:'pointer',marginBottom:'20px'}}>← Back</div>
         <div style={{fontSize:'18px',fontWeight:700,marginBottom:'6px'}}>Add a dependent profile</div>
-        {guardianRequired&&<div style={{background:C.amberLight,border:`0.5px solid ${C.amber}`,borderRadius:'10px',padding:'12px 14px',marginBottom:'16px',fontSize:'12px',color:C.amber,lineHeight:1.6}}>You already manage one dependent under this login for free. This one will be created, but switching between both under this login needs Medsa Guardian - contact Medsa to upgrade.</div>}
         <div style={{fontSize:'13px',color:C.textSub,marginBottom:'14px',lineHeight:1.5}}>Medsa Guardian covers anyone you're the caretaker of - a child, a parent, an elderly relative, or someone with a disability.</div>
         <div style={{fontSize:'12px',color:C.textMuted,marginBottom:'6px'}}>Relationship</div>
         <select value={relationship} onChange={e=>setRelationship(e.target.value)} style={{width:'100%',border:`0.5px solid ${C.border}`,borderRadius:'10px',padding:'12px 14px',fontSize:'14px',boxSizing:'border-box',marginBottom:'14px',background:'#fff'}}>
